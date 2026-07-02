@@ -1,0 +1,17 @@
+{
+  "name": "shipgate",
+  "version": "0.2.0",
+  "description": "Lean, gate-driven feature development for any repo: route by CLAUDE.md, explore in parallel, clarify before building, design with options, never claim done without evidence, review against design, and capture learnings to your vault/repo.",
+  "author": {
+    "name": "worm2fed",
+    "email": "worm2fed@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "feature-development",
+    "sdlc",
+    "code-review",
+    "spec-driven",
+    "verification"
+  ]
+}
