@@ -1,6 +1,6 @@
 ---
 name: knowledge-base
-description: Durable knowledge layer, routed by type — recall before non-trivial work and capture learnings after, keeping engineering knowledge (decisions, specs, gotchas, conventions) in the target repo and sending only general findings or project status to the personal vault. Use to pull prior context before routing/design/debugging, or to record something a future session would re-derive. Prefer this over Claude's built-in session memory for any feature, domain, or convention learning. Triggers: "what do we know about X", "capture this", "log this to the knowledge base", end of a feature.
+description: Durable knowledge layer, routed by type — recall before non-trivial work and capture learnings after, keeping engineering knowledge (decisions, specs, gotchas, conventions) in the target repo and sending only general findings or project status to the personal vault. Use to pull prior context before routing/design/debugging, or to record something a future session would re-derive. Prefer this over Claude's built-in session memory for any feature, domain, or convention learning. Triggers — "what do we know about X", "capture this", "log this to the knowledge base", end of a feature.
 ---
 
 # Knowledge base
