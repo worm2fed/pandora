@@ -17,6 +17,14 @@ Cached output, output from earlier in the conversation, "I ran this before," and
 catch it" are all disqualified. State changes; the only evidence that counts is the command
 you just ran.
 
+**This gate is about evidence, not repetition.** Run the proving command once and read it —
+a claim you just evidenced this way is settled; don't re-verify it again later in the same
+state, and don't spawn subagents to double-check your own fresh output. Current models
+self-verify while working; the failure mode this skill exists for is the *unevidenced*
+claim, not the under-repeated one. Independent fresh-context review (the `review` phase) is
+a different thing and stays — a reviewer without your accumulated context catches what you
+are blind to.
+
 These words in a completion claim are a red flag that you're asserting, not verifying —
 if you're about to write one, stop and run the command instead:
 
@@ -64,7 +72,9 @@ If you can't make it fail before the fix, you don't yet know the test is testing
 - "I ran something like it earlier." Earlier ≠ now. Re-run.
 - "The failing test is flaky." Maybe — but prove it's flaky, don't assume it.
 - "It compiles, so it works." Compilation is not behavior.
-- "The subagent said it was done." Subagents claim completion too; verify their work.
+- "The subagent said it was done." Require the *evidence* in its report — real command
+  output, not "tests pass". A report with evidence is accepted; a report without it gets the
+  command run, not the claim trusted. Don't re-derive work the evidence already proves.
 
 ## When verification fails
 

@@ -14,15 +14,34 @@ feature branched off the wrong base does not.
 **Never silently operate on the checked-out branch. Always confirm before switching or
 creating a branch.**
 
+> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
+> checkout) overrides the defaults below; read it first if present.
+
 ## Which repo — resolve this FIRST if repos are nested
 
-If the working directory contains nested git repos beneath it (e.g. an umbrella/meta repo with
-`*/.git` in subdirectories), resolve the **target repo** first — from the request or the impact
-map (`route-and-map`) — and do *all* branch/state work inside it. Never branch the umbrella
-itself unless the change genuinely targets its own files, and confirm with the user before doing
-so. A plain single-repo project skips this entirely: the working dir is the repo.
+Some checkouts are an **umbrella**: a scaffolding repo with each real project a nested git repo
+beneath it. Detect this by the **nested repos, not the absence of the umbrella's own `.git`** —
+the umbrella *is* itself a git repo, so a naive "is this a git repo?" check answers *yes* and it
+looks branchable. It is not: if nested `*/.git` directories exist (e.g. `source/*/.git`), you
+are in an umbrella and its own branch is off-limits. Branching the umbrella by mistake is the
+recurring failure this section exists to stop.
+
+**Hard rule: never run a branch-changing command — `git switch -c`, `git checkout -b`,
+`git worktree add`, branch creation/deletion/reset — in the umbrella.** So:
+
+1. Resolve the **target repo** first — from the issue/request or the impact map
+   (`route-and-map`). `cd` into it and do *all* branch/state work there.
+2. If the change spans repos, branch in **each affected repo**, never once at the umbrella level.
+3. The only time you branch the umbrella itself is when the change genuinely targets its own
+   scaffolding files — rare. Confirm explicitly with the user before ever doing so.
+
+The config's **Repo layout** section describes the umbrella and where projects live. With no
+config and no nested repos, the working dir is the repo and this section doesn't apply.
 
 ## Steps
+
+> All steps below run **inside the target repo** — `cd` there first (per the section above),
+> never in the umbrella.
 
 1. **Detect git state** (in the target repo). Current branch (`git branch --show-current`),
    clean or dirty (`git status --porcelain`), and whether the current branch already belongs to
@@ -39,20 +58,20 @@ so. A plain single-repo project skips this entirely: the working dir is the repo
    reveals `main`/`master`/`develop`. Fetch so it's current, and branch off *that*, not off the
    current checkout.
 
-4. **Build the branch name from the repo's convention.** If `CLAUDE.md` documents a branch rule,
-   follow it. Otherwise use the default:
+4. **Build the branch name.** Precedence: the config's **Branching** section, then a branch rule
+   in the repo's `CLAUDE.md`, otherwise the default:
    ```
    <type>/<issue-id>-<slug>
    ```
    - **type** — `feat` (new feature), `fix` (bug), or `chore` (refactor / deps / docs /
      maintenance). Infer from the work and confirm.
-   - **issue-id** — the tracker issue number if one exists (on GitHub, via `gh`); this is the
-     same id `clarify` records in the PRD, so capture it once here and reuse it downstream.
-     **Untracked work: omit the segment** — `<type>/<slug>` is fine.
+   - **issue-id** — the issue id from your tracker, if one exists; this is the same id `clarify`
+     records in the PRD, so capture it once here and reuse it downstream. **Untracked work: omit
+     the segment** — `<type>/<slug>` is fine.
    - **slug** — short kebab-case summary of the change.
-   - e.g. `feat/42-export-csv`, `fix/add-null-guard`, `chore/bump-deps`.
+   - e.g. `feat/1234-add-export-filters`, `fix/1290-date-off-by-one`, `chore/1301-bump-deps`.
 
-5. **Propose and confirm.** State it plainly — "branch `feat/42-export-csv` off
+5. **Propose and confirm.** State it plainly — "branch `feat/1234-add-export-filters` off
    `main` (fetched, up to date)?" — and wait for confirmation before `git switch -c`. The
    **default is branch-in-place** in the current checkout: no dependency reinstall, and a running
    Docker stack bound to the repo path keeps pointing at your code.
@@ -60,7 +79,7 @@ so. A plain single-repo project skips this entirely: the working dir is the repo
 6. **Offer a worktree only when isolation is wanted.** If the user wants their current checkout
    left untouched or needs features in parallel, use `git worktree add .worktrees/<slug> -b
    <branch> <base>` instead. Call out the costs so it's an informed choice: each worktree needs
-   its own dependency install (costly if the project has heavy dependencies), and any dev stack
+   its own dependency install (costly if the project has heavy dependencies), and a dev stack
    bound to the main repo path won't see worktree code without reconfiguration. Don't default to this.
 
 ## Output

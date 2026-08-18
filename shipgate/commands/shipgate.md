@@ -8,6 +8,9 @@ Drive the feature-development flow using the `feature` orchestrator skill.
 
 User input: $ARGUMENTS
 
+Read the project config `.claude/shipgate.md` first if present — it declares the project's
+tooling (artifact homes, forge, branching).
+
 Do this:
 
 1. Invoke the **`feature`** skill to orchestrate.
@@ -17,8 +20,8 @@ Do this:
    and confirm before switching; do **not** start exploring on whatever branch is checked out.
    Then proceed to **Route & Map**.
 3. If `$ARGUMENTS` is empty, **detect the current phase** from the artifacts present
-   (`docs/prd/<name>.md`, `docs/adr/`, `docs/prd/<name>.worklog.md`) and propose resuming at
-   the right phase.
+   (the configured PRD/ADR/worklog homes — default `docs/prd/<name>.md`, `docs/adr/`,
+   `docs/prd/<name>.worklog.md`) and propose resuming at the right phase.
 4. Scale ceremony to the size of the change — a one-line fix should not get a full PRD.
    Say which phases you're skipping and why.
 

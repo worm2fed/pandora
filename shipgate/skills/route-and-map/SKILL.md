@@ -10,6 +10,9 @@ what does it touch?** The cost of getting this wrong is high — new logic in th
 a forked write path, a forgotten follow-up obligation. This step is cheap insurance, and in a
 small single-module repo it collapses to a few lines.
 
+> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
+> checkout) overrides the defaults below; read it first if present.
+
 The rules that decide routing are **not** hardcoded here — they live in the repo's
 `CLAUDE.md` files and drift over time. Your job is to *consult* them, not memorize them.
 
@@ -21,18 +24,23 @@ The rules that decide routing are **not** hardcoded here — they live in the re
    top-level file doesn't repeat. These files are the source of truth; if they and your
    assumption disagree, the file wins.
 
-2. **Recall prior knowledge** (`knowledge-base`), pulling each kind from its home: **technical
-   conventions and prior decisions** from the `CLAUDE.md` files you just read and the repo's
-   `docs/adr/`; **project/domain context** from the vault if available. Cite hits as
-   "[wiki] …" or "[repo] …".
+2. **Recall prior knowledge** (`knowledge-base`): pull domain/product context and prior
+   decisions from the configured knowledge base — default: the repo's `docs/adr/` and
+   CLAUDE.md files. Cite hits as "[kb] …" or "[repo] …" so it's clear what's recalled, not
+   re-derived.
 
-3. **Classify the change** using the rules `CLAUDE.md` actually defines — don't import rules
-   from elsewhere. Common rule shapes to look for (examples, not a checklist):
-   - Which module/service owns new business logic or new endpoints.
-   - Migration ownership, and any post-migration obligations the repo declares.
-   - Feature-flag registration, if the project uses flags.
-   - Where frontend changes belong (app, bounded context).
-   - Write-path vs read-path constraints.
+3. **Classify the change** using the rules `CLAUDE.md` actually defines — these are typical
+   multi-service patterns to look for, not universal rules, and not rules to import from
+   elsewhere:
+   - New business logic / new endpoints → the module/service CLAUDE.md designates for it
+     (often a designated new backend).
+   - Read paths → can often move without touching a legacy backend.
+   - Write paths → frequently still touch legacy code (models, events, sockets); plan the
+     cut-over, don't fork state.
+   - Schema changes → whichever service owns migrations (the migration source of truth);
+     then any downstream refresh the repo declares (e.g. regenerating dependent schema dumps).
+   - Feature flags → if the project uses flags, add the flag to each reading service's registry.
+   - Frontend → the frontend app, in the right bounded context.
 
 4. **Emit the impact map.** Produce this and confirm it with the user before exploring
    (drop sections that don't apply):
@@ -51,10 +59,11 @@ The rules that decide routing are **not** hardcoded here — they live in the re
 
 ### Schema / data
 - Migration needed? <yes/no — where>
-- Downstream obligations per CLAUDE.md? <e.g. regenerate fixtures/types, update dependents>
+- Dump refresh needed afterward? <which services — n/a if the repo has no such obligation>
 
 ### Feature flag (only if the project uses flags)
-- Flag id: <...> — registered where: <...>
+- Flag id: <per the repo's naming convention>
+- Enum(s)/registry to add it to: <service → file, per CLAUDE.md — n/a if the repo has no flag system>
 
 ### Cross-cutting risks
 - <forked write paths, event coupling, anything to cut over deliberately>

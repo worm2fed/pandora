@@ -10,6 +10,9 @@ prd: "./<feature-kebab>.md"
 related: []
 ---
 
+<!-- Length: match the document to its substance — cover what's needed, delete empty
+     sections, no filler, no boilerplate summaries. -->
+
 # Worklog: <Feature name>
 
 > Design + build plan companion to `./<feature-kebab>.md`.
@@ -41,7 +44,9 @@ deprecation plan for any public/external surface.
 
 ## CLAUDE.md / impact-map compliance
 
-- <each repo-rule obligation the impact map flagged, and how it's met>
+- Primary home service: <...> (n/a for single-service repos)
+- Schema owner + downstream refresh obligations: <... or n/a>
+- Feature flag + registry/enum(s): <... or n/a>
 
 ---
 

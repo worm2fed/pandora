@@ -6,10 +6,13 @@ updated:
 tags:
   - prd
 status: draft
-issue: "<issue link — GitHub #ID and URL, or none / ad-hoc>"
+issue: "<tracker issue/epic — id and URL, or none / ad-hoc>"
 worklog: "./<feature-kebab>.worklog.md"
 related: []
 ---
+
+<!-- Length: match the document to its substance — cover what's needed, delete empty
+     sections, no filler, no boilerplate summaries. -->
 
 # PRD: <Feature name>
 

@@ -9,6 +9,20 @@ Execution discipline is what separates a plan that ships from a plan that rots. 
 build plan one task at a time, prove each task is done before moving on, and keep the
 worklog honest about what actually happened.
 
+> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
+> checkout) overrides the defaults below; read it first if present. If its Style section names a style skill,
+> invoke that skill before writing code — and put the same instruction in every worker brief
+> (see `model-tiers`).
+
+## Who types the code
+
+Check the `model-tiers` skill first: when the build is big enough to dispatch, the master
+session doesn't work tasks inline — each coherent unit goes to a worker subagent with a
+self-contained brief, and the session reviews the worker's diff against the design before
+anything is staged. Workers delegate mechanical sub-work to Sonnet subagents. For small
+builds, work the tasks directly. Either way, the loop below is what "done" means for each
+task — whoever executes it.
+
 ## The loop (per task)
 
 1. **Take the next task** in dependency order from the Build Plan. Respect `[P]` only as a
@@ -20,7 +34,7 @@ worklog honest about what actually happened.
    either.
 
 3. **Match the conventions** surfaced during exploration — error handling, validation, DI,
-   the shapes exploration surfaced, naming. New code should look like it was always there.
+   the stack idioms exploration surfaced, naming. New code should look like it was always there.
 
 4. **Write the test first when there's real behavior.** Whether you're adding logic or fixing
    a bug, write the failing test before the production code: watch it fail for the right reason
@@ -33,8 +47,8 @@ worklog honest about what actually happened.
    contract:
    - In-repo callers: update them atomically in the same change.
    - Public/external APIs: parallel-change + deprecation, not a hard break.
-   - Schema change: after the migration, complete any downstream obligations the impact map
-     flagged (per CLAUDE.md). Don't leave them for later.
+   - Schema change: run any downstream refresh obligations the impact map / CLAUDE.md names
+     (e.g. regenerating dependent services' schema dumps). Don't leave them stale.
 
 6. **Verify before you check the box.** Invoke the `verify` skill: run the actual command
    (test, build, lint) for this task, read the output, confirm it proves the task's
@@ -42,7 +56,9 @@ worklog honest about what actually happened.
 
 7. **Update the worklog.** Tick the task. If you diverged from the design, log it in
    *Deviations & notes* with the reason and impact — a silent divergence is how the design
-   and the code drift apart.
+   and the code drift apart. Anything you learned that outlives this feature — a trap, a
+   convention, a style call — gets a one-line entry in the project **ledger** as it happens
+   (see `knowledge-base`); don't trust end-of-flow memory to resurface it.
 
 ## When to stop and reconsider
 

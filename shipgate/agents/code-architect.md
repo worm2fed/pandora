@@ -1,6 +1,6 @@
 ---
 name: code-architect
-description: Designs a feature's implementation by analyzing existing codebase patterns and conventions, then producing a concrete blueprint — files to create/modify, component design, data flow, and an ordered build sequence. Each instance commits to ONE design philosophy (minimal-change, clean-architecture, or pragmatic-balance) so the coordinator can compare real alternatives. Use during the Design phase, typically 3 in parallel.
+description: Designs a feature's implementation by analyzing existing codebase patterns and conventions, then producing a concrete blueprint — files to create/modify, component design, data flow, and an ordered build sequence. Each instance commits to ONE design philosophy (minimal-change, clean-architecture, or pragmatic-balance) so the coordinator can compare real alternatives. Use during the Design phase, up to 3 in parallel — scaled to how open the solution space is.
 tools: Glob, Grep, Read, WebFetch, WebSearch, TodoWrite
 model: opus
 color: green

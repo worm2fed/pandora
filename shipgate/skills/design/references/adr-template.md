@@ -7,9 +7,12 @@ tags:
   - adr
 status: proposed
 date:
-issue: "<issue link — GitHub #ID and URL, or none / ad-hoc>"
+issue: "<tracker issue/epic — id and URL, or none / ad-hoc>"
 related: []
 ---
+
+<!-- Length: match the document to its substance — cover what's needed, delete empty
+     sections, no filler, no boilerplate summaries. -->
 
 # NNNN. <Short decision title>
 
