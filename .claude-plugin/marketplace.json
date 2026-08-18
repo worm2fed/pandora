@@ -11,8 +11,8 @@
       "name": "shipgate",
       "source": "./shipgate",
       "displayName": "shipgate",
-      "description": "Lean, gate-driven feature development: route by CLAUDE.md, explore in parallel, clarify before building, design with options, never claim done without evidence, review against design, capture durable learnings. Optional integrations (obsidian-vault MCP, gh CLI, chrome-devtools) degrade gracefully.",
-      "version": "0.2.0",
+      "description": "Lean, gate-driven feature development: route by CLAUDE.md, explore in parallel, clarify before building, design with options, orchestrate by model tier, never claim done without evidence, review against design, capture durable learnings. Configure per project via .claude/shipgate.md; integrations degrade gracefully.",
+      "version": "0.7.0",
       "author": {
         "name": "worm2fed",
         "email": "worm2fed@gmail.com"
@@ -20,6 +20,20 @@
       "license": "MIT",
       "keywords": ["feature-development", "sdlc", "code-review", "spec-driven", "verification"],
       "category": "workflow"
+    },
+    {
+      "name": "bpmn",
+      "source": "./bpmn",
+      "displayName": "bpmn",
+      "description": "BPMN 2.0 diagrams from plain language: Claude writes the semantic XML, bundled tooling auto-layouts (pools, lanes, boundary events), validates with bpmnlint, and renders a self-contained HTML preview — no manual bpmn.io fixup loop.",
+      "version": "0.1.0",
+      "author": {
+        "name": "worm2fed",
+        "email": "worm2fed@gmail.com"
+      },
+      "license": "MIT",
+      "keywords": ["bpmn", "diagrams", "process-modeling", "workflow", "visualization"],
+      "category": "productivity"
     }
   ]
 }
