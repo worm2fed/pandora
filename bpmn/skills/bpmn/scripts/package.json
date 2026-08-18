@@ -1,0 +1,12 @@
+{
+  "name": "bpmn-skill-scripts",
+  "private": true,
+  "type": "module",
+  "description": "Tooling for the bpmn skill: auto-layout, validate, render.",
+  "dependencies": {
+    "bpmn-auto-layout": "1.3.0",
+    "bpmn-js": "18.21.0",
+    "bpmn-moddle": "10.0.0",
+    "bpmnlint": "11.12.1"
+  }
+}
