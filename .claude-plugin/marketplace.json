@@ -1,6 +1,6 @@
 {
   "$schema": "https://code.claude.com/schemas/marketplace.json",
-  "name": "worm2fed-plugins",
+  "name": "pandora",
   "owner": {
     "name": "worm2fed",
     "email": "worm2fed@gmail.com"

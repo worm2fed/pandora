@@ -101,16 +101,16 @@ the split and degrades gracefully if a store isn't reachable.
 
 ## Install
 
-shipgate is published through the **`worm2fed-plugins`** marketplace (manifest at the repo
+shipgate is published through the **`pandora`** marketplace (manifest at the repo
 root, `.claude-plugin/marketplace.json`). From a local clone or the git remote:
 
 ```
 /plugin marketplace add ~/workspace/plugins
-/plugin install shipgate@worm2fed-plugins
+/plugin install shipgate@pandora
 ```
 
 Then drive it with `/shipgate [description]`. Updating the marketplace (`/plugin marketplace
-update worm2fed-plugins`) picks up new versions when the entry's `version` bumps.
+update pandora`) picks up new versions when the entry's `version` bumps.
 
 ## Dependencies & integrations
 
