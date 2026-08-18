@@ -22,6 +22,20 @@
       "category": "workflow"
     },
     {
+      "name": "astrolabe",
+      "source": "./astrolabe",
+      "displayName": "astrolabe",
+      "description": "Typed functional code style: types first, immutability, smart constructors, illegal states unrepresentable, effects at the edges. Examples in TypeScript, principles language-portable; pairs with a per-project skill for local specifics.",
+      "version": "0.1.0",
+      "author": {
+        "name": "worm2fed",
+        "email": "worm2fed@gmail.com"
+      },
+      "license": "MIT",
+      "keywords": ["code-style", "functional-programming", "domain-driven-design", "typescript", "fp-ts"],
+      "category": "workflow"
+    },
+    {
       "name": "bpmn",
       "source": "./bpmn",
       "displayName": "bpmn",
