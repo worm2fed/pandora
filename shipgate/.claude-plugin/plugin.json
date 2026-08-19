@@ -1,6 +1,6 @@
 {
   "name": "shipgate",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Lean, gate-driven feature development for any repo: route by CLAUDE.md, explore in parallel, clarify before building, design with options, orchestrate by model tier, never claim done without evidence, review against design, and capture learnings to your configured knowledge base. Per-project setup via .claude/shipgate.md.",
   "author": {
     "name": "worm2fed",

@@ -140,6 +140,10 @@ just less informed.
 
 ## Status
 
+v0.7.1 — implement's reuse-before-writing step now also checks the dependency's own API
+surface and same-module siblings before hand-rolling integration plumbing (pairs with
+astrolabe v0.3.0's reuse ladder).
+
 v0.7.0 — orchestration throughput: **design-ahead pipelining** (while workers implement
 issue N, the orchestrator specs N+1 with the user — epic mode's stop now gates merge+build,
 not design; queued designs are re-validated against what actually merged); **executive

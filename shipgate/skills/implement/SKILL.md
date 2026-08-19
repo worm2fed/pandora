@@ -29,9 +29,12 @@ task — whoever executes it.
    signal that tasks are independent — don't start a task whose prerequisites are unchecked.
 
 2. **Reuse before writing.** Grep the codebase for an existing utility, helper, or pattern
-   that already does this. The cheapest correct code is the code you don't add. Only write
-   new code when nothing fits cleanly — don't force-fit a near-match, but don't reinvent
-   either.
+   that already does this — and when integrating a dependency, **read its API surface
+   first**: libraries usually ship the combinator for their own domain (timers, retries,
+   interceptor lifecycles), and a sibling function in the same module using that dependency
+   is the template to match. The cheapest correct code is the code you don't add. Only
+   write new code when nothing fits cleanly — don't force-fit a near-match, but don't
+   reinvent either.
 
 3. **Match the conventions** surfaced during exploration — error handling, validation, DI,
    the stack idioms exploration surfaced, naming. New code should look like it was always there.
