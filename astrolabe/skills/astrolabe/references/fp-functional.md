@@ -147,6 +147,25 @@ function generic over the part that varies**, never a class hierarchy, an inheri
 or a config-object mega-function. A good abstraction makes call sites *more* declarative —
 they shrink to exactly the part that differs.
 
+**Before writing plumbing, climb the reuse ladder.** The extraction rules below are the
+*repair* path; the cheaper move is not writing the duplicate in the first place. Before
+hand-rolling any integration plumbing (timing, retries, batching, settle-on-both-branches,
+cleanup), check in order:
+
+1. **The dependency's own API.** A library usually ships the combinator for its own
+   domain — a metrics client's `startTimer()` stop-closure replaces hand-rolled
+   high-resolution-time arithmetic plus a manual `observe()`; an HTTP client's interceptor
+   lifecycle replaces hand-wired handlers. Read the dependency's types before writing
+   arithmetic around it: **if your code computes what the library already measures, you
+   are re-implementing your dependency.**
+2. **Siblings in the same module.** An adjacent function integrating the same dependency
+   is the template — match its approach (or improve both), never diverge silently. A new
+   function that hand-rolls what its neighbor gets from the library is non-negotiable #8's
+   "second pattern" in miniature, inside one file.
+3. **The codebase's shared helpers** — grep before writing.
+4. Only then write it new — and the moment a second copy appears, extract per the rules
+   below.
+
 **When to extract — the duplication is structural.** Two call sites hand-rolling the same
 *skeleton* — the same control flow, plumbing, guards, and error handling — differing only
 in a hole, already qualify when the plumbing is subtle. The canonical shape: two HTTP
@@ -381,3 +400,4 @@ deliberate exception — it is not a habit. Everywhere else, avoid mutable `let`
 - `readonly` everywhere; aggregate via `Monoid` + `RA.foldMap`; spread updates; explicit `Eq`/`Ord` for sort/uniq/group.
 - Curry data-last only where partial application is used; otherwise plain uncurried functions.
 - Abstract by extracting the shared *skeleton* into a HOF generic over the hole — two hand-rolled copies of subtle plumbing qualify; one call site, accidental similarity, or a mode flag inside disqualify.
+- Before writing plumbing, climb the reuse ladder: the dependency's own API → siblings in the same module → shared helpers → only then new code. Never re-implement what your library already ships.

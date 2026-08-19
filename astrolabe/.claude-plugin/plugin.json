@@ -1,6 +1,6 @@
 {
   "name": "astrolabe",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Typed functional code style: types first, immutability, smart constructors, illegal states unrepresentable, effects at the edges. Examples in TypeScript, principles language-portable; pairs with a per-project skill for local specifics.",
   "author": {
     "name": "worm2fed",

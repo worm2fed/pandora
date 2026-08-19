@@ -45,6 +45,12 @@ section so every phase (and every worker brief) picks them up:
 
 ## Status
 
+v0.3.0 — the reuse ladder: before hand-rolling integration plumbing, check (1) the
+dependency's own API (libraries ship the combinator for their own domain — don't
+re-implement what the library measures), (2) siblings in the same module (the adjacent
+integration is the template), (3) the codebase's shared helpers — and only then write new.
+The v0.2.0 extraction rules are the repair path; the ladder is the prevention path.
+
 v0.2.0 — abstraction discipline: extract the shared skeleton into a higher-order function
 generic over what varies, with explicit when-to and when-not-to criteria (duplicated
 subtle plumbing qualifies; single call sites, accidental similarity, and mode flags
