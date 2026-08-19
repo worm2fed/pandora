@@ -140,6 +140,60 @@ const vendorId = (id: number): VendorId => createId(id);
 pipe(vendorId(v), O.some, resolveGroupConfig(order.rateBook));
 ```
 
+## Abstraction — extract the skeleton, keep the holes
+
+Abstract where it helps, in the functional spirit: the unit of reuse is a **higher-order
+function generic over the part that varies**, never a class hierarchy, an inheritance tree,
+or a config-object mega-function. A good abstraction makes call sites *more* declarative —
+they shrink to exactly the part that differs.
+
+**When to extract — the duplication is structural.** Two call sites hand-rolling the same
+*skeleton* — the same control flow, plumbing, guards, and error handling — differing only
+in a hole, already qualify when the plumbing is subtle. The canonical shape: two HTTP
+interceptors each hand-rolled per-call start state in a `WeakMap` keyed by the request
+config, a response handler settling on both branches, the error-type guard, and the
+untouched rethrow — and both re-explained the config-identity trick in a prose comment.
+Extract that skeleton into one function generic over the threaded start state
+(`attachObserver<StartState>(onStart, onSettle)`); the two call sites now express only
+what differs (a timer vs. a structured log line).
+
+Signals the extraction is due:
+
+- **The same explanatory comment appears at two sites.** If you explain the same trick
+  twice in prose, the code should encode it once, in a named function whose doc comment is
+  the single home of that explanation.
+- **The diff of the two sites is smaller than either site.** The shared part dominates;
+  the holes are small and nameable.
+- **The plumbing carries a correctness subtlety** (identity-keyed state, both-branches
+  settling, error rethrow discipline) — subtle plumbing duplicated is subtle plumbing that
+  will drift.
+
+**How to extract:**
+
+- Parameterize with a **type variable over the threaded state** and function-valued holes —
+  the abstraction owns the skeleton, callers own the holes. Give the exported HOF an
+  explicit type annotation (non-negotiable #9).
+- The abstraction gets its **own module, named for what it does**, with its **own colocated
+  test** — the extraction must be behavior-preserving, and the test proves the skeleton's
+  subtleties (both branches settle, errors rethrow untouched, identity holds) once, for
+  every caller.
+- Type-class instances **are** this pattern at the type level: `Eq`/`Ord`/`Monoid` capture
+  an algebra once so `sort`/`uniq`/`fold` never re-implement comparison or aggregation
+  (see Immutability & aggregation below).
+
+**When NOT to abstract:**
+
+- **One call site.** A hypothetical second caller is not a caller. Wait for the real one —
+  premature abstraction guesses the axis of variation and usually guesses wrong.
+- **Accidentally-similar code.** Two sites that look alike today but change for different
+  reasons should stay separate — duplication is cheaper than the wrong abstraction, and
+  un-inlining a bad one costs more than re-extracting a good one later.
+- **The helper's name would be vaguer than the code it wraps** (`processData`, `handleX`).
+  If you can't name the skeleton crisply, you haven't found a real one.
+- **The abstraction needs flags/modes to serve its callers** — a boolean or mode parameter
+  switching behavior inside means you've unified two skeletons, not extracted one. Split
+  it, or accept the duplication.
+
 ## Absence: Option end-to-end, null only at the unwrap boundary
 
 **Model absence with `Option` in every domain/application signature, schema, and DTO —
@@ -326,3 +380,4 @@ deliberate exception — it is not a habit. Everywhere else, avoid mutable `let`
 - Closed union → `match().exhaustive()`; permissive parse → `match().otherwise()` returning `Option`. No `switch`, no `if/else` for domain branches.
 - `readonly` everywhere; aggregate via `Monoid` + `RA.foldMap`; spread updates; explicit `Eq`/`Ord` for sort/uniq/group.
 - Curry data-last only where partial application is used; otherwise plain uncurried functions.
+- Abstract by extracting the shared *skeleton* into a HOF generic over the hole — two hand-rolled copies of subtle plumbing qualify; one call site, accidental similarity, or a mode flag inside disqualify.

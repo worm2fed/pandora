@@ -16,7 +16,7 @@ references, loaded by what you're writing:
 | Reference | Covers |
 |---|---|
 | `domain-modeling.md` | Types before behavior, branded newtypes, the uniform value-object template, smart-constructor split (validate/Either vs create/Option), discriminated unions & error modeling, entity lifecycle in types, naming, type ownership across contexts, curated barrels |
-| `fp-functional.md` | pipe/flow composition, currying discipline, Option end-to-end with one unwrap boundary, Either/TaskEither/RTE (no try/catch), ts-pattern branching, immutability & Monoid aggregation |
+| `fp-functional.md` | pipe/flow composition, currying discipline, abstraction discipline (extract the skeleton as a HOF, keep the holes — and when not to), Option end-to-end with one unwrap boundary, Either/TaskEither/RTE (no try/catch), ts-pattern branching, immutability & Monoid aggregation |
 | `architecture-and-testing.md` | The DDD onion with effects at the edges, validation at exactly two boundaries, repositories/mappers/DTOs, error unions → transport, DI through the environment; and the testing canon — fixture factories, property-based law tests, assertion strategy, mock-the-boundary |
 
 ## Install
@@ -44,6 +44,11 @@ section so every phase (and every worker brief) picks them up:
 ```
 
 ## Status
+
+v0.2.0 — abstraction discipline: extract the shared skeleton into a higher-order function
+generic over what varies, with explicit when-to and when-not-to criteria (duplicated
+subtle plumbing qualifies; single call sites, accidental similarity, and mode flags
+disqualify).
 
 v0.1.0 — initial extraction of the general, project-agnostic canon from a working
 per-project style skill.

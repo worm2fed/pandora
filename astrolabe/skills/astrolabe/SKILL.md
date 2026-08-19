@@ -38,7 +38,7 @@ When both exist, read this one first, then the project's.
 | You are writing…                                                                    | Read                                       |
 | ------------------------------------------------------------------------------------ | ------------------------------------------ |
 | New types: entities, value objects, branded ids, error unions, enums-vs-unions      | `references/domain-modeling.md`            |
-| FP plumbing: pipelines, Option/Either/RTE, ts-pattern, immutability, aggregation    | `references/fp-functional.md`              |
+| FP plumbing: pipelines, Option/Either/RTE, ts-pattern, immutability, aggregation, when/how to abstract | `references/fp-functional.md`   |
 | Backend structure (layers, use cases, validation, mappers, DTOs, errors, DI) or tests | `references/architecture-and-testing.md` |
 
 Multiple match → read all that match. A new command usually needs
