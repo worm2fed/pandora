@@ -11,8 +11,8 @@
       "name": "shipgate",
       "source": "./shipgate",
       "displayName": "shipgate",
-      "description": "Lean, gate-driven feature development: route by CLAUDE.md, explore in parallel, clarify before building, design with options, orchestrate by model tier, never claim done without evidence, review against design, capture durable learnings. Configure per project via .claude/shipgate.md; integrations degrade gracefully.",
-      "version": "0.7.1",
+      "description": "Lean, gate-driven feature development: route by CLAUDE.md, explore in parallel, clarify before building, design with options, orchestrate by model tier, never claim done without evidence, review against design, capture durable learnings. Run /shipgate:setup to record flow state in an append-only journal instead of re-inferring it. Configure per project via .claude/shipgate.md; integrations degrade gracefully.",
+      "version": "0.8.0",
       "author": {
         "name": "worm2fed",
         "email": "worm2fed@gmail.com"
