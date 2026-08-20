@@ -138,3 +138,19 @@ Capture anything reusable from the review (a recurring mistake, a convention wor
 via `knowledge-base` — quick observations go to the project **ledger** as one-liners; the
 Capture phase triages them. State plainly what you verified and what you did not — coverage
 honesty is part of the review.
+
+## Record the outcome (journaled projects)
+
+On a project whose config declares a **Journal**, three moments here are events, each appended
+when it happens: the Step 5 verdict, the MR going up, and reviewer feedback landing.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type review-verdict \
+  --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3},"mr":null}'
+```
+
+Then `mr-opened` {ref, url} once the MR/PR exists, and `review-feedback` {ref, threads} each time
+comments arrive — counts and references only; the finding text and thread bodies stay in the MR.
+A missing or unreadable database is an infrastructure failure, not a reason to skip the append:
+surface it loudly and continue in legacy mode only with the user's acknowledgement.

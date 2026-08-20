@@ -1,6 +1,6 @@
 ---
 name: feature
-description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the PRD/ADR/worklog present), proposes the next step, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own cycle and a stop between them.
+description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the flow journal, or the PRD/ADR/worklog present), proposes the next step, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own cycle and a stop between them.
 ---
 
 # Feature orchestrator
@@ -70,7 +70,38 @@ warrants the full 2-3.
 
 ## Detect state, then route
 
-Don't assume the work is starting fresh. Infer the current phase from what exists:
+Don't assume the work is starting fresh — establish where the work stands before doing
+anything else.
+
+**Journaled projects** (the config declares a **Journal**): read the position, don't guess it.
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" status [--feature <slug>]
+```
+
+That brief is the authoritative position — the phase, the gate decisions on record, the last
+verify, any queued designs. Route from it and then open only the artifacts it names. Do not
+reconstruct position by scanning worklog checkboxes; the journal exists precisely so nobody
+has to. A session-start hook usually hands you this brief before you ask, in which case use
+what you already have rather than re-running the command.
+
+Two rules follow from the journal being the position of record:
+
+- **A missing event is a stuck flow, not a fallback.** If the journal says `design` and the
+  worklog is clearly further along, do NOT quietly route to the later phase. Say what the
+  journal says, say what the artifacts show, and record the resolution as an event
+  (`deviation`, or the phase event that was missed) before moving. Silent reinterpretation
+  is the failure mode the journal removes.
+- **Journal unavailable ≠ journal empty.** If the database is missing or unreadable while the
+  config declares one, that is an infrastructure problem: surface it, offer
+  `journal.py doctor`, and only fall back to artifact inference for the session with the
+  user's explicit acknowledgement.
+
+**Un-journaled projects** (no Journal section — legacy mode): infer position from what exists,
+using the same semantics. Offer `/shipgate:setup` once, briefly, if the project looks like it
+would benefit; don't nag.
+
+The phase semantics — what each position means and where it goes next — are the same either way:
 
 - **Starting new work and not already on this feature's branch → `workspace` FIRST.** Don't
   explore or read code until the branch is established off a clean base — otherwise you ground
@@ -156,6 +187,11 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
 - **Recall early** (`knowledge-base`) at Route & Map and Design — don't re-derive known
   conventions.
 - **Verify before "done"** (`verify`) at every completion claim, not just at Review.
+- **Record as you go, on journaled projects.** Every phase you enter, every gate decision
+  you make (especially in `executive` mode), every verdict — append it when it happens, not
+  in a batch at the end. The phase skills say which events are theirs. Hooks capture what
+  the harness can see and will stop the session ending with a semantic event missing, so
+  batching only means being told to go back and do it.
 - **Match model tier to the work** (`model-tiers`) — when the work is big enough to
   dispatch, the master session orchestrates only: Implement-phase code changes go to
   worker subagents with self-contained briefs, and mechanical sub-work sinks to Sonnet.

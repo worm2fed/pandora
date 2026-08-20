@@ -63,6 +63,23 @@ task — whoever executes it.
    convention, a style call — gets a one-line entry in the project **ledger** as it happens
    (see `knowledge-base`); don't trust end-of-flow memory to resurface it.
 
+## Record each task (journaled projects)
+
+On a project whose config declares a **Journal**, step 7 has a second half — append the task the
+moment you tick it, not in a sweep at the end of the plan:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type task-done --data '{"task_id":"T012"}'
+```
+
+`task-done` is gate-validated: it is refused unless a passing `verify-run` naming that task
+already exists, so the order is verify, record the verify (see `verify`), then record the task
+done. A divergence gets its own `deviation` {note} event beside the worklog line — a pointer and
+a sentence; the prose stays in the worklog. A missing or unreadable database is an infrastructure
+failure, not a reason to skip the append: surface it loudly and continue in legacy mode only with
+the user's acknowledgement.
+
 ## When to stop and reconsider
 
 - If a task reveals the design was wrong (not just incomplete), stop and route back to

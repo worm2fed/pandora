@@ -72,6 +72,23 @@ The rules that decide routing are **not** hardcoded here — they live in the re
 - <anything the CLAUDE.md files don't resolve — escalate, don't guess>
 ```
 
+## Record the map (journaled projects)
+
+On a project whose config declares a **Journal**, append the phase entry as the impact map is
+emitted, carrying the map's essentials in `data` — enough for a later session to route from:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type phase-entered \
+  --data '{"phase":"route-and-map","primary_home":"core-service",
+           "touched":["core-service","web"],"schema":false,"flag":"kernel-42"}'
+```
+
+Essentials only — the map itself stays in the conversation and in the artifacts that follow it;
+the journal points at position, it doesn't copy documents. A missing or unreadable database is an
+infrastructure failure, not a reason to skip the append: surface it loudly and continue in legacy
+mode only with the user's acknowledgement.
+
 ## Guardrails
 
 - **Don't guess routing.** If the CLAUDE.md files genuinely don't resolve where something

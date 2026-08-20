@@ -90,6 +90,25 @@ PRD and inform your questions — don't make the user re-type what's already on 
 there's no tracker or no issue, mark it "none / ad-hoc" — that's fine. When an issue id exists,
 it also feeds the branch name downstream, so getting it here saves work later.
 
+## Record the gate (journaled projects)
+
+On a project whose config declares a **Journal**, every resolved ambiguity is a `gate-decision`,
+appended as it is decided — `ask` and `executive` alike; the mode is just a field:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type gate-decision \
+  --data '{"gate":"clarify","question":"Bulk export in scope?","decision":"single export only",
+           "mode":"executive","rationale":"no bulk consumer exists yet"}'
+```
+
+When the last marker is gone, append `clarify-passed` with `{"prd":"docs/prd/<slug>.md",
+"fr_count":9}` — the PRD by **path**, never its text. That event is gate-validated: it is refused
+while the PRD still contains `[NEEDS CLARIFICATION]`, which is this gate made mechanical, not an
+obstacle to route around. A missing or unreadable database is an infrastructure failure, not a
+reason to skip the append: surface it loudly and continue in legacy mode only with the user's
+acknowledgement.
+
 ## Guardrails
 
 - **Keep the PRD free of implementation.** "Display a filterable list with full-text search"

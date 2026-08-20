@@ -89,3 +89,19 @@ caveats (dirty tree handled, deps to install). Then hand off to Route & Map.
 
 If you're already on the correct branch for this work, this whole step collapses to a one-line
 confirmation — it's a guard, not ceremony.
+
+## Record the start (journaled projects)
+
+On a project whose config declares a **Journal**, the established branch is where the flow gets a
+name. Append it here, the moment it happens — not in a batch later:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type flow-started \
+  --data '{"request":"add export filters","branch":"feat/1234-add-export-filters"}'
+```
+
+`<slug>` is the PRD slug this work will use (`epic/<slug>` for epic-level work). Keep `request` to
+one line — the journal records position and pointers to artifacts, never their contents. A missing
+or unreadable database is an infrastructure failure, not a reason to skip the append: surface it
+loudly and continue in legacy mode only with the user's acknowledgement.

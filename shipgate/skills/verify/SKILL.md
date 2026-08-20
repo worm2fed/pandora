@@ -76,6 +76,30 @@ If you can't make it fail before the fix, you don't yet know the test is testing
   output, not "tests pass". A report with evidence is accepted; a report without it gets the
   command run, not the claim trusted. Don't re-derive work the evidence already proves.
 
+## Record the evidence (journaled projects)
+
+Fresh evidence is worth nothing tomorrow if only your conclusion survives. On a project
+whose config declares a **Journal**, a passing gate is appended as a `verify-run` event —
+the command, its exit code, and a trimmed head/tail of the output — against the feature's
+stream:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type verify-run \
+  --data '{"scope":"T010","outcome":"pass","task_ids":["T010"],
+           "commands":[{"cmd":"yarn test","exit":0,"head":"…","tail":"… 42 passed"}]}'
+```
+
+Three things this is not: it is not a substitute for *running* the command (the gate above
+is unchanged), not a place to paste whole logs (trim to the lines that prove the claim —
+the event is size-capped), and not optional bookkeeping. `task-done` will not append
+without a passing `verify-run` naming that task, so an unrecorded verify blocks the very
+completion it was meant to prove.
+
+Record failures too, with `"outcome":"fail"` — a gate that caught something is the most
+useful entry in the log, and it is what lets a later session see that the fix was proven
+rather than assumed.
+
 ## When verification fails
 
 Report the failure honestly with the output — a failed check caught now is the skill

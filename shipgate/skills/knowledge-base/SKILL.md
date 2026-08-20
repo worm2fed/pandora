@@ -127,3 +127,19 @@ anything the user didn't intend to persist, anything the code already makes obvi
 Shape each entry to be useful out of context: what it applies to, the guidance, the evidence
 (file/command/ADR), and when it does *not* apply. In a store that supports links, connect related
 notes per that store's conventions so the knowledge base stays connected.
+
+## Record the capture (journaled projects)
+
+On a project whose config declares a **Journal**, close the Capture phase once the ledger is
+walked and every entry is promoted or dropped — append it then, not at some later tidy-up:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type capture-done \
+  --data '{"promoted":["docs/adr/0007-async-export.md","CLAUDE.md"],"dropped":4}'
+```
+
+Promotions are recorded as **destinations** — the paths or store names written to, never the
+knowledge itself, which now lives in those stores. A missing or unreadable database is an
+infrastructure failure, not a reason to skip the append: surface it loudly and continue in legacy
+mode only with the user's acknowledgement.

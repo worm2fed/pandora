@@ -88,6 +88,26 @@ feature slices, then polish. Verify every PRD requirement (FR-###) and success c
 (SC-###) maps to at least one task — a requirement with no task is a requirement you'll
 forget to build.
 
+## Record the commit (journaled projects)
+
+On a project whose config declares a **Journal**, append `design-committed` as the working doc
+lands — artifacts by path, so a later session knows exactly what to open:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream feature/<slug> --type design-committed \
+  --data '{"issue":"<issue-id>","worklog":"docs/prd/<slug>.worklog.md",
+           "adrs":["docs/adr/0007-async-export.md"]}'
+```
+
+Designing ahead in epic mode uses the epic stream: `design-queued` {issue, assumes} on
+`epic/<slug>` when a design is parked for a later child, and `design-invalidated` {issue, reason}
+at the round boundary where a merge breaks what it assumed — each when it happens, never batched.
+Carry `issue` on all three: `status` drains a queued design by matching that key, so a
+`design-committed` without it leaves the design listed as queued forever.
+A missing or unreadable database is an infrastructure failure, not a reason to skip the append:
+surface it loudly and continue in legacy mode only with the user's acknowledgement.
+
 ## Guardrails
 
 - **Honor the impact map and CLAUDE.md.** The design must respect where code belongs and
