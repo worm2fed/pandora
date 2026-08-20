@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "db": ".claude/shipgate.db",
+  "ledger": "docs/ledger.md",
+  "artifact_homes": {
+    "worklog": "*/docs/prd/*.worklog.md",
+    "prd": "*/docs/prd/*.md",
+    "adr": "*/docs/adr/*.md"
+  },
+  "enforce": {
+    "stop_gate": true,
+    "auto_capture": true
+  }
+}
