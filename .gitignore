@@ -1,1 +1,7 @@
 node_modules/
+__pycache__/
+
+# shipgate flow journal — local state, never shared. The glob covers the -wal and -shm
+# sidecar files WAL mode creates. .claude/shipgate.json is deliberately NOT ignored: the
+# db path in it is repo-relative, so it reproduces on any clone.
+.claude/shipgate.db*
