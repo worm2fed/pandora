@@ -26,8 +26,13 @@ Start or resume work with **`/shipgate [description]`**, or just describe a feat
 
 ## Configuration
 
-Copy `config-template.md` from this plugin into your project as **`.claude/shipgate.md`**
-and fill in what applies. Skills read it at the start of a flow and treat it as overriding
+Run **`/shipgate:setup`** in a project and it does this for you: detects the repo's shape,
+asks a handful of questions with recommended defaults, writes `.claude/shipgate.md`, and —
+if you want one — initializes the flow journal. Re-running it enters update mode rather
+than clobbering what's there.
+
+Or do it by hand: copy `config-template.md` from this plugin into your project as
+**`.claude/shipgate.md`** and fill in what applies. Skills read it at the start of a flow and treat it as overriding
 their defaults; subagents get the relevant excerpts pasted into their dispatch briefs.
 Every section is optional — with no config at all, shipgate still works on sensible
 defaults (in-repo `docs/prd|adr/`, forge auto-detected from the git remote).
@@ -37,6 +42,7 @@ What the sections configure:
 | Section | Configures | Default without it |
 | --- | --- | --- |
 | Knowledge base | where PRDs/ADRs/worklogs and captured knowledge live (in-repo paths or an MCP-backed wiki), page conventions | `docs/prd/`, `docs/adr/`, capture to repo docs |
+| Journal | the append-only flow journal's database path (written by `/shipgate:setup`) | no journal — phase inferred from artifact shape |
 | Forge & tracker | GitLab/GitHub, CLI, MR/PR template + fetch command, issue-link form, AC source | auto-detect from `git remote` (`gh`/PR, `glab`/MR) |
 | Branching | branch naming pattern + examples | `<type>/<issue-id>-<slug>` |
 | Repo layout | umbrella / nested-repo checkouts, where the real repos live | working dir is the repo |

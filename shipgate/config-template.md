@@ -39,6 +39,55 @@ excerpt into each brief. So write sections to be liftable on their own.
   for workflow preferences. Entries are promoted or dropped at triage and then removed —
   see the `knowledge-base` skill>
 
+## Journal
+
+<!-- Default when absent: no journal — phase is inferred from artifact shape (checkbox
+     state, [NEEDS CLARIFICATION] markers) exactly as shipgate has always worked. This
+     section is written by `/shipgate:setup`; you rarely hand-write it. -->
+
+- Database: <path, e.g. `.claude/shipgate.db` — where the append-only flow journal lives>
+
+When this section is present the project is **journaled**, and three things change:
+
+- **Position is recorded, not guessed.** Phase transitions, gate decisions, verify
+  evidence, and review verdicts are appended as events; `feature` routes from the
+  journal alone. Artifact inference is not a fallback here — a missing event reads as
+  "still in the previous phase" until it is recorded.
+- **Capture is enforced by the plugin's hooks**, not by remembering: artifact writes are
+  recorded automatically, and a session cannot end while an expected event is missing.
+  The hooks read `.claude/shipgate.json` (a generated sidecar holding the database path,
+  the artifact-home globs, and the ledger path) — `setup` writes it; never hand-edit it,
+  re-run `setup` instead. If that sidecar is absent, every hook exits immediately and the project
+  behaves as un-journaled.
+- **The database is local, disposable state.** Gitignore it (`shipgate.db*`); the
+  artifacts in git or your wiki remain the portable record. Moving machines degrades to
+  un-journaled behavior unless you carry it over with `journal.py export` / `import`.
+  Never mount it into a container: the journal runs in SQLite's WAL mode, which needs
+  filesystem locks a bind mount doesn't provide, and because WAL is a property of the
+  file the breakage outlives the container (recover with `PRAGMA journal_mode=DELETE`
+  from the host). If a bot runs a shipgate phase, it runs it on the host.
+
+**The journal does not replace the ledger.** The ledger holds *prose learnings* mid-flow
+and is deliberately lossy — entries are promoted to a durable home or dropped at triage,
+then removed, so an empty ledger is the healthy steady state. The journal holds
+*operational state* and is never emptied. Triage still writes learnings to the stores
+above; the journal only records **that** it happened, as a `capture-done` event. Don't
+park a learning in the journal — it is machine-local and gitignored, so anything durable
+left there is lost to your teammates and to your next machine. The sidecar does carry the
+ledger's path, so `status` can report how many untriaged entries are waiting; that is the
+`knowledge-base` skill's ~15-entry nudge made mechanical, and it is information only —
+the ledger never gates a session.
+
+**Event names are a fixed vocabulary.** `journal.py vocab` lists them and `append` refuses
+anything else, because an event named something plausible-but-unlisted is inert — it
+records, and no gate or report ever reads it, which looks like success. Pass `--new-type`
+to mint a genuinely new concept on purpose. Stream names are free: `feature/<slug>` or the
+branch (`fix/8744-vessel-rate`) both work. `journal.py doctor` reports any off-vocabulary
+events already in a journal.
+
+Dial enforcement down by setting `enforce.stop_gate` or `enforce.auto_capture` to false
+in the sidecar (both default true). Run `journal.py doctor` when anything looks stale.
+
 ## Forge & tracker
 
 <!-- Default when absent: detect from `git remote get-url origin` — github.com → gh + PRs,
@@ -77,6 +126,13 @@ excerpt into each brief. So write sections to be liftable on their own.
     already ran when review passed (then next epic child, if any); watched MR merged →
     resume the held work per its note; conflicts / failed CI → fix before review continues.
 - The watcher is strictly read-only. It suggests; the user triggers every resume.
+- Optional, when a **Journal** is configured: a watcher may append what it observes to
+  `watch/<project>!<iid>` streams via the plugin's `journal.py` (`baseline`,
+  `pipeline-flip`, `comments-added`, `merge-status`, `conflicts`, `approved`, `merged`,
+  `closed`). Watchers typically keep a single overwritten snapshot file, so a missed or
+  crashed tick loses the intervening history; journalling makes the snapshot a cache and
+  the history reconstructable. Suggestion, not a requirement — a watcher that doesn't do
+  this still works exactly as described above.
 
 ## Branching
 
