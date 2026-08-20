@@ -7,6 +7,10 @@
     "email": "worm2fed@gmail.com"
   },
   "license": "MIT",
+  "hooks": [
+    "./hooks/core.json",
+    "./hooks/filechanged.json"
+  ],
   "keywords": [
     "feature-development",
     "sdlc",

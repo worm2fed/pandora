@@ -1,0 +1,17 @@
+{
+  "_comment": "FileChanged lives in its own file on purpose. The event was added in Claude Code v2.1.83; how an older build treats an unrecognized event name in a hooks file is undocumented, so isolating it means a worst case of 'disk-watching capture is missing' rather than 'the Stop gate silently stopped existing'. The matcher is deliberately omitted: a FileChanged matcher registers literal filenames in the cwd rather than matching paths, and omitting it fires the hook for every dynamically watched path, which is what session_start.py supplies.",
+  "hooks": {
+    "FileChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/file_changed.py"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
