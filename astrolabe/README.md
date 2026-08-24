@@ -45,6 +45,14 @@ section so every phase (and every worker brief) picks them up:
 
 ## Status
 
+v0.4.0 — the **type review checklist** (end of `domain-modeling.md`): six questions for
+reviewing declarations on their own — closed vocabularies as unions (a hand-enumerated
+table proves closure; author the union, never widen to `string`), reuse only within the
+boundary or shared kernel (another context's vocabulary → own union + one total mapping at
+the seam), totality over unions, no representable invalid field combinations, Option/branded
+ids for absence and identity, unconsumed types deleted. Routed from the SKILL.md table;
+pairs with a process-side declarations-first round (e.g. shipgate v0.10.0's types round).
+
 v0.3.0 — the reuse ladder: before hand-rolling integration plumbing, check (1) the
 dependency's own API (libraries ship the combinator for their own domain — don't
 re-implement what the library measures), (2) siblings in the same module (the adjacent

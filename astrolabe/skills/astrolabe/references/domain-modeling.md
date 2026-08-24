@@ -351,3 +351,32 @@ is its only public surface; cross-context imports go through it.
 **The barrel is the entry point + exports; a helper function accumulating there is drift,
 not a home.** Move it out to the module owning the type it operates on; the barrel only
 imports and re-exports.
+
+## Type review checklist
+
+For reviewing a set of declarations on its own — a types-only change, a declarations-first
+round, or the type surface of any diff. Each item is a question; a "no" is a finding.
+
+1. **Is every closed, finite vocabulary a union (or enum-equivalent)?** `string`,
+   `Record<string, X>`, and `readonly string[]` standing in for a closed set are findings.
+   A hand-enumerated lookup table IS the proof its key set is closed; the absence of a
+   pre-existing union is a reason to author one, never a reason to widen to `string`.
+2. **Does this vocabulary already exist** (a value object, union, branded id)? Reuse beats
+   authoring — but only from the context's own boundary or the shared kernel, and this
+   question decides reuse-vs-author, never whether the type exists at all. Consuming another
+   context's canonical *model* follows the ownership rule above (import at the border,
+   direction named). Embedding another context's *vocabulary* in your own domain decisions
+   is leakage, not reuse: declare your own closed union and put the single **total** mapping
+   at the seam already permitted to know both sides — then an upstream rename is a compile
+   error at the translation point, not a silent fallback downstream. Integration/adapter
+   contexts are the worst offenders precisely because translating is nearly all they do.
+3. **Is every record over a union total**, so adding or renaming a member is a compile
+   error at every site that must decide something — not a runtime default?
+4. **Can any two fields combine into an invalid state?** Group them into one discriminated
+   shape (one option, not two independent ones) so the invalid combination cannot be
+   constructed.
+5. **Absence and identity:** nulls are `Option` (or required `| null` at the edge);
+   co-optional fields that appear together are grouped into one optional object; a raw
+   `string`/`number` where a branded id exists is a finding.
+6. **Does every declared type have a consumer?** A type with none gets deleted, not
+   admired.
