@@ -87,7 +87,8 @@ node $S/render.mjs <file>.bpmn                                  # single diagram
 node $S/render.mjs <a>.bpmn <b>.bpmn <c>.bpmn -o suite.html     # tabbed suite
 ```
 
-Send the HTML to the user with `SendUserFile` (display: `render`). Then iterate
+Send the HTML to the user with `SendUserFile` (display: `render`) if available;
+otherwise print the absolute file path and tell the user to open it in a browser. Then iterate
 in conversation: edit the **semantic** XML (stable IDs make this surgical),
 re-run layout → validate → render to the **same paths** so the preview updates.
 Don't ask permission per iteration — apply the feedback, re-render, show it.

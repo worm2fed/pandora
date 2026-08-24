@@ -24,6 +24,13 @@ Iteration happens in conversation: describe a change, Claude edits the
 semantics, re-layouts, re-renders. The final `.bpmn` imports cleanly into
 [bpmn.io](https://demo.bpmn.io) / Camunda Modeler for optional manual polish.
 
+## Install
+
+```
+/plugin marketplace add worm2fed/pandora
+/plugin install bpmn@pandora
+```
+
 ## Usage
 
 Ask for a diagram in natural language, or invoke the skill directly:
