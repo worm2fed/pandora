@@ -47,8 +47,9 @@ decision). Escalate to the user only when the reversibility lens says one-way do
 the choice changes user-visible scope, or when you genuinely can't rank the approaches.
 Present the committed choice and its rationale in the phase summary so the user can veto.
 
-Before you commit to the recommendation, run two quick lenses on the leading approach (use the
-`thinking-skills` plugin if available; otherwise just apply the idea):
+Before you commit to the recommendation, run two quick lenses on the leading approach
+(invoke the lens skills the config's **Thinking lenses** section maps to Design, if any;
+otherwise just apply the idea):
 - **reversibility** — is this a one-way door (schema migration, public API, shared write path)
   or easily undone? One-way doors deserve more deliberation *and* an ADR; reversible choices
   can move fast. This directly informs what you record in Step 3.

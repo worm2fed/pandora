@@ -146,6 +146,19 @@ just less informed.
 
 ## Status
 
+v0.9.0 — config-declared tooling: new **Code tooling** section (a library-docs
+tool/MCP for dependency APIs + an LSP tool for symbol navigation — wired into implement's
+reuse step, structured-debug's evidence sources, and worker briefs) and new **Thinking
+lenses** section (map phases to lens skills to actually invoke; default remains
+apply-the-idea-inline). Hardcoded `thinking-skills` plugin references removed — the two
+review/design agents can't invoke skills, so their lens guidance is now inline; main-session
+lens invocation is config-routed.
+
+v0.8.0 — project bootstrap: the `setup` skill (interview → writes `.claude/shipgate.md`,
+a generated `.claude/shipgate.json` sidecar, and initializes the flow journal) and the
+flow journal itself — the authoritative per-branch position (phase, tasks, verifies, gate
+decisions) that the orchestrator routes from instead of rescanning worklogs.
+
 v0.7.1 — implement's reuse-before-writing step now also checks the dependency's own API
 surface and same-module siblings before hand-rolling integration plumbing (pairs with
 astrolabe v0.3.0's reuse ladder).

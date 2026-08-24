@@ -23,9 +23,10 @@ own questions — see the Executive mode section below.
 
 First, anchor the *why*: what job is the user actually hiring this feature to do? The stated
 feature is often a proposed solution, not the real need — naming the underlying job keeps the
-PRD focused on the outcome and sharpens the success criteria. If the `thinking-skills` plugin
-is available, `thinking-jobs-to-be-done` does this directly; otherwise just ask "what progress
-is the user trying to make, and how will they know it worked?"
+PRD focused on the outcome and sharpens the success criteria. If the config's **Thinking
+lenses** section maps a lens skill to Clarify (e.g. a jobs-to-be-done skill), invoke it;
+otherwise just ask "what progress is the user trying to make, and how will they know it
+worked?"
 
 Then walk these dimensions and mark each **Clear / Partial / Missing** based on the request +
 exploration findings. This tells you where the real gaps are instead of asking random

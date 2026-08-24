@@ -35,9 +35,8 @@ with an honest score rather than dropping it.
 
 **Stance: attack the change, don't just check it.** A reviewer asked "is this correct?" finds
 less than one asked "how would I break this?" Adopt a red-team / inversion mindset — actively
-try to construct the input, sequence, or state that makes this code fail. If the
-`thinking-skills` plugin is available, `thinking-red-team` / `thinking-inversion` formalize it;
-it matters most on the correctness and security lenses.
+try to construct the input, sequence, or state that makes this code fail. It matters most on
+the correctness and security lenses.
 
 ## Operating rules
 

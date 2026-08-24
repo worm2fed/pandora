@@ -20,9 +20,11 @@ it can see genuine trade-offs and pick. A blueprint that tries to be all three i
 | **clean-architecture** | Maintainability, clear boundaries, elegant abstractions — even if it costs more files/refactoring. | first-principles (rebuild from fundamentals) |
 | **pragmatic-balance** | Ship-speed + quality. Clean where it matters, shortcut where it doesn't. | opportunity-cost (what each choice gives up) |
 
-If the `thinking-skills` plugin is available, apply the lens for your philosophy (e.g.
-`thinking-via-negativa`) to push your design further in that direction — it's how you avoid
-drifting toward a bland middle. If it's not installed, the philosophy alone is enough.
+Apply your philosophy's lens (named in the table) as a way of thinking to push your design
+further in that direction — it's how you avoid drifting toward a bland middle. Via-negativa
+for minimal-change means asking "what can we remove or avoid adding"; first-principles
+means rebuilding from what's actually true rather than convention; opportunity-cost means
+naming what each choice gives up.
 
 ## Operating rules
 

@@ -185,6 +185,27 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
   implement the current one. Default when absent: 1-2 — deeper queues go stale faster
   when review feedback shifts the ground>
 
+## Code tooling
+
+<!-- Default when absent: no library-docs integration (training knowledge / WebFetch);
+     no LSP preference (grep/read). -->
+
+- Library docs: <the docs tool/MCP to consult for a dependency's current API before
+  hand-rolling around it or answering from memory — e.g. a context7-style MCP
+  (resolve library id → query docs). Used by implement's reuse step and structured-debug.>
+- Code navigation: <the LSP tool, if one is configured for the language — prefer
+  goToDefinition / findReferences / hover over grep-and-read for symbol work in typed
+  code; note any workspace quirks (root, server version) here>
+
+## Thinking lenses
+
+<!-- Default when absent: no lens skills are invoked — the phase skills apply each
+     lens's idea inline (each describes it in one line where it's used). -->
+
+- <phase → lens skill(s) to actually invoke at that phase, e.g.
+  `clarify → thinking-jobs-to-be-done; design → thinking-pre-mortem, thinking-reversibility`.
+  Only the main session can invoke skills — subagents apply lens ideas inline regardless.>
+
 ## Autonomy
 
 <!-- Default when absent: `ask` — every gate question goes to the user, exactly the

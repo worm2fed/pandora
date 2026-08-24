@@ -38,14 +38,19 @@ the fix is deliberate.
      `gh run view --log` / `glab ci trace`).
    - Logic-level → run the failing test in isolation; add targeted logging or a
      `--inspect`/debugger session.
+   - Symbol-level (who calls this, what's this type, where is it defined) → the LSP tool
+     when the config's **Code tooling** section names one — `findReferences`/
+     `goToDefinition`/`hover` beat grep-plus-read in typed code.
+   - A dependency's actual behavior/API → the library-docs integration the config's
+     **Code tooling** section names (if any), before trusting memory of the API.
 
 3. **Hypothesize and test — one variable at a time.** For each hypothesis, write down: what
    evidence you'd see if it's true, what you'd see if it's false, and the exact command/check
    that distinguishes them. Run it. Let the evidence kill hypotheses; don't pattern-match to
    the first plausible cause. Change one thing per test so you know what moved the result.
 
-   This step *is* the scientific method; a few lenses sharpen it (use the `thinking-skills`
-   plugin if available, else apply the idea):
+   This step *is* the scientific method; a few lenses sharpen it (invoke the lens skills
+   the config's **Thinking lenses** section maps to debugging, if any; else apply the idea):
    - **occam's-razor** — test the fewest-assumption hypothesis first; escalate to exotic causes
      only when the simple ones are ruled out.
    - **kepner-tregoe** — when the bug is *selective* (some endpoints/users/regions/times, not

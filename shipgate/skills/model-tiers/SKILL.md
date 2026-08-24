@@ -72,7 +72,9 @@ A worker starts with zero context; the brief must be self-contained:
 3. **Branch check** — the worker must verify it is on the expected branch before editing,
    and stop if not.
 4. **Validation commands** — the exact lint/test/build commands that prove the task done,
-   and the instruction to run them and read the output.
+   and the instruction to run them and read the output. Also name the config's **Code
+   tooling** integrations (the library-docs tool for dependency APIs, the LSP tool for
+   symbol navigation) so workers use them instead of grep-and-memory.
 5. **No commit, no staging** — the worker leaves changes in the working tree for
    orchestrator review.
 6. **Report-back format** — evidence (real command output, not "tests pass"), deviations

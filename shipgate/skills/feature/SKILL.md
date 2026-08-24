@@ -204,6 +204,7 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   security-sensitive area) or a release check, fire the built-in `/security-review` — the
   in-flow reviewer security lens is a routine sweep, not a full audit. Built-in `/simplify` is
   there for standalone cleanup.
-- **Structured thinking where it pays** (if the `thinking-skills` plugin is installed): the
-  phases already name their lens; for any *other* hard fork where the right lens isn't obvious,
-  start at `thinking-model-router`. Don't force a model on routine or trivial work.
+- **Structured thinking where it pays**: each phase describes its lens inline and applies
+  the idea by default; the config's **Thinking lenses** section may map phases to actual
+  lens skills to invoke (typically the early, judgment-dense phases — clarify, design).
+  Don't force a lens on routine or trivial work.

@@ -32,8 +32,11 @@ task — whoever executes it.
    that already does this — and when integrating a dependency, **read its API surface
    first**: libraries usually ship the combinator for their own domain (timers, retries,
    interceptor lifecycles), and a sibling function in the same module using that dependency
-   is the template to match. The cheapest correct code is the code you don't add. Only
-   write new code when nothing fits cleanly — don't force-fit a near-match, but don't
+   is the template to match. Consult the library-docs integration the config's **Code
+   tooling** section names (if any) rather than trusting memory of the API; for symbol
+   navigation in typed code (who calls this, where is it defined), prefer the LSP tool the
+   config names over grep-and-read. The cheapest correct code is the code you don't add.
+   Only write new code when nothing fits cleanly — don't force-fit a near-match, but don't
    reinvent either.
 
 3. **Match the conventions** surfaced during exploration — error handling, validation, DI,
