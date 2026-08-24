@@ -82,7 +82,7 @@ the ledger never gates a session.
 anything else, because an event named something plausible-but-unlisted is inert — it
 records, and no gate or report ever reads it, which looks like success. Pass `--new-type`
 to mint a genuinely new concept on purpose. Stream names are free: `feature/<slug>` or the
-branch (`fix/8744-vessel-rate`) both work. `journal.py doctor` reports any off-vocabulary
+branch (`fix/1290-date-off-by-one`) both work. `journal.py doctor` reports any off-vocabulary
 events already in a journal.
 
 Dial enforcement down by setting `enforce.stop_gate` or `enforce.auto_capture` to false

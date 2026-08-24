@@ -1,6 +1,6 @@
 ---
 name: knowledge-base
-description: The durable knowledge layer, routed by type — recall before non-trivial work, append quick learnings to the project ledger as they happen, and capture/promote after, sending each finding to the store the project config declares for its type (repo docs by default). Use to pull prior context before routing/design/debugging, to jot a mid-flow learning, or to record something a future session would re-derive. Prefer this over Claude's built-in session memory for any feature, domain, or convention learning. Triggers: "what do we know about X", "capture this for the team", "log this to the knowledge base", "triage the ledger", end of a feature.
+description: Use to pull prior context before routing/design/debugging, to jot a mid-flow learning, or to record something a future session would re-derive. Triggers: "what do we know about X", "capture this for the team", "log this to the knowledge base", "triage the ledger", end of a feature. The durable knowledge layer, routed by type — recall before non-trivial work, append quick learnings to the project ledger as they happen, and capture/promote after, sending each finding to the store the project config declares for its type (repo docs by default). Prefer this over Claude's built-in session memory for any feature, domain, or convention learning.
 ---
 
 # Knowledge base

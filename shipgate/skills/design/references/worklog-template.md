@@ -42,6 +42,19 @@ New or changed entities, tables, migrations. Note any downstream data obligation
 Endpoints, payloads, events, websocket messages. Note breaking changes + the parallel-change/
 deprecation plan for any public/external surface.
 
+## Reference implementation
+
+The vetted implementation new code mirrors for its internal anatomy: `path/to/file` — and
+why it's the reference (not simply the nearest sibling).
+
+## Pre-authorized deltas (ports/migrations only)
+
+Intentional divergences from the source-of-truth artifact, declared up front. The review
+phase's parity gate consumes this list — anything not here counts as an unauthorized
+behavioral difference. Delete this section when the work isn't a port or migration.
+
+- <delta> — why it's intended
+
 ## CLAUDE.md / impact-map compliance
 
 - Primary home service: <...> (n/a for single-service repos)
@@ -71,3 +84,10 @@ Tests are tasks, not a separate phase. Tick boxes as you go; log deviations inli
 
 ## Deviations & notes (filled during implementation)
 - <date> — diverged from design at T0NN because <...>; impact: <...>
+
+## Rejected findings
+
+Filled during review: findings the review coordinator killed on evidence, and why — so a
+later round doesn't re-litigate them.
+
+- <finding, with `file:line`> — killed because <...>

@@ -1,8 +1,25 @@
 ---
 name: code-reviewer
-description: Reviews code for bugs, logic errors, security issues, convention violations, and design drift. Reports every finding with a confidence score and severity — coverage over self-filtering; the dispatching coordinator runs the filtering pass. Each instance reviews through ONE lens (correctness, conventions+design-alignment, or simplicity+security). Returns findings with file:line. Use during the Review phase, up to 3 in parallel.
-tools: Glob, Grep, Read, Bash, WebFetch, WebSearch, TodoWrite
+description: |
+  Reviews code for bugs, logic errors, security issues, convention violations, and design
+  drift. Reports every finding with a confidence score and severity — coverage over
+  self-filtering; the dispatching coordinator runs the filtering pass. Each instance reviews
+  through ONE lens (correctness, conventions+design-alignment, or simplicity+security).
+  Returns findings with file:line. Use during the Review phase, up to 3 in parallel.
+
+  <example>
+  Context: The build plan is complete on a multi-file change touching an auth boundary, and
+  the coordinator is at the Review gate before opening an MR.
+  user: "All the tasks are ticked. Can we push this?"
+  assistant: "Not before review. The diff has real surface for each lens, so I'll dispatch
+  three code-reviewer agents in parallel — correctness, conventions + design-alignment, and
+  simplicity + security — then filter and rank their findings in my own pass."
+  <commentary>Fresh-context reviewers catch what the coordinator's accumulated build context
+  blinds it to; the coordinator filters afterwards rather than asking them to self-filter.</commentary>
+  </example>
+tools: Glob, Grep, Read, Bash, WebFetch, WebSearch
 model: sonnet
+effort: medium
 color: red
 ---
 

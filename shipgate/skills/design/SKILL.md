@@ -78,11 +78,27 @@ project config declares) from `references/worklog-template.md`. It has two secti
 different lifecycles:
 
 - **Design** — the *how*: architecture, components, data flow, API/contract changes, data
-  model. This is stable once agreed; treat edits as deliberate.
+  model. This is stable once agreed; treat edits as deliberate. Fill the template's
+  **Reference implementation** section: new code should mirror the vetted reference
+  implementation the design names — the nearest sibling is not automatically a pattern
+  source (scaffolds and stubs encode garbage), and a previous slice's output is a source
+  only for the surfaces that were actually reviewed; template drift compounds slice over
+  slice. When the work **ports or migrates existing behavior**, also fill
+  **Pre-authorized deltas (ports/migrations only)** — every intentional
+  divergence from the source-of-truth artifact, declared up front; the review phase's
+  parity gate consumes this list, and anything not on it counts as an unauthorized
+  behavioral difference.
 - **Build Plan** — ordered tasks, **with tests as tasks** (never a separate doc). Mark a task
   `[P]` when it's independent of its siblings and could be done in parallel. Each task names
   the file(s) it touches and what "done" means. This section is *living* — implementation
-  ticks the boxes and logs deviations here.
+  ticks the boxes and logs deviations here. When a slice **introduces new domain shapes**
+  (entities, value objects, error unions, command/handler signatures), plan a
+  **declarations task** ahead of that slice's body tasks: types and signatures only, bodies
+  throwing `unimplemented`, "done" = a test-inclusive type-check passing plus a review of
+  the declarations alone (see `implement` — Types round). Scope it to the slice, never the
+  whole feature — a feature-wide types round is big design up front wearing a functional
+  hat — and keep it after exploration: some shapes only exist once the wire and DB reality
+  are known.
 
 Order the build plan so dependencies are respected: setup/shared foundations first, then the
 feature slices, then polish. Verify every PRD requirement (FR-###) and success criterion

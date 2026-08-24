@@ -97,7 +97,7 @@ the project **ledger** as one-liners the moment you hit them (see `knowledge-bas
 ## Record the diagnosis (journaled projects)
 
 On a project whose config declares a **Journal**, a bug flow records the same way a feature
-does — the stream is this work's branch (`fix/8744-vessel-rate`) or its slug, either is fine:
+does — the stream is this work's branch (`fix/1290-date-off-by-one`) or its slug, either is fine:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \

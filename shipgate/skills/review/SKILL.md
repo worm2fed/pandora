@@ -24,7 +24,16 @@ diff; the full three-lens fan only for changes where each lens has real surface*
 - **simplicity + security** — needless complexity / wrong abstractions, plus OWASP-class
   issues and (if relevant) prompt injection.
 
-Give each the diff, the worklog (design + build plan), the PRD, and the impact map.
+Give each the diff, the worklog (design + build plan), the PRD, and the impact map — plus
+two coordinator lists: **do-not-flag** (deviations already logged and authorized in the
+worklog, so reviewers don't spend findings re-litigating settled calls) and any
+**pre-rulings** (items you already know are must-fix; reviewers confirm scope rather than
+re-discover them).
+
+For a genuinely trivial, pattern-mirroring diff (a config line, a one-file change copying
+a vetted shape), the coordinator may gate directly with no reviewer subagent — say you're
+doing that and record the ruling (journaled projects: a `gate-decision` event). The
+independent-review requirement is for changes with judgment surface, not for every diff.
 
 This security lens is a routine sweep, not a full audit. For changes touching auth, secrets,
 or any area the project config lists as security-sensitive (default: auth, secrets, payments),
@@ -40,6 +49,11 @@ as a separate pass. Consolidate by file, dedupe across lenses, then filter:
   enough to be worth a check — verify those yourself (read the cited code) and either
   promote or kill them on evidence.
 - **Drop** what doesn't survive scrutiny; don't pass speculative noise to the author.
+
+Rejections are rulings, not silence: record what you killed and why under the worklog's
+**Rejected findings** section (one line each; journaled projects fold them into the
+`review-verdict` counts), so a later round doesn't re-raise or re-litigate a finding that
+already lost on evidence.
 
 Order by severity (BLOCKER → HIGH → MEDIUM → LOW). Every surviving finding must carry a
 `file:line` and a concrete fix.
@@ -71,7 +85,25 @@ screenshot — not an assertion that it "should" be. Any criterion you can't dem
 AC is demonstrably met does the issue earn a Ready verdict. (This applies to every issue, epic
 child or standalone.)
 
-## Step 5 — Verify, then verdict
+## Step 5 — Parity gate (ports and migrations only)
+
+When the change ports or migrates existing behavior, one more independent pass before the
+verdict: a **fresh** adversarial subagent gets the source-of-truth artifact (legacy code,
+contract, flow spec), the implementation, and the worklog's **Pre-authorized deltas
+(ports/migrations only)** list (see `design`), prompted to find any *unauthorized*
+behavioral difference. It must
+parse the whole artifact — trigger config, error paths, transactionality, timeouts,
+concurrency — not just the happy path.
+
+The coordinator arbitrates each finding: **accept as an improvement** (add it to that same
+worklog section with the reasoning — journaled projects record a
+`gate-decision`) or **route back to `implement`**. Silent-failure semantics in the source
+(swallow-and-continue flags, bare catches) are usually bugs to fix rather than contracts
+to preserve — but that's a ruling to make explicitly, never a default.
+
+Not a port → skip this step silently.
+
+## Step 6 — Verify, then verdict
 
 Run the `verify` gate on the suite/build/lint for the touched code — fresh output, exit
 codes, real pass counts. Then give a clear verdict:
@@ -79,6 +111,11 @@ codes, real pass counts. Then give a clear verdict:
 - **Ready** — no blockers, rules satisfied, evidence attached. Safe to MR/PR/push.
 - **Not ready** — list blockers; route back to `implement` (code wrong) or `design`
   (approach wrong). Don't soften a blocker into a suggestion.
+
+**Cap the internal loop at two rounds.** Not-ready → fix → re-review is normal once; a
+second round should close the gap. If blockers still stand after two rounds, surface the
+open list to the user instead of looping — a review that can't converge is signalling a
+design or requirements problem, not a code problem.
 
 This phase **is** the flow's verification — one independent review plus one evidence gate.
 Don't stack further self-check passes on top ("double-check once more", a second verify of
@@ -142,7 +179,7 @@ honesty is part of the review.
 ## Record the outcome (journaled projects)
 
 On a project whose config declares a **Journal**, three moments here are events, each appended
-when it happens: the Step 5 verdict, the MR going up, and reviewer feedback landing.
+when it happens: the Step 6 verdict, the MR going up, and reviewer feedback landing.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \

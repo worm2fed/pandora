@@ -114,7 +114,7 @@ EVENT_VOCABULARY: Dict[str, str] = {
 }
 
 # Streams the tool owns. Everything else is a work stream — named for its branch
-# (`fix/8744-…`) or its feature slug, both of which are legitimate.
+# (`fix/1290-…`) or its feature slug, both of which are legitimate.
 META_STREAM = "shipgate"
 WATCH_STREAM_PREFIX = "watch/"
 
@@ -786,7 +786,7 @@ def is_work_stream(stream: str) -> bool:
     """Every stream except the tool's own is work worth reporting.
 
     Defining this by exclusion rather than by a `feature/` prefix is deliberate: a
-    session that names its stream after the branch (`fix/8744-vessel-rate`) is doing
+    session that names its stream after the branch (`fix/1290-date-off-by-one`) is doing
     something reasonable — arguably better, since it ties the journal to the branch —
     and a prefix allowlist silently hid whole flows from `status`.
     """
@@ -872,7 +872,7 @@ def build_status(
 ) -> Dict[str, Any]:
     if feature:
         # Accept a bare slug, a `feature/` stream, or any other work stream name
-        # (a branch-shaped one such as `fix/8744-…`) — match whichever exists.
+        # (a branch-shaped one such as `fix/1290-…`) — match whichever exists.
         existing = list_streams(conn)
         candidates = [feature, FEATURE_STREAM_PREFIX + feature]
         wanted = [s for s in candidates if s in existing]

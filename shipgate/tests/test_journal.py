@@ -1101,7 +1101,7 @@ class TestExportImport(JournalTestCase):
 class TestWorkStreamRecognition(JournalTestCase):
     """Any stream that isn't the tool's own is work worth reporting.
 
-    A real bug flow named its stream after the branch — `fix/8744-vessel-rate` — and the
+    A real bug flow named its stream after the branch — `fix/1290-date-off-by-one` — and the
     old `feature/` prefix filter hid all ten of its events from `status`, which reported
     "No feature streams recorded" while the journal was in fact full.
     """
@@ -1111,9 +1111,9 @@ class TestWorkStreamRecognition(JournalTestCase):
         self.init_db()
 
     def test_a_branch_named_stream_is_reported(self):
-        self.append_event("fix/8744-vessel-rate", "flow-started", {"branch": "fix/8744"})
+        self.append_event("fix/1290-date-off-by-one", "flow-started", {"branch": "fix/1290"})
         streams = [f["stream"] for f in self.status_json()["features"]]
-        self.assertIn("fix/8744-vessel-rate", streams)
+        self.assertIn("fix/1290-date-off-by-one", streams)
 
     def test_the_meta_stream_is_not_reported_as_work(self):
         self.append_event("shipgate", "setup-completed", {"mode": "create"})
@@ -1129,10 +1129,10 @@ class TestWorkStreamRecognition(JournalTestCase):
         self.assertEqual(streams, ["feature/demo"])
 
     def test_filtering_matches_a_branch_named_stream(self):
-        self.append_event("fix/8744-vessel-rate", "flow-started", {})
+        self.append_event("fix/1290-date-off-by-one", "flow-started", {})
         self.append_event("feature/other", "flow-started", {})
-        got = [f["stream"] for f in self.status_json("--feature", "8744")["features"]]
-        self.assertEqual(got, ["fix/8744-vessel-rate"])
+        got = [f["stream"] for f in self.status_json("--feature", "1290")["features"]]
+        self.assertEqual(got, ["fix/1290-date-off-by-one"])
 
 
 # ---------------------------------------------------------------------------

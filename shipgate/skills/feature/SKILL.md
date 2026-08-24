@@ -10,9 +10,8 @@ You coordinate the lean feature flow. You don't do the deep work yourself — yo
 it*. Think of yourself as the tech lead who keeps the work moving through the right gates,
 not the engineer heads-down in one file.
 
-> **Project config:** before applying the defaults below, read `.claude/shipgate.md` from
-> the project root (in an umbrella checkout, also check the umbrella root). If present, its
-> instructions override this skill's defaults.
+> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
+> checkout) overrides the defaults below; read it first if present.
 
 ## The flow
 
@@ -114,12 +113,9 @@ The phase semantics — what each position means and where it goes next — are 
 - Worklog with unchecked Build Plan tasks → **Implement** (resume at the next task).
 - Build Plan complete → **Review**.
 - Review passed → **Capture, immediately** — explicitly invoke the `knowledge-base` skill:
-  triage the ledger (promote or drop its entries) and route any remaining learnings to their
-  configured homes (don't leave it to ambient "remember this" — that triggers Claude's
-  built-in session memory instead, and the knowledge never lands where a future session finds
-  it). **Capture is not gated on the MR merging or on a further user go-ahead** — the
-  learnings exist the moment review passes, and knowledge must never sit hostage to an
-  external event. Then done.
+  triage the ledger and route the rest to their configured homes. Never leave it to ambient
+  "remember this" — that hits Claude's built-in session memory, not the knowledge base.
+  **Not gated on the MR merging or on a further user go-ahead.** Then done.
 - An **MR-watcher event** (if the config declares a watcher) naming an issue is a valid resume
   signal for that issue — enter at the phase the event unlocks, not at the start: reviewer
   comments → the review-feedback cycle (defined in `review`: re-enter implement for the

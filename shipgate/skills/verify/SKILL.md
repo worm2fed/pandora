@@ -54,6 +54,7 @@ if you're about to write one, stop and run the command instead:
 | Bug is fixed | Reproduce first (must fail), apply fix, reproduce again (now passes) |
 | Phase complete | Each acceptance criterion verified individually, not as a bundle |
 | Feature works | An end-to-end run or a concrete manual walkthrough, not "the code looks right" |
+| No regressions in shared code | The affected suite run **before** the change (baseline) and after — zero *new* failures; "pre-existing" is a claim to check, not to assume (it may be your own branch's earlier debt) |
 
 ## Bug fixes: prove the test catches the bug
 

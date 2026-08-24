@@ -80,8 +80,8 @@ emitted, carrying the map's essentials in `data` — enough for a later session 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream feature/<slug> --type phase-entered \
-  --data '{"phase":"route-and-map","primary_home":"core-service",
-           "touched":["core-service","web"],"schema":false,"flag":"kernel-42"}'
+  --data '{"phase":"route-and-map","primary_home":"api",
+           "touched":["api","web"],"schema":false,"flag":"export-filters"}'
 ```
 
 Essentials only — the map itself stays in the conversation and in the artifacts that follow it;

@@ -53,6 +53,13 @@ Measurable and technology-agnostic — how we'll know it works and is done.
 - <technical / business / time constraints>
 - <assumptions we're making; mark risky ones>
 
+## Assumptions (executive)
+
+Executive mode only — the coverage-scan questions answered without asking. One line each;
+delete this section when the flow ran in `ask` mode.
+
+- <question> → <answer taken> — <one-sentence rationale>
+
 ## Open questions
 
 - `[NEEDS CLARIFICATION]` <only what's genuinely unresolved; the Clarify gate is not passed

@@ -40,7 +40,11 @@ task — whoever executes it.
    reinvent either.
 
 3. **Match the conventions** surfaced during exploration — error handling, validation, DI,
-   the stack idioms exploration surfaced, naming. New code should look like it was always there.
+   the stack idioms exploration surfaced, naming. New code should look like it was always
+   there. For internal anatomy: **mirror the vetted reference implementation the design
+   names** — the nearest sibling is not automatically a pattern source (scaffolds and
+   stubs encode garbage), and a previous slice's output is a source only for the surfaces
+   that were actually reviewed.
 
 4. **Write the test first when there's real behavior.** Whether you're adding logic or fixing
    a bug, write the failing test before the production code: watch it fail for the right reason
@@ -65,6 +69,28 @@ task — whoever executes it.
    and the code drift apart. Anything you learned that outlives this feature — a trap, a
    convention, a style call — gets a one-line entry in the project **ledger** as it happens
    (see `knowledge-base`); don't trust end-of-flow memory to resurface it.
+
+## Types round (declarations-first slices)
+
+When the build plan carries a **declarations task** (the design plans one for any slice
+introducing new domain shapes), the slice runs "type, define, refine":
+
+1. **Declare only.** Types, interfaces, function signatures, table shapes — bodies are
+   `throw new Error('unimplemented')`. No behavior yet.
+2. **Gate on the type-check.** The task's `verify` gate is a full, test-inclusive
+   type-check passing — declarations are verifiable code, not a design document.
+3. **Review the declarations alone** before any body task starts: against the style
+   skill(s) the config names (a typed-FP canon usually carries a type-review checklist —
+   closed vocabularies as unions, totality, no representable invalid combinations,
+   branded ids, unconsumed types deleted). A small slice can be gated by the coordinator
+   directly; a shape-heavy one gets a reviewer pass.
+4. **Reviewed signatures are frozen.** A body task that needs a reviewed signature to
+   change escalates back to the coordinator/design instead of silently reshaping it, and
+   the change lands as a worklog deviation (journaled projects: a `deviation` event).
+   The freeze is what makes this a gate rather than a decoration.
+
+Skip this for slices that only use existing shapes — the round exists for new domain
+vocabulary, not for every task.
 
 ## Record each task (journaled projects)
 

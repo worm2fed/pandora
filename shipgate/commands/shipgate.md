@@ -19,9 +19,18 @@ Do this:
    when there's no tracker) off a clean base
    and confirm before switching; do **not** start exploring on whatever branch is checked out.
    Then proceed to **Route & Map**.
-3. If `$ARGUMENTS` is empty, **detect the current phase** from the artifacts present
-   (the configured PRD/ADR/worklog homes — default `docs/prd/<name>.md`, `docs/adr/`,
-   `docs/prd/<name>.worklog.md`) and propose resuming at the right phase.
+3. If `$ARGUMENTS` is empty, **detect the current phase, journal-first**. When the project
+   config declares a **Journal**, read the position — don't guess it:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" status [--feature <slug>]
+   ```
+
+   That brief is the authoritative position; route from it and open only the artifacts it
+   names. Only when no Journal is declared (or the user has acknowledged an unreadable
+   database) fall back to **inferring** the phase from the artifacts present (the configured
+   PRD/ADR/worklog homes — default `docs/prd/<name>.md`, `docs/adr/`,
+   `docs/prd/<name>.worklog.md`). Then propose resuming at the right phase.
 4. Scale ceremony to the size of the change — a one-line fix should not get a full PRD.
    Say which phases you're skipping and why.
 

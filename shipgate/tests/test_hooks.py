@@ -304,7 +304,7 @@ class TestStopGate(HookTestCase):
         self.assertEqual(final.stdout.strip(), "", "gate should now be satisfied")
 
     def test_a_synced_legacy_worklog_does_not_block(self):
-        """The Voyager case: a Drive bisync touches an old finished worklog.
+        """The bisynced-vault case: a Drive bisync touches an old finished worklog.
 
         Its boxes are ticked and no journal event has ever named it, because the work
         predates the journal. Capturing the change is right; blocking the session over

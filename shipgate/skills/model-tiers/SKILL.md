@@ -1,6 +1,6 @@
 ---
 name: model-tiers
-description: Match model cost to judgment density — the master session orchestrates (analysis, design, review, dispatch) instead of typing product code, implementation goes to worker subagents one tier below the session's model, and workers hand mechanical sub-work down (cheaper model, or low effort). Use when starting implementation in an orchestrating session, when a task is big enough to split across workers, when writing a worker brief, or when asked to "dispatch this to workers", "orchestrate the implementation", "delegate the coding", or "spawn workers for this".
+description: Use when starting implementation in an orchestrating session, when a task is big enough to split across workers, when writing a worker brief, or when asked to "dispatch this to workers", "orchestrate the implementation", "delegate the coding", or "spawn workers for this". Matches model cost to judgment density — the master session orchestrates (analysis, design, review, dispatch) instead of typing product code, implementation goes to worker subagents one tier below the session's model, and workers hand mechanical sub-work down (cheaper model, or low effort).
 ---
 
 # Model tiers — orchestrate, don't type
@@ -17,7 +17,7 @@ the cheapest capable tier does the mechanical grind.
 | Role | Who | Does | Never does |
 |------|-----|------|------------|
 | **Orchestrator** | the master session | analysis, design, review, tracker/knowledge-base writes, dispatching workers, checking their evidence | edit product code (when workers are in play) |
-| **Implementer** | worker subagents on the strongest model *below the orchestrator's tier* (a top-tier/Fable session dispatches `model: "opus"` workers; a session already on Opus dispatches `model: "sonnet"` — or same-tier workers where isolation, not cost, is the point) | design-sensitive coding: seams, encodings, debugging, anything where a wrong call is expensive | grind through bulk mechanical edits itself |
+| **Implementer** | worker subagents on the strongest model *below the orchestrator's tier* (a session on the top available tier dispatches workers one tier down (e.g. `model: "opus"`); a session already on Opus dispatches `model: "sonnet"` — or same-tier workers where isolation, not cost, is the point) | design-sensitive coding: seams, encodings, debugging, anything where a wrong call is expensive | grind through bulk mechanical edits itself |
 | **Mechanic** | subagents on the cheapest capable tier (`model: "sonnet"`, or `haiku` for the truly trivial) | bulk migrations, repetitive multi-file edits, long test-output collection | make design decisions |
 
 **Effort is the second lever, alongside model.** Agent definitions take an `effort:`
@@ -55,6 +55,10 @@ when it doesn't; the sink-to-Sonnet rule still applies either way.
   next round/issue with the user (see the `feature` skill's pipelining rules), answer
   architecture questions, triage the ledger. Interact with workers at natural boundaries
   via SendMessage — never poll them.
+- **Environment repair is yours, between rounds.** Clean installs, test-DB recreation,
+  stale-state suspicion — a worker diagnosing a broken environment burns its run on work
+  that was never its task. When a worker's failure smells environmental, take the repair
+  yourself and re-dispatch, don't let the worker debug the harness.
 - **Review before anything is staged.** Read the worker's diff against the design
   artifacts (ADR, worklog, PRD) and check the evidence in its report (real command output).
   Commit to the delegation: acceptance-check, don't re-derive the worker's findings or redo
@@ -65,14 +69,25 @@ when it doesn't; the sink-to-Sonnet rule still applies either way.
 A worker starts with zero context; the brief must be self-contained:
 
 1. **The design spec inline** — the relevant ADR/worklog excerpt pasted in, not a pointer
-   to "the design doc". Workers shouldn't re-derive decisions.
+   to "the design doc". Workers shouldn't re-derive decisions. Also point at the **source
+   artifacts** the excerpt digests (the contract, the legacy code, the issue) and invite
+   the check: your digest is a transcription, the artifact outranks it — a worker that
+   finds the brief contradicting the artifact reports the conflict and gets credited,
+   not corrected.
 2. **Files to read first** (absolute paths) and the conventions that apply (per-service
    CLAUDE.md rules, house style, test commands). If the project config's Style section names
-   a style skill, instruct the worker to invoke it before writing code.
+   a style skill, instruct the worker to invoke it before writing code. Tell it to **mirror
+   the vetted reference implementation the design names** — the nearest sibling is not
+   automatically a pattern source (scaffolds and stubs encode garbage), and a previous
+   slice's output is a source only for the surfaces that were actually reviewed.
 3. **Branch check** — the worker must verify it is on the expected branch before editing,
    and stop if not.
 4. **Validation commands** — the exact lint/test/build commands that prove the task done,
-   and the instruction to run them and read the output. Also name the config's **Code
+   and the instruction to run them and read the output. Use **workspace-level scripts**
+   (the repo's `lint:check`-style commands), never per-file tool invocations — per-file
+   runs miss project-context rules the pre-commit hook will catch. When the task touches
+   shared runtime, include a **baseline**: run the affected suite once before changes,
+   compare after — the bar is zero *new* failures. Also name the config's **Code
    tooling** integrations (the library-docs tool for dependency APIs, the LSP tool for
    symbol navigation) so workers use them instead of grep-and-memory.
 5. **No commit, no staging** — the worker leaves changes in the working tree for
@@ -95,21 +110,23 @@ A worker starts with zero context; the brief must be self-contained:
 
 ## Worker lifecycle — warm vs cold
 
-A worker that just finished a task holds context (files read, conventions learned, cache
-warm) that a fresh spawn would pay to rebuild. Choose deliberately:
+A worker that just finished holds context a fresh spawn would pay to rebuild. Choose deliberately:
 
-- **Reuse warm** (SendMessage the existing worker) when the follow-up task lives in the
-  same area and benefits from the context it already holds — a fix-up from review, the next
-  task in the same module, a variation on what it just built. Reuse skips re-briefing and
-  re-exploration entirely.
-- **Spawn cold** when the task needs *different* context, when the held context would bias
-  the approach (e.g. it should re-derive from the design, not from its own earlier attempt),
-  or when the worker is degraded.
-- **Retire on degradation.** Long-lived workers degrade past roughly **~400k tokens or 4-6
-  task rounds** — thinking stretches to minutes, output quality drops. Retire the worker and
-  spawn a **fresh finisher briefed off the worktree state** (the actual files + worklog),
-  never off the old transcript. Judge a worker's health and liveness by artifacts — file
-  mtimes, process state, test output — not by its transcript chatter.
+- **Reuse warm** (SendMessage the existing worker) for a follow-up in the same area — a
+  review fix-up, the next task in the same module. But only the *same changeset* counts as a
+  follow-up: the **next changeset spawns cold**, however convenient reuse looks. Write every
+  follow-up **self-sufficiently** — full fix list inline plus "re-read the worklog" — so the
+  worker's memory is a bonus, never a dependency: one that finished a heavy round may resume
+  compacted, remembering less than its transcript suggests.
+- **Spawn cold** when the task needs *different* context, or when the held context would bias
+  the approach (it should re-derive from the design, not from its own earlier attempt).
+- **Retire on degradation** — roughly **~400k tokens or 4-6 rounds** (thinking stretches to
+  minutes, quality drops), *or* on **amnesia symptoms** at any token count: re-litigated
+  decisions, violated constraints the brief restated, re-asked settled facts. Then kill it and
+  cold-spawn a **finisher briefed off the worktree state** (the actual files + worklog), never
+  off the old transcript. Judge health and liveness by artifacts — file mtimes, process state,
+  test output — not transcript chatter. And split oversized rounds *up front*: two big jobs in
+  one dispatch is how a worker arrives at round 2 already compacted.
 
 ## When NOT to apply
 

@@ -50,6 +50,10 @@ What the sections configure:
 | Security-sensitive areas | domains that trigger the full `/security-review` | auth, secrets, payments |
 | Debug evidence sources | prod/QA log-query skill, CI-log integration | local logs, tests, debugger |
 | Epic workflow | epic decomposition command, ordering, delivery rules | issue-by-issue, manual decomposition |
+| MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR opened" |
+| Code tooling | the library-docs tool/MCP to consult for a dependency's current API, and the LSP tool for symbol navigation | training knowledge / WebFetch; grep-and-read |
+| Thinking lenses | which lens skills to actually invoke at which phase | no lens skills invoked — the phase skills apply each lens's idea inline |
+| Autonomy | `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them) | `ask` — every gate question goes to the user |
 
 ## What's inside
 
@@ -60,12 +64,13 @@ What the sections configure:
 **Skills**
 
 - `feature` — orchestrator: detects phase from artifacts, routes, owns escape hatches, drives epics issue-by-issue.
+- `setup` — bootstrap: detects the repo's shape, interviews with recommended defaults, writes `.claude/shipgate.md` + its generated `.claude/shipgate.json` sidecar, and initializes the flow journal. Re-run to update.
 - `workspace` — Phase 0: get onto the right branch (`<type>/<issue-id>-<slug>`) off a clean base before any work; never builds on the wrong checkout — and never on an umbrella repo.
 - `route-and-map` — reads CLAUDE.md (root + each touched module) + the knowledge base, emits an impact map.
 - `clarify` — the hard gate: coverage scan, prioritized questions, writes the PRD (FR-###/SC-###).
 - `design` — parallel architects → recommendation → ADR(s) + worklog (Design + Build Plan).
 - `implement` — reuse-first execution, breaking-change discipline, per-task `verify`.
-- `review` — parallel reviewers (≥80 confidence), CLAUDE.md compliance, acceptance-criteria check, final `verify`.
+- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate coordinator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`.
 - `verify` _(cross-cutting)_ — no "done" without fresh command evidence.
 - `model-tiers` _(cross-cutting)_ — the master session orchestrates only; implementation goes to worker subagents, mechanical sub-work sinks to the cheapest capable tier.
 - `knowledge-base` _(cross-cutting)_ — recall/capture durable knowledge, routed by type to the stores the project config declares (default: repo docs). Named to avoid colliding with Claude's built-in session memory.
@@ -80,7 +85,7 @@ cover dedicated audits/cleanups.
 
 - `code-explorer` — grounded exploration, file:line, essential-files list.
 - `code-architect` _(opus)_ — one committed design philosophy per instance.
-- `code-reviewer` — confidence-filtered findings, file:line.
+- `code-reviewer` — every finding scored (confidence + severity), file:line; the coordinator filters.
 
 ## Artifacts (3 per feature)
 
@@ -108,10 +113,10 @@ the split and degrades gracefully if a store isn't reachable.
 ## Install
 
 shipgate is published through the **`pandora`** marketplace (manifest at the repo
-root, `.claude-plugin/marketplace.json`). From a local clone or the git remote:
+root, `.claude-plugin/marketplace.json`):
 
 ```
-/plugin marketplace add ~/workspace/plugins
+/plugin marketplace add worm2fed/pandora
 /plugin install shipgate@pandora
 ```
 
@@ -146,6 +151,21 @@ just less informed.
 
 ## Status
 
+v0.10.0 — gates learned from a colleague's fleet-orchestration process. **Types round**:
+design plans a declarations-only task for any slice introducing domain shapes; implement
+delivers types with `unimplemented` bodies, gates on a test-inclusive type-check, reviews
+the declarations alone, and freezes reviewed signatures (changes escalate + land as
+`deviation`). **Parity gate** for ports/migrations: design declares pre-authorized deltas;
+review adds a fresh adversarial pass hunting unauthorized behavioral differences across the
+whole source artifact. **Review arbitration**: reviewer briefs carry do-not-flag lists and
+pre-rulings, killed findings are recorded so they aren't re-litigated, trivial diffs may be
+coordinator-gated (recorded as `gate-decision`), and the internal not-ready→fix loop caps
+at two rounds before surfacing. **Worker discipline** (model-tiers): self-sufficient
+follow-up dispatches, amnesia symptoms → cold-spawn, environment repair is orchestrator
+work, briefs point at source artifacts (the artifact outranks the digest) and name a vetted
+reference implementation, validation via workspace-level scripts with a baseline run on
+shared code. All new gates reuse the existing journal vocabulary — no new event types.
+
 v0.9.0 — config-declared tooling: new **Code tooling** section (a library-docs
 tool/MCP for dependency APIs + an LSP tool for symbol navigation — wired into implement's
 reuse step, structured-debug's evidence sources, and worker briefs) and new **Thinking
@@ -159,49 +179,4 @@ a generated `.claude/shipgate.json` sidecar, and initializes the flow journal) a
 flow journal itself — the authoritative per-branch position (phase, tasks, verifies, gate
 decisions) that the orchestrator routes from instead of rescanning worklogs.
 
-v0.7.1 — implement's reuse-before-writing step now also checks the dependency's own API
-surface and same-module siblings before hand-rolling integration plumbing (pairs with
-astrolabe v0.3.0's reuse ladder).
-
-v0.7.0 — orchestration throughput: **design-ahead pipelining** (while workers implement
-issue N, the orchestrator specs N+1 with the user — epic mode's stop now gates merge+build,
-not design; queued designs are re-validated against what actually merged); **executive
-autonomy mode** (config-declared, default `ask` — in `executive` the orchestrator makes and
-records routine gate decisions, escalating only one-way doors, scope changes,
-security-sensitive areas, and true 50/50s); **the ledger** (a project-wide, append-cheap
-staging inbox for mid-flow learnings, triaged at Capture into config-declared promotion
-targets — wiki pages, skills, CLAUDE.md, ADRs, personal memory — or dropped; Capture now
-fires when review passes, never waiting on the merge); and **worker lifecycle** (reuse warm
-workers via SendMessage for same-context follow-ups, spawn cold for different context,
-retire degraded workers ~400k tokens / 4-6 rounds in and brief a fresh finisher off the
-worktree state).
-
-v0.6.0 — bug provenance: `structured-debug` gains a "trace the provenance" step — find
-the commit that introduced the defect (`log -S` / `blame` / `bisect run` with the repro),
-prove it counterfactually (repro fails at the commit, passes at its parent), name why it
-slipped through, and report all of it in a comment on the tracker issue. New optional
-**Bug provenance** line in the config's Forge & tracker section says where those comments
-go (default: the bug's issue, via the forge CLI).
-
-v0.5.0 — re-tuned for current-generation models (per Anthropic's Opus 5 prompting
-guidance): review is coverage-first (reviewers report every finding scored with
-confidence + severity; a separate coordinator pass filters — generation-time severity
-floors made models silently drop real bugs); the verify gate is scoped to evidence, not
-repetition (fresh command output per claim stays, re-check choreography goes — independent
-fresh-context review remains a distinct, kept discipline); delegation is disciplined (one
-agent when one suffices, fan-outs scale to the task, tiers phrased relative to the
-orchestrator's model instead of hardcoding "opus = mid"); `effort` added as the second
-cost lever (agent frontmatter + Workflow `opts.effort`, mechanical work at `low`); and
-written deliverables (PRD/ADR/worklog/MR body) carry explicit length calibration.
-
-v0.4.1 — docs/wording only, no behavior change: the review-feedback cycle is now defined
-(in `review` — a loop between Review and Implement), the MR watcher is called an
-integration rather than a hook (no Claude Code hook is involved), and the project-config
-preamble duplicated across skills was slimmed to one canonical form.
-
-v0.4.0 — optional **MR watcher** integration: a project-declared skill watches open MRs/PRs;
-`review` registers blockers/follow-ups with it, and its events resume the flow at the
-phase they unlock (comments → review-feedback, merge → capture, blocker merged → held work).
-
-v0.3.0 — merged the work-fork's evolution back (model-tiers, richer workspace/epic/review
-discipline) and made every project specific a `.claude/shipgate.md` config concern.
+Full history: [CHANGELOG.md](CHANGELOG.md)

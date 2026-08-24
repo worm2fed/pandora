@@ -61,7 +61,7 @@ the natural home for creating the journal database.
   (export/import exists as an escape hatch, not a sync protocol).
 - Not solving the knowledge-vault bisync conflict problem (separate concern, different
   layer).
-- Patching any concrete watcher implementation (e.g. voyager's `babysit-mrs`) — this PRD
+- Patching any concrete watcher implementation (e.g. a project's own MR-watcher skill) — this PRD
   only defines the integration contract a watcher can adopt.
 
 ## Users & stories
