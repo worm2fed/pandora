@@ -97,22 +97,32 @@ the project **ledger** as one-liners the moment you hit them (see `knowledge-bas
 ## Record the diagnosis (journaled projects)
 
 On a project whose config declares a **Journal**, a bug flow records the same way a feature
-does — the stream is this work's branch (`fix/1290-date-off-by-one`) or its slug, either is fine:
+does — the stream is this work's branch (`fix/1290-date-off-by-one`), one stream per issue like
+any other flow:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream fix/<issue>-<slug> --type debug-root-cause \
-  --data '{"cause":"<one sentence>","introduced_by":"<commit>","evidence":"<what proved it>"}'
+  --stream <branch> --type debug-root-cause \
+  --data '{"cause":"<one sentence>","introduced_by":"<commit>","refs":["docs/prd/<slug>.worklog.md#root-cause"]}'
 ```
 
 Four events carry a debug flow, each appended when it happens: `bug-reproduced` once expected
 vs actual is pinned down, `debug-root-cause` when the cause is established, `gate-decision`
 for every fork you settle on the way to the fix — *that is the event for a decision*, whatever
-you would naturally call it — and `verify-run` for the evidence the fix holds, which is exactly
-what the failing-test-first run produces.
+you would naturally call it, and it carries `raised_by` (`user` when the user raised or
+corrected the point, `orchestrator` when you asked or decided it, plus `--actor user` for the
+user's own calls) — and `verify-run` for the evidence the fix holds, which is exactly what the
+failing-test-first run produces.
 
-**Use the canonical names.** `journal.py vocab` lists them, and `append` refuses anything else:
-an event named something plausible-but-unlisted is inert — it records, and no gate or report
+**`bug-reproduced` and `debug-root-cause` are the two that bloat — pointer, not prose.** The
+repro steps, the environment fingerprint, the hypothesis table and the evidence trail live in
+the worklog or on the tracker issue; the event carries one sentence plus `refs` naming the
+section that holds them. A payload over 1 KB is refused for exactly that reason: a diagnosis
+pasted into the journal is a diagnosis nobody can search, review or reuse.
+
+**Use the canonical names and shapes.** `journal.py vocab` lists the types and
+`vocab --shape <type>` prints the payload each one takes; `append` refuses anything else —
+an event named something plausible-but-unlisted is inert: it records, and no gate or report
 ever reads it, which looks like success. If a debug flow genuinely needs a concept the
 vocabulary lacks, mint it deliberately with `--new-type` rather than inventing a near-miss of a
 name that already exists. A missing or unreadable database is an infrastructure failure, not a

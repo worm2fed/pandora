@@ -78,12 +78,16 @@ ledger's path, so `status` can report how many untriaged entries are waiting; th
 `knowledge-base` skill's ~15-entry nudge made mechanical, and it is information only —
 the ledger never gates a session.
 
-**Event names are a fixed vocabulary.** `journal.py vocab` lists them and `append` refuses
-anything else, because an event named something plausible-but-unlisted is inert — it
-records, and no gate or report ever reads it, which looks like success. Pass `--new-type`
-to mint a genuinely new concept on purpose. Stream names are free: `feature/<slug>` or the
-branch (`fix/1290-date-off-by-one`) both work. `journal.py doctor` reports any off-vocabulary
-events already in a journal.
+**Event names and payload shapes are a fixed vocabulary.** `journal.py vocab` lists the
+types, `vocab --shape <type>` prints the payload each one takes, and `append` refuses
+anything else — an event named something plausible-but-unlisted is inert: it records, and
+no gate or report ever reads it, which looks like success. Pass `--new-type` to mint a
+genuinely new concept on purpose. `journal.py doctor` reports any off-vocabulary events
+already in a journal.
+
+**One stream per issue, named for its branch** (`fix/1290-date-off-by-one`). An epic's
+children are separate branches and so separate streams; a stream carrying two issues has a
+phase, a gate history and a verdict that describe neither of them.
 
 Dial enforcement down by setting `enforce.stop_gate` or `enforce.auto_capture` to false
 in the sidecar (both default true). Run `journal.py doctor` when anything looks stale.
@@ -107,23 +111,23 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 
 ## MR watcher
 
-<!-- Default when absent: no watcher — the flow ends at "MR opened" and resumes only when
+<!-- Default when absent: no watcher — the flow ends at "MR/PR opened" and resumes only when
      the user asks. -->
 
 - Watcher: <project skill that watches open MRs/PRs and keeps a watch list, or delete
   this section>
 - Register a blocker/follow-up: <the exact command the watcher exposes for adding an
-  external MR to its watch list>
+  external MR/PR to its watch list>
 - If declared, two skills honor it:
-  - **review**, after opening the MR: if this work is now blocked on someone else's MR,
-    or has follow-up work gated on this MR merging, register it with the watcher's watch
-    list. The note must name the held work AND its next action (e.g. "unblocks #8311 —
-    rebase + open MR"), so the unblock event arrives as an instruction, not trivia.
-    Say what you're registering as you do it.
+  - **review**, after opening the MR/PR: if this work is now blocked on someone else's
+    request, or has follow-up work gated on this one merging, register it with the
+    watcher's watch list. The note must name the held work AND its next action (e.g.
+    "unblocks #1234 — rebase + open the request"), so the unblock event arrives as an
+    instruction, not trivia. Say what you're registering as you do it.
   - **feature**, resume detection: a watcher event naming an issue is a valid resume
     trigger. Map it: reviewer comments → the review-feedback cycle (defined in the
-    `review` skill); own MR merged → residual ledger triage only — the main capture
-    already ran when review passed (then next epic child, if any); watched MR merged →
+    `review` skill); own MR/PR merged → residual ledger triage only — the main capture
+    already ran when review passed (then next epic child, if any); a watched one merged →
     resume the held work per its note; conflicts / failed CI → fix before review continues.
 - The watcher is strictly read-only. It suggests; the user triggers every resume.
 - Optional, when a **Journal** is configured: a watcher may append what it observes to
@@ -180,7 +184,7 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 
 - Decomposition: <command/skill that creates the epic + child issues>
 - Ordering: <how dependencies between child issues are expressed, e.g. `blocked_by`>
-- Delivery: <e.g. one issue = one branch = one MR, reviewed independently>
+- Delivery: <e.g. one issue = one branch = one MR/PR, reviewed independently>
 - Design-ahead depth: <how many upcoming issues the orchestrator specs while workers
   implement the current one. Default when absent: 1-2 — deeper queues go stale faster
   when review feedback shifts the ground>
@@ -196,6 +200,25 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 - Code navigation: <the LSP tool, if one is configured for the language — prefer
   goToDefinition / findReferences / hover over grep-and-read for symbol work in typed
   code; note any workspace quirks (root, server version) here>
+
+## Worker guardrails
+
+<!-- Default when absent: no project-specific guardrails — worker briefs carry only the
+     built-in discipline from `model-tiers` (branch check, no commit/staging, evidence in
+     the report). -->
+
+Hard rules for anyone editing this repo, written to be pasted **verbatim** into every worker
+brief — `model-tiers` requires them word-for-word, because a summarized guardrail is a
+broken one. One imperative line per rule, no rationale, no grouping:
+
+- <e.g. "Never run a repo-wide formatter or a linter with --fix; the read-only gate is
+  `<script>`">
+- <e.g. "Build with `<dev build script>`; the release script belongs to CI, never to a
+  worker">
+- <e.g. "The git index is the user's review record: never run `git add`, `git reset`,
+  `git stash` or `git checkout -- <path>`; leave every change in the working tree">
+- <e.g. "Stop and report when a spend or time limit is close, leaving finished work on
+  disk — never abandon a run mid-edit">
 
 ## Thinking lenses
 

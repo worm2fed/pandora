@@ -75,17 +75,22 @@ anything else.
 **Journaled projects** (the config declares a **Journal**): read the position, don't guess it.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" status [--feature <slug>]
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" status [--branch <branch>] [--feature <slug>] [--all]
 ```
 
 That brief is the authoritative position — the phase, the gate decisions on record, the last
 verify, any queued designs. Route from it and then open only the artifacts it names. Do not
 reconstruct position by scanning worklog checkboxes; the journal exists precisely so nobody
-has to. A session-start hook usually hands you this brief before you ask, in which case use
-what you already have rather than re-running the command.
+has to. Completed streams are hidden and long-dormant ones collapse to a line; `--all` shows
+everything. A session-start hook usually hands you this brief before you ask, in which case
+use what you already have rather than re-running the command.
 
-Two rules follow from the journal being the position of record:
+Three rules follow from the journal being the position of record:
 
+- **One stream per issue, named for its branch.** The stream name *is* the branch name, so
+  the hook's `--branch` lookup finds it. An epic's children are separate branches and
+  therefore separate streams. Never carry two issues in one stream: its phase, gate history
+  and verdict would then describe no single deliverable.
 - **A missing event is a stuck flow, not a fallback.** If the journal says `design` and the
   worklog is clearly further along, do NOT quietly route to the later phase. Say what the
   journal says, say what the artifacts show, and record the resolution as an event
@@ -115,14 +120,16 @@ The phase semantics — what each position means and where it goes next — are 
 - Review passed → **Capture, immediately** — explicitly invoke the `knowledge-base` skill:
   triage the ledger and route the rest to their configured homes. Never leave it to ambient
   "remember this" — that hits Claude's built-in session memory, not the knowledge base.
-  **Not gated on the MR merging or on a further user go-ahead.** Then done.
+  **Not gated on the MR/PR merging or on a further user go-ahead.** Then done — and on a
+  journaled project the stream is closed with `flow-completed` once nothing is owed on it,
+  which is what makes it leave every later session's brief.
 - An **MR-watcher event** (if the config declares a watcher) naming an issue is a valid resume
   signal for that issue — enter at the phase the event unlocks, not at the start: reviewer
   comments → the review-feedback cycle (defined in `review`: re-enter implement for the
-  fixes, re-verify the changed scope, reply and resolve threads); own MR merged → *residual*
+  fixes, re-verify the changed scope, reply and resolve threads); own MR/PR merged → *residual*
   capture only — triage whatever the review-feedback cycle added to the ledger since the
   main Capture, which already ran when review passed (then the next epic child, if any);
-  watched MR merged → resume the held work per its watch-list note; conflicts / failed CI →
+  watched MR/PR merged → resume the held work per its watch-list note; conflicts / failed CI →
   fix before review continues. The watcher only suggests — the user triggers the resume.
 
 Propose the next phase in one line, then proceed (or do it once the user confirms for the
@@ -161,13 +168,17 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   Design for issue **N+1** with the user, so a fully specced design is queued when N lands.
   Default depth: **1-2 issues ahead** (the config's Epic workflow section may declare a
   `Design-ahead depth` to go deeper). Track queued designs as normal worklogs; mark them
-  queued, not started. **Staleness rule:** review feedback or a merged MR can change the
+  queued, not started. **Staleness rule:** review feedback or a merged MR/PR can change the
   ground a queued design assumed — at each round boundary, re-validate the next queued design
   against what actually merged before implementing it, and re-open its design if the
   assumptions broke.
 - **The stop gates merge-and-build, not design.** Each issue is reviewed/merged independently —
   report it done and **wait for the go-ahead** before *merging it or starting to implement*
-  the next issue. Don't silently roll implementation from one issue into the next.
+  the next issue. Don't silently roll implementation from one issue into the next. And
+  **"start the next item" is never publish authorization for this one**: an MR/PR goes up
+  only once this issue's `review-verdict` {verdict: ready} is recorded, or the user's
+  explicit `gate-decision` {gate: publish, raised_by: user, decision: publish} is, appended
+  with `--actor user` — journaled projects refuse `mr-opened` without one.
   Design-ahead work on upcoming issues is explicitly allowed (and encouraged) during that
   wait — the gate exists so the user controls what gets built, not to park the orchestrator.
 - **Shared vs per-issue artifacts.** The epic-level PRD and design are shared context, written
@@ -185,9 +196,31 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
 - **Verify before "done"** (`verify`) at every completion claim, not just at Review.
 - **Record as you go, on journaled projects.** Every phase you enter, every gate decision
   you make (especially in `executive` mode), every verdict — append it when it happens, not
-  in a batch at the end. The phase skills say which events are theirs. Hooks capture what
-  the harness can see and will stop the session ending with a semantic event missing, so
-  batching only means being told to go back and do it.
+  in a sweep at the end. The phase skills say which events are theirs, and
+  `journal.py vocab --shape <type>` prints the payload each one takes, so no skill has to
+  quote it. Four rules keep the recording cheap and honest:
+  - **Pointer, not prose.** The worklog / PRD / ADR holds the text; the event holds `refs`
+    (paths, section anchors, seq numbers) and one sentence. A payload over 1 KB on a work
+    stream is refused for exactly this reason.
+  - **A phase-owning event records its own phase.** `clarify-passed`, `design-committed`,
+    `verify-run`, `task-done`, `review-verdict` and `capture-done` imply their
+    `phase-entered`, so don't type it around them. You still append `phase-entered` for the
+    phases no event owns — workspace, route-and-map, explore — and whenever you skip a
+    phase, naming the skipped ones in `skipped`.
+  - **One batch per phase boundary.** `append --batch` takes JSONL on stdin, so a boundary
+    that produces two or three events (verify-run + task-done, phase-entered +
+    gate-decision) costs one Bash call rather than three (stdin form: see `verify`). Chaining `--expect <version>`
+    across separate appends, read the new `version` back from each append's output rather
+    than assuming +1: a phase-owning event may write its implied `phase-entered` too, and
+    that transition moves the version as well.
+  - **Say who decided.** A `gate-decision` carries `raised_by`: `user` when the user raised
+    or corrected the point, `orchestrator` when you asked it or decided it yourself. Pass
+    `--actor user` for a decision the user made, `--actor orchestrator` (or nothing)
+    otherwise; a worker that appends passes `--actor worker`. The form is `role[@label]` —
+    omit the label and `append` fills in the current session.
+
+  Hooks capture what the harness can see and will stop the session ending with a semantic
+  event missing, so deferring the appends only means being told to go back and do them.
 - **Match model tier to the work** (`model-tiers`) — when the work is big enough to
   dispatch, the master session orchestrates only: Implement-phase code changes go to
   worker subagents with self-contained briefs, and mechanical sub-work sinks to Sonnet.

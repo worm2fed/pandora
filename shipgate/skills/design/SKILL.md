@@ -112,7 +112,7 @@ lands — artifacts by path, so a later session knows exactly what to open:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream feature/<slug> --type design-committed \
+  --stream <branch> --type design-committed \
   --data '{"issue":"<issue-id>","worklog":"docs/prd/<slug>.worklog.md",
            "adrs":["docs/adr/0007-async-export.md"]}'
 ```

@@ -98,13 +98,19 @@ appended as it is decided — `ask` and `executive` alike; the mode is just a fi
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream feature/<slug> --type gate-decision \
+  --stream <branch> --type gate-decision --actor user \
   --data '{"gate":"clarify","question":"Bulk export in scope?","decision":"single export only",
-           "mode":"executive","rationale":"no bulk consumer exists yet"}'
+           "mode":"ask","raised_by":"user","rationale":"no bulk consumer exists yet"}'
 ```
 
-When the last marker is gone, append `clarify-passed` with `{"prd":"docs/prd/<slug>.md",
-"fr_count":9}` — the PRD by **path**, never its text. That event is gate-validated: it is refused
+**Attribute it.** A point the user raised or corrected is `"raised_by":"user"` with
+`--actor user`; a question you asked or answered yourself in `executive` mode is
+`"raised_by":"orchestrator"` (the default) with `--actor orchestrator`, or no flag at all.
+That distinction is the only way a later review of the flow can tell escalation from
+correction. `journal.py vocab --shape gate-decision` prints the payload.
+
+When the last marker is gone, append `clarify-passed` {prd, fr_count} — the PRD by **path**,
+never its text (`vocab --shape clarify-passed`). That event is gate-validated: it is refused
 while the PRD still contains `[NEEDS CLARIFICATION]`, which is this gate made mechanical, not an
 obstacle to route around. A missing or unreadable database is an infrastructure failure, not a
 reason to skip the append: surface it loudly and continue in legacy mode only with the user's

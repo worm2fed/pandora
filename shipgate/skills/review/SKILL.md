@@ -125,6 +125,8 @@ while working, and extra re-checking adds cost without catching more.
 ## Opening the MR/PR (on the user's go-ahead)
 
 With no tracker/remote, stop at "Ready, evidence attached" and let the user handle pushing.
+On a journaled project the verdict (or the user's publish decision) is recorded *before* the
+MR/PR goes up — see **Record the outcome** below.
 
 **Use the canonical template — don't invent a body.** If the config's **Forge & tracker**
 section names a template (its location + the exact command to fetch it), read it from there —
@@ -147,11 +149,12 @@ project-qualified form, e.g. `group/project#NNNN`, since a bare `#NNNN` resolves
 non-existent same-repo issue. Default: the forge's native `#NNNN` / `Closes #NNNN`. Honor any
 extra title/body rules the config declares.
 
-**Hand off to the MR watcher.** If the config declares an **MR watcher**: after the MR is open,
-register any MRs this work is blocked on — and any follow-up work gated on this MR merging —
-with the watcher's watch list, using the registration command the config names. The note must
-carry the held work and its next action (e.g. "unblocks #8311 — rebase + open MR"). Say what
-you're registering as you do it. No watcher declared → skip silently.
+**Hand off to the MR watcher.** If the config declares an **MR watcher**: once this change's
+MR/PR is open, register any review request this work is blocked on — and any follow-up work
+gated on this one merging — with the watcher's watch list, using the registration command the
+config names. The note must carry the held work and its next action (e.g. "unblocks #1234 —
+rebase + open the request"). Say what you're registering as you do it. No watcher declared →
+skip silently.
 
 ## The review-feedback cycle (after the MR/PR is open)
 
@@ -164,7 +167,7 @@ not a new phase:
    the repo's convention says so (e.g. fixup + autosquash) rather than stacking
    "address review" commits.
 3. **Re-run the `verify` gate on the changed scope** and re-review what changed — not the
-   whole MR again.
+   whole MR/PR again.
 4. **Push, reply in each thread** with what changed (or why you disagree), and resolve
    the threads you've addressed.
 5. Hand back to the MR watcher (if declared) and wait. Merge → residual ledger triage only
@@ -179,15 +182,36 @@ honesty is part of the review.
 ## Record the outcome (journaled projects)
 
 On a project whose config declares a **Journal**, three moments here are events, each appended
-when it happens: the Step 6 verdict, the MR going up, and reviewer feedback landing.
+when it happens: the Step 6 verdict, the MR/PR going up, and reviewer feedback landing.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream feature/<slug> --type review-verdict \
-  --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3},"mr":null}'
+  --stream <branch> --type review-verdict \
+  --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3}}'
 ```
 
-Then `mr-opened` {ref, url} once the MR/PR exists, and `review-feedback` {ref, threads} each time
-comments arrive — counts and references only; the finding text and thread bodies stay in the MR.
+The verdict is `ready` or `not-ready` — those two spellings and no others, because the publish
+gate below reads them. `journal.py vocab --shape <type>` prints the payload for this and the
+next two events.
+
+Then `mr-opened` {ref, url} once the MR/PR exists — the event name is historical and covers a
+PR just as well — and `review-feedback` {ref, threads} each time comments arrive: counts and
+references only, with the finding text and thread bodies left in the request.
+
+**Publishing follows the record, not the momentum.** `mr-opened` is accepted only when the
+stream holds, appended after its last `task-done`, either a `review-verdict` with
+`verdict: ready`, or the user's own publish decision:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream <branch> --type gate-decision --actor user \
+  --data '{"gate":"publish","question":"Open the MR now?","decision":"publish",
+           "mode":"ask","raised_by":"user"}'
+```
+
+All three of `gate: publish`, `raised_by: user` and `decision: publish` — that literal
+word — are required, so a flow cannot authorize its own publish by raising the gate and
+answering it itself. An instruction to start the next piece of work authorizes neither route.
+
 A missing or unreadable database is an infrastructure failure, not a reason to skip the append:
 surface it loudly and continue in legacy mode only with the user's acknowledgement.
