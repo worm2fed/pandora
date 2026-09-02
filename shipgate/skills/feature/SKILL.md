@@ -67,6 +67,24 @@ explorer brief.
 Scale it: a one-service change may need one light explorer or none; a cross-cutting feature
 warrants the full 2-3.
 
+When the config's **Orchestration** section says `explore: workflow`, run that fan through
+the `Workflow` tool instead: Read `${CLAUDE_PLUGIN_ROOT}/skills/feature/references/explore-workflow.js`
+and pass its full text as `script` (bundled files are outside the working directory, so
+`scriptPath` is refused) with `args = {lenses: [{name, prompt}], brief, model}` — one entry per
+lens you'd have dispatched, `brief` **required** (it is the only context the explorers get, so
+the script throws on an empty one) and carrying the config excerpts and recall pointers each
+explorer needs plus "one paragraph per finding, refs as file:line" (explorer detail is
+unbounded otherwise and the return object grows past what you want in context), and
+`model` **required** (one tier below the session, per `model-tiers`). It returns
+`{lenses: [{lens, findings}], essentialFiles}`, where each essential file lists why every lens
+flagged it — capped at 25 files in order of first mention and 20 findings per lens (both drops
+are logged), and a lens entry missing its `name` or `prompt` throws before any agent runs. A
+return carrying `aborted` means every lens explorer died and the run explored nothing — treat
+it as the degradation case, not as "there was nothing to find". Step 2 is unchanged and
+non-negotiable: **you still read those files yourself** — the workflow locates, you build the
+understanding. `Workflow` unavailable or the call refused → run the explorer fan above and
+record a `deviation`.
+
 ## Detect state, then route
 
 Don't assume the work is starting fresh — establish where the work stands before doing

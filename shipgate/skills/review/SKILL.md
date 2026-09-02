@@ -1,6 +1,6 @@
 ---
 name: review
-description: Final pre-push review of a change against its design and the repo's rules. Runs code-reviewer subagents in parallel (coverage-first — they report everything scored), filters and ranks findings in a separate coordinator pass, checks CLAUDE.md compliance (whatever rules the repo's CLAUDE.md declares), verifies the acceptance criteria are demonstrably met (not just that tasks are done), and runs a final verify. Use when implementation is complete and before opening an MR/PR or pushing.
+description: Final pre-push review of a change against its design and the repo's rules. Runs code-reviewer subagents in parallel (coverage-first — they report everything scored) as a hand-driven Agent fan, or as the config-selected review Workflow script that adds evidence-required refuters, filters and ranks findings in a separate coordinator pass, checks CLAUDE.md compliance (whatever rules the repo's CLAUDE.md declares), verifies the acceptance criteria are demonstrably met (not just that tasks are done), and runs a final verify. Use when implementation is complete and before opening an MR/PR or pushing.
 ---
 
 # Review
@@ -39,6 +39,81 @@ This security lens is a routine sweep, not a full audit. For changes touching au
 or any area the project config lists as security-sensitive (default: auth, secrets, payments),
 or before a release, escalate to the built-in `/security-review` for a dedicated OWASP-depth pass.
 
+### When the config says `review: workflow`
+
+The config's **Orchestration** section can route this fan through the `Workflow` tool
+instead. Build the brief exactly as above — diff ref, worklog, PRD, impact map, do-not-flag,
+pre-rulings — then Read `${CLAUDE_PLUGIN_ROOT}/skills/review/references/review-workflow.js`
+and call `Workflow` with its full text as `script` (the tool accepts `scriptPath` only inside
+the session's working directory, which a bundled plugin file never is; the tool result names
+a persisted copy you can pass as `scriptPath` on a re-run) and `args`:
+
+- `lenses` — 1-3 of `correctness`, `conventions+design`, `simplicity+security`. The script
+  runs one finder per lens and holds the lens definitions, so scale by naming **fewer
+  lenses** (a small diff gets `lenses: ['correctness']`) — unlike the `agents` path it
+  cannot put all three lenses in one reviewer.
+- `finderBrief` — the brief you just built, as one string. **Required**: the script throws
+  before spending anything without it, because the refuters read it too.
+- `doNotFlag`, `preRulings` — your two coordinator lists, one entry per string.
+- `confidenceFloor` — a number 0-100, default 60; findings under it come back unverified.
+- `model` — **required**, one tier below the session per `model-tiers`.
+- `verify` — `'high-only'` (default), `'all'` or `'none'`. `high-only` spends refuters
+  on the BLOCKER/HIGH candidates only; `all` refutes every candidate above the floor.
+- `maxRefuters` — hard cap on refuter agents for the whole run, default 6. Candidates are
+  taken in rank order and the script logs whatever the cap left unverified.
+- `effortVerify`, `refutersForHigh` — optional; omitted, `effortVerify` leaves the refuters on
+  the tool's default effort, and `refutersForHigh` (default 2) is how many refuters a
+  BLOCKER/HIGH gets. `maxRefuters` below `refutersForHigh` throws: no BLOCKER/HIGH could ever
+  be verified.
+
+The script fans the finders out and dedupes across lenses: two findings merge when they cite
+the same file (compared on its last path segments, so `src/a.js` and `./src/a.js` are one
+file) and either the exact same line or the same normalized summary head. A line-less finding
+can therefore only merge by wording, and near-but-not-equal lines stay separate.
+
+The picked candidates then go to refuters that must **cite the `file:line` that disproves the
+claim**. The quorum is deliberately hard to reach: a BLOCKER/HIGH dies only when **both**
+requested refuters report **and both** refute with evidence (at confidence ≥ 70). One dead
+refuter keeps the finding alive and marks it `refuters-died`; so does an unevidenced,
+uncertain or dissenting vote. Silence never kills.
+
+It returns `{survivors, killed, belowFloor, counts, coverage, lensesRun}` — no reviewer's raw
+report enters your context. `counts` carries `found`, `deduped`, `candidates` (above the
+floor), `refuters` (agents actually spent), `unverified` (candidates the cap skipped),
+`survivors` and `killed`. Every survivor keeps `lenses` (each lens that reported it),
+`refuters` (the counted refutations, kept as recorded dissent even though they lost),
+`alsoReported` (a merged duplicate's own wording, which sometimes puts it better) and two
+verification fields:
+
+- `verification` — `held` (challenged and it survived), `refuters-died` (a refuter or the
+  whole verify pass never reported), `unverified-cap` (`maxRefuters` ran out before it) or
+  `not-targeted` (the `verify` mode excluded it). Only `held` means an adversary looked.
+- `quorum` — `"<counted>/<requested>"`, e.g. `"1/2"` when one of two refuters died. `"0/0"`
+  on anything no refuter was requested for.
+
+`coverage` totals that at run level: `{verify, refutersRequested, refutersReported,
+unverified}`, where `unverified` counts the survivors that reached you unchallenged. `why`
+and `fix` come back clipped to 300 chars, so read the code before acting on one. `killed`
+entries carry their `quorum` and their refuters' `{reason, evidence}` once, and `belowFloor`
+is one line per finding — a below-floor BLOCKER/HIGH also keeps a clipped `why` and `fix`, so
+you can check it rather than guess at it.
+
+Step 2 then runs on `survivors` (the verify pass is adversarial, not a substitute for your
+own read: low-confidence high-severity survivors still get checked by you), every `killed`
+entry goes under the worklog's **Rejected findings** with its refuter reason and evidence,
+and the tool result's `runId` goes into `review-verdict.data.workflow_run_id`.
+
+**What this buys, honestly.** The finders cost the same as the `Agent` fan — the workflow
+buys structure, dedupe and context hygiene, not fewer tokens; and full adversarial
+verification (`verify: 'all'`) is expensive, so keep it for high-stakes diffs.
+
+**A return carrying `aborted`** means every lens finder died and the run reviewed nothing —
+a clean review and a dead run must not be confused. Treat it as the degradation case below.
+
+**Degradation.** `Workflow` unavailable in this host, or the user refuses the call → run the
+`agents` path above and record a `deviation` event (journaled projects) noting the fallback.
+The fan is not optional; the mechanism is.
+
 ## Step 2 — Filter and rank (the coordinator's pass)
 
 Reviewers report **everything** they found, scored with confidence and severity — filtering
@@ -49,6 +124,12 @@ as a separate pass. Consolidate by file, dedupe across lenses, then filter:
   enough to be worth a check — verify those yourself (read the cited code) and either
   promote or kill them on evidence.
 - **Drop** what doesn't survive scrutiny; don't pass speculative noise to the author.
+
+On the `workflow` path this pass starts from the return's `survivors` — already deduped
+across lenses, and (under the default `verify`) the BLOCKER/HIGH ones already put to refuters
+that had to cite disproving evidence — so the work here is promotion, killing and ranking,
+not consolidation. Every survivor whose `verification` is not `held` reached you unchallenged
+(`coverage.unverified` counts them): those are yours to check.
 
 Rejections are rulings, not silence: record what you killed and why under the worklog's
 **Rejected findings** section (one line each; journaled projects fold them into the
@@ -190,9 +271,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3}}'
 ```
 
-The verdict is `ready` or `not-ready` — those two spellings and no others, because the publish
-gate below reads them. `journal.py vocab --shape <type>` prints the payload for this and the
-next two events.
+The verdict is `ready` or `not-ready` — those two spellings and no others, because the
+publish gate below reads them. A review run through the `Workflow` tool sets
+`review-verdict.data.workflow_run_id` to the tool result's `runId`, so the run's agent
+transcripts stay reachable from the record; report its `counts` (`found`, `deduped`,
+`candidates`, `refuters`, `unverified`, `survivors`, `killed`) as the finding counts rather
+than recounting by hand. A run that returned `aborted` earns no verdict at all — record the
+fallback `deviation` and review again. `journal.py vocab --shape <type>` prints the payload
+for this and the next two events.
 
 Then `mr-opened` {ref, url} once the MR/PR exists — the event name is historical and covers a
 PR just as well — and `review-feedback` {ref, threads} each time comments arrive: counts and

@@ -53,6 +53,7 @@ What the sections configure:
 | MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR/PR opened" |
 | Code tooling | the library-docs tool/MCP to consult for a dependency's current API, and the LSP tool for symbol navigation | training knowledge / WebFetch; grep-and-read |
 | Worker guardrails | the project's hard rules, pasted verbatim into every worker brief | only the built-in worker discipline (branch check, no staging, evidence) |
+| Orchestration | whether Review / Explore fan out via bundled `Workflow` scripts or `Agent` subagents | `agents` for both |
 | Thinking lenses | which lens skills to actually invoke at which phase | no lens skills invoked — the phase skills apply each lens's idea inline |
 | Autonomy | `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them) | `ask` — every gate question goes to the user |
 
@@ -170,6 +171,7 @@ experience.)
 | a log-query skill (named in config)                                    | skill                 | prod/QA log evidence in `structured-debug`                                                                                                                         | use `docker logs` / local sources                  |
 | `chrome-devtools-mcp`                                                  | MCP/skill             | frontend/browser evidence in `structured-debug`                                                                                                                    | use other evidence sources                         |
 | `/security-review`, `/simplify`                                        | Claude Code built-ins | deep security audit / standalone cleanup                                                                                                                           | ship with Claude Code already                      |
+| the `Workflow` tool (Claude Code built-in; config `## Orchestration`)  | Claude Code built-in  | Review and Explore fans run as bundled scripts: schema-typed findings, in-script dedupe, evidence-required refuters on review's top findings                       | the `Agent` fan, as before                         |
 | an MR/PR-watcher skill (named in config)                               | skill                 | `review` registers blockers/follow-ups on the watch list; watcher events resume the flow at the phase they unlock                                                  | flow ends at "MR/PR opened"; resume manually       |
 
 The plugin also expects the repo to carry **`CLAUDE.md`** files (root + nested where relevant) —
@@ -177,6 +179,32 @@ that's how `route-and-map` decides where code belongs. Repos without them still 
 just less informed.
 
 ## Status
+
+v0.12.0 — orchestration by workflow, config-selected. A new `## Orchestration` config
+section (`review: agents | workflow`, `explore: agents | workflow`, default `agents`) lets
+a project run the Review fan and the Explore fan as `Workflow` scripts bundled with the
+skills instead of hand-driven `Agent` fans. **Review**: `review-workflow.js` runs the lens
+finders (`shipgate:code-reviewer`, schema-typed findings, do-not-flag and pre-rulings
+passed as `args`), dedupes across lenses in script, then spends a capped refuter budget
+(`verify: none | high-only | all`, defaulting to `high-only` with `maxRefuters: 6`) on the
+BLOCKER/HIGH candidates: a refutation counts only when it cites the `file:line` that
+disproves the finding, and a finding dies only on a full quorum — every requested refuter
+reported and every one of them refuted with evidence — so an uncertain, uncited or dead
+refuter leaves it standing. The return is compact — ranked survivors carrying `verification`
+and `quorum`, the killed list with its evidence, one-line below-floor entries, counts and
+run-level `coverage` — so the coordinator's filtering pass starts from data, the raw
+reviewer reports never enter its context, and the run id lands in
+`review-verdict.data.workflow_run_id`. **Explore**: `explore-workflow.js` runs the lenses
+as `shipgate:code-explorer` agents and merges their essential files, capped at 25; the
+orchestrator still reads those files itself. Scripts always receive an explicit `model`
+(one tier below the session — the tool would otherwise inherit the session model), and the
+bundled-file references in `clarify`, `design`, `review` and `feature` now go through
+`${CLAUDE_PLUGIN_ROOT}` so they resolve after a marketplace install. The cost is honest:
+the finders cost what the `Agent` fan costs, so the gain is structure, dedupe and context
+hygiene rather than fewer tokens, and full verification (`verify: all`) is worth it only on
+high-stakes diffs. Implement stays on `Agent` workers (mid-flight `SendMessage`, warm reuse,
+environment repair and the shared working tree have no workflow equivalent). A host without
+the tool keeps the `agents` path and records a `deviation`.
 
 v0.11.0 — the flow journal made cheap and trustworthy, from two weeks of its own data.
 **Cost**: the session brief drops finished work (a stream now ends with `flow-completed`, and a
@@ -215,13 +243,5 @@ follow-up dispatches, amnesia symptoms → cold-spawn, environment repair is orc
 work, briefs point at source artifacts (the artifact outranks the digest) and name a vetted
 reference implementation, validation via workspace-level scripts with a baseline run on
 shared code. All new gates reuse the existing journal vocabulary — no new event types.
-
-v0.9.0 — config-declared tooling: new **Code tooling** section (a library-docs
-tool/MCP for dependency APIs + an LSP tool for symbol navigation — wired into implement's
-reuse step, structured-debug's evidence sources, and worker briefs) and new **Thinking
-lenses** section (map phases to lens skills to actually invoke; default remains
-apply-the-idea-inline). Hardcoded `thinking-skills` plugin references removed — the two
-review/design agents can't invoke skills, so their lens guidance is now inline; main-session
-lens invocation is config-routed.
 
 Full history: [CHANGELOG.md](CHANGELOG.md)

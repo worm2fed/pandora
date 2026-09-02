@@ -61,7 +61,7 @@ otherwise just apply the idea):
 For each genuine either/or the team will want to remember *why* it went one way (not every
 detail — real forks: a data model, a sync vs async boundary, a build-vs-reuse call), write
 an ADR at the configured ADR home (default `docs/adr/NNNN-<title>.md`, following any page
-conventions the project config declares) using `references/adr-template.md`. Number
+conventions the project config declares) using `${CLAUDE_PLUGIN_ROOT}/skills/design/references/adr-template.md`. Number
 sequentially.
 ADRs are immutable once accepted — to change a decision, write a new ADR that supersedes the
 old one. The ADR *is* the record; only if the decision carries product-significant weight, note
@@ -74,7 +74,7 @@ artifact should stand alone so a reader (or `grep #ID`) finds the whole trail wi
 
 Create the working doc at the configured worklog home (default
 `docs/prd/<feature-kebab>.worklog.md`, next to its PRD, following any page conventions the
-project config declares) from `references/worklog-template.md`. It has two sections with
+project config declares) from `${CLAUDE_PLUGIN_ROOT}/skills/design/references/worklog-template.md`. It has two sections with
 different lifecycles:
 
 - **Design** — the *how*: architecture, components, data flow, API/contract changes, data

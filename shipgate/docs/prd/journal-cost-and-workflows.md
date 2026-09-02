@@ -10,6 +10,7 @@ issue: "none / ad-hoc"
 worklog: "./journal-cost-precision.worklog.md"
 related:
   - "./journal-cost-precision.worklog.md"
+  - "./workflow-orchestration.worklog.md"
   - "./journal.md"
   - "../adr/0001-sqlite-flow-journal.md"
 ---
@@ -170,9 +171,12 @@ Skills / config
   `review: agents | workflow`, `explore: agents | workflow` (default `agents`).
 - **FR-018** — With `review: workflow`, the `review` skill invokes the `Workflow` tool with
   a bundled script: lens finders (`agentType: shipgate:code-reviewer`, schema-typed
-  findings, do-not-flag + pre-rulings via `args`) → in-script dedupe by file:line →
-  adversarial verify per finding ≥ the confidence floor → ranked return. The coordinator's
-  Step 2 starts from that return; `review-verdict` data carries the workflow `runId`.
+  findings, do-not-flag + pre-rulings via `args`) → in-script dedupe by file:line and
+  summary → evidence-required adversarial verify of the BLOCKER/HIGH candidates by default
+  (`verify: none | high-only | all`, capped by `maxRefuters`) → compact ranked return. The
+  coordinator's Step 2 starts from that return; `review-verdict.data.workflow_run_id`
+  carries the run id. (Amended 2026-09-02 after the trial: per-finding verification of
+  everything above the floor cost ~7× the Agent fan and killed valid findings.)
 - **FR-019** — With `explore: workflow`, the Explore phase runs the 2–3 lenses through a
   workflow with schema `{findings[], essential_files[]}` and the orchestrator reads only
   the essential files, as today.

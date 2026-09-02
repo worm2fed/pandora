@@ -44,6 +44,13 @@ pandora is a **plugin marketplace**: one git repo holding several independent pl
   usually absent — include it as `<type>/<issue-id>-<slug>` when an issue does exist.
 - Examples: `feat/sqlite-journal`, `fix/hook-fast-path`, `chore/bump-astrolabe`.
 
+## Orchestration
+
+- review: workflow
+- explore: workflow
+  <!-- both fans run as the bundled Workflow scripts; a host without the tool falls back to
+       the Agent fan and records a `deviation`. -->
+
 ## Security-sensitive areas
 
 - **Anything under a plugin's `hooks/`.** Plugin hooks execute on the user's machine in

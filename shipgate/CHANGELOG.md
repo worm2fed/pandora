@@ -2,6 +2,32 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.12.0 — orchestration by workflow, config-selected. A new `## Orchestration` config
+section (`review: agents | workflow`, `explore: agents | workflow`, default `agents`) lets
+a project run the Review fan and the Explore fan as `Workflow` scripts bundled with the
+skills instead of hand-driven `Agent` fans. **Review**: `review-workflow.js` runs the lens
+finders (`shipgate:code-reviewer`, schema-typed findings, do-not-flag and pre-rulings
+passed as `args`), dedupes across lenses in script, then spends a capped refuter budget
+(`verify: none | high-only | all`, defaulting to `high-only` with `maxRefuters: 6`) on the
+BLOCKER/HIGH candidates: a refutation counts only when it cites the `file:line` that
+disproves the finding, and a finding dies only on a full quorum — every requested refuter
+reported and every one of them refuted with evidence — so an uncertain, uncited or dead
+refuter leaves it standing. The return is compact — ranked survivors carrying `verification`
+and `quorum`, the killed list with its evidence, one-line below-floor entries, counts and
+run-level `coverage` — so the coordinator's filtering pass starts from data, the raw
+reviewer reports never enter its context, and the run id lands in
+`review-verdict.data.workflow_run_id`. **Explore**: `explore-workflow.js` runs the lenses
+as `shipgate:code-explorer` agents and merges their essential files, capped at 25; the
+orchestrator still reads those files itself. Scripts always receive an explicit `model`
+(one tier below the session — the tool would otherwise inherit the session model), and the
+bundled-file references in `clarify`, `design`, `review` and `feature` now go through
+`${CLAUDE_PLUGIN_ROOT}` so they resolve after a marketplace install. The cost is honest:
+the finders cost what the `Agent` fan costs, so the gain is structure, dedupe and context
+hygiene rather than fewer tokens, and full verification (`verify: all`) is worth it only on
+high-stakes diffs. Implement stays on `Agent` workers (mid-flight `SendMessage`, warm reuse,
+environment repair and the shared working tree have no workflow equivalent). A host without
+the tool keeps the `agents` path and records a `deviation`.
+
 v0.11.0 — the flow journal made cheap and trustworthy, from two weeks of its own data.
 **Cost**: the session brief drops finished work (a stream now ends with `flow-completed`, and a
 `capture-done` left alone for 48 h reads terminal; `--all` still shows everything), collapses
