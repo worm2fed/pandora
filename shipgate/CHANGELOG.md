@@ -2,6 +2,29 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.11.0 — the flow journal made cheap and trustworthy, from two weeks of its own data.
+**Cost**: the session brief drops finished work (a stream now ends with `flow-completed`, and a
+`capture-done` left alone for 48 h reads terminal; `--all` still shows everything), collapses
+streams dormant over a week to one line, caps each stream at its last three gate decisions
+(five on the checked-out branch's stream), and puts the checked-out branch's stream first
+(`status --branch`, passed by the SessionStart hook); semantic events go up as one `append
+--batch` per phase boundary, and a payload over 1 KB is refused so the prose stays in the
+worklog and the event carries `refs`. **Position reliability**: a phase-owning event records
+the `phase-entered` it implies instead of leaving the brief's headline field to memory (ADR
+0002), `append` validates each type's payload against a canonical shape and normalizes the
+aliases that had been drifting silently past the gates (`chosen→decision`, `kind→gate`,
+`result→outcome`, `tasks→task_ids`, verdict `pass→ready`), and `actor` becomes `role[@label]`
+over a closed set of roles, labelled by default from the session id the SessionStart hook
+records (ADR 0003) — so who decided, and whether they were asked or were correcting
+(`gate-decision.raised_by`), is finally queryable, via the new `stats`. **New gates**:
+`mr-opened` is refused unless a `ready` verdict or the user's own `gate=publish` /
+`decision=publish` call stands after the last `task-done` — "start the next item" cannot
+publish; duplicate `artifact-written` rows (same path, same mtime, under 5 s apart) collapse;
+and the Stop hook records its own blocks as `gate-blocked`. **Process**: the config template
+gains a `## Worker guardrails` section that `model-tiers` requires pasted word-for-word into
+every worker brief (every worker incident so far started as a compressed brief), and streams
+are one per issue, named for the branch.
+
 v0.10.0 — gates learned from a colleague's fleet-orchestration process. **Types round**:
 design plans a declarations-only task for any slice introducing domain shapes; implement
 delivers types with `unimplemented` bodies, gates on a test-inclusive type-check, reviews
