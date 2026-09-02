@@ -52,6 +52,10 @@ pandora is a **plugin marketplace**: one git repo holding several independent pl
   no-op-when-not-applicable path is treated as a correctness requirement, not an
   optimization.
 - Anything that reads or writes outside the plugin's own directory.
+- **Confidentiality of private-project evidence.** This repo is public; the rule and the
+  placeholder forms live in the root `CLAUDE.md` ("Public repo"). Every worker and
+  reviewer brief that touches docs, skills, tests or fixtures carries that section
+  verbatim, and review treats a leak as a BLOCKER.
 
 ## Autonomy
 

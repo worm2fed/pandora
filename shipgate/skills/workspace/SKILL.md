@@ -97,11 +97,12 @@ name. Append it here, the moment it happens — not in a batch later:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream feature/<slug> --type flow-started \
+  --stream <branch> --type flow-started \
   --data '{"request":"add export filters","branch":"feat/1234-add-export-filters"}'
 ```
 
-`<slug>` is the PRD slug this work will use (`epic/<slug>` for epic-level work). Keep `request` to
+The stream is named for the branch you just established — one stream per issue, so an epic's
+children each get their own (`epic/<slug>` for the epic-level work itself). Keep `request` to
 one line — the journal records position and pointers to artifacts, never their contents. A missing
 or unreadable database is an infrastructure failure, not a reason to skip the append: surface it
 loudly and continue in legacy mode only with the user's acknowledgement.

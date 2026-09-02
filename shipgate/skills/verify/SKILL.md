@@ -86,16 +86,25 @@ stream:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream feature/<slug> --type verify-run \
-  --data '{"scope":"T010","outcome":"pass","task_ids":["T010"],
-           "commands":[{"cmd":"yarn test","exit":0,"head":"…","tail":"… 42 passed"}]}'
+  --stream <branch> --type verify-run \
+  --data '{"outcome":"pass","task_ids":["T010"],"commands":[{"cmd":"yarn test","exit":0,"tail":"42 passed"}]}'
 ```
 
 Three things this is not: it is not a substitute for *running* the command (the gate above
-is unchanged), not a place to paste whole logs (trim to the lines that prove the claim —
-the event is size-capped), and not optional bookkeeping. `task-done` will not append
+is unchanged), not a place to paste whole logs (trim to the lines that prove the claim — a
+payload over 1 KB is refused), and not optional bookkeeping. `task-done` will not append
 without a passing `verify-run` naming that task, so an unrecorded verify blocks the very
-completion it was meant to prove.
+completion it was meant to prove — and since the two land together, send them as one
+`append --batch` (JSONL on stdin) rather than two calls:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <branch> --batch <<'EOF'
+{"type":"verify-run","data":{"outcome":"pass","task_ids":["T010"],"commands":[{"cmd":"yarn test","exit":0,"tail":"42 passed"}]}}
+{"type":"task-done","data":{"task_id":"T010"}}
+EOF
+```
+
+`journal.py vocab --shape verify-run` prints the payload if you need it.
 
 Record failures too, with `"outcome":"fail"` — a gate that caught something is the most
 useful entry in the log, and it is what lets a later session see that the fix was proven

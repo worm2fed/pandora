@@ -19,9 +19,10 @@ worklog honest about what actually happened.
 Check the `model-tiers` skill first: when the build is big enough to dispatch, the master
 session doesn't work tasks inline — each coherent unit goes to a worker subagent with a
 self-contained brief, and the session reviews the worker's diff against the design before
-anything is staged. Workers delegate mechanical sub-work to Sonnet subagents. For small
-builds, work the tasks directly. Either way, the loop below is what "done" means for each
-task — whoever executes it.
+anything is staged. Workers delegate mechanical sub-work to Sonnet subagents. Every brief
+carries the config's **Worker guardrails** section pasted verbatim (see `model-tiers`) — the
+project's hard rules are not yours to compress. For small builds, work the tasks directly.
+Either way, the loop below is what "done" means for each task — whoever executes it.
 
 ## The loop (per task)
 
@@ -99,15 +100,17 @@ moment you tick it, not in a sweep at the end of the plan:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream feature/<slug> --type task-done --data '{"task_id":"T012"}'
+  --stream <branch> --type task-done --data '{"task_id":"T012"}'
 ```
 
 `task-done` is gate-validated: it is refused unless a passing `verify-run` naming that task
 already exists, so the order is verify, record the verify (see `verify`), then record the task
-done. A divergence gets its own `deviation` {note} event beside the worklog line — a pointer and
-a sentence; the prose stays in the worklog. A missing or unreadable database is an infrastructure
-failure, not a reason to skip the append: surface it loudly and continue in legacy mode only with
-the user's acknowledgement.
+done — both in one `append --batch`, since they close the same boundary (stdin form: see
+`verify`). A divergence gets its
+own `deviation` {note} event beside the worklog line — a pointer and a sentence; the prose
+stays in the worklog, and a payload over 1 KB is refused to keep it that way. A missing or
+unreadable database is an infrastructure failure, not a reason to skip the append: surface it
+loudly and continue in legacy mode only with the user's acknowledgement.
 
 ## When to stop and reconsider
 

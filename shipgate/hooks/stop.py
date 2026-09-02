@@ -22,15 +22,17 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _common import (  # noqa: E402
+    append_event,
     emit,
-    find_project,
     likely_journaled,
     read_hook_input,
+    resolve_project,
     run_journal,
     safe_main,
 )
 
 CHECK_FINDINGS_EXIT = 5
+META_STREAM = "shipgate"
 
 
 def format_reason(findings: list) -> str:
@@ -66,7 +68,7 @@ def main() -> None:
     if payload.get("stop_hook_active") is True:
         sys.exit(0)
 
-    project = find_project(payload.get("cwd"))
+    project = resolve_project(payload)
     if project is None or not project.enforces("stop_gate"):
         sys.exit(0)
 
@@ -86,6 +88,12 @@ def main() -> None:
     if not findings:
         sys.exit(0)
 
+    append_event(
+        project,
+        META_STREAM,
+        "gate-blocked",
+        {"session": session_id, "findings": len(findings)},
+    )
     emit({"decision": "block", "reason": format_reason(findings)})
 
 

@@ -50,6 +50,11 @@ Cover only what the config actually needs and detection could not settle:
 - **Autonomy** — `ask` *(default)*: every gate question goes to the user. `executive`: the
   orchestrator answers routine gate questions itself and records them, escalating only one-way
   doors, scope changes, and security-sensitive areas.
+- **Worker guardrails** — any hard rules a worker must never compress: formatters or linters
+  that rewrite files (and the read-only gate to use instead), build scripts, staging
+  conventions, spend limits. One imperative line each, written into the config's
+  **Worker guardrails** section — worker briefs paste that section verbatim, so a rule that
+  lives only in the user's head is a rule no worker will ever see.
 - **Anything detection flagged as ambiguous** — umbrella layout confirmation, a tracker living
   in a different project than the code, an unrecognized forge.
 
@@ -100,7 +105,10 @@ Order matters: never leave a sidecar pointing at a database that was not created
 
 Then print what was created (one line each) and the one-line **what changes now**: this project
 is journaled — phase is recorded rather than guessed, artifact writes are auto-captured, and a
-session won't end with a lifecycle event missing.
+session won't end with a lifecycle event missing. Say the stream rule while you are there:
+**one stream per issue, named for its branch** (an epic's children are separate branches, so
+separate streams), which is what lets the session-start hook put the checked-out branch's
+stream first and drop the finished ones.
 
 ## Step 4 — Update mode
 

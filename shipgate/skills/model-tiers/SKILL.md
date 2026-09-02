@@ -95,6 +95,14 @@ A worker starts with zero context; the brief must be self-contained:
 6. **Report-back format** — evidence (real command output, not "tests pass"), deviations
    from the brief with reasons, and blockers quoted verbatim. A worker that hit a wall
    reports the wall; it does not improvise a different design.
+7. **The config's Worker guardrails section, pasted word-for-word.** Not summarized, not
+   trimmed to the rules you judge relevant, not rephrased in your own voice — compression of
+   a guardrail is how every recorded worker incident happened (a repo-wide formatter run over
+   unrelated files, a release build where a dev build was meant, a user's staged review
+   markers reset). The paste is the mechanism; your paraphrase is the failure. No such
+   section in the config ⇒ say so in the brief rather than inventing rules. A section still
+   holding the template's `<e.g. …>` placeholders counts as absent: say that too, and never
+   paste a placeholder into a brief as though it were this project's rule.
 
 ## Implementer rules (worker)
 

@@ -135,11 +135,20 @@ walked and every entry is promoted or dropped — append it then, not at some la
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream feature/<slug> --type capture-done \
-  --data '{"promoted":["docs/adr/0007-async-export.md","CLAUDE.md"],"dropped":4}'
+  --stream <branch> --type capture-done \
+  --data '{"promoted":["docs/adr/0007-async-export.md","CLAUDE.md"],
+           "dropped":["ledger line about the flaky export fixture"]}'
 ```
 
-Promotions are recorded as **destinations** — the paths or store names written to, never the
-knowledge itself, which now lives in those stores. A missing or unreadable database is an
-infrastructure failure, not a reason to skip the append: surface it loudly and continue in legacy
-mode only with the user's acknowledgement.
+Both keys are lists, even when empty (`[]`): `promoted` records **destinations** — the paths
+or store names written to, never the knowledge itself, which now lives in those stores —
+and `dropped` one short line per entry that was let go, so a later session can tell what was
+judged not worth keeping.
+
+**Close the stream when nothing is owed on it.** No open MR/PR, no residual triage, no next epic
+child ⇒ append `flow-completed` {reason} straight after `capture-done`, as the second line of
+the same `append --batch` (stdin form: see `verify`). That is what lets a finished stream leave every later session's
+brief; a stream nobody closes is read as live work forever.
+
+A missing or unreadable database is an infrastructure failure, not a reason to skip the append:
+surface it loudly and continue in legacy mode only with the user's acknowledgement.

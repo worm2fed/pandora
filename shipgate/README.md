@@ -50,8 +50,9 @@ What the sections configure:
 | Security-sensitive areas | domains that trigger the full `/security-review` | auth, secrets, payments |
 | Debug evidence sources | prod/QA log-query skill, CI-log integration | local logs, tests, debugger |
 | Epic workflow | epic decomposition command, ordering, delivery rules | issue-by-issue, manual decomposition |
-| MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR opened" |
+| MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR/PR opened" |
 | Code tooling | the library-docs tool/MCP to consult for a dependency's current API, and the LSP tool for symbol navigation | training knowledge / WebFetch; grep-and-read |
+| Worker guardrails | the project's hard rules, pasted verbatim into every worker brief | only the built-in worker discipline (branch check, no staging, evidence) |
 | Thinking lenses | which lens skills to actually invoke at which phase | no lens skills invoked — the phase skills apply each lens's idea inline |
 | Autonomy | `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them) | `ask` — every gate question goes to the user |
 
@@ -110,6 +111,32 @@ over MCP, in-repo docs, or both; without config:
 No npx/SQLite dependency; everything is git-visible or in a store you chose. Recall mirrors
 the split and degrades gracefully if a store isn't reachable.
 
+## Flow journal
+
+On a journaled project (`/shipgate:setup` writes the config and creates the database) position
+is an append-only event stream — **one stream per issue, named for its branch** — rather than
+something re-inferred from artifacts every session. The session-start hook injects the brief;
+`scripts/journal.py` is the whole interface:
+
+| Command | Does |
+| --- | --- |
+| `status [--branch B] [--feature SLUG] [--all]` | the position brief: the checked-out branch's stream first and in full, dormant streams as one line, completed ones hidden unless `--all` |
+| `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
+| `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
+| `check --session ID` | what the flow still owes (the Stop hook's source) |
+| `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations, verifies per task, review rounds |
+| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability |
+
+`append` is where the gates live. It validates the payload against its type's shape
+(normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
+is why such an append can advance the stream's version by two, and why a chain of `--expect N`
+must read each new version back from the output instead of assuming +1 — refuses a payload over
+1 KB (prose belongs in the worklog — the event carries `refs`), and refuses `mr-opened` until
+the stream holds, after its last `task-done`, either a `review-verdict` with `verdict=ready` or
+a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
+worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
+the current session. A stream ends with `flow-completed` and leaves the brief.
+
 ## Install
 
 shipgate is published through the **`pandora`** marketplace (manifest at the repo
@@ -143,13 +170,36 @@ experience.)
 | a log-query skill (named in config)                                    | skill                 | prod/QA log evidence in `structured-debug`                                                                                                                         | use `docker logs` / local sources                  |
 | `chrome-devtools-mcp`                                                  | MCP/skill             | frontend/browser evidence in `structured-debug`                                                                                                                    | use other evidence sources                         |
 | `/security-review`, `/simplify`                                        | Claude Code built-ins | deep security audit / standalone cleanup                                                                                                                           | ship with Claude Code already                      |
-| an MR/PR-watcher skill (named in config)                               | skill                 | `review` registers blockers/follow-ups on the watch list; watcher events resume the flow at the phase they unlock                                                  | flow ends at "MR opened"; resume manually          |
+| an MR/PR-watcher skill (named in config)                               | skill                 | `review` registers blockers/follow-ups on the watch list; watcher events resume the flow at the phase they unlock                                                  | flow ends at "MR/PR opened"; resume manually       |
 
 The plugin also expects the repo to carry **`CLAUDE.md`** files (root + nested where relevant) —
 that's how `route-and-map` decides where code belongs. Repos without them still work; routing is
 just less informed.
 
 ## Status
+
+v0.11.0 — the flow journal made cheap and trustworthy, from two weeks of its own data.
+**Cost**: the session brief drops finished work (a stream now ends with `flow-completed`, and a
+`capture-done` left alone for 48 h reads terminal; `--all` still shows everything), collapses
+streams dormant over a week to one line, caps each stream at its last three gate decisions
+(five on the checked-out branch's stream), and puts the checked-out branch's stream first
+(`status --branch`, passed by the SessionStart hook); semantic events go up as one `append
+--batch` per phase boundary, and a payload over 1 KB is refused so the prose stays in the
+worklog and the event carries `refs`. **Position reliability**: a phase-owning event records
+the `phase-entered` it implies instead of leaving the brief's headline field to memory (ADR
+0002), `append` validates each type's payload against a canonical shape and normalizes the
+aliases that had been drifting silently past the gates (`chosen→decision`, `kind→gate`,
+`result→outcome`, `tasks→task_ids`, verdict `pass→ready`), and `actor` becomes `role[@label]`
+over a closed set of roles, labelled by default from the session id the SessionStart hook
+records (ADR 0003) — so who decided, and whether they were asked or were correcting
+(`gate-decision.raised_by`), is finally queryable, via the new `stats`. **New gates**:
+`mr-opened` is refused unless a `ready` verdict or the user's own `gate=publish` /
+`decision=publish` call stands after the last `task-done` — "start the next item" cannot
+publish; duplicate `artifact-written` rows (same path, same mtime, under 5 s apart) collapse;
+and the Stop hook records its own blocks as `gate-blocked`. **Process**: the config template
+gains a `## Worker guardrails` section that `model-tiers` requires pasted word-for-word into
+every worker brief (every worker incident so far started as a compressed brief), and streams
+are one per issue, named for the branch.
 
 v0.10.0 — gates learned from a colleague's fleet-orchestration process. **Types round**:
 design plans a declarations-only task for any slice introducing domain shapes; implement
@@ -173,10 +223,5 @@ lenses** section (map phases to lens skills to actually invoke; default remains
 apply-the-idea-inline). Hardcoded `thinking-skills` plugin references removed — the two
 review/design agents can't invoke skills, so their lens guidance is now inline; main-session
 lens invocation is config-routed.
-
-v0.8.0 — project bootstrap: the `setup` skill (interview → writes `.claude/shipgate.md`,
-a generated `.claude/shipgate.json` sidecar, and initializes the flow journal) and the
-flow journal itself — the authoritative per-branch position (phase, tasks, verifies, gate
-decisions) that the orchestrator routes from instead of rescanning worklogs.
 
 Full history: [CHANGELOG.md](CHANGELOG.md)
