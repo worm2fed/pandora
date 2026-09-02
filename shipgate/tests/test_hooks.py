@@ -23,6 +23,10 @@ SHIPGATE = Path(__file__).resolve().parent.parent
 HOOKS = SHIPGATE / "hooks"
 JOURNAL = SHIPGATE / "scripts" / "journal.py"
 
+sys.path.insert(0, str(HOOKS))
+
+from _common import load_project  # noqa: E402
+
 SESSION = "sess-integration-1"
 SLUG = "feat"
 STREAM = f"feature/{SLUG}"
@@ -38,11 +42,19 @@ WORKLOG_ONE_TICKED = WORKLOG_UNTICKED.replace("- [ ] T001", "- [x] T001")
 WORKLOG_TWO_TICKED = WORKLOG_ONE_TICKED.replace("- [ ] T002", "- [x] T002")
 
 
-def run_hook(name: str, payload: dict, cwd: Path, project_dir: Path | None = None):
+def run_hook(
+    name: str,
+    payload: dict,
+    cwd: Path,
+    project_dir: Path | None = None,
+    hooks_dir: Path | None = None,
+    env_extra: dict | None = None,
+):
     env = dict(os.environ)
     env["CLAUDE_PROJECT_DIR"] = str(project_dir if project_dir else cwd)
+    env.update(env_extra or {})
     return subprocess.run(
-        [sys.executable, str(HOOKS / f"{name}.py")],
+        [sys.executable, str((hooks_dir or HOOKS) / f"{name}.py")],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -60,6 +72,31 @@ def journal(db: Path, *args: str, cwd: Path | None = None):
         cwd=str(cwd) if cwd else None,
         timeout=60,
     )
+
+
+def init_git_checkout(path: Path, branch: str) -> None:
+    """A one-commit repo on `branch` — `rev-parse` needs a born HEAD to name it."""
+    env = {
+        **os.environ,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+    }
+    commands = [
+        ["git", "init", "-q"],
+        ["git", "symbolic-ref", "HEAD", f"refs/heads/{branch}"],
+        ["git", "-c", "user.email=t@example.com", "-c", "user.name=t",
+         "commit", "-q", "--allow-empty", "-m", "init"],
+    ]
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command, cwd=str(path), capture_output=True, text=True, timeout=30,
+                env=env,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise unittest.SkipTest(f"git unavailable: {error}") from error
+        if result.returncode != 0:
+            raise unittest.SkipTest(f"git {command[1]} failed: {result.stderr}")
 
 
 class HookTestCase(unittest.TestCase):
@@ -221,6 +258,324 @@ class TestSessionStart(HookTestCase):
         self.assertIn("journal", specific["additionalContext"].lower())
         self.assertEqual(len(self.events(event_type="session-started")), 1)
 
+    def test_records_the_session_id_for_later_appends(self):
+        """ADR 0003: skill appends inherit this id as their actor label."""
+        run_hook(
+            "session_start",
+            {"session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+            self.root,
+        )
+        result = journal(self.db, "session", "--get")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), SESSION)
+
+
+class StubJournalMixin:
+    """Stands a stub in for the journal CLI, in a throwaway copy of the plugin tree.
+
+    `journal_script()` resolves relative to the hooks directory, so copying the hooks
+    next to a stub `scripts/journal.py` is what makes the hook's argv observable.
+    """
+
+    STUB = """#!/usr/bin/env python3
+import os
+import sys
+
+log = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "calls.log"
+)
+with open(log, "a", encoding="utf-8") as handle:
+    handle.write("\\t".join(sys.argv[1:]) + "\\n")
+if "status" in sys.argv[1:]:
+    print("stub brief")
+"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import shutil
+
+        self._plugin_tmp = tempfile.TemporaryDirectory()
+        self.plugin = Path(self._plugin_tmp.name).resolve()
+        shutil.copytree(
+            HOOKS, self.plugin / "hooks", ignore=shutil.ignore_patterns("__pycache__")
+        )
+        (self.plugin / "scripts").mkdir()
+        (self.plugin / "scripts" / "journal.py").write_text(self.STUB, encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._plugin_tmp.cleanup()
+        super().tearDown()
+
+    def calls(self) -> list[list[str]]:
+        log = self.plugin / "calls.log"
+        self.assertTrue(log.is_file(), "the hook never invoked the journal")
+        lines = log.read_text(encoding="utf-8").splitlines()
+        return [line.split("\t") for line in lines]
+
+    def journal_args(self, subcommand: str) -> list[str]:
+        """The argv the hook handed `journal.py <subcommand>`, flags only."""
+        for args in self.calls():
+            if subcommand in args:
+                return args[args.index(subcommand):]
+        self.fail(f"the hook never invoked `journal.py {subcommand}`")
+
+    def status_args(self) -> list[str]:
+        return self.journal_args("status")
+
+    def run_session_start(
+        self, payload: dict | None = None, env_extra: dict | None = None
+    ):
+        return run_hook(
+            "session_start",
+            payload
+            or {"session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+            self.root,
+            hooks_dir=self.plugin / "hooks",
+            env_extra=env_extra,
+        )
+
+
+class TestSessionStartBranch(StubJournalMixin, HookTestCase):
+    """What the hook asks the journal for, argv by argv.
+
+    The branch flag is the hook's whole contribution to FR-004; asserting it here keeps
+    that independent of how `status` chooses to order streams.
+    """
+
+    def test_a_git_checkout_asks_for_the_branch_stream_first(self):
+        init_git_checkout(self.root, "feature/x")
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status", "--branch=feature/x"])
+
+    def test_a_dash_leading_branch_name_is_a_value_not_a_flag(self):
+        """A repo can carry a branch literally named `--all`; two tokens broke here."""
+        init_git_checkout(self.root, "feature/x")
+        for command in (
+            ["git", "update-ref", "refs/heads/--all", "HEAD"],
+            ["git", "symbolic-ref", "HEAD", "refs/heads/--all"],
+        ):
+            renamed = subprocess.run(
+                command, cwd=str(self.root), capture_output=True, text=True, timeout=30
+            )
+            self.assertEqual(renamed.returncode, 0, renamed.stderr)
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status", "--branch=--all"])
+
+    def test_the_session_id_is_passed_as_a_single_token(self):
+        self.run_session_start()
+        self.assertEqual(self.journal_args("session"), ["session", f"--set={SESSION}"])
+
+    def test_a_non_string_cwd_costs_the_branch_hint_not_the_brief(self):
+        init_git_checkout(self.root, "feature/x")
+        result = self.run_session_start(
+            {"session_id": SESSION, "cwd": 42, "source": "startup"}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status"])
+        self.assertIn("stub brief", result.stdout)
+
+    def test_an_inherited_git_dir_never_answers_for_another_repo(self):
+        """`GIT_DIR` in the session env would otherwise name a foreign repo's branch."""
+        init_git_checkout(self.root, "feature/x")
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        other = Path(elsewhere.name).resolve()
+        init_git_checkout(other, "not-my-branch")
+        result = self.run_session_start(env_extra={"GIT_DIR": str(other / ".git")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status", "--branch=feature/x"])
+
+    def test_outside_a_git_checkout_the_branch_is_omitted(self):
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status"])
+
+    def test_a_detached_head_is_not_a_branch_name(self):
+        init_git_checkout(self.root, "feature/x")
+        subprocess.run(
+            ["git", "checkout", "-q", "--detach"], cwd=str(self.root), check=True,
+            capture_output=True,
+        )
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status"])
+
+
+class TestSessionAttributionFailure(StubJournalMixin, HookTestCase):
+    """The brief survives a journal that cannot record the session id."""
+
+    STUB = """#!/usr/bin/env python3
+import sys
+
+args = sys.argv[1:]
+if "session" in args:
+    sys.stderr.write("session store unavailable\\n")
+    sys.exit(1)
+if "status" in args:
+    print("stub brief")
+"""
+
+    def test_the_brief_is_prefixed_with_an_attribution_warning(self):
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertTrue(
+            context.startswith("shipgate: session attribution unavailable"),
+            f"the warning must lead the context: {context[:120]}",
+        )
+        self.assertIn("session --set failed", context)
+        self.assertIn("stub brief", context)
+
+
+class TestSessionAttributionWithAnEmptyBrief(StubJournalMixin, HookTestCase):
+    """A fresh journal renders no brief; the warning must still reach the session."""
+
+    STUB = """#!/usr/bin/env python3
+import sys
+
+if "session" in sys.argv[1:]:
+    sys.exit(1)
+"""
+
+    def test_the_notice_is_emitted_on_its_own(self):
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        specific = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(
+            specific["additionalContext"].splitlines()[0],
+            "shipgate: session attribution unavailable (journal.py session --set "
+            "failed) — skill appends this session will carry no session label.",
+        )
+        self.assertNotIn("flow journal —", specific["additionalContext"])
+
+    def test_a_working_session_set_with_no_brief_emits_no_context(self):
+        (self.plugin / "scripts" / "journal.py").write_text(
+            "#!/usr/bin/env python3\n", encoding="utf-8"
+        )
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        specific = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertNotIn("additionalContext", specific)
+
+
+class TestProjectResolution(StubJournalMixin, HookTestCase):
+    """A hook belongs to the session's own directory, not to the process's.
+
+    `CLAUDE_PROJECT_DIR` can name a journaled project while the session sits in an
+    un-journaled one; writing that session's events into the ambient project is the
+    failure this pins down.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._elsewhere = tempfile.TemporaryDirectory()
+        self.elsewhere = Path(self._elsewhere.name).resolve()
+        self.addCleanup(self._elsewhere.cleanup)
+
+    def run_hook_from_elsewhere(self, name, payload):
+        return run_hook(
+            name,
+            payload,
+            self.elsewhere,
+            project_dir=self.root,
+            hooks_dir=self.plugin / "hooks",
+        )
+
+    def test_session_start_ignores_the_ambient_project_when_cwd_is_not_journaled(self):
+        result = self.run_hook_from_elsewhere(
+            "session_start",
+            {"session_id": SESSION, "cwd": str(self.elsewhere), "source": "startup"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(
+            (self.plugin / "calls.log").exists(),
+            "the hook reached the ambient project's journal",
+        )
+
+    def test_session_start_falls_back_to_the_ambient_project_without_a_cwd(self):
+        result = self.run_hook_from_elsewhere(
+            "session_start", {"session_id": SESSION, "source": "startup"}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("stub brief", result.stdout)
+
+    def test_stop_ignores_the_ambient_project_when_cwd_is_not_journaled(self):
+        result = self.run_hook_from_elsewhere(
+            "stop",
+            {"session_id": SESSION, "cwd": str(self.elsewhere),
+             "stop_hook_active": False},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertFalse((self.plugin / "calls.log").exists())
+
+    def test_stop_falls_back_to_the_ambient_project_without_a_cwd(self):
+        result = self.run_hook_from_elsewhere(
+            "stop", {"session_id": SESSION, "stop_hook_active": False}
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.journal_args("check"),
+            ["check", "--session", SESSION, "--json"],
+        )
+
+
+class TestJournalDbIsNeverAnArtifact(HookTestCase):
+    """A glob wide enough to match the db must not make the db an artifact."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sidecar = self.root / ".claude" / "shipgate.json"
+        config = json.loads(self.sidecar.read_text())
+        config["artifact_homes"] = {"x": ".claude/*"}
+        self.sidecar.write_text(json.dumps(config), encoding="utf-8")
+        self.wal = Path(str(self.db) + "-wal")
+        self.wal.write_text("", encoding="utf-8")
+
+    def test_the_db_is_neither_watched_nor_covered(self):
+        result = run_hook(
+            "session_start",
+            {"session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        watched = json.loads(result.stdout)["hookSpecificOutput"]["watchPaths"]
+        self.assertIn(str(self.sidecar), watched, "the glob should still match")
+        self.assertNotIn(str(self.db), watched)
+        self.assertNotIn(str(self.wal), watched)
+
+        project = load_project(str(self.root))
+        self.assertTrue(project.covers(str(self.sidecar)))
+        self.assertFalse(project.covers(str(self.db)))
+        self.assertFalse(project.covers(str(self.wal)))
+
+
+class TestSessionStartBranchOrdering(HookTestCase):
+    def test_the_branch_stream_leads_the_brief(self):
+        init_git_checkout(self.root, STREAM)
+        for stream in ("aaa-other", STREAM):
+            appended = journal(
+                self.db, "append", "--stream", stream, "--type", "phase-entered",
+                "--data", json.dumps({"phase": "workspace"}),
+            )
+            self.assertEqual(appended.returncode, 0, appended.stderr)
+
+        result = run_hook(
+            "session_start",
+            {"session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("aaa-other", context, f"no brief was rendered: {context}")
+        self.assertLess(
+            context.index(STREAM), context.index("aaa-other"),
+            "the stream named after the branch must render first",
+        )
+
 
 class TestStopGate(HookTestCase):
     """The gate itself: block when bookkeeping is missing, pass once it isn't."""
@@ -264,6 +619,19 @@ class TestStopGate(HookTestCase):
         self.assertIn("T001", payload["reason"])
         self.assertIn("task-done", payload["reason"])
 
+    def test_a_block_is_recorded_with_its_finding_count(self):
+        self.tick_and_capture(WORKLOG_TWO_TICKED)
+        self.assertEqual(json.loads(self.stop().stdout)["decision"], "block")
+        blocked = self.events(event_type="gate-blocked")
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["stream"], "shipgate")
+        self.assertEqual(blocked[0]["data"]["session"], SESSION)
+        self.assertEqual(blocked[0]["data"]["findings"], 2)
+
+    def test_a_clean_stop_records_no_block(self):
+        self.assertEqual(self.stop().stdout.strip(), "")
+        self.assertEqual(self.events(event_type="gate-blocked"), [])
+
     def test_reentrant_stop_stands_down(self):
         """Loop protection — the harness hard-overrides after 8 blocks regardless."""
         self.tick_and_capture(WORKLOG_ONE_TICKED)
@@ -271,6 +639,11 @@ class TestStopGate(HookTestCase):
         again = self.stop(active=True)
         self.assertEqual(again.returncode, 0)
         self.assertEqual(again.stdout.strip(), "")
+        self.assertEqual(
+            len(self.events(event_type="gate-blocked")),
+            1,
+            "standing down must not record a second block",
+        )
 
     def test_every_finding_is_reported_in_one_round(self):
         """Findings must be satisfiable in a single round, never trickled out."""
@@ -393,6 +766,17 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
             },
             self.root,
         )
+        self.assertFalse((self.root / ".claude").exists())
+        self.assertEqual(list(self.root.rglob("*.db")), [])
+
+    def test_a_stop_touches_nothing(self):
+        result = run_hook(
+            "stop",
+            {"session_id": "s", "cwd": str(self.root), "stop_hook_active": False},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
         self.assertFalse((self.root / ".claude").exists())
         self.assertEqual(list(self.root.rglob("*.db")), [])
 

@@ -23,9 +23,11 @@ import os
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import (
+    Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple,
+)
 
 # --------------------------------------------------------------------------
 # Constants
@@ -77,6 +79,7 @@ EVENT_VOCABULARY: Dict[str, str] = {
     "deviation": "diverged from the plan, or corrected an earlier record",
     "flow-suspended": "work parked",
     "flow-resumed": "work picked back up",
+    "flow-completed": "work finished — capture done, stream leaves the brief",
     "flow-abandoned": "work dropped for good",
     # gates and decisions
     "gate-decision": "a decision taken at a gate (this is the one for 'decision')",
@@ -99,6 +102,7 @@ EVENT_VOCABULARY: Dict[str, str] = {
     "artifact-written": "an artifact file changed (hook-written)",
     "session-started": "a session began (hook-written)",
     "session-ended": "a session ended (hook-written)",
+    "gate-blocked": "Stop hook blocked a session over missing events (hook-written)",
     "setup-completed": "setup created or updated this project",
     "schema-migrated": "the journal schema moved version",
     "imported": "events were imported from a JSONL export",
@@ -112,6 +116,107 @@ EVENT_VOCABULARY: Dict[str, str] = {
     "merged": "the MR merged",
     "closed": "the MR closed unmerged",
 }
+
+# The payload shape each type must satisfy — the counterpart to the vocabulary above:
+# the vocabulary makes an event *findable*, the shape makes it *readable*. A type absent
+# here has no shape on purpose (hook and watcher payloads answer to their writer, not to
+# a gate). Per type:
+#   required      keys that must be present
+#   enums         key -> the only values accepted for it
+#   lists         keys whose value must be a JSON list
+#   aliases       old key -> canonical key, renamed before validation
+#   value_aliases key -> {old value: canonical value}
+#   defaults      key -> value filled in when absent
+EVENT_SHAPES: Dict[str, Dict[str, Any]] = {
+    "flow-started": {"required": ["request"]},
+    "phase-entered": {"required": ["phase"]},
+    "deviation": {
+        "required": ["note"],
+        "aliases": {"correction": "note", "what": "note"},
+    },
+    "gate-decision": {
+        "required": ["gate", "question", "decision", "mode"],
+        "enums": {
+            "mode": ["ask", "executive"],
+            "raised_by": ["user", "orchestrator"],
+        },
+        "aliases": {"chosen": "decision", "kind": "gate"},
+        "defaults": {"raised_by": "orchestrator"},
+    },
+    "clarify-passed": {"required": ["prd"]},
+    "design-committed": {"required": ["worklog"]},
+    "task-done": {"required": ["task_id"]},
+    "verify-run": {
+        "required": ["outcome", "task_ids"],
+        "enums": {"outcome": ["pass", "fail"]},
+        "lists": ["task_ids"],
+        "aliases": {"result": "outcome", "tasks": "task_ids"},
+    },
+    "review-verdict": {
+        "required": ["verdict"],
+        "enums": {"verdict": ["ready", "not-ready"]},
+        "value_aliases": {"verdict": {"pass": "ready", "fail": "not-ready"}},
+    },
+    "capture-done": {
+        "required": ["promoted", "dropped"],
+        "lists": ["promoted", "dropped"],
+    },
+}
+
+# Events that can only happen inside one phase, so appending one *is* entering it.
+# ADR 0002: `append` records the transition rather than refusing the event.
+PHASE_OF_EVENT: Dict[str, str] = {
+    "clarify-passed": "clarify",
+    "design-committed": "design",
+    "design-queued": "design",
+    "verify-run": "implement",
+    "task-done": "implement",
+    "review-verdict": "review",
+    "capture-done": "capture",
+}
+
+# `actor` is `role[@label]` (ADR 0003) — the role says who decided, the label which
+# session or agent.
+ACTOR_ROLES = ("orchestrator", "worker", "user", "hook", "watcher")
+
+# Types after which a stream has nothing left to report.
+TERMINAL_TYPES = ("flow-completed", "flow-abandoned")
+
+# A finished stream reopens only on an event that says work restarted. A late
+# `deviation`, or a hook's `artifact-written` on a file someone reread, leaves it
+# finished — otherwise a stream could never leave the brief for good.
+REVIVING_TYPES = frozenset(
+    {"flow-started", "flow-resumed", "phase-entered", *PHASE_OF_EVENT}
+)
+
+# Roles whose label is never a session id. The watcher runs outside any Claude session,
+# so `meta.current_session` would attribute its events to whoever started a session last;
+# a `user` label names a person, which is why `stats` drops the role from its session
+# count — defaulting a session id in would put it back and inflate that count.
+SESSIONLESS_ROLES = frozenset({"watcher", "user"})
+
+# A `capture-done` with nothing after it is a flow that ended without saying so; give
+# it two days in case review feedback lands, then treat it as finished.
+CAPTURE_TERMINAL_HOURS = 48
+DORMANT_DAYS = 7
+# The brief is injected into every session, so it pays for the last few decisions per
+# stream, not for all of them, and never for a line that wraps a terminal three times.
+# The stream matching the current branch is the work being resumed, so it gets the full
+# five; the others are context and get three.
+BRIEF_DECISION_LIMIT = 5
+BRIEF_DECISION_LIMIT_OTHER = 3
+BRIEF_TASK_IDS = 5
+BRIEF_LINE_CHARS = 160
+
+# The journal records state and evidence pointers; the worklog, PRD and ADRs hold the
+# prose. A payload past this is a document being pasted into an event, at the writer's
+# token expense on every brief that reprints it.
+PAYLOAD_CAP_BYTES = 1024
+
+# One file write reaches the journal twice — PostToolUse sees the tool call, FileChanged
+# sees the same bytes land — so an `artifact-written` repeating a path at the same mtime
+# this recently is the second hook, not a second write.
+ARTIFACT_DEDUPE_SECONDS = 5.0
 
 # Streams the tool owns. Everything else is a work stream — named for its branch
 # (`fix/1290-…`) or its feature slug, both of which are legitimate.
@@ -369,6 +474,51 @@ def get_meta(conn: sqlite3.Connection, key: str) -> Optional[str]:
     return row["value"] if row else None
 
 
+def current_session(conn: sqlite3.Connection) -> Optional[str]:
+    """The session id the SessionStart hook stored, if any (ADR 0003)."""
+    if not _table_exists(conn, "meta"):
+        return None
+    return get_meta(conn, "current_session") or None
+
+
+def set_current_session(conn: sqlite3.Connection, session_id: str) -> None:
+    """Record the session id (ADR 0003). One statement, so no explicit transaction."""
+    if not _table_exists(conn, "meta"):
+        raise InfraError(
+            "this journal has no meta table, so the session cannot be recorded — "
+            "run `journal.py init`"
+        )
+    _set_meta(conn, "current_session", session_id)
+
+
+def parse_actor(
+    raw: Optional[str],
+    conn: sqlite3.Connection,
+    data: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Canonicalize ``--actor`` to ``role[@label]`` (ADR 0003).
+
+    An event that already names its session in the payload — every hook-written one —
+    keeps the bare role, so the two never disagree about which session it was.
+    """
+    role, separator, label = (raw or "orchestrator").partition("@")
+    if role not in ACTOR_ROLES:
+        raise UsageError(
+            f"actor role {role!r} is not one of {', '.join(ACTOR_ROLES)} — "
+            "pass `role` or `role@label` (label = session id, agent, watcher)"
+        )
+    if separator and label:
+        return f"{role}@{label}"
+    if role in SESSIONLESS_ROLES:
+        return role
+    if isinstance(data, dict):
+        session = data.get("session")
+        if isinstance(session, str) and session:
+            return role
+    session_id = current_session(conn)
+    return f"{role}@{session_id}" if session_id else role
+
+
 def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.execute(
         "INSERT INTO meta (key, value) VALUES (?, ?) "
@@ -594,12 +744,8 @@ def _validate_phase_entered(
         )
     target = PHASE_ORDER.index(phase)
 
-    history = read_events(conn, stream=stream, types=("phase-entered",))
-    previous = -1
-    for event in history:
-        recorded = event.data.get("phase")
-        if recorded in PHASE_ORDER:
-            previous = PHASE_ORDER.index(recorded)
+    recorded = folded_phase(conn, stream)
+    previous = PHASE_ORDER.index(recorded) if recorded is not None else -1
 
     # Backward and same-phase transitions are always legal (review -> implement
     # is a normal loop). So is a single step forward.
@@ -611,10 +757,20 @@ def _validate_phase_entered(
     declared_set = set(declared) if isinstance(declared, list) else set()
     unnamed = [name for name in intervening if name not in declared_set]
     if unnamed:
+        # A stream whose only recorded phase is unusable folds to None, which reads as
+        # "nothing recorded" and turns any append into a jump from the start. Say which
+        # spelling was ignored, or the refusal looks like a bug in the caller.
+        spelled = _last_phase_spelling(conn, stream) if recorded is None else None
         raise GateViolation(
             "phase-entered {target}: forward jump skips {n} phase(s); list them in "
-            "data.skipped. Missing: {missing}".format(
-                target=phase, n=len(intervening), missing=", ".join(unnamed)
+            "data.skipped. Missing: {missing}{hint}".format(
+                target=phase,
+                n=len(intervening),
+                missing=", ".join(unnamed),
+                hint=(
+                    f" (the last recorded phase-entered spelled it {spelled!r}, "
+                    "which is not in the declared order)"
+                ) if spelled is not None else "",
             )
         )
 
@@ -622,7 +778,7 @@ def _validate_phase_entered(
 def _validate_review_verdict(
     conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
 ) -> None:
-    if data.get("verdict") != "pass":
+    if data.get("verdict") != "ready":
         return
     task_dones = read_events(conn, stream=stream, types=("task-done",))
     last_task_done_seq = max((e.seq for e in task_dones), default=0)
@@ -630,8 +786,45 @@ def _validate_review_verdict(
         if event.seq > last_task_done_seq:
             return
     raise GateViolation(
-        "review-verdict=pass requires a verify-run with outcome=pass recorded after "
+        "review-verdict=ready requires a verify-run with outcome=pass recorded after "
         f"the last task-done in stream {stream!r}"
+    )
+
+
+def _authorizes_publish(data: Dict[str, Any]) -> bool:
+    """Whether a ``gate-decision`` is the deliberate call to publish.
+
+    All three conditions matter: the orchestrator can raise a publish gate and answer
+    it itself, so a decision that only *sits at* the gate — or records "no" there —
+    would otherwise let the flow authorize its own MR.
+    """
+    return (
+        data.get("gate") == "publish"
+        and data.get("raised_by") == "user"
+        and str(data.get("decision")).strip().lower() == "publish"
+    )
+
+
+def _validate_mr_opened(
+    conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
+) -> None:
+    task_dones = read_events(conn, stream=stream, types=("task-done",))
+    last_task_done_seq = max((e.seq for e in task_dones), default=0)
+    for event in read_events(
+        conn, stream=stream, types=("review-verdict", "gate-decision")
+    ):
+        if event.seq <= last_task_done_seq:
+            continue
+        if event.type == "review-verdict" and event.data.get("verdict") == "ready":
+            return
+        if event.type == "gate-decision" and _authorizes_publish(event.data):
+            return
+    raise GateViolation(
+        f"mr-opened in stream {stream!r} needs, recorded after the last task-done, "
+        "either a review-verdict with verdict=ready, or a gate-decision with "
+        "gate=publish, raised_by=user and decision=publish — record the review's "
+        "outcome, take the publish decision with the user, or append with --force "
+        "and a reason"
     )
 
 
@@ -655,6 +848,102 @@ def suggest_event_types(event_type: str) -> List[str]:
         if words & {w for w in candidate.split("-") if w}:
             close.append(candidate)
     return close[:4]
+
+
+def normalize_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Rewrite a payload to its canonical shape, or refuse it.
+
+    Aliases are renamed and defaults filled before anything is checked, so a caller
+    using an older spelling is corrected rather than rejected. What is left must
+    satisfy the required keys, the enums and the list types — a gate reading
+    ``data.outcome`` cannot do its job on a payload that spells it ``result``.
+
+    Two keys that mean the same thing are refused rather than resolved: silently
+    dropping one of them would discard a value the caller meant to record, and there
+    is no way to tell which of the two they meant.
+    """
+    shape = EVENT_SHAPES.get(event_type)
+    if not shape:
+        return dict(data)
+
+    aliases = shape.get("aliases", {})
+    payload: Dict[str, Any] = {}
+    written_by: Dict[str, str] = {}
+    for key, value in data.items():
+        canonical = aliases.get(key, key)
+        if canonical in written_by:
+            raise GateViolation(
+                f"{event_type}: data.{written_by[canonical]} and data.{key} both "
+                f"mean {canonical!r} — send one of them"
+                + _shape_hint(event_type)
+            )
+        written_by[canonical] = key
+        payload[canonical] = value
+    for key, mapping in shape.get("value_aliases", {}).items():
+        value = payload.get(key)
+        if isinstance(value, str) and value in mapping:
+            payload[key] = mapping[value]
+    for key, value in shape.get("defaults", {}).items():
+        payload.setdefault(key, value)
+
+    missing = [
+        key for key in shape.get("required", []) if payload.get(key) in (None, "")
+    ]
+    if missing:
+        raise GateViolation(
+            f"{event_type} is missing required data key(s): {', '.join(missing)}"
+            + _shape_hint(event_type)
+        )
+    for key in shape.get("lists", []):
+        if key in payload and not isinstance(payload[key], list):
+            raise GateViolation(
+                f"{event_type}: data.{key} must be a list" + _shape_hint(event_type)
+            )
+    for key, allowed in shape.get("enums", {}).items():
+        if key in payload and payload[key] not in allowed:
+            raise GateViolation(
+                f"{event_type}: data.{key} must be one of "
+                f"{', '.join(str(a) for a in allowed)}, got {payload[key]!r}"
+                + _shape_hint(event_type)
+            )
+    return payload
+
+
+def _shape_hint(event_type: str) -> str:
+    return (
+        f" — canonical shape (`journal.py vocab --shape {event_type}`): "
+        + json.dumps(EVENT_SHAPES[event_type], sort_keys=True)
+    )
+
+
+def check_payload_size(
+    stream: str,
+    payload: Dict[str, Any],
+    force: bool = False,
+    force_reason: Optional[str] = None,
+) -> None:
+    """Refuse a payload carrying prose rather than a pointer to it (FR-013).
+
+    Hook and watcher streams are exempt: their payloads are machine-sized already and
+    nobody reads them in the brief. ``--force`` waives the cap only with a reason —
+    every brief from here on reprints those bytes, so the waiver has to say why.
+    """
+    if not is_work_stream(stream):
+        return
+    size = len(json.dumps(payload, sort_keys=True).encode())
+    if size <= PAYLOAD_CAP_BYTES:
+        return
+    if not force:
+        raise GateViolation(
+            f"payload is {size} bytes (cap {PAYLOAD_CAP_BYTES}): the worklog/PRD/ADR "
+            "holds the prose, the event holds `refs` and one sentence — or --force "
+            "with a reason"
+        )
+    if not force_reason:
+        raise UsageError(
+            f"--force on a {size}-byte payload (cap {PAYLOAD_CAP_BYTES}) needs "
+            "--force-reason saying why the prose belongs in the event"
+        )
 
 
 def validate_event_type(event_type: str, allow_new: bool) -> None:
@@ -690,11 +979,112 @@ def validate_gate(
         _validate_phase_entered(conn, stream, data)
     elif event_type == "review-verdict":
         _validate_review_verdict(conn, stream, data)
+    elif event_type == "mr-opened":
+        _validate_mr_opened(conn, stream, data)
 
 
 # --------------------------------------------------------------------------
 # Append
 # --------------------------------------------------------------------------
+
+
+class AppendResult(NamedTuple):
+    seq: int
+    version: int
+    implied_phase: Optional[str] = None
+    duplicate: bool = False
+    # The version `--expect` was compared against, so a caller that lost a race can
+    # see what it was actually holding.
+    version_before: int = 0
+
+
+def _last_phase_spelling(conn: sqlite3.Connection, stream: str) -> Optional[str]:
+    """The newest ``phase-entered``'s ``phase`` as written, in or out of the order."""
+    for event in reversed(read_events(conn, stream=stream, types=("phase-entered",))):
+        candidate = event.data.get("phase")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
+def folded_phase(conn: sqlite3.Connection, stream: str) -> Optional[str]:
+    """The phase a stream's ``phase-entered`` history leaves it in."""
+    phase: Optional[str] = None
+    for event in read_events(conn, stream=stream, types=("phase-entered",)):
+        candidate = event.data.get("phase")
+        if candidate in PHASE_ORDER:
+            phase = candidate
+    return phase
+
+
+def _parse_ts(ts: Any) -> Optional[datetime]:
+    if not isinstance(ts, str):
+        return None
+    try:
+        recorded = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+    return recorded if recorded.tzinfo else recorded.replace(tzinfo=timezone.utc)
+
+
+def _seconds_since(ts: str, now: Optional[datetime] = None) -> Optional[float]:
+    recorded = _parse_ts(ts)
+    if recorded is None:
+        return None
+    return ((now or datetime.now(timezone.utc)) - recorded).total_seconds()
+
+
+def _recent_duplicate_artifact(
+    conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
+) -> Optional[Tuple[int, int]]:
+    """The ``(seq, version)`` of the row this ``artifact-written`` merely repeats.
+
+    The whole window is searched, not just the last row: two files saved in the same
+    tool call interleave as ``a, b, a`` and the repeat of ``a`` is still the second
+    hook seeing the first write. A row stamped in the future is never a duplicate —
+    a clock that ran backwards would otherwise swallow every subsequent write.
+
+    Accepted: `--force` does not bypass this, so two genuine writes of one path inside
+    5 s that leave an identical mtime collapse into the first one's row.
+    """
+    path = data.get("path")
+    if not isinstance(path, str) or not path:
+        return None
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=ARTIFACT_DEDUPE_SECONDS)).isoformat()
+    rows = conn.execute(
+        "SELECT seq, stream, version, type, data, ts, actor FROM events "
+        "WHERE stream = ? AND type = 'artifact-written' AND ts >= ? "
+        "ORDER BY seq DESC LIMIT 50",
+        (stream, cutoff),
+    ).fetchall()
+    for row in rows:
+        previous = _row_to_event(row)
+        if (
+            previous.data.get("path") != path
+            or previous.data.get("mtime") != data.get("mtime")
+        ):
+            continue
+        elapsed = _seconds_since(previous.ts, now)
+        if elapsed is None or not 0 <= elapsed <= ARTIFACT_DEDUPE_SECONDS:
+            continue
+        return previous.seq, previous.version
+    return None
+
+
+def _implied_phase_payload(
+    previous: Optional[str], phase: str, event_type: str
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "phase": phase,
+        "implied": True,
+        "implied_by": event_type,
+    }
+    start = PHASE_ORDER.index(previous) + 1 if previous in PHASE_ORDER else 0
+    skipped = PHASE_ORDER[start: PHASE_ORDER.index(phase)]
+    if skipped:
+        payload["skipped"] = skipped
+    return payload
 
 
 def append_event(
@@ -708,8 +1098,8 @@ def append_event(
     force: bool = False,
     force_reason: Optional[str] = None,
     allow_new_type: bool = False,
-) -> Tuple[int, int]:
-    """Append one event. Returns ``(seq, version)``.
+) -> AppendResult:
+    """Append one event.
 
     ``UNIQUE(stream, version)`` is the real concurrency guard; ``BEGIN IMMEDIATE``
     serializes writers so the common path never collides. On the rare
@@ -719,6 +1109,7 @@ def append_event(
     # The vocabulary check is not a gate precondition — it is about whether this event
     # can ever be read — so `--force` does not waive it; `--new-type` does.
     validate_event_type(event_type, allow_new_type)
+    canonical_actor = parse_actor(actor, conn, data)
 
     payload = dict(data)
     if force:
@@ -726,6 +1117,10 @@ def append_event(
         payload["force_reason"] = force_reason
     if allow_new_type and event_type not in EVENT_VOCABULARY:
         payload["new_type"] = True
+    # Like the vocabulary check, this is about whether the event can be read at all,
+    # so `--force` does not waive it.
+    payload = normalize_payload(event_type, payload)
+    check_payload_size(stream, payload, force, force_reason)
 
     for attempt in range(2):
         conn.execute("BEGIN IMMEDIATE")
@@ -734,24 +1129,38 @@ def append_event(
             if expect is not None and existing != expect:
                 conn.execute("ROLLBACK")
                 raise VersionConflict(stream, expect, existing)
+            if event_type == "artifact-written":
+                repeated = _recent_duplicate_artifact(conn, stream, payload)
+                if repeated is not None:
+                    conn.execute("ROLLBACK")
+                    return AppendResult(
+                        repeated[0], repeated[1], duplicate=True,
+                        version_before=existing,
+                    )
             if not force:
                 validate_gate(conn, stream, event_type, payload, project_dir)
+
             version = existing + 1
-            cursor = conn.execute(
-                "INSERT INTO events (stream, version, type, data, ts, actor) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    stream,
-                    version,
-                    event_type,
-                    json.dumps(payload, sort_keys=True),
-                    utc_now(),
-                    actor,
-                ),
+            implied_phase = PHASE_OF_EVENT.get(event_type)
+            if implied_phase is not None:
+                previous = folded_phase(conn, stream)
+                if previous == implied_phase:
+                    implied_phase = None
+                else:
+                    _insert_event(
+                        conn, stream, version, "phase-entered",
+                        _implied_phase_payload(previous, implied_phase, event_type),
+                        canonical_actor,
+                    )
+                    version += 1
+
+            seq = _insert_event(
+                conn, stream, version, event_type, payload, canonical_actor
             )
-            seq = int(cursor.lastrowid)
             conn.execute("COMMIT")
-            return seq, version
+            return AppendResult(
+                seq, version, implied_phase, version_before=existing
+            )
         except sqlite3.IntegrityError:
             conn.execute("ROLLBACK")
             if expect is not None:
@@ -759,14 +1168,28 @@ def append_event(
             if attempt == 0:
                 continue
             raise
-        except JournalError:
-            _rollback_quietly(conn)
-            raise
         except Exception:
             _rollback_quietly(conn)
             raise
 
     raise InfraError(f"could not append to stream {stream!r} after a retry")
+
+
+def _insert_event(
+    conn: sqlite3.Connection,
+    stream: str,
+    version: int,
+    event_type: str,
+    payload: Dict[str, Any],
+    actor: Optional[str],
+) -> int:
+    cursor = conn.execute(
+        "INSERT INTO events (stream, version, type, data, ts, actor) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (stream, version, event_type, json.dumps(payload, sort_keys=True),
+         utc_now(), actor),
+    )
+    return int(cursor.lastrowid)
 
 
 def _rollback_quietly(conn: sqlite3.Connection) -> None:
@@ -799,21 +1222,34 @@ def feature_slug(stream: str) -> str:
     ) else stream
 
 
-def fold_stream(events: Sequence[Event]) -> Dict[str, Any]:
+def fold_stream(
+    events: Sequence[Event], now: Optional[datetime] = None
+) -> Dict[str, Any]:
     """Fold a stream's events into the resume brief for one feature."""
     phase: Optional[str] = None
     phase_entered_at: Optional[str] = None
+    phase_implied = False
+    terminal = False
     gate_decisions: List[Dict[str, Any]] = []
     queued: Dict[str, Dict[str, Any]] = {}
     last_verify: Optional[Dict[str, Any]] = None
     task_ids: List[str] = []
 
     for event in events:
+        if event.type in TERMINAL_TYPES:
+            terminal = True
+        elif event.type in REVIVING_TYPES:
+            terminal = False
+
         if event.type == "phase-entered":
+            # Same rule as `folded_phase`: a phase outside the declared order (an
+            # imported row spelling it `Implement`) is not a position the brief or
+            # the ordering gate can reason about, so neither of them adopts it.
             candidate = event.data.get("phase")
-            if isinstance(candidate, str):
+            if candidate in PHASE_ORDER:
                 phase = candidate
                 phase_entered_at = event.ts
+                phase_implied = bool(event.data.get("implied"))
         elif event.type == "gate-decision":
             # Start from the event's own payload so a decision recorded under a
             # different shape keeps its content, then overlay the canonical keys.
@@ -850,16 +1286,34 @@ def fold_stream(events: Sequence[Event]) -> Dict[str, Any]:
                 task_ids.append(task_id)
 
     last = events[-1] if events else None
+    age = _seconds_since(last.ts, now) if last else None
+    age_days = int(age // 86400) if age is not None else None
+    if (
+        not terminal
+        and last is not None
+        and last.type == "capture-done"
+        and age is not None
+        and age > CAPTURE_TERMINAL_HOURS * 3600
+    ):
+        terminal = True
+
     return {
         "stream": events[0].stream if events else None,
         "feature": feature_slug(events[0].stream) if events else None,
         "version": last.version if last else 0,
         "phase": phase,
         "phase_entered_at": phase_entered_at,
+        "implied_phase": phase_implied,
         "last_event": (
             {"seq": last.seq, "type": last.type, "ts": last.ts} if last else None
         ),
+        "age_days": age_days,
+        "terminal": terminal,
+        "dormant": bool(
+            not terminal and age_days is not None and age_days >= DORMANT_DAYS
+        ),
         "gate_decisions": gate_decisions,
+        "gate_decision_count": len(gate_decisions),
         "open_designs": list(queued.values()),
         "last_verify": last_verify,
         "tasks_done": len(task_ids),
@@ -867,8 +1321,51 @@ def fold_stream(events: Sequence[Event]) -> Dict[str, Any]:
     }
 
 
+def branch_stream_candidates(branch: str) -> List[str]:
+    """Stream names a git branch could plausibly be journaled under.
+
+    The convention is stream name = branch name. Failing that, the branch's last path
+    segment is tried with and without the `feature/` prefix, so branch
+    `fix/1290-date-off-by-one` also finds streams `feature/1290-date-off-by-one` and
+    `1290-date-off-by-one`. Most exact first.
+    """
+    slug = branch.rsplit("/", 1)[-1]
+    candidates = [
+        branch,
+        FEATURE_STREAM_PREFIX + branch,
+        FEATURE_STREAM_PREFIX + slug,
+        feature_slug(branch),
+        slug,
+    ]
+    unique: List[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def branch_match(branch: str, streams: Sequence[str]) -> Optional[str]:
+    available = set(streams)
+    for candidate in branch_stream_candidates(branch):
+        if candidate in available:
+            return candidate
+    return None
+
+
+def _brief_rank(feature: Dict[str, Any]) -> int:
+    if feature.get("branch_match"):
+        return 0
+    if feature.get("terminal"):
+        return 3
+    return 2 if feature.get("dormant") else 1
+
+
 def build_status(
-    conn: sqlite3.Connection, feature: Optional[str] = None
+    conn: sqlite3.Connection,
+    feature: Optional[str] = None,
+    branch: Optional[str] = None,
+    show_all: bool = False,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     if feature:
         # Accept a bare slug, a `feature/` stream, or any other work stream name
@@ -883,13 +1380,34 @@ def build_status(
     else:
         wanted = [s for s in list_streams(conn) if is_work_stream(s)]
 
-    features = []
+    folded = []
     for stream in wanted:
         events = read_events(conn, stream=stream)
         if not events:
             continue
-        features.append(fold_stream(events))
-    return {"features": features}
+        folded.append(fold_stream(events, now=now))
+
+    matched = branch_match(branch, [f["stream"] for f in folded]) if branch else None
+    # Hiding finished work is what keeps the brief small, but someone who names a
+    # stream is asking about that stream — answering "nothing here" would be a lie.
+    keep_terminal = show_all or bool(feature)
+    features = []
+    hidden_terminal = 0
+    for entry in folded:
+        entry["branch_match"] = entry["stream"] == matched
+        if entry["terminal"] and not keep_terminal and not entry["branch_match"]:
+            hidden_terminal += 1
+            continue
+        features.append(entry)
+
+    # Two stable sorts: recency inside each rank, then the ranks themselves.
+    features.sort(key=lambda f: (f["last_event"] or {}).get("ts") or "", reverse=True)
+    features.sort(key=_brief_rank)
+    return {
+        "features": features,
+        "hidden_terminal": hidden_terminal,
+        "branch_match": matched,
+    }
 
 
 def _render_decision(decision: Dict[str, Any]) -> str:
@@ -938,50 +1456,128 @@ def _render_ledger(status: Dict[str, Any]) -> List[str]:
     return [line]
 
 
+def _one_line(value: Any) -> str:
+    """Collapse every run of whitespace, newlines included, to a single space.
+
+    The brief is injected into the session prompt, so a payload that carries a
+    newline would otherwise be able to add lines to it — a heading, a fake section
+    divider — and the reader has no way to tell those from the journal's own.
+    """
+    return " ".join(str(value).split())
+
+
+def _clip(line: str) -> str:
+    flat = _one_line(line)
+    if len(flat) <= BRIEF_LINE_CHARS:
+        return flat
+    return flat[: BRIEF_LINE_CHARS - 1] + "…"
+
+
+def _short_ts(ts: Any) -> str:
+    """Minute precision — the brief is read to orient, never to reconcile.
+
+    Collapsed before it is cut: an imported row can carry anything in `ts`, and 16
+    characters of a newline-bearing string would still reach the brief as two lines.
+    """
+    return _one_line(ts)[:16]
+
+
+def _render_task_ids(feature: Dict[str, Any]) -> str:
+    ids = feature["task_ids"]
+    if not ids:
+        return ""
+    shown = ids[-BRIEF_TASK_IDS:]
+    elided = "… " if len(ids) > len(shown) else ""
+    return f"  [{elided}{', '.join(_one_line(i) for i in shown)}]"
+
+
+def _render_dormant(feature: Dict[str, Any]) -> str:
+    """One line for work nobody has touched in a week — name, position, age."""
+    last = feature["last_event"] or {}
+    return _one_line(
+        f"{feature['stream']}  (v{feature['version']})  "
+        f"phase {feature['phase'] or '—'} · "
+        f"last {last.get('type', '—')} {str(last.get('ts', ''))[:10]}  "
+        f"· dormant {feature['age_days']}d"
+    )
+
+
+def _render_feature(feature: Dict[str, Any]) -> List[str]:
+    lines = [
+        f"{_one_line(feature['stream'])}  (v{feature['version']})"
+        + ("  · terminal" if feature.get("terminal") else "")
+    ]
+    lines.append(
+        f"  phase        : {feature['phase'] or '—'}"
+        + ("  (implied)" if feature.get("implied_phase") else "")
+        + (f"  (entered {_short_ts(feature['phase_entered_at'])})"
+           if feature["phase_entered_at"] else "")
+    )
+    last = feature["last_event"]
+    lines.append(
+        f"  last event   : {_one_line(last['type'])} at {_short_ts(last['ts'])}"
+        if last else "  last event   : —"
+    )
+    lines.append(
+        f"  tasks done   : {feature['tasks_done']}" + _render_task_ids(feature)
+    )
+    verify = feature["last_verify"]
+    if verify:
+        covered = verify.get("task_ids") or []
+        lines.append(
+            f"  last verify  : {_one_line(verify.get('outcome'))}"
+            + (f" — {', '.join(_one_line(t) for t in covered)}" if covered else "")
+            + f" ({_short_ts(verify.get('ts'))})"
+        )
+    else:
+        lines.append("  last verify  : —")
+    decisions = feature["gate_decisions"]
+    if decisions:
+        limit = (
+            BRIEF_DECISION_LIMIT if feature.get("branch_match")
+            else BRIEF_DECISION_LIMIT_OTHER
+        )
+        shown = decisions[-limit:]
+        lines.append("  gate decisions:")
+        for decision in shown:
+            lines.append(_clip("    - " + _render_decision(decision)))
+        earlier = feature.get("gate_decision_count", len(decisions)) - len(shown)
+        if earlier > 0:
+            lines.append(f"    … +{earlier} earlier")
+    if feature["open_designs"]:
+        lines.append("  open designs:")
+        for design in feature["open_designs"]:
+            assumes = design.get("assumes")
+            lines.append(_clip(
+                f"    - {_one_line(design.get('issue'))}"
+                + (f" (assumes {_one_line(assumes)})" if assumes else "")
+            ))
+    lines.append("")
+    return lines
+
+
+def _render_hidden(status: Dict[str, Any]) -> List[str]:
+    hidden = status.get("hidden_terminal") or 0
+    if not hidden:
+        return []
+    return [f"{hidden} completed stream(s) hidden (--all shows them)"]
+
+
 def render_status(status: Dict[str, Any]) -> str:
     features = status["features"]
     if not features:
-        return "\n".join(["No feature streams recorded.", *_render_ledger(status)])
+        return "\n".join([
+            "No feature streams recorded.",
+            *_render_hidden(status),
+            *_render_ledger(status),
+        ])
     lines: List[str] = []
     for feature in features:
-        lines.append(f"{feature['stream']}  (v{feature['version']})")
-        lines.append(
-            f"  phase        : {feature['phase'] or '—'}"
-            + (f"  (entered {feature['phase_entered_at']})"
-               if feature["phase_entered_at"] else "")
-        )
-        last = feature["last_event"]
-        lines.append(
-            f"  last event   : {last['type']} at {last['ts']}" if last
-            else "  last event   : —"
-        )
-        lines.append(
-            f"  tasks done   : {feature['tasks_done']}"
-            + (f"  [{', '.join(feature['task_ids'])}]" if feature["task_ids"] else "")
-        )
-        verify = feature["last_verify"]
-        if verify:
-            covered = verify.get("task_ids") or []
-            lines.append(
-                f"  last verify  : {verify.get('outcome')}"
-                + (f" — {', '.join(str(t) for t in covered)}" if covered else "")
-                + f" ({verify.get('ts')})"
-            )
+        if feature.get("dormant") and not feature.get("branch_match"):
+            lines.append(_render_dormant(feature))
         else:
-            lines.append("  last verify  : —")
-        if feature["gate_decisions"]:
-            lines.append("  gate decisions:")
-            for decision in feature["gate_decisions"]:
-                lines.append("    - " + _render_decision(decision))
-        if feature["open_designs"]:
-            lines.append("  open designs:")
-            for design in feature["open_designs"]:
-                assumes = design.get("assumes")
-                lines.append(
-                    f"    - {design.get('issue')}"
-                    + (f" (assumes {assumes})" if assumes else "")
-                )
-        lines.append("")
+            lines.extend(_render_feature(feature))
+    lines.extend(_render_hidden(status))
     lines.extend(_render_ledger(status))
     return "\n".join(lines).rstrip()
 
@@ -1015,13 +1611,16 @@ def parse_ticked_tasks(text: str) -> List[str]:
 def event_session(event: Event) -> Optional[str]:
     """Which session an event belongs to.
 
-    Hook-written events carry ``data.session``; skill-written events label the
-    session through ``--actor``. Both are honored.
+    Hook-written events carry ``data.session``; skill-written events carry it as the
+    ``role@label`` suffix `append` fills in from ``meta.current_session``. Both are
+    honored; an actor with no label belongs to no particular session.
     """
     session = event.data.get("session")
     if isinstance(session, str) and session:
         return session
-    return event.actor
+    if event.actor and "@" in event.actor:
+        return event.actor.split("@", 1)[1] or None
+    return None
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
@@ -1238,8 +1837,208 @@ def render_findings(findings: Sequence[Dict[str, Any]]) -> str:
         "append them, then stop again:"
     ]
     for finding in findings:
-        lines.append(f"  • missing {finding['missing']}: {finding['detail']}")
+        lines.append(
+            f"  • missing {finding['missing']}: {_one_line(finding['detail'])}"
+        )
         lines.append(f"      {finding['suggested_command']}")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# stats
+# --------------------------------------------------------------------------
+
+
+def _merge_counts(dicts: Iterable[Dict[str, int]]) -> Dict[str, int]:
+    merged: Dict[str, int] = {}
+    for source in dicts:
+        for key, value in source.items():
+            merged[key] = merged.get(key, 0) + value
+    return merged
+
+
+def _actor_role(event: Event) -> str:
+    return (event.actor or "").split("@", 1)[0] or "unattributed"
+
+
+def _counted_sessions(events: Iterable[Event]) -> Set[str]:
+    """The sessions that touched these events.
+
+    Events actored `user@…` are excluded: that label is a person's name, not a session
+    id (ADR 0003 only defaults the label to `meta.current_session` for machine roles),
+    so counting them would inflate "sessions" by one per human who ever appeared.
+    """
+    return {
+        session
+        for session in (
+            event_session(event) for event in events if _actor_role(event) != "user"
+        )
+        if session
+    }
+
+
+def _stream_stats(
+    stream: str, events: Sequence[Event], now: Optional[datetime] = None
+) -> Dict[str, Any]:
+    by_role: Dict[str, int] = {}
+    decisions: Dict[str, int] = {}
+    verified: Dict[str, int] = {}
+    task_ids: Set[str] = set()
+    tallies = {
+        "deviation": 0, "verify-run": 0, "task-done": 0,
+        "review-verdict": 0, "review-feedback": 0,
+    }
+    implied = 0
+
+    for event in events:
+        role = _actor_role(event)
+        by_role[role] = by_role.get(role, 0) + 1
+        if event.type in tallies:
+            tallies[event.type] += 1
+        if event.type == "gate-decision":
+            key = "{}/{}".format(
+                event.data.get("mode") or "-", event.data.get("raised_by") or "-"
+            )
+            decisions[key] = decisions.get(key, 0) + 1
+        elif event.type == "verify-run":
+            # Per verify-run, not per mention: one run naming a task twice verified
+            # it once.
+            for task in set(str(t) for t in event.data.get("task_ids") or []):
+                verified[task] = verified.get(task, 0) + 1
+        elif event.type == "task-done":
+            task_id = event.data.get("task_id")
+            if isinstance(task_id, str) and task_id:
+                task_ids.add(task_id)
+        elif event.type == "phase-entered" and event.data.get("implied"):
+            implied += 1
+
+    rendered = render_status({"features": [fold_stream(events, now=now)]})
+    return {
+        "stream": stream,
+        "events": len(events),
+        "by_role": by_role,
+        "decisions": decisions,
+        "deviations": tallies["deviation"],
+        "verify_runs": tallies["verify-run"],
+        # Distinct ids, as the brief counts them — a task re-recorded after review
+        # feedback is one task done, not two.
+        "tasks_done": len(task_ids),
+        "tasks_reverified": sum(1 for runs in verified.values() if runs > 1),
+        "review_rounds": tallies["review-verdict"],
+        "review_feedback": tallies["review-feedback"],
+        "sessions": len(_counted_sessions(events)),
+        "implied_phases": implied,
+        "stream_render_bytes": len(rendered.encode()),
+    }
+
+
+STATS_SUMS = (
+    "events", "deviations", "verify_runs", "tasks_done", "tasks_reverified",
+    "review_rounds", "review_feedback", "implied_phases",
+)
+
+
+def build_stats(
+    conn: sqlite3.Connection,
+    since: Optional[str] = None,
+    stream: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Per-stream counts for the numbers the process is tuned on (FR-014)."""
+    cutoff = None
+    if since:
+        cutoff = _parse_ts(since)
+        if cutoff is None:
+            raise UsageError(
+                f"--since {since!r} is not an ISO timestamp "
+                "(2026-09-01, or 2026-09-01T12:00:00+00:00)"
+            )
+
+    grouped: Dict[str, List[Event]] = {}
+    for event in read_events(conn, stream=stream):
+        # An explicitly named stream is reported even when it is the tool's own.
+        if stream is None and not is_work_stream(event.stream):
+            continue
+        if cutoff is not None:
+            recorded = _parse_ts(event.ts)
+            if recorded is None or recorded < cutoff:
+                continue
+        grouped.setdefault(event.stream, []).append(event)
+
+    rows = [
+        _stream_stats(name, events, now=now)
+        for name, events in sorted(grouped.items())
+    ]
+    totals: Dict[str, Any] = {key: sum(row[key] for row in rows) for key in STATS_SUMS}
+    totals["by_role"] = _merge_counts(row["by_role"] for row in rows)
+    totals["decisions"] = _merge_counts(row["decisions"] for row in rows)
+    totals["sessions"] = len(
+        _counted_sessions(e for events in grouped.values() for e in events)
+    )
+    # The brief is not the sum of its streams — it hides terminal ones and collapses
+    # dormant ones to a line — so the only honest total is the brief itself. It is a
+    # whole-journal measurement: `--since` narrows the counts, never this.
+    totals["brief_bytes"] = len(
+        render_status(build_status(conn, feature=stream, now=now)).encode()
+    )
+    return {"since": since, "streams": rows, "totals": totals}
+
+
+STATS_COLUMNS = (
+    ("dec", lambda r: sum(r["decisions"].values())),
+    ("dev", lambda r: r["deviations"]),
+    ("vfy", lambda r: r["verify_runs"]),
+    ("task", lambda r: r["tasks_done"]),
+    ("rvfy", lambda r: r["tasks_reverified"]),
+    ("rnd", lambda r: r["review_rounds"]),
+    ("fb", lambda r: r["review_feedback"]),
+    ("sess", lambda r: r["sessions"]),
+    ("impl", lambda r: r["implied_phases"]),
+    # Per stream this is that stream's own rendered block; on the TOTAL row it is the
+    # whole brief, which is smaller than their sum.
+    ("bytes", lambda r: r.get("stream_render_bytes", r.get("brief_bytes", 0))),
+)
+
+
+def render_stats(report: Dict[str, Any]) -> str:
+    rows = report["streams"]
+    since = report.get("since")
+    scope = f" since {since}" if since else ""
+    if not rows:
+        return f"no work streams recorded{scope}"
+
+    roles = sorted({role for row in rows for role in row["by_role"]})
+    header = ["stream", "ev"] + [role[:4] for role in roles] + [
+        name for name, _ in STATS_COLUMNS
+    ]
+
+    def cells(row: Dict[str, Any], label: str) -> List[str]:
+        return (
+            [label, str(row["events"])]
+            + [str(row["by_role"].get(role, 0)) for role in roles]
+            + [str(read(row)) for _, read in STATS_COLUMNS]
+        )
+
+    table = [header] + [cells(row, row["stream"]) for row in rows]
+    table.append(cells(report["totals"], "TOTAL"))
+    widths = [max(len(row[i]) for row in table) for i in range(len(header))]
+    lines = [
+        "  ".join(
+            cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i])
+            for i, cell in enumerate(row)
+        ).rstrip()
+        for row in table
+    ]
+
+    lines.append("")
+    lines.append("gate decisions (mode/raised_by):")
+    decisions = report["totals"]["decisions"]
+    if decisions:
+        width = max(len(key) for key in decisions)
+        for key in sorted(decisions):
+            lines.append(f"  {key.ljust(width)}  {decisions[key]}")
+    else:
+        lines.append("  none recorded")
     return "\n".join(lines)
 
 
@@ -1475,13 +2274,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_append = subparsers.add_parser("append", help="append one event")
     _add_db_flag(p_append)
-    p_append.add_argument("--stream", required=True, help="stream name, e.g. feature/x")
-    p_append.add_argument("--type", required=True, dest="event_type",
+    p_append.add_argument(
+        "--stream", required=True,
+        help="stream name — the branch, e.g. fix/1290-date-off-by-one",
+    )
+    p_append.add_argument("--type", default=None, dest="event_type",
                           help="event type, e.g. phase-entered")
     p_append.add_argument("--data", default=None,
                           help="event payload as a JSON object")
+    p_append.add_argument("--batch", action="store_true",
+                          help="read the events as JSONL on stdin instead of from "
+                               "--type/--data — one object per line, "
+                               "{\"type\": ..., \"data\": {...}} plus optional "
+                               "\"stream\" and \"actor\"; appended in order under one "
+                               "connection, all gates applying. The first failure "
+                               "stops the batch and the lines before it stay "
+                               "written: this is not a transaction")
     p_append.add_argument("--expect", type=int, default=None, metavar="N",
-                          help="conditional append: current version must equal N")
+                          help="conditional append: current version must equal N. A "
+                               "phase-owning event may also write an implied "
+                               "phase-entered, so the version can advance by two — "
+                               "read the next expectation off the append's own "
+                               "output (--json reports version and version_before) "
+                               "rather than assuming N+1")
     p_append.add_argument("--actor", default=None,
                           help="free label: session id, agent, watcher")
     p_append.add_argument("--force", action="store_true",
@@ -1498,13 +2313,45 @@ def build_parser() -> argparse.ArgumentParser:
         "vocab", help="list the canonical event types append will accept")
     _add_db_flag(p_vocab)
     p_vocab.add_argument("--json", action="store_true", help="machine-readable output")
+    p_vocab.add_argument(
+        "--shape", nargs="?", const="", default=None, metavar="TYPE",
+        help="print one type's canonical payload shape as JSON, or every shape "
+             "when given no type",
+    )
     p_vocab.set_defaults(func=cmd_vocab)
+
+    p_session = subparsers.add_parser(
+        "session", help="read or set the session id append attributes events to"
+    )
+    _add_db_flag(p_session)
+    p_session.add_argument("--set", dest="set_id", default=None, metavar="ID",
+                           help="record ID as the current session")
+    p_session.add_argument("--get", action="store_true",
+                           help="print the current session id")
+    p_session.add_argument("--json", action="store_true",
+                           help="machine-readable output")
 
     p_status = subparsers.add_parser("status", help="resume brief per feature stream")
     _add_db_flag(p_status)
     p_status.add_argument("--feature", default=None, metavar="SLUG",
                           help="restrict to one feature stream")
+    p_status.add_argument("--branch", default=None, metavar="NAME",
+                          help="git branch of the current checkout; the stream it "
+                               "names renders first and in full")
+    p_status.add_argument("--all", action="store_true", dest="show_all",
+                          help="include completed and abandoned streams")
     p_status.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p_stats = subparsers.add_parser(
+        "stats", help="per-stream counts: events by role, decisions by mode, sessions"
+    )
+    _add_db_flag(p_stats)
+    p_stats.add_argument("--since", default=None, metavar="ISO",
+                         help="only count events recorded at or after this timestamp")
+    p_stats.add_argument("--stream", default=None,
+                         help="restrict to one stream (the tool's own included)")
+    p_stats.add_argument("--json", action="store_true",
+                         help="machine-readable output")
 
     p_check = subparsers.add_parser(
         "check", help="Stop-hook gate: find semantic events missing for a session"
@@ -1548,12 +2395,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _refuse_json_constant(literal: str) -> Any:
+    """Reject Python's JSON extensions, which no other parser will read back."""
+    raise UsageError(
+        f"{literal} is not valid JSON — Python accepts the literal but SQLite would "
+        "store a row nothing else can parse; send a number or a string"
+    )
+
+
+def parse_batch_records(raw: str) -> List[Tuple[int, Dict[str, Any]]]:
+    """Parse ``--batch`` JSONL into ``(line number, record)`` pairs.
+
+    Every line is parsed before any is appended, so a typo on the last line costs
+    nothing. Gate refusals are a different matter — those are found one at a time,
+    with the lines before them already written.
+    """
+    records: List[Tuple[int, Dict[str, Any]]] = []
+    # An editor or a PowerShell redirect can put a UTF-8 BOM in front of the first
+    # line; it belongs to the stream, not to that line's JSON.
+    for lineno, line in enumerate(raw.lstrip("﻿").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line, parse_constant=_refuse_json_constant)
+        # Nesting deep enough to exhaust the parser's stack is malformed input, not a
+        # crash to hand the caller a traceback for.
+        except (ValueError, RecursionError) as exc:
+            raise UsageError(f"line {lineno}: not valid JSON ({exc})") from exc
+        if not isinstance(record, dict):
+            raise UsageError(f"line {lineno}: expected a JSON object")
+        event_type = record.get("type")
+        if not isinstance(event_type, str) or not event_type:
+            raise UsageError(f'line {lineno}: missing "type"')
+        if not isinstance(record.get("data", {}), dict):
+            raise UsageError(f'line {lineno}: "data" must be a JSON object')
+        for key in ("stream", "actor"):
+            value = record.get(key)
+            if value is not None and not isinstance(value, str):
+                raise UsageError(f'line {lineno}: "{key}" must be a string')
+        records.append((lineno, record))
+    if not records:
+        raise UsageError("--batch read no events on stdin")
+    return records
+
+
 def parse_data_argument(raw: Optional[str]) -> Dict[str, Any]:
     if raw is None:
         return {}
     try:
-        parsed = json.loads(raw)
-    except ValueError as exc:
+        parsed = json.loads(raw, parse_constant=_refuse_json_constant)
+    except (ValueError, RecursionError) as exc:
         raise UsageError(f"--data is not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise UsageError("--data must be a JSON object")
@@ -1584,15 +2475,111 @@ def cmd_init(args, resolution: Resolution) -> int:
     return EXIT_OK
 
 
+def _append_summary(
+    stream: str, event_type: str, data: Dict[str, Any], result: AppendResult
+) -> str:
+    if result.duplicate:
+        return (f"duplicate {event_type} for {data.get('path')} skipped "
+                f"(seq {result.seq})")
+    transition = (
+        f" (entered {result.implied_phase}, implied)" if result.implied_phase else ""
+    )
+    return (f"appended {event_type} to {stream}: "
+            f"seq {result.seq}, version {result.version}{transition}")
+
+
+def _append_payload(
+    stream: str, event_type: str, result: AppendResult, line: Optional[int] = None
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "seq": result.seq,
+        "version": result.version,
+        "version_before": result.version_before,
+        "stream": stream,
+        "type": event_type,
+        "implied_phase": result.implied_phase,
+        "duplicate": result.duplicate,
+    }
+    if line is not None:
+        payload["line"] = line
+    return payload
+
+
 def cmd_append(args, resolution: Resolution) -> int:
     if args.force_reason is not None and not args.force:
         raise UsageError("--force-reason requires --force")
+    if args.batch:
+        if args.event_type is not None or args.data is not None:
+            raise UsageError(
+                "--batch takes the events from stdin — drop --type and --data"
+            )
+        if args.expect is not None:
+            raise UsageError(
+                "--expect cannot hold across a batch (every line moves the version) "
+                "— append that event on its own"
+            )
+        return _append_batch(args, resolution)
+    if args.event_type is None:
+        raise UsageError(
+            "append needs --type, or --batch to read JSONL events from stdin"
+        )
+    return _append_one(args, resolution)
+
+
+def _append_batch(args, resolution: Resolution) -> int:
+    """Append a JSONL batch line by line through one connection (FR-012)."""
+    records = parse_batch_records(sys.stdin.read())
+    results: List[Dict[str, Any]] = []
+    failure: Optional[Tuple[int, BaseException]] = None
+
+    conn = connect(resolution.db_path)
+    try:
+        for lineno, record in records:
+            stream = record.get("stream") or args.stream
+            event_type = record["type"]
+            data = record.get("data") or {}
+            try:
+                result = append_event(
+                    conn,
+                    stream=stream,
+                    event_type=event_type,
+                    data=data,
+                    project_dir=resolution.project_dir,
+                    actor=record.get("actor") or args.actor,
+                    force=args.force,
+                    force_reason=args.force_reason,
+                    allow_new_type=args.new_type,
+                )
+            # Any failure, not just a gate refusal: a sqlite error mid-batch must
+            # still let the caller see which lines did land, and on which one it
+            # stopped, before the exit code says why.
+            except Exception as error:
+                failure = (lineno, error)
+                break
+            results.append(_append_payload(stream, event_type, result, line=lineno))
+            if not args.json:
+                print(_append_summary(stream, event_type, data, result))
+    finally:
+        conn.close()
+
+    if args.json:
+        payload: List[Dict[str, Any]] = list(results)
+        if failure is not None:
+            payload.append({"error": str(failure[1]), "line": failure[0]})
+        print(json.dumps(payload, sort_keys=True))
+    if failure is not None:
+        print(f"line {failure[0]}: {failure[1]}", file=sys.stderr)
+        return getattr(failure[1], "exit_code", EXIT_INFRA)
+    return EXIT_OK
+
+
+def _append_one(args, resolution: Resolution) -> int:
     data = parse_data_argument(args.data)
 
     conn = connect(resolution.db_path)
     try:
         try:
-            seq, version = append_event(
+            result = append_event(
                 conn,
                 stream=args.stream,
                 event_type=args.event_type,
@@ -1628,32 +2615,70 @@ def cmd_append(args, resolution: Resolution) -> int:
         conn.close()
 
     if args.json:
-        print(json.dumps({
-            "seq": seq, "version": version,
-            "stream": args.stream, "type": args.event_type,
-        }, sort_keys=True))
+        print(json.dumps(
+            _append_payload(args.stream, args.event_type, result), sort_keys=True
+        ))
     else:
-        print(f"appended {args.event_type} to {args.stream}: "
-              f"seq {seq}, version {version}")
+        print(_append_summary(args.stream, args.event_type, data, result))
     return EXIT_OK
 
 
 def cmd_vocab(args, resolution: Resolution) -> int:
+    shape = getattr(args, "shape", None)
+    if shape is not None:
+        if shape == "":
+            print(json.dumps(EVENT_SHAPES, sort_keys=True))
+            return EXIT_OK
+        if shape not in EVENT_VOCABULARY:
+            raise UsageError(
+                f"'{shape}' is not in the event vocabulary — run `journal.py vocab` "
+                "for the canonical names"
+            )
+        print(json.dumps(EVENT_SHAPES.get(shape, {}), sort_keys=True))
+        return EXIT_OK
     if args.json:
         print(json.dumps(EVENT_VOCABULARY, sort_keys=True))
         return EXIT_OK
     width = max(len(name) for name in EVENT_VOCABULARY)
     for name, purpose in EVENT_VOCABULARY.items():
-        print(f"  {name:<{width}}  {purpose}")
+        marker = "  [shape]" if name in EVENT_SHAPES else ""
+        print(f"  {name:<{width}}  {purpose}{marker}")
     print()
     print("Anything else is refused by `append` — pass --new-type to mint one on purpose.")
+    print("[shape] types have a required payload — `vocab --shape <type>` prints it.")
+    return EXIT_OK
+
+
+def cmd_session(args, resolution: Resolution) -> int:
+    if bool(args.set_id) == bool(args.get):
+        raise UsageError("session takes exactly one of --set ID or --get")
+    conn = connect(resolution.db_path)
+    try:
+        if args.set_id:
+            set_current_session(conn, args.set_id)
+            session_id = args.set_id
+        else:
+            session_id = current_session(conn)
+    finally:
+        conn.close()
+
+    if args.json:
+        print(json.dumps({"current_session": session_id}, sort_keys=True))
+    elif args.set_id:
+        print(f"current session set to {session_id}")
+    elif session_id:
+        print(session_id)
+    else:
+        print("no current session recorded")
     return EXIT_OK
 
 
 def cmd_status(args, resolution: Resolution) -> int:
     conn = connect(resolution.db_path)
     try:
-        status = build_status(conn, args.feature)
+        status = build_status(
+            conn, args.feature, branch=args.branch, show_all=args.show_all
+        )
     finally:
         conn.close()
     status["ledger"] = ledger_summary(resolution.project_dir, resolution.sidecar)
@@ -1661,6 +2686,19 @@ def cmd_status(args, resolution: Resolution) -> int:
         print(json.dumps(status, sort_keys=True))
     else:
         print(render_status(status))
+    return EXIT_OK
+
+
+def cmd_stats(args, resolution: Resolution) -> int:
+    conn = connect(resolution.db_path)
+    try:
+        report = build_stats(conn, since=args.since, stream=args.stream)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        print(render_stats(report))
     return EXIT_OK
 
 
@@ -1781,7 +2819,9 @@ COMMANDS = {
     "init": cmd_init,
     "vocab": cmd_vocab,
     "append": cmd_append,
+    "session": cmd_session,
     "status": cmd_status,
+    "stats": cmd_stats,
     "check": cmd_check,
     "log": cmd_log,
     "streams": cmd_streams,
@@ -1808,11 +2848,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except sqlite3.Error as exc:
         print(f"error: sqlite failure: {exc}", file=sys.stderr)
         return EXIT_INFRA
+    except BrokenPipeError:
+        return EXIT_OK
     except OSError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_INFRA
-    except BrokenPipeError:
-        return EXIT_OK
 
 
 if __name__ == "__main__":

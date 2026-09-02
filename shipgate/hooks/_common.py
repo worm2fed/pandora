@@ -46,7 +46,7 @@ def journaled_root(*candidates):
     """
     seen = set()
     for candidate in candidates:
-        if not candidate:
+        if not isinstance(candidate, str) or not candidate:
             continue
         for directory in _ancestors(candidate):
             if directory in seen:
@@ -58,7 +58,11 @@ def journaled_root(*candidates):
 
 
 def likely_journaled():
-    """Cheapest possible pre-check, using only the ambient environment."""
+    """Cheapest possible pre-check, using only the ambient environment.
+
+    Deliberately blind to the payload's cwd, which is only readable after stdin —
+    the cost of rule 2: a session whose cwd alone is journaled gets no brief.
+    """
     return journaled_root(os.environ.get("CLAUDE_PROJECT_DIR"), os.getcwd())
 
 
@@ -74,6 +78,16 @@ class Project:
         raw = self.sidecar.get("db") or DEFAULT_DB_RELPATH
         path = os.path.expanduser(raw)
         return path if os.path.isabs(path) else os.path.join(self.root, path)
+
+    @property
+    def journal_paths(self):
+        """The journal db and its SQLite siblings — never artifacts, whatever globs say.
+
+        The db sits under `.claude/`, so an artifact glob can match it; capturing writes
+        to the journal as journal events would feed it its own noise.
+        """
+        db = os.path.realpath(self.db_path)
+        return frozenset({db, db + "-wal", db + "-shm"})
 
     @property
     def artifact_globs(self):
@@ -97,6 +111,8 @@ class Project:
         """True when `path` sits under one of the configured artifact homes."""
         from fnmatch import fnmatch
 
+        if os.path.realpath(path) in self.journal_paths:
+            return False
         relative = self.relative(path).replace(os.sep, "/")
         if relative.startswith(".."):
             return False
@@ -122,6 +138,21 @@ def find_project(*candidates):
     return load_project(root) if root else None
 
 
+def resolve_project(payload):
+    """The journaled project a hook payload belongs to, or None.
+
+    The payload's cwd is the session's own directory, so when it is there it is the
+    only candidate considered: falling through to the ambient dirs after it would let
+    a session in an un-journaled directory write into whichever journaled project
+    happens to be an ancestor of the hook process. Only a missing or non-string cwd
+    falls back — that is a malformed payload, not a session saying "not here".
+    """
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    if isinstance(cwd, str) and cwd:
+        return find_project(cwd)
+    return find_project(os.environ.get("CLAUDE_PROJECT_DIR"), os.getcwd())
+
+
 def watch_paths(project):
     """Absolute paths of the artifact files to watch this session.
 
@@ -137,6 +168,7 @@ def watch_paths(project):
 
     found = []
     seen = set()
+    excluded = project.journal_paths
     for pattern in project.artifact_globs:
         try:
             matches = glob(os.path.join(project.root, pattern), recursive=True)
@@ -145,6 +177,8 @@ def watch_paths(project):
         for match in matches:
             resolved = os.path.abspath(match)
             if resolved in seen or not os.path.isfile(resolved):
+                continue
+            if os.path.realpath(match) in excluded:
                 continue
             seen.add(resolved)
             found.append(resolved)
@@ -172,6 +206,7 @@ def run_journal(project, args):
     try:
         return subprocess.run(
             command,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=JOURNAL_TIMEOUT_SECONDS,
