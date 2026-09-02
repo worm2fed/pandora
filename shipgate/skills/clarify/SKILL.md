@@ -75,7 +75,7 @@ questions, not the bar for the consequential ones.
 
 Create or update the PRD at the configured PRD home (default `docs/prd/<feature-kebab>.md`,
 plain markdown in the repo — the *what & why*, never the *how*). Use the template at
-`references/prd-template.md`, and follow any page conventions the config's Knowledge base
+`${CLAUDE_PLUGIN_ROOT}/skills/clarify/references/prd-template.md`, and follow any page conventions the config's Knowledge base
 section declares. Number things so later phases can trace them:
 
 - **FR-###** — functional requirements

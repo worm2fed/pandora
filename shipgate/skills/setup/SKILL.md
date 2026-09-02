@@ -55,6 +55,13 @@ Cover only what the config actually needs and detection could not settle:
   conventions, spend limits. One imperative line each, written into the config's
   **Worker guardrails** section — worker briefs paste that section verbatim, so a rule that
   lives only in the user's head is a rule no worker will ever see.
+- **Orchestration** — how the Review and Explore fans run: `agents` *(default)*, the
+  hand-driven Agent fan, or `workflow`, which runs the fan through the `Workflow` tool and a
+  bundled script so findings come back schema-typed and verified without the raw reports
+  entering the session's context. Recommend `workflow` for Review when the `Workflow` tool
+  appears in the session's tool list (that fan is the one that pays off); leave Explore on
+  `agents` unless the user wants both. Either way the phase falls back to `agents` when the
+  tool is absent.
 - **Anything detection flagged as ambiguous** — umbrella layout confirmation, a tracker living
   in a different project than the code, an unrecognized forge.
 

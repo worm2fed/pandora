@@ -27,6 +27,14 @@ models a strong model at low effort often beats a weaker model at high, so befor
 work a tier down, consider sinking the *effort* instead. Keep default/high effort for
 design-sensitive work and verification.
 
+**Workflow agents need the model passed explicitly.** A `Workflow` script's `agent()` call
+inherits the *session's* model when `opts.model` is omitted — which puts workers on the
+orchestrator's tier and quietly breaks the table above. So every shipgate script takes
+`model` in its `args` and passes it to each `agent()` call, and every skill that invokes one
+sets it to one tier below the session. Effort follows the same split as anywhere else:
+`effort: 'low'` for mechanical stages, default effort for the verify and judge stages, where
+the whole point is judgment.
+
 Two invariants survive any model lineup:
 
 1. **The master session orchestrates.** Once work is big enough to dispatch, the session

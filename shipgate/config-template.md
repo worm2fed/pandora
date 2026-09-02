@@ -220,6 +220,28 @@ broken one. One imperative line per rule, no rationale, no grouping:
 - <e.g. "Stop and report when a spend or time limit is close, leaving finished work on
   disk — never abandon a run mid-edit">
 
+## Orchestration
+
+<!-- Default when absent: `agents` for both — the hand-driven Agent fan the skills have
+     always used. -->
+
+- review: <agents | workflow>
+- explore: <agents | workflow>
+
+`workflow` runs that phase's fan-out through the `Workflow` tool and a script bundled with
+the plugin: the fan becomes deterministic (fixed lenses, in-script dedupe) and the raw
+reviewer/explorer reports never land in the orchestrator's context — findings come back
+schema-typed and deduped across lenses, and the coordinator reads only that return. Review
+additionally sends its top-severity findings to refuters that must cite the line disproving
+them (capped, and off for the rest); explore just runs its lenses in parallel and merges
+their essential files. Neither is cheaper than the `agents` path — the fan-out itself is the
+cost, and the gain is structure, dedupe and context hygiene. `agents` keeps every subagent's
+full report inline, which costs context but leaves all of the judgment in the session.
+
+Degradation is automatic and never blocks: when the `Workflow` tool is unavailable in the
+host or the user refuses the call, the phase runs its `agents` path and records a
+`deviation` event. The fan still happens, just the old way.
+
 ## Thinking lenses
 
 <!-- Default when absent: no lens skills are invoked — the phase skills apply each
