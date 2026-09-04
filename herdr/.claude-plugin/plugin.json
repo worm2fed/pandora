@@ -1,0 +1,17 @@
+{
+  "name": "herdr",
+  "version": "0.1.0",
+  "description": "Control Herdr from a Claude session: split panes, start and name sibling agents, run commands elsewhere, read output and wait on state. Redistributes the upstream Herdr skill under Apache-2.0, pinned to a known Herdr release.",
+  "author": {
+    "name": "worm2fed",
+    "email": "worm2fed@gmail.com"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "herdr",
+    "terminal",
+    "multiplexer",
+    "agent-orchestration",
+    "panes"
+  ]
+}

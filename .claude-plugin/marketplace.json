@@ -18,7 +18,13 @@
         "email": "worm2fed@gmail.com"
       },
       "license": "MIT",
-      "keywords": ["feature-development", "sdlc", "code-review", "spec-driven", "verification"],
+      "keywords": [
+        "feature-development",
+        "sdlc",
+        "code-review",
+        "spec-driven",
+        "verification"
+      ],
       "category": "workflow"
     },
     {
@@ -32,7 +38,13 @@
         "email": "worm2fed@gmail.com"
       },
       "license": "MIT",
-      "keywords": ["code-style", "functional-programming", "domain-driven-design", "typescript", "fp-ts"],
+      "keywords": [
+        "code-style",
+        "functional-programming",
+        "domain-driven-design",
+        "typescript",
+        "fp-ts"
+      ],
       "category": "workflow"
     },
     {
@@ -46,7 +58,33 @@
         "email": "worm2fed@gmail.com"
       },
       "license": "MIT",
-      "keywords": ["bpmn", "diagrams", "process-modeling", "workflow", "visualization"],
+      "keywords": [
+        "bpmn",
+        "diagrams",
+        "process-modeling",
+        "workflow",
+        "visualization"
+      ],
+      "category": "productivity"
+    },
+    {
+      "name": "herdr",
+      "source": "./herdr",
+      "displayName": "herdr",
+      "description": "Control Herdr from a Claude session: split panes, start and name sibling agents, run commands elsewhere, read output and wait on state. Redistributes the upstream Herdr skill under Apache-2.0, pinned to a known Herdr release.",
+      "version": "0.1.0",
+      "author": {
+        "name": "worm2fed",
+        "email": "worm2fed@gmail.com"
+      },
+      "license": "Apache-2.0",
+      "keywords": [
+        "herdr",
+        "terminal",
+        "multiplexer",
+        "agent-orchestration",
+        "panes"
+      ],
       "category": "productivity"
     }
   ]

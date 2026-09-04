@@ -31,9 +31,11 @@ pandora/
 ├── .claude-plugin/marketplace.json   ← the marketplace manifest
 ├── shipgate/                         ← one directory per plugin
 ├── astrolabe/
-└── bpmn/
+├── bpmn/
+└── herdr/
 ```
 
 ## License
 
-MIT
+MIT (`LICENSE`) — except `herdr/`, which redistributes the upstream Herdr skill under
+Apache-2.0 and carries its own `LICENSE` and `NOTICE`.
