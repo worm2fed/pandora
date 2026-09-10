@@ -2,6 +2,11 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.12.1 — hooks file cleanup. `hooks/filechanged.json` carried its explanatory note under a
+`_comment` key, which Claude Code's hooks loader reports at every session start as
+`hooks.json: unknown key "_comment" ignored`. The note now lives under `description`, the
+documented top-level field for a plugin hooks file. No behaviour change.
+
 v0.12.0 — orchestration by workflow, config-selected. A new `## Orchestration` config
 section (`review: agents | workflow`, `explore: agents | workflow`, default `agents`) lets
 a project run the Review fan and the Explore fan as `Workflow` scripts bundled with the
