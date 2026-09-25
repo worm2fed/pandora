@@ -62,7 +62,11 @@ For a feature, do it the feature-dev way:
 
 Subagents don't read `.claude/shipgate.md` themselves, so paste the config excerpts they need
 (e.g. the knowledge-base stores to recall from, the security-sensitive areas) into each
-explorer brief.
+explorer brief. A brief may also carry the risk-signal table for the area it dispatches into
+(`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <area> --by-dir 2`) — decide per
+dispatch; it is context about which code is hot or load-bearing, not an instruction to rank
+findings by it. The same goes for the workflow path's `brief`. Unavailable (see the JSON's
+`reason`, `trajectory.reason`, `structure.reason`) → leave the table out.
 
 Scale it: a one-service change may need one light explorer or none; a cross-cutting feature
 warrants the full 2-3.

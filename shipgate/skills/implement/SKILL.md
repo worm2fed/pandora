@@ -36,7 +36,12 @@ Either way, the loop below is what "done" means for each task — whoever execut
    is the template to match. Consult the library-docs integration the config's **Code
    tooling** section names (if any) rather than trusting memory of the API; for symbol
    navigation in typed code (who calls this, where is it defined), prefer the LSP tool the
-   config names over grep-and-read. The cheapest correct code is the code you don't add.
+   config names over grep-and-read. When several existing candidates match, compare them
+   with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <candidate-files> --json`
+   and prefer the proven one — lower `fix_rate`, higher `age_days`, higher `fan_in` — saying
+   so in the choice (signals unavailable — see the JSON's `reason`, `trajectory.reason`,
+   `structure.reason` — means choosing on reading alone, and saying so). The
+   cheapest correct code is the code you don't add.
    Only write new code when nothing fits cleanly — don't force-fit a near-match, but don't
    reinvent either.
 

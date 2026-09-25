@@ -38,6 +38,12 @@ honest. Present to the user:
 - A short summary of each approach and its core trade-off.
 - The concrete differences that matter (files touched, new abstractions, risk).
 - **Your recommendation, with reasoning** grounded in this codebase and the impact map.
+  When several existing precedents could serve as the reference implementation, compare
+  them with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <candidate-files> --json`
+  and prefer the proven one — lower `fix_rate`, higher `age_days`, higher `fan_in` — stating
+  that in the worklog's **Reference implementation** rationale (signals unavailable — see
+  the JSON's `reason`, `trajectory.reason`, `structure.reason` — means choosing on reading
+  alone, and saying so).
 - Then ask which they want. Make a real recommendation — "here are three options, you
   decide" wastes the analysis you just did.
 

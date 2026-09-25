@@ -2,6 +2,32 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.13.0 — code signals. The flow's intelligence was all *declared* (CLAUDE.md, ADRs, the
+journal); nothing computed what the code and its history say. **Signals**: a second bundled
+stdlib script, `scripts/signals.py` (`hotspots`, `blast`, `suspects`), computes per-file git
+trajectory (commits, fix-rate, age, staleness, author count and top share) and, for TS/JS,
+Python and Go, import-graph fan-in/out and blast radius, each labelled by quartile over the
+whole repository so `top` means top *here*; "now" is HEAD's commit time, so two runs on one
+state are byte-identical, and nothing persists (ADR 0004). A new `## Code signals` config
+section (window, fix pattern, extra excludes) is the first one a script reads itself, so the
+terminal and the flow compute the same numbers. **Wiring**: `route-and-map`'s impact map
+gains a **Risk signals** block and the journal entry its labels and sizes; `review` briefs
+carry the diff's risk table, and `review-workflow.js` takes an optional `fileRisk` that
+tie-breaks ranking after severity and confidence and spends the refuter budget severity →
+risk → confidence — risk never overrides severity, and absent it the output is byte-identical;
+`structured-debug` starts hypotheses from a ranked suspect list; `implement` and `design`
+prefer the precedent with the lower fix-rate, greater age and higher fan-in; explorer and
+worker briefs may carry the table. No git, a shallow clone, an empty history or no adapter
+degrades to one line and the phase as before. **Honesty**: fan-in is a lower bound in
+alias-heavy or dynamically-imported code (the output marks `partial` / `unresolved`; risk is
+a tie-break within a severity band only, so an undercount can cost a file its refuter slot in
+that band but never changes a severity or drops a finding); granularity is the file, not the method,
+and the semantic axis (embeddings, BM25, a glossary) is out of scope by decision. An indexed
+retrieval layer (TeaRAGs-style: daemon, embedding runtime, ~1 GB per repo) was evaluated and
+rejected as a dependency — see `docs/research/2026-09-25-tearags-vs-shipgate.md`. Evals
+08–11 (bug localization from history, blast radius of a diff, risk-ranked review, a negative
+one-line change) cover the new behaviour under `--ablation with-without`.
+
 v0.12.1 — hooks file cleanup. `hooks/filechanged.json` carried its explanatory note under a
 `_comment` key, which Claude Code's hooks loader reports at every session start as
 `hooks.json: unknown key "_comment" ignored`. The note now lives under `description`, the

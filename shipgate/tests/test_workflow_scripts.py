@@ -315,6 +315,133 @@ class ReviewWorkflow(ScriptCase):
             with self.subTest(label):
                 self.assertIn(expected, self.err(args))
 
+    def test_file_risk_steers_the_refuter_budget_to_the_top_risk_file(self):
+        out = self.review(
+            {
+                "correctness": [
+                    finding(severity="HIGH", confidence=90, file="src/safe.js", line=10, summary="safe race"),
+                    finding(severity="HIGH", confidence=80, file="src/hot.js", line=20, summary="hot race"),
+                ]
+            },
+            {"refute:": verdict(refuted=False, evidence="")},
+            maxRefuters=2,
+            refutersForHigh=2,
+            fileRisk={"src/safe.js": "low", "src/hot.js": "top"},
+        )
+        result = out["result"]
+        spent = [call["label"] for call in out["calls"] if call["phase"] == "Verify"]
+        self.assertEqual(len(spent), 2)
+        for label in spent:
+            self.assertTrue(label.startswith("refute:src/hot.js:20"), label)
+        by_file = {s["file"]: s for s in result["survivors"]}
+        self.assertEqual(by_file["src/hot.js"]["verification"], "held")
+        self.assertEqual(by_file["src/safe.js"]["verification"], "unverified-cap")
+        self.assertEqual(result["counts"]["unverified"], 1)
+        self.assertTrue(any(line == "risk-ordered verify over 2 file(s)" for line in out["logs"]))
+
+    def test_file_risk_never_overrides_severity_in_verify(self):
+        out = self.review(
+            {
+                "correctness": [
+                    finding(severity="BLOCKER", confidence=70, file="src/safe.js", line=10, summary="auth bypass"),
+                    finding(severity="HIGH", confidence=95, file="src/hot.js", line=20, summary="hot race"),
+                ]
+            },
+            {"refute:": verdict(refuted=False, evidence="")},
+            maxRefuters=2,
+            fileRisk={"src/hot.js": "top"},
+        )
+        spent = [call["label"] for call in out["calls"] if call["phase"] == "Verify"]
+        self.assertTrue(all(label.startswith("refute:src/safe.js:10") for label in spent), spent)
+
+    def test_file_risk_breaks_a_severity_and_confidence_tie(self):
+        result = self.deduped_with_risk(
+            [
+                finding(file="src/cold.js", line=1, summary="cold issue"),
+                finding(file="src/hot.js", line=1, summary="hot issue"),
+            ],
+            {"src/hot.js": "top", "src/cold.js": "low"},
+        )
+        self.assertEqual([s["file"] for s in result["survivors"]], ["src/hot.js", "src/cold.js"])
+
+    def test_file_risk_keys_are_path_normalized(self):
+        result = self.deduped_with_risk(
+            [finding(file="src/a.js", line=1, summary="an issue")],
+            {"./src/a.js": "high"},
+        )
+        self.assertEqual(result["survivors"][0]["risk"], "high")
+
+    def test_file_risk_is_labelled_on_compacted_findings_when_present(self):
+        result = self.deduped_with_risk(
+            [
+                finding(file="src/hot.js", line=1, summary="hot issue"),
+                finding(file="src/other.js", line=2, summary="unmapped issue"),
+                finding(file="src/hot.js", line=3, confidence=10, summary="low confidence"),
+            ],
+            {"src/hot.js": "mid"},
+        )
+        self.assertIs(result["coverage"]["riskOrdered"], True)
+        by_file = {s["file"]: s for s in result["survivors"]}
+        self.assertEqual(by_file["src/hot.js"]["risk"], "mid")
+        self.assertNotIn("risk", by_file["src/other.js"])
+        self.assertEqual(result["belowFloor"][0]["risk"], "mid")
+
+    def test_file_risk_absent_leaves_the_output_byte_identical(self):
+        reports = {
+            "correctness": [
+                finding(severity="BLOCKER", line=10, summary="unauthenticated write path"),
+                finding(severity="HIGH", line=20, file="src/b.js", summary="race on the cache write"),
+                finding(severity="MEDIUM", line=30, summary="duplicated parsing helper"),
+                finding(severity="HIGH", confidence=40, line=40, summary="maybe a leak"),
+            ]
+        }
+        verdicts = {"refute:src/a.js:10": verdict(), "refute:": verdict(refuted=False, evidence="")}
+        absent = self.review(reports, verdicts, maxRefuters=2)
+        for label, value in (("null", None), ("empty", {}), ("only null labels", {"src/a.js": None})):
+            with self.subTest(label):
+                given = self.review(reports, verdicts, maxRefuters=2, fileRisk=value)
+                self.assertEqual(json.dumps(given["result"]), json.dumps(absent["result"]))
+                self.assertEqual(given["logs"], absent["logs"])
+        result = absent["result"]
+        self.assertEqual(
+            sorted(result["coverage"]), ["refutersReported", "refutersRequested", "unverified", "verify"]
+        )
+        self.assertNotIn("risk-ordered", "\n".join(absent["logs"]))
+        entries = result["survivors"] + result["belowFloor"] + [k["finding"] for k in result["killed"]]
+        self.assertTrue(entries)
+        for entry in entries:
+            self.assertNotIn("risk", entry)
+
+    def test_file_risk_null_labels_are_treated_as_absent(self):
+        result = self.deduped_with_risk(
+            [
+                finding(file="a.js", line=1, summary="shallow-row issue"),
+                finding(file="b.js", line=1, summary="ranked issue"),
+            ],
+            {"a.js": None, "b.js": "top"},
+        )
+        self.assertIs(result["coverage"]["riskOrdered"], True)
+        by_file = {s["file"]: s for s in result["survivors"]}
+        self.assertEqual(by_file["b.js"]["risk"], "top")
+        self.assertNotIn("risk", by_file["a.js"])
+
+    def test_file_risk_guard_rejects_bad_values(self):
+        base = {"lenses": ["correctness"], "finderBrief": "diff: HEAD~1", "model": "sonnet"}
+        for label, value in (
+            ("unknown label", {"a.js": "hot"}),
+            ("string", "top"),
+            ("array", [["a.js", "top"]]),
+            ("non-string label", {"a.js": 3}),
+        ):
+            with self.subTest(label):
+                self.assertTrue(
+                    self.err({**base, "fileRisk": value}).startswith("review-workflow: args.fileRisk"),
+                )
+        self.ok({**base, "fileRisk": None}, finders({"correctness": []}))
+
+    def deduped_with_risk(self, findings: list, risk: dict) -> dict:
+        return self.review({"correctness": findings}, verify="none", fileRisk=risk)["result"]
+
 
 class ExploreWorkflow(ScriptCase):
     script = EXPLORE

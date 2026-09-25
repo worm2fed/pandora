@@ -53,6 +53,7 @@ const VERDICT = {
 }
 
 const SEVERITY_RANK = { BLOCKER: 4, HIGH: 3, MEDIUM: 2, LOW: 1 }
+const RISK_RANK = { top: 4, high: 3, mid: 2, low: 1 }
 const VERIFY_MODES = ['high-only', 'all', 'none']
 const COUNTING_CONFIDENCE = 70
 const PATH_SEGMENTS = 3
@@ -123,6 +124,33 @@ if (maxRefuters < refutersForHigh) {
 const doNotFlag = stringList(args.doNotFlag, 'doNotFlag')
 const preRulings = stringList(args.preRulings, 'preRulings')
 
+// Keys go through normalizePath (a function declaration, so hoisted) so './src/a.js' and
+// 'src/a.js' name one file; two keys that normalize together keep the higher risk.
+// Known limitation: normalizePath keeps the last 3 segments (the same identity dedupe uses),
+// so distinct files sharing that tail collide here too and the higher risk wins.
+// A null/undefined label (signals.py on a shallow clone) means "no signal" and is skipped.
+function riskMap(value) {
+  const map = new Map()
+  if (value === undefined || value === null) return map
+  const plain = typeof value === 'object' && !Array.isArray(value)
+  const known = (label) =>
+    label === null || label === undefined || Object.prototype.hasOwnProperty.call(RISK_RANK, label)
+  if (!plain || !Object.values(value).every(known)) {
+    throw new Error(
+      `review-workflow: args.fileRisk must be an object of path → ${Object.keys(RISK_RANK).reverse().join('|')}, ` +
+        `got ${JSON.stringify(value)}`,
+    )
+  }
+  for (const [file, label] of Object.entries(value)) {
+    if (label === null || label === undefined) continue
+    const key = normalizePath(file)
+    const held = map.get(key)
+    if (!held || RISK_RANK[label] > RISK_RANK[held]) map.set(key, label)
+  }
+  return map
+}
+const fileRisk = riskMap(args.fileRisk)
+
 function block(title, items) {
   if (!items.length) return `${title}: none.`
   return `${title}:\n${items.map((i) => `- ${i}`).join('\n')}`
@@ -189,9 +217,35 @@ function normalizePath(file) {
   return segments.slice(-PATH_SEGMENTS).join('/')
 }
 
+function riskLabel(finding) {
+  return fileRisk.get(normalizePath(finding.file))
+}
+
+function riskOf(finding) {
+  return RISK_RANK[riskLabel(finding)] || 0
+}
+
+function bySeverity(a, b) {
+  return (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0)
+}
+
+// Ranking order: severity, then confidence, then file risk as the tie-break.
 function compareFindings(a, b) {
-  const bySeverity = (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0)
-  return bySeverity !== 0 ? bySeverity : b.confidence - a.confidence
+  return bySeverity(a, b) || b.confidence - a.confidence || riskOf(b) - riskOf(a)
+}
+
+// Refuter-target order: severity still leads — risk never lifts a HIGH over a BLOCKER — but
+// within a severity the riskier file is verified before the more confident claim.
+function compareForVerify(a, b) {
+  return bySeverity(a, b) || riskOf(b) - riskOf(a) || b.confidence - a.confidence
+}
+
+// The risk label rides on a compacted finding only when the map names its file, so an
+// absent args.fileRisk leaves every record exactly as before.
+function withRisk(entry, finding) {
+  const label = riskLabel(finding)
+  if (label !== undefined) entry.risk = label
+  return entry
 }
 
 function outranks(candidate, incumbent) {
@@ -288,7 +342,7 @@ function compactVote(vote) {
 }
 
 function compact(finding) {
-  return {
+  return withRisk({
     severity: finding.severity,
     confidence: finding.confidence,
     file: finding.file,
@@ -298,7 +352,7 @@ function compact(finding) {
     fix: clip(finding.fix, 300),
     lenses: finding.lenses.slice(),
     alsoReported: finding.alsoReported.slice(),
-  }
+  }, finding)
 }
 
 // Killed findings carry their refuter votes once, under killed[].reasons — only a survivor
@@ -312,13 +366,13 @@ function survivor(outcome) {
 }
 
 function oneLine(finding) {
-  return {
+  return withRisk({
     severity: finding.severity,
     confidence: finding.confidence,
     file: finding.file,
     line: finding.line,
     summary: finding.summary,
-  }
+  }, finding)
 }
 
 // A below-floor BLOCKER/HIGH is the one the coordinator is told to check itself, so it keeps
@@ -395,7 +449,8 @@ let verdicts = []
 
 if (verify !== 'none') {
   phase('Verify')
-  const targets = candidates.filter((f) => verify === 'all' || isHigh(f))
+  if (fileRisk.size) log(`risk-ordered verify over ${fileRisk.size} file(s)`)
+  const targets = candidates.filter((f) => verify === 'all' || isHigh(f)).slice().sort(compareForVerify)
   for (const finding of targets) {
     const want = isHigh(finding) ? refutersForHigh : 1
     if (cappedOut.length || refuterSpend + want > maxRefuters) {
@@ -506,6 +561,9 @@ return {
     survivors: survivors.length,
     killed: killed.length,
   },
-  coverage: { verify, refutersRequested: refuterSpend, refutersReported, unverified: unchallenged },
+  coverage: Object.assign(
+    { verify, refutersRequested: refuterSpend, refutersReported, unverified: unchallenged },
+    fileRisk.size ? { riskOrdered: true } : {},
+  ),
   lensesRun: live.map((report) => report.lens),
 }

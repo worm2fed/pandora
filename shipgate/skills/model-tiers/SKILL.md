@@ -87,7 +87,12 @@ A worker starts with zero context; the brief must be self-contained:
    a style skill, instruct the worker to invoke it before writing code. Tell it to **mirror
    the vetted reference implementation the design names** — the nearest sibling is not
    automatically a pattern source (scaffolds and stubs encode garbage), and a previous
-   slice's output is a source only for the surfaces that were actually reviewed.
+   slice's output is a source only for the surfaces that were actually reviewed. The brief
+   may carry the risk-signal table for the dispatched area
+   (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <area> --by-dir 2`) — your
+   call per dispatch; it is context on which files are fragile or load-bearing, not an
+   instruction to rank by it. Unavailable (see the JSON's `reason`, `trajectory.reason`,
+   `structure.reason`) → leave it out.
 3. **Branch check** — the worker must verify it is on the expected branch before editing,
    and stop if not.
 4. **Validation commands** — the exact lint/test/build commands that prove the task done,

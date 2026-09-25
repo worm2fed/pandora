@@ -44,6 +44,19 @@ the fix is deliberate.
    - A dependency's actual behavior/API → the library-docs integration the config's
      **Code tooling** section names (if any), before trusting memory of the API.
 
+   **Pull the suspect list** before forming hypotheses, seeded with the files the stack trace
+   or the report names:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" suspects <symptom-files> --json
+   ```
+
+   Carry the top entries into the hypothesis table as `[signals]` evidence — fix-rate,
+   staleness, proximity to the symptom. It ranks where to look first, not what is wrong: a
+   suspect is still tested one variable at a time, and it is no more guilty for ranking high.
+   Unavailable (`no-git`, `shallow`, `empty-history` — suspects needs the history) → note
+   `Risk signals: unavailable (<reason>)` in one line and form hypotheses as before.
+
 3. **Hypothesize and test — one variable at a time.** For each hypothesis, write down: what
    evidence you'd see if it's true, what you'd see if it's false, and the exact command/check
    that distinguishes them. Run it. Let the evidence kill hypotheses; don't pattern-match to
