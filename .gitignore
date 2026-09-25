@@ -5,3 +5,6 @@ __pycache__/
 # sidecar files WAL mode creates. .claude/shipgate.json is deliberately NOT ignored: the
 # db path in it is repo-relative, so it reproduces on any clone.
 .claude/shipgate.db*
+
+# claude plugin eval output (per-run reports, traces)
+shipgate/evals/results/

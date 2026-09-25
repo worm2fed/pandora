@@ -52,6 +52,7 @@ What the sections configure:
 | Epic workflow | epic decomposition command, ordering, delivery rules | issue-by-issue, manual decomposition |
 | MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR/PR opened" |
 | Code tooling | the library-docs tool/MCP to consult for a dependency's current API, and the LSP tool for symbol navigation | training knowledge / WebFetch; grep-and-read |
+| Code signals | window, fix-commit pattern and extra excludes for the bundled risk signals (the one section a script reads, not the model) | 12-month window, built-in fix pattern and excludes |
 | Worker guardrails | the project's hard rules, pasted verbatim into every worker brief | only the built-in worker discipline (branch check, no staging, evidence) |
 | Orchestration | whether Review / Explore fan out via bundled `Workflow` scripts or `Agent` subagents | `agents` for both |
 | Thinking lenses | which lens skills to actually invoke at which phase | no lens skills invoked — the phase skills apply each lens's idea inline |
@@ -88,6 +89,10 @@ cover dedicated audits/cleanups.
 - `code-explorer` — grounded exploration, file:line, essential-files list.
 - `code-architect` _(opus)_ — one committed design philosophy per instance.
 - `code-reviewer` — every finding scored (confidence + severity), file:line; the coordinator filters.
+
+**Scripts** (Python 3 stdlib)
+
+- `scripts/journal.py` — the flow journal CLI; `scripts/signals.py` — per-file risk signals, read by `route-and-map`, `review` and `structured-debug` (see [Code signals](#code-signals)).
 
 ## Artifacts (3 per feature)
 
@@ -138,6 +143,32 @@ a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. 
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the current session. A stream ends with `flow-completed` and leaves the brief.
 
+## Code signals
+
+Per-file risk computed from the code and its history, on demand, by
+`scripts/signals.py` — no index, no cache, nothing written. One `git log` pass gives each
+file's **trajectory** over the window: commits, fix-rate (share of commits whose subject
+matches the fix pattern), age, staleness, author count and top-author share. One import scan
+gives **structure** for TS/JS, Python and Go: fan-in, fan-out and the blast radius
+(transitive importers) of a file set; other languages report `structure: unknown`, never a
+wrong number. Every number carries a label — `low | mid | high | top`, quartiles over *this*
+repository (or `--scope`), so `top` means top here; paths and `--diff` only filter the rows.
+
+| Command | Does |
+| --- | --- |
+| `hotspots [PATH…] [--diff REV] [--by-dir DEPTH] [--blast] [--top N]` | ranked per-file signals, optionally rolled up to modules and with the selection's blast radius |
+| `blast FILE… [--diff REV] [--limit N]` | transitive importers of a file set — structure only, no log pass |
+| `suspects FILE… [--top N]` | files near a symptom ranked by fix-rate × recency × proximity, for debugging |
+
+Common flags: `--repo`, `--scope`, `--window`, `--fix-pattern`, `--exclude`, `--json`; they
+override the `## Code signals` config section. Consumers: `route-and-map` (a **Risk signals**
+block in the impact map, essentials in the journal), `review` (a per-file risk table in the
+brief, and `fileRisk` for the workflow's refuter ordering), `structured-debug` (a suspect
+list cited as `[signals]` evidence), `implement` and `design` (prefer the proven precedent),
+and optionally explorer and worker briefs. No git, a shallow clone, an empty history or no
+adapter → one line saying why, exit 0, the phase runs as before. Output carries counts and
+shares, never author names.
+
 ## Install
 
 shipgate is published through the **`pandora`** marketplace (manifest at the repo
@@ -159,7 +190,8 @@ breaks the flow; it just falls back. (Claude Code has no enforced plugin-depende
 mechanism, so this list is the source of truth for what to install to get the full
 experience.)
 
-**Required:** Claude Code. That's it.
+**Required:** Claude Code. That's it — the bundled scripts (the journal, the code signals)
+are Python 3 standard library only, and the signals skip themselves where there is no git.
 
 **Optional integrations** (each enhances one part of the flow):
 
@@ -179,6 +211,32 @@ that's how `route-and-map` decides where code belongs. Repos without them still 
 just less informed.
 
 ## Status
+
+v0.13.0 — code signals. The flow's intelligence was all *declared* (CLAUDE.md, ADRs, the
+journal); nothing computed what the code and its history say. **Signals**: a second bundled
+stdlib script, `scripts/signals.py` (`hotspots`, `blast`, `suspects`), computes per-file git
+trajectory (commits, fix-rate, age, staleness, author count and top share) and, for TS/JS,
+Python and Go, import-graph fan-in/out and blast radius, each labelled by quartile over the
+whole repository so `top` means top *here*; "now" is HEAD's commit time, so two runs on one
+state are byte-identical, and nothing persists (ADR 0004). A new `## Code signals` config
+section (window, fix pattern, extra excludes) is the first one a script reads itself, so the
+terminal and the flow compute the same numbers. **Wiring**: `route-and-map`'s impact map
+gains a **Risk signals** block and the journal entry its labels and sizes; `review` briefs
+carry the diff's risk table, and `review-workflow.js` takes an optional `fileRisk` that
+tie-breaks ranking after severity and confidence and spends the refuter budget severity →
+risk → confidence — risk never overrides severity, and absent it the output is byte-identical;
+`structured-debug` starts hypotheses from a ranked suspect list; `implement` and `design`
+prefer the precedent with the lower fix-rate, greater age and higher fan-in; explorer and
+worker briefs may carry the table. No git, a shallow clone, an empty history or no adapter
+degrades to one line and the phase as before. **Honesty**: fan-in is a lower bound in
+alias-heavy or dynamically-imported code (the output marks `partial` / `unresolved`; risk is
+a tie-break within a severity band only, so an undercount can cost a file its refuter slot in
+that band but never changes a severity or drops a finding); granularity is the file, not the method,
+and the semantic axis (embeddings, BM25, a glossary) is out of scope by decision. An indexed
+retrieval layer (TeaRAGs-style: daemon, embedding runtime, ~1 GB per repo) was evaluated and
+rejected as a dependency — see `docs/research/2026-09-25-tearags-vs-shipgate.md`. Evals
+08–11 (bug localization from history, blast radius of a diff, risk-ranked review, a negative
+one-line change) cover the new behaviour under `--ablation with-without`.
 
 v0.12.0 — orchestration by workflow, config-selected. A new `## Orchestration` config
 section (`review: agents | workflow`, `explore: agents | workflow`, default `agents`) lets

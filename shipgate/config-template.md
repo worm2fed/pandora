@@ -201,6 +201,21 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
   goToDefinition / findReferences / hover over grep-and-read for symbol work in typed
   code; note any workspace quirks (root, server version) here>
 
+## Code signals
+
+<!-- Default when absent: 12-month window, the built-in fix pattern (conventional-commit fix
+     types + fix/bug/hotfix/revert/regression words), the built-in excludes (vendor,
+     node_modules, dist, build, lockfiles, generated). Values must be in backticks; a
+     <placeholder> counts as absent. -->
+
+The one section a script reads rather than the model: `scripts/signals.py` takes these three
+bullets' backticked values (command-line flags still win), so the terminal and the flow
+compute the same numbers.
+
+- Window: `<months, e.g. 18>`
+- Fix pattern: `<regex over the commit subject>`
+- Exclude: `<extra globs, comma-separated, e.g. generated/, *.snap>`
+
 ## Worker guardrails
 
 <!-- Default when absent: no project-specific guardrails — worker briefs carry only the

@@ -30,6 +30,21 @@ worklog, so reviewers don't spend findings re-litigating settled calls) and any
 **pre-rulings** (items you already know are must-fix; reviewers confirm scope rather than
 re-discover them).
 
+Add the diff's **per-file risk signals** to the brief, as a compact table (path, commits,
+fix%, fan-in, `risk`) rather than raw JSON, so reviewers spend their reading time on the
+files most likely to regress — every changed file, since `--diff` mode does not truncate:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --diff <base> --json
+```
+
+Keep that JSON's `files[].path → risk` for the `workflow` path's `fileRisk`, from the rows
+whose `risk` is non-null only. When the top-level `available` or `trajectory.available` is
+false (`no-git`, `shallow`, `empty-history` — the reason is `trajectory.reason`, or the top
+level's), the brief says `Risk signals: unavailable (<trajectory.reason>)` in one line instead
+of the table and the review runs as it always has; structure-only data (fan-in, blast) may
+still be mentioned. `no-adapter` arrives in `structure.reason` and only drops the fan-in column.
+
 For a genuinely trivial, pattern-mirroring diff (a config line, a one-file change copying
 a vetted shape), the coordinator may gate directly with no reviewer subagent — say you're
 doing that and record the ruling (journaled projects: a `gate-decision` event). The
@@ -61,6 +76,11 @@ a persisted copy you can pass as `scriptPath` on a re-run) and `args`:
   on the BLOCKER/HIGH candidates only; `all` refutes every candidate above the floor.
 - `maxRefuters` — hard cap on refuter agents for the whole run, default 6. Candidates are
   taken in rank order and the script logs whatever the cap left unverified.
+- `fileRisk` — optional `{path: risk}` (`low|mid|high|top`), built from the signals JSON's
+  `files[].path → risk` for the rows whose `risk` is non-null (a `null` value is skipped as
+  absent; any other unknown label throws). When present, findings tie-break at equal severity and confidence
+  by file risk, and the refuter budget is spent severity → risk → confidence, so a capped
+  run verifies the risky files first. Absent → exactly today's ordering.
 - `effortVerify`, `refutersForHigh` — optional; omitted, `effortVerify` leaves the refuters on
   the tool's default effort, and `refutersForHigh` (default 2) is how many refuters a
   BLOCKER/HIGH gets. `maxRefuters` below `refutersForHigh` throws: no BLOCKER/HIGH could ever
@@ -136,8 +156,11 @@ Rejections are rulings, not silence: record what you killed and why under the wo
 `review-verdict` counts), so a later round doesn't re-raise or re-litigate a finding that
 already lost on evidence.
 
-Order by severity (BLOCKER → HIGH → MEDIUM → LOW). Every surviving finding must carry a
-`file:line` and a concrete fix.
+Order by severity (BLOCKER → HIGH → MEDIUM → LOW). At equal severity and confidence, a
+finding in a `top`-churn or `top`-fix-rate file outranks one in a `low` file — risk orders
+attention, it never changes a finding's severity. The `workflow` path applies this through
+`fileRisk`; on the `agents` path, apply it by hand from the brief's signal table. Every
+surviving finding must carry a `file:line` and a concrete fix.
 
 ## Step 3 — Repo-rule & design compliance
 

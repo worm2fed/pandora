@@ -29,7 +29,23 @@ The rules that decide routing are **not** hardcoded here — they live in the re
    CLAUDE.md files. Cite hits as "[kb] …" or "[repo] …" so it's clear what's recalled, not
    re-derived.
 
-3. **Classify the change** using the rules `CLAUDE.md` actually defines — these are typical
+3. **Pull the risk signals** for the paths you expect to touch, once per touched repo (in an
+   umbrella checkout, one call per repo with `--repo`):
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --repo <repo> <paths> --by-dir 2 --blast --json
+   ```
+
+   Per touched module, keep its labels (churn from `commits`, fix-rate, fan-in) and `risk`,
+   plus the `blast.size` of the touched set — labels are relative to this repo, so `top` means
+   top *here*. Signals inform routing; they never override a routing rule a CLAUDE.md states.
+   Unavailable at the top level (`no-git`, `shallow`, `empty-history`; `no-adapter` only
+   when neither half could be computed) → the map carries the one-line note below instead of
+   the block. A structure-only or trajectory-only result shows in `trajectory.reason` /
+   `structure.reason` (`no-adapter` usually arrives there) → keep whichever half is
+   available. No error, nothing to install.
+
+4. **Classify the change** using the rules `CLAUDE.md` actually defines — these are typical
    multi-service patterns to look for, not universal rules, and not rules to import from
    elsewhere:
    - New business logic / new endpoints → the module/service CLAUDE.md designates for it
@@ -42,7 +58,7 @@ The rules that decide routing are **not** hardcoded here — they live in the re
    - Feature flags → if the project uses flags, add the flag to each reading service's registry.
    - Frontend → the frontend app, in the right bounded context.
 
-4. **Emit the impact map.** Produce this and confirm it with the user before exploring
+5. **Emit the impact map.** Produce this and confirm it with the user before exploring
    (drop sections that don't apply):
 
 ```
@@ -65,6 +81,11 @@ The rules that decide routing are **not** hardcoded here — they live in the re
 - Flag id: <per the repo's naming convention>
 - Enum(s)/registry to add it to: <service → file, per CLAUDE.md — n/a if the repo has no flag system>
 
+### Risk signals
+- <module> — churn <label> · fix-rate <label> · fan-in <label> → risk <label>
+- Blast radius of the touched set: <size> files (<top importing dirs>)
+  (unavailable → replace this block with one line: `Risk signals: unavailable (<reason>)`)
+
 ### Cross-cutting risks
 - <forked write paths, event coupling, anything to cut over deliberately>
 
@@ -81,8 +102,12 @@ emitted, carrying the map's essentials in `data` — enough for a later session 
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type phase-entered \
   --data '{"phase":"route-and-map","primary_home":"api",
-           "touched":["api","web"],"schema":false,"flag":"export-filters"}'
+           "touched":["api","web"],"schema":false,"flag":"export-filters",
+           "signals":{"modules":{"api":{"churn":"top","fix":"high","fan_in":"mid"}},"blast":37}}'
 ```
+
+`signals` carries labels and sizes only, never the table — or `{"unavailable":"shallow"}` when
+the signals could not be computed — so the entry stays well under the 1 KB cap.
 
 Essentials only — the map itself stays in the conversation and in the artifacts that follow it;
 the journal points at position, it doesn't copy documents. A missing or unreadable database is an
