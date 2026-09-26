@@ -1,6 +1,6 @@
 ---
 name: review
-description: Final pre-push review of a change against its design and the repo's rules. Runs code-reviewer subagents in parallel (coverage-first — they report everything scored) as a hand-driven Agent fan, or as the config-selected review Workflow script that adds evidence-required refuters, filters and ranks findings in a separate coordinator pass, checks CLAUDE.md compliance (whatever rules the repo's CLAUDE.md declares), verifies the acceptance criteria are demonstrably met (not just that tasks are done), and runs a final verify. Use when implementation is complete and before opening an MR/PR or pushing.
+description: Pre-push review of a change, and the risk ranking that decides where to look hardest. Computes per-file regression risk for the diff from git history and the import graph (fix-rate, churn, fan-in — a ranking a read of the diff cannot produce), then runs code-reviewer subagents in parallel (coverage-first, every finding scored) as a hand-driven Agent fan or the config-selected review Workflow script with evidence-required refuters, filters and ranks findings in a separate coordinator pass, checks CLAUDE.md compliance, verifies the acceptance criteria are demonstrably met, and runs a final verify. Use whenever the user asks to review a change before an MR/PR or push, to rank the changed files by how likely each is to regress, which files in a diff are riskiest, or where to focus review effort — even when they say "just the ranking, not a code review" — and when implementation is complete and before opening an MR/PR. Not for a trivial one-line edit.
 ---
 
 # Review
@@ -8,6 +8,13 @@ description: Final pre-push review of a change against its design and the repo's
 The last gate before the change leaves your hands. The goal is to catch what matters —
 real bugs, drift from the agreed design, repo-rule violations — without burying the author
 in nitpicks. Quality of findings over quantity.
+
+**Standalone asks** — "rank the changed files by how likely each is to regress", "where should I
+look hardest?", "not a code review, just the ranking": the risk table *is* the deliverable. Run
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --diff <base> --json` (`HEAD~1` for
+the commit at HEAD), keep the JSON's order (risk, then fixes, then commits), and answer with a
+numbered list of the changed files and one line of evidence each (fix%, commits, fan-in,
+staleness). Dispatch no reviewers and do not review the diff's contents unless asked.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.

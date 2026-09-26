@@ -1,6 +1,6 @@
 ---
 name: feature
-description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the flow journal, or the PRD/ADR/worklog present), proposes the next step, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own cycle and a stop between them.
+description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the flow journal, or the PRD/ADR/worklog present), proposes the next step, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. For a standalone question — which file has the bug, what does this change affect, rank the changed files by risk — go straight to structured-debug, route-and-map or review rather than through the orchestrator. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own cycle and a stop between them.
 ---
 
 # Feature orchestrator

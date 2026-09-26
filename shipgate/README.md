@@ -69,15 +69,15 @@ What the sections configure:
 - `feature` — orchestrator: detects phase from artifacts, routes, owns escape hatches, drives epics issue-by-issue.
 - `setup` — bootstrap: detects the repo's shape, interviews with recommended defaults, writes `.claude/shipgate.md` + its generated `.claude/shipgate.json` sidecar, and initializes the flow journal. Re-run to update.
 - `workspace` — Phase 0: get onto the right branch (`<type>/<issue-id>-<slug>`) off a clean base before any work; never builds on the wrong checkout — and never on an umbrella repo.
-- `route-and-map` — reads CLAUDE.md (root + each touched module) + the knowledge base, emits an impact map.
+- `route-and-map` — reads CLAUDE.md (root + each touched module) + the knowledge base, emits an impact map. Also answers a standalone "what does this change affect?".
 - `clarify` — the hard gate: coverage scan, prioritized questions, writes the PRD (FR-###/SC-###).
 - `design` — parallel architects → recommendation → ADR(s) + worklog (Design + Build Plan).
 - `implement` — reuse-first execution, breaking-change discipline, per-task `verify`.
-- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate coordinator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`.
+- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate coordinator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk".
 - `verify` _(cross-cutting)_ — no "done" without fresh command evidence.
 - `model-tiers` _(cross-cutting)_ — the master session orchestrates only; implementation goes to worker subagents, mechanical sub-work sinks to the cheapest capable tier.
 - `knowledge-base` _(cross-cutting)_ — recall/capture durable knowledge, routed by type to the stores the project config declares (default: repo docs). Named to avoid colliding with Claude's built-in session memory.
-- `structured-debug` — on-demand: evidence-first debugging for bugs, regressions, incidents.
+- `structured-debug` — on-demand: evidence-first debugging for bugs, regressions, incidents. Also answers a standalone "which file has the defect?".
 
 Security, simplification, and test-first are folded into the flow rather than living as
 separate skills: the `code-reviewer` agent carries a security + simplicity lens, `implement`

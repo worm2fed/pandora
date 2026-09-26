@@ -24,8 +24,11 @@ claude plugin eval . --runs 3 --ablation with-without --scaffold --judge-model s
   touches history dies with "Operation not permitted". A 0.00 score with a cheap run is
   almost always this — read the run's final message before believing it.
 - The harness refuses Bash-granting runs while a credential store under `~` (`~/.aws`,
-  `~/.docker`, …) contains a symlink, and there is no flag. Workaround: run under a scratch
-  `HOME` with `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`.
+  `~/.docker`, …) contains a symlink, and there is no flag (`DOCKER_CONFIG` does not bypass
+  it). Workaround: run under an empty scratch `HOME` with `CLAUDE_CONFIG_DIR` pointing at
+  the real config dir of the account to bill — that authenticates as-is, no
+  `claude setup-token` needed. Nested inside a Claude Code session, drop `CLAUDECODE` from
+  the env (`env -u CLAUDECODE`).
 
 ## What the cases measure
 

@@ -2,6 +2,19 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.13.1 — skill triggering on natural prompts. The v0.13.0 signals only reached users who
+typed `/shipgate`: on naturally phrased asks ("which file most likely has the defect?", "what
+could the change at HEAD affect?", "rank the changed files by regression risk") no shipgate
+skill fired in any of ~60 eval runs, because each description said where the skill sits in the
+flow ("first step of any feature", "final pre-push review", "agree a fix before changing code")
+rather than what a user asks for, and none named the capability a plain read cannot give. The
+`structured-debug`, `route-and-map` and `review` descriptions are rewritten around the asks
+and the computed signals, with a negative trigger for trivial one-line edits; each skill body
+gains a short **Standalone asks** note so an invoked skill answers the question and stops (no
+branch, no fix plan, no reviewer fan); `feature`'s description sends standalone questions to the
+phase skill instead of the orchestrator. Evals 08–11 are the regression test; no script or hook
+changed.
+
 v0.13.0 — code signals. The flow's intelligence was all *declared* (CLAUDE.md, ADRs, the
 journal); nothing computed what the code and its history say. **Signals**: a second bundled
 stdlib script, `scripts/signals.py` (`hotspots`, `blast`, `suspects`), computes per-file git

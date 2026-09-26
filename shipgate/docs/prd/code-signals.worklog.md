@@ -376,7 +376,7 @@ fallback clause pending — the honest no-plugin column for 12–14 is whatever 
 
 ## Follow-ups (not in this change)
 
-- **Skill triggering on natural prompts** — `structured-debug` / `route-and-map` / `review`
+- **Skill triggering on natural prompts** (fixed in v0.13.1, `fix/skill-triggering`) — `structured-debug` / `route-and-map` / `review`
   did not fire in any of ~60 eval runs on "which file has the bug" / "what does this change
   affect" / "rank these files by risk" asks (both v0.12.1 and v0.13.0). The signals only
   reach the user when the flow is invoked explicitly. Needs its own look at the skill
