@@ -1,6 +1,6 @@
 ---
 name: route-and-map
-description: First step of any feature or bug — decide WHERE the change belongs and map its blast radius before exploring or designing. Reads the repo's CLAUDE.md files (root + each touched module/service) as the routing source of truth, recalls prior knowledge, and emits an impact map. Use at the start of feature work, when unsure which module to edit, or when a change may span modules/services.
+description: Impact analysis for a change — where it belongs and what it touches. Computes the blast radius from the import graph (direct and transitive importers of the changed files) and per-file risk signals from git history, reads the repo's CLAUDE.md files (root + each touched module/service) as the routing source of truth, recalls prior knowledge, and emits an impact map. Use whenever the user asks what a change, commit or diff could affect or break, which files depend on the ones changed, what to check before opening a PR, where new logic belongs, or whether a change spans modules/services — and as the first step of any non-trivial feature or bug, before exploring or designing. Not for a trivial one-line edit (a typo, a comment, a config value) — just make it.
 ---
 
 # Route & Map
@@ -9,6 +9,16 @@ Before exploring code or designing anything, answer: **where does this change be
 what does it touch?** The cost of getting this wrong is high — new logic in the wrong place,
 a forked write path, a forgotten follow-up obligation. This step is cheap insurance, and in a
 small single-module repo it collapses to a few lines.
+
+**Standalone asks** — "what could the change at HEAD affect?", "which files depend on this?",
+"what should I check before I open the PR?": the impact map *is* the answer. Run
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" blast --diff <base> --json` (`HEAD~1` for
+the commit at HEAD; `blast <paths>` for named files) and report its `by_dir` grouping — the
+`files` list is the full transitive set, so mark the direct importers by grepping for imports
+of the changed files, and name any `unknown_seeds` as unmapped. The answer is the affected
+set and nothing else: do not name files you ruled out, and add routing notes (CLAUDE.md rules,
+cross-cutting risks) only when the user asked for them. Do not branch, journal or explore
+afterwards unless asked.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.

@@ -1,6 +1,6 @@
 ---
 name: structured-debug
-description: Evidence-first debugging — clarify expected vs actual, reproduce, form and test hypotheses, trace the commit that introduced the defect, then agree a fix before changing code. Use when asked to debug a bug, investigate a regression, triage an incident, diagnose failing behavior or a failing test, analyze a production error spike, or do root-cause analysis. Trigger before reaching for a fix; the discipline is what stops you from "fixing" the wrong thing.
+description: Evidence-first debugging for a bug, regression, failing test, incident or error spike — including the question that comes before any fix, which file(s) most likely hold the defect. Ranks suspects from git history (fix-rate, staleness, proximity to the files the report names — signals a plain read of the code cannot give), then pins expected vs actual, reproduces, tests hypotheses one variable at a time, traces the introducing commit and agrees a fix before changing code. Use whenever the user reports broken behaviour ("since the last release X is wrong", "this test started failing"), asks where a bug lives or which files to suspect, or wants a defect localized, root-caused or triaged — even when they say not to fix it, and even when they already have a guess. Trigger before reaching for a fix; the discipline is what stops you from "fixing" the wrong thing.
 ---
 
 # Structured debug
@@ -11,6 +11,11 @@ isolate, then fix with a plan.
 
 **Do not change code until the user approves the fix plan.** Investigation is read-mostly;
 the fix is deliberate.
+
+**Standalone asks** — "which file most likely has the defect?", "where should I look?", "don't fix
+anything": run step 1 (clarify), the suspect-list part of step 2 (skip the repro itself), and
+step 3 (hypotheses); answer with the ranked candidate files and one line of evidence each (fix history, proximity to the reported symptom, what the
+code there does). Skip the fix plan, and edit nothing. The suspect ranking is where to look first, not a verdict — say so.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
