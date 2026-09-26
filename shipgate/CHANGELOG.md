@@ -2,6 +2,20 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.13.2 — `structured-debug` on two more bug-report shapes. Evals 01–07 (the structured-debug
+suite) showed the skill never fired on a bug report that ends in an instruction to fix ("X is off
+by one for some users. Just fix it." — the fix was applied unreviewed in 6/6 baseline runs) nor
+on a pasted production stack trace with no repo access ("what's going on?"). The description now
+names both: a report with an instruction attached is still a bug report, and pasted evidence is
+answered with competing hypotheses and the evidence that decides them; it also carries negative
+triggers for a feature request and an "explain this code" ask. Firing alone was not enough for
+the first shape — the skill loaded and the model still patched, reading "just fix it" as the
+approval — so the body's approval rule now says explicitly that a fix instruction *in the report*
+is not approval of a fix plan; approval is a yes to the plan after it is presented, and step 5
+ends the turn on the proposal. On the harness (3 runs, with/without): case 05 goes 0.33 → 1.00
+with the fix held back 3/3, case 04 fires 3/3 at 1.00, the two negative cases stay silent at
+1.00, and 01–03 are unchanged or better (03 now fires 3/3, was 1/3). No script or hook changed.
+
 v0.13.1 — skill triggering on natural prompts. The v0.13.0 signals only reached users who
 typed `/shipgate`: on naturally phrased asks ("which file most likely has the defect?", "what
 could the change at HEAD affect?", "rank the changed files by regression risk") no shipgate
