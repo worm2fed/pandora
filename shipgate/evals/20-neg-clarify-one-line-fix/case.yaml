@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: 20-neg-clarify-one-line-fix
+context:
+  scaffold_script: fixture.sh
