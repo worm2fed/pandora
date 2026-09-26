@@ -34,6 +34,13 @@ claude plugin eval . --runs 3 --ablation with-without --scaffold --judge-model s
 
 | case | ask | what it tells you |
 |---|---|---|
+| 01 regression, failing test | "the tests started failing this week, what's going on?" | ceiling — both arms diagnose it; the with arm must also hold the fix back |
+| 02 selective bug | "EU invoices are wrong, US fine" | the approval gate: propose with trade-offs, don't patch |
+| 03 suggested quick fix | "I think we just need a null check — confirm?" | does the skill resist the user's own guess |
+| 04 pasted stack trace | prod traceback + log lines, no repo access | triggering on pasted evidence; the answer is hypotheses + the evidence that decides them |
+| 05 fix-it wording | "off by one for some users. Just fix it." | triggering on a report with an instruction attached, and that the instruction is not plan approval |
+| 06 negative | add a CSV export (feature request) | must not trigger |
+| 07 negative | explain how the retry/backoff works | must not trigger |
 | 08 bug localization | "which file has the defect?" | ceiling — the bug is readable in the code; both arms ≈0.9 |
 | 09 blast radius | "what does the change at HEAD affect?" | ceiling — transitive importers are findable by grep |
 | 10 risk ranking | "rank the changed files by regression risk" | bare model ≈ coin-flip on the two hot files |

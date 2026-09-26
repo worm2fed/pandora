@@ -1,6 +1,6 @@
 ---
 name: structured-debug
-description: Evidence-first debugging for a bug, regression, failing test, incident or error spike — including the question that comes before any fix, which file(s) most likely hold the defect. Ranks suspects from git history (fix-rate, staleness, proximity to the files the report names — signals a plain read of the code cannot give), then pins expected vs actual, reproduces, tests hypotheses one variable at a time, traces the introducing commit and agrees a fix before changing code. Use whenever the user reports broken behaviour ("since the last release X is wrong", "this test started failing"), asks where a bug lives or which files to suspect, or wants a defect localized, root-caused or triaged — even when they say not to fix it, and even when they already have a guess. Trigger before reaching for a fix; the discipline is what stops you from "fixing" the wrong thing.
+description: Evidence-first debugging for a bug, regression, failing test, incident or error spike — including which file(s) most likely hold the defect. Ranks suspects by git history (fix-rate, staleness, proximity to the named files; signals a plain read cannot give), reproduces, tests hypotheses one at a time, traces the introducing commit and agrees the fix before changing code. Use whenever the user reports broken behaviour — "X returns the wrong value for some users", "this test started failing", or a pasted stack trace or error log with "what's going on?" (even with no repo access: answer with competing hypotheses and the evidence that decides them) — or asks where a bug lives. Trigger even when they say not to fix it, when they have a guess, and especially when they say "just fix it": a bug report with an instruction attached is still a bug report, and the fix follows the plan they approve, not the report. Not for a feature request, explaining how working code behaves, or a trivial one-line edit.
 ---
 
 # Structured debug
@@ -10,7 +10,12 @@ and declaring victory without knowing why. This skill keeps you honest: understa
 isolate, then fix with a plan.
 
 **Do not change code until the user approves the fix plan.** Investigation is read-mostly;
-the fix is deliberate.
+the fix is deliberate. "Just fix it", "go ahead and fix", "please patch this" *in the bug
+report* is not that approval — it is the report's urgency, given before anyone knows what the
+fix is. Approval is a yes to a plan that has been presented (step 5: the candidate fix, its
+risk, the verification steps). Until then: finish the investigation, present the plan with its
+trade-offs, ask, and end the turn — even when the fix looks like a one-liner and the failing
+tests already point at it.
 
 **Standalone asks** — "which file most likely has the defect?", "where should I look?", "don't fix
 anything": run step 1 (clarify), the suspect-list part of step 2 (skip the repro itself), and
@@ -90,7 +95,8 @@ code there does). Skip the fix plan, and edit nothing. The suspect ranking is wh
    line is what turns a fixed bug into a pattern the team can act on.
 
 5. **Plan the fix.** Present the candidate fix(es) with their risk and the verification steps.
-   Recommend one. Get approval.
+   Recommend one. Ask for approval and stop; the edit happens in the turn after the yes, never
+   in the same turn as the proposal.
 
 ## Validate the fix
 

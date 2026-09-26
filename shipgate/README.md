@@ -77,7 +77,7 @@ What the sections configure:
 - `verify` _(cross-cutting)_ — no "done" without fresh command evidence.
 - `model-tiers` _(cross-cutting)_ — the master session orchestrates only; implementation goes to worker subagents, mechanical sub-work sinks to the cheapest capable tier.
 - `knowledge-base` _(cross-cutting)_ — recall/capture durable knowledge, routed by type to the stores the project config declares (default: repo docs). Named to avoid colliding with Claude's built-in session memory.
-- `structured-debug` — on-demand: evidence-first debugging for bugs, regressions, incidents. Also answers a standalone "which file has the defect?".
+- `structured-debug` — on-demand: evidence-first debugging for bugs, regressions, incidents — a pasted stack trace with no repo access included, and a report that says "just fix it" (the fix still waits for an approved plan). Also answers a standalone "which file has the defect?".
 
 Security, simplification, and test-first are folded into the flow rather than living as
 separate skills: the `code-reviewer` agent carries a security + simplicity lens, `implement`
