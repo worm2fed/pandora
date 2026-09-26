@@ -51,6 +51,16 @@ pandora is a **plugin marketplace**: one git repo holding several independent pl
   <!-- both fans run as the bundled Workflow scripts; a host without the tool falls back to
        the Agent fan and records a `deviation`. -->
 
+## Code signals
+
+<!-- Read by `shipgate/scripts/signals.py` itself (v0.13+): backticked values only, flags
+     win. Defaults when absent: 12-month window, built-in fix pattern, built-in excludes. -->
+
+- Window: `12`
+- Exclude: `shipgate/evals/`
+  <!-- eval fixture scripts churn with every calibration and would read as the hottest
+       files in the repo; they are synthetic, not product code. -->
+
 ## Security-sensitive areas
 
 - **Anything under a plugin's `hooks/`.** Plugin hooks execute on the user's machine in
