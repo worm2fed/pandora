@@ -2,6 +2,24 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.13.3 — `verify` on natural completion asks. Evals 22–28 (the verify suite) showed the skill
+never fired: 0 of 15 with-arm runs on ordinary asks that end in a status the user acts on ("fix
+whatever fails and confirm we're good to go", "rename X and tell me when it's done", "confirm the
+suite still passes", "get lint and tests green, then tell me"). The description was phrased from
+the model's side ("use whenever about to claim success") and never matched the moment — skill
+selection happens when the ask arrives, not when the claim is being written. It is rewritten the
+way the phase skills that do fire are, and trigger-first: it opens with the asks themselves, from
+the user's side (a task ending in done / fixed / green / good to go / confirm); names a pasted
+test run or CI result in the ask as a trigger on its own, since that output describes the code
+before the edit; says outright that the size of the change does not matter (a one-line edit plus
+"confirm the tests still pass" is the canonical case); then lists what the skill adds — the
+checklist of ways a green report lies (proving run before the last edit, 0 tests discovered,
+stale pasted output, several claims in one report, hedged wording) and the gate; and carries
+negative triggers for explaining code, a one-shot "run X and tell me the result", and
+re-verifying a claim already settled in the same state. The body's "evidence, not repetition"
+rule now also says a green proving run is followed by the report, not by ad-hoc spot checks.
+On the harness (3 runs, with/without, Opus): the skill fires 3/3 on cases 22, 23, 25 and 26 and 4/6 on 24 (two trees), from 0/15 at baseline; the negatives stay silent with their command counts unchanged (27 runs no command, 28 runs the suite exactly once in 6/6); with-arm scores are 0.90 / 1.00 / 1.00 / 0.92 / 0.90 for 22–26 against a baseline of 1.00 / 0.94 / 1.00 / 1.00 / 0.90, and 22's ordering check (last suite run after the last edit) holds 3/3. The one with-arm outcome miss on 22 is an honest "not good to go yet" that stops to ask which rounding rule is intended, not an unverified claim. No script or hook changed.
+
 v0.13.2 — `structured-debug` on two more bug-report shapes. Evals 01–07 (the structured-debug
 suite) showed the skill never fired on a bug report that ends in an instruction to fix ("X is off
 by one for some users. Just fix it." — the fix was applied unreviewed in 6/6 baseline runs) nor

@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Enforce evidence-based completion claims — require fresh command output from the current session before reporting that anything works, is done, fixed, passes, builds, or is complete. Use whenever about to claim success on a task, bug fix, phase, test run, build, or deploy — even when the change "obviously" works, since that's exactly when unverified claims slip through.
+description: Load this at the start of any task that ends in a status the user will act on — "fix whatever fails and confirm we're good to go", "rename X and tell me when it's done", "add validation with a test and confirm the tests pass", "get lint and tests green, then tell me", "add a docstring and confirm the suite still passes" — and at the start of any ask that pastes a test run or CI result, because that output describes the code before the edit and the question is about the code after it. The size of the change does not matter: a one-line edit plus "confirm the tests still pass" is the canonical case, not an exception, since a trivial edit is exactly when the unverified claim slips through. What it adds is the checklist of ways a green report lies — the proving run predates the last edit, the runner discovered 0 tests, the pasted or remembered result is stale, one report bundles several claims (lint *and* tests are two commands), the wording hedges ("should pass") — and the gate itself: run the one command that proves each exact claim in the current session, read the whole output (exit code, counted passes and failures), state the result with the evidence. Not for explaining how code behaves, for a one-shot "run X and tell me the result" where that run is itself the evidence, or for re-running a command whose fresh output already settled the claim in the same state.
 ---
 
 # Verify
@@ -19,7 +19,9 @@ you just ran.
 
 **This gate is about evidence, not repetition.** Run the proving command once and read it —
 a claim you just evidenced this way is settled; don't re-verify it again later in the same
-state, and don't spawn subagents to double-check your own fresh output. Current models
+state, don't follow a green proving run with ad-hoc spot checks of the same behaviour (the
+next action after the proving output is the report), and don't spawn subagents to
+double-check your own fresh output. Current models
 self-verify while working; the failure mode this skill exists for is the *unevidenced*
 claim, not the under-repeated one. Independent fresh-context review (the `review` phase) is
 a different thing and stays — a reviewer without your accumulated context catches what you
