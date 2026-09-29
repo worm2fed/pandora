@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: 49-neg-review-explain-diff
+context:
+  scaffold_script: fixture.sh
