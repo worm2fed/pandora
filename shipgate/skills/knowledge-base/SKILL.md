@@ -85,6 +85,21 @@ keeping surfaces.
   (`style:`, `gotcha:`, `decision:`, `pref:`), optional one-line context. **No quality gate
   at append time** — the capture gate below applies at *promotion*, not here. If you
   hesitated whether it's worth an entry, it was.
+- **The trigger is a moment, not a phase end.** The phase skills name theirs — the root
+  cause just confirmed (`structured-debug`, before the fix plan), a task just ticked
+  (`implement`), a finding class that recurred (`review`) — and each carries the append
+  inline so it costs one tool call and no skill load:
+
+  ```bash
+  printf -- '- %s — gotcha: <what silently bit, where, the one-line rule>\n' "$(date +%F)" >> docs/ledger.md
+  ```
+
+  Outside a phase skill the same rule holds: hit a trap, write the line, keep going. The
+  line is the deliverable — not a `CLAUDE.md` edit, not an ADR, not built-in memory, and
+  not a pause to explain the ledger. The ledger exists when the config declares it or
+  `docs/ledger.md` is already there; a project gets one at setup or at its first Capture,
+  never as a side effect of a debugging, build or review step — a new file the user did
+  not ask for reads as a change applied, not a learning kept.
 - **Promotion (triage) is where curation happens.** Walk the entries; route each through the
   type-routing above to its durable home — including any **promotion targets the config
   declares**, which may be unconventional stores: a style skill's SKILL.md, specific wiki

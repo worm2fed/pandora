@@ -2,6 +2,30 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.13.4 — mid-flow ledger jots. Eval 43 (the knowledge-base suite's implicit-jot case: a
+failing test whose cause is SQLite's off-by-default foreign-key enforcement, the user's go-ahead
+to fix, and a `docs/ledger.md` already in the repo) showed the plugin writing the dated ledger
+line in 1 of 3 runs, the bare model in 0 of 3 — the same shape the flow journal shows on a
+production project, where Capture keeps finding an empty ledger and promoting "learnings" from
+end-of-flow memory. The flow that runs is `structured-debug`, and its only ledger instruction was
+one sentence at the end of the Validate section, after the fix, with no trigger moment, no format
+and no command; `implement` (step 7) and `review` carried the same aside. Each now has the jot as
+a positioned step with the append inline, so it costs one tool call and no skill load:
+`structured-debug` step 5, between the confirmed root cause and the fix plan — if the cause is a
+reusable trap (a default that silently disables a feature, a command or log line that lies, a
+test that passes vacuously) append one dated line now; `implement` at the task tick; `review`
+while ranking findings. `knowledge-base`'s ledger section names those moments and the line
+format. Two rules came out of the measurement rather than the design. The jot goes only into a
+ledger the project already has (the config-declared path, or an existing `docs/ledger.md`): the
+first draft created the file when absent, and on the structured-debug fixtures, which have none,
+the announced new file cost the "proposal, not an applied fix" judge claim (01 → 0.89, 03 →
+0.71). And the `knowledge-base` description is unchanged, because skill selection happens when
+the ask arrives and a confirmed root cause is not an ask. On the harness (3 runs, with/without;
+two trees for 43 on the final wording): 43 jots 5/6 (was 1/3) with the fix applied 6/6 and
+`CLAUDE.md` clean 6/6; 38 1.00; 41 and 42 1.00 and silent with no files written; structured-debug
+01 1.00, 02 0.78 / 0.89 (baseline 0.89 / 1.00 — the misses are the credit-note coverage claim,
+no ledger involved), 03 0.90 (baseline 1.00). No script or hook changed.
+
 v0.13.3 — `verify` on natural completion asks. Evals 22–28 (the verify suite) showed the skill
 never fired: 0 of 15 with-arm runs on ordinary asks that end in a status the user acts on ("fix
 whatever fails and confirm we're good to go", "rename X and tell me when it's done", "confirm the

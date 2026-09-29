@@ -18,6 +18,9 @@ this file; paths below are relative to the repo root.
 | Is the answer better with the plugin? (the gate) | `scripts/run-case.sh` — `claude plugin eval` with graders + with/without ablation | ~$1 per case per tree (with+without, 3 runs) |
 
 The probe measures triggering only, never answer quality. Ship on harness numbers.
+In the probe's session (`claude -p --plugin-dir <plugin> --setting-sources "" --strict-mcp-config`)
+the plugin's skill descriptions (`<plugin>:<skill>` + description, capped at 1,536 chars) are the
+whole triggering surface — no README, no hooks output — so a description is all there is to tune.
 
 ## Commands
 

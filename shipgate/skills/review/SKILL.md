@@ -285,10 +285,18 @@ not a new phase:
    (the main Capture already ran when the review verdict landed — anything new here came
    from this feedback cycle).
 
-Capture anything reusable from the review (a recurring mistake, a convention worth recording)
-via `knowledge-base` — quick observations go to the project **ledger** as one-liners; the
-Capture phase triages them. State plainly what you verified and what you did not — coverage
-honesty is part of the review.
+Jot anything reusable from the review to the project **ledger** the moment it shows up — a
+finding class that recurred across files, a convention the reviewers had to infer, a check
+that would have caught the defect earlier — one dated line each (the path the config
+declares, or `docs/ledger.md` when that file already exists; a project with neither gets no
+new file from a review), written while ranking the findings, not recalled at Capture:
+
+```bash
+printf -- '- %s — <gotcha|style|decision>: <one line>\n' "$(date +%F)" >> docs/ledger.md
+```
+
+The Capture phase triages them (see `knowledge-base`). State plainly what you verified and
+what you did not — coverage honesty is part of the review.
 
 ## Record the outcome (journaled projects)
 

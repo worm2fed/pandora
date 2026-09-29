@@ -70,11 +70,21 @@ Either way, the loop below is what "done" means for each task — whoever execut
    (test, build, lint) for this task, read the output, confirm it proves the task's
    "done when" criterion. No "should work."
 
-7. **Update the worklog.** Tick the task. If you diverged from the design, log it in
-   *Deviations & notes* with the reason and impact — a silent divergence is how the design
-   and the code drift apart. Anything you learned that outlives this feature — a trap, a
-   convention, a style call — gets a one-line entry in the project **ledger** as it happens
-   (see `knowledge-base`); don't trust end-of-flow memory to resurface it.
+7. **Update the worklog — and the ledger.** Tick the task. If you diverged from the design,
+   log it in *Deviations & notes* with the reason and impact — a silent divergence is how
+   the design and the code drift apart. Then, before the next task: anything this task
+   taught you that outlives the feature — a trap (a default that silently disables a
+   feature, a breaking change nothing flagged), a convention you found by grep rather than
+   in the docs, a style call you made — is one dated line in the project **ledger** (the
+   path the config declares, or `docs/ledger.md` when that file already exists), appended in
+   this step, not recalled from memory at Capture:
+
+   ```bash
+   printf -- '- %s — <gotcha|style|decision>: <one line>\n' "$(date +%F)" >> docs/ledger.md
+   ```
+
+   No quality gate here — Capture triages it (see `knowledge-base`). Not `CLAUDE.md`, and
+   no new ledger file in a project that has none: note the learning in the worklog instead.
 
 ## Types round (declarations-first slices)
 

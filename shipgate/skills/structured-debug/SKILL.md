@@ -12,7 +12,7 @@ isolate, then fix with a plan.
 **Do not change code until the user approves the fix plan.** Investigation is read-mostly;
 the fix is deliberate. "Just fix it", "go ahead and fix", "please patch this" *in the bug
 report* is not that approval — it is the report's urgency, given before anyone knows what the
-fix is. Approval is a yes to a plan that has been presented (step 5: the candidate fix, its
+fix is. Approval is a yes to a plan that has been presented (step 6: the candidate fix, its
 risk, the verification steps). Until then: finish the investigation, present the plan with its
 trade-offs, ask, and end the turn — even when the fix looks like a one-liner and the failing
 tests already point at it.
@@ -20,7 +20,7 @@ tests already point at it.
 **Standalone asks** — "which file most likely has the defect?", "where should I look?", "don't fix
 anything": run step 1 (clarify), the suspect-list part of step 2 (skip the repro itself), and
 step 3 (hypotheses); answer with the ranked candidate files and one line of evidence each (fix history, proximity to the reported symptom, what the
-code there does). Skip the fix plan, and edit nothing. The suspect ranking is where to look first, not a verdict — say so.
+code there does). Skip the ledger jot and the fix plan, and edit nothing. The suspect ranking is where to look first, not a verdict — say so.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
@@ -94,7 +94,29 @@ code there does). Skip the fix plan, and edit nothing. The suspect ranking is wh
    spec was ambiguous, a cross-repo contract drifted, a migration went unrefreshed. That one
    line is what turns a fixed bug into a pattern the team can act on.
 
-5. **Plan the fix.** Present the candidate fix(es) with their risk and the verification steps.
+5. **Jot the trap to the ledger — now, before the fix plan.** The confirmed cause is the
+   moment the learning exists in full; by the time the fix is verified and reported it has
+   been compressed to "fixed", and Capture finds an empty ledger. If the cause is a
+   *reusable trap* — a default that silently disables a feature, a command or log line that
+   lies, a test that passes vacuously, a tool or library quirk, a contract that drifted —
+   append one dated line to the project **ledger** (the path the config declares, or
+   `docs/ledger.md` when that file already exists). One tool call, no quality gate — Capture
+   triages it, and "is it worth a line?" means yes:
+
+   ```bash
+   printf -- '- %s — gotcha: <what silently bit, where, the one-line rule>\n' "$(date +%F)" >> docs/ledger.md
+   ```
+
+   The ledger — not `CLAUDE.md` (operating instructions, not a gotcha landfill), not an ADR
+   (a Capture-time promotion, if at all), not Claude's built-in memory. A project with no
+   ledger (nothing declared, no file) gets none from a debugging step: skip the line and let
+   the "why it slipped through" sentence carry the trap. A typo or a one-off data glitch is
+   not a trap either; skip the line. Anything smaller you hit on the way (a
+   misleading log line, a debugging trick, a fixture quirk) gets the same one-liner the
+   moment it surfaces. This step is one command between the diagnosis and the plan: it
+   never replaces or delays the root-cause report, and it is not the fix.
+
+6. **Plan the fix.** Present the candidate fix(es) with their risk and the verification steps.
    Recommend one. Ask for approval and stop; the edit happens in the turn after the yes, never
    in the same turn as the proposal.
 
@@ -114,9 +136,9 @@ bugs enter the development cycle — a fix without the provenance comment loses 
 When you land the root cause, capture it via `knowledge-base`: a root cause + fix is **technical**
 knowledge, so it routes to the store configured for engineering knowledge (default: an ADR if it
 changed a decision, otherwise a repo docs note), not a product/domain store. Capture the diagnosis
-and the fix so the next person — or the next you — doesn't re-derive it from scratch. Smaller
-learnings surfaced along the way (a misleading log line, a tool quirk, a debugging trick) go to
-the project **ledger** as one-liners the moment you hit them (see `knowledge-base`).
+and the fix so the next person — or the next you — doesn't re-derive it from scratch. The
+ledger line from step 5 is its raw material; if it is not there, a step was skipped — write it
+before the report, not instead of it.
 
 ## Record the diagnosis (journaled projects)
 

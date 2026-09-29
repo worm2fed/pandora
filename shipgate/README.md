@@ -117,6 +117,11 @@ over MCP, in-repo docs, or both; without config:
 No npx/SQLite dependency; everything is git-visible or in a store you chose. Recall mirrors
 the split and degrades gracefully if a store isn't reachable.
 
+Between recall and capture sits the **ledger** (`docs/ledger.md` by default): one dated line
+per learning, appended the moment it surfaces — `structured-debug` at the confirmed root
+cause, `implement` at each task tick, `review` while ranking findings — and triaged at
+Capture, where each line is promoted to its home or dropped.
+
 ## Flow journal
 
 On a journaled project (`/shipgate:setup` writes the config and creates the database) position
