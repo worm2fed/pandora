@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: 43-kb-implicit-jot
+context:
+  scaffold_script: fixture.sh

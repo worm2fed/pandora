@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: 38-kb-ledger-jot
+context:
+  scaffold_script: fixture.sh
