@@ -455,6 +455,86 @@
       "version": "0.13.5",
       "with": 1.0,
       "without": 1.0
+    },
+    "58-big-debug-regression": {
+      "delta": 0.03,
+      "results": "2026-10-01T14-46-01-748Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 0.83,
+      "without": 0.8
+    },
+    "59-big-debug-selective": {
+      "delta": 0.12,
+      "results": "2026-10-01T14-46-03-797Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 0.88,
+      "without": 0.76
+    },
+    "60-big-route-nested-rule": {
+      "delta": 0.1,
+      "results": "2026-10-01T14-46-05-889Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 0.9,
+      "without": 0.8
+    },
+    "61-big-route-rules-conflict": {
+      "delta": 0.14,
+      "results": "2026-10-01T14-46-07-875Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 0.86,
+      "without": 0.71
+    },
+    "62-big-review-planted-diff": {
+      "delta": 0.23,
+      "results": "2026-10-01T14-46-10-000Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 0.9,
+      "without": 0.67
+    },
+    "63-big-review-after-fixes": {
+      "delta": 0.3,
+      "results": "2026-10-01T14-55-19-393Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 1.0,
+      "without": 0.7
+    },
+    "64-big-kb-recall-implicit": {
+      "delta": 0.0,
+      "results": "2026-10-01T14-55-20-672Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 1.0,
+      "without": 1.0
+    },
+    "65-big-clarify-stale-assumption": {
+      "delta": 0.13,
+      "results": "2026-10-01T14-55-23-781Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 1.0,
+      "without": 0.87
+    },
+    "66-big-design-prior-adr": {
+      "delta": 0.08,
+      "results": "2026-10-01T14-55-26-885Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 0.92,
+      "without": 0.83
+    },
+    "67-big-neg-one-line": {
+      "delta": 0.0,
+      "results": "2026-10-01T14-55-28-681Z",
+      "runs": 3,
+      "version": "0.13.6",
+      "with": 1.0,
+      "without": 1.0
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
