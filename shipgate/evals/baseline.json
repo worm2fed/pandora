@@ -457,11 +457,11 @@
       "without": 1.0
     },
     "58-big-debug-regression": {
-      "delta": 0.03,
-      "results": "2026-10-01T14-46-01-748Z",
+      "delta": 0.13,
+      "results": "2026-10-01T15-31-29-670Z",
       "runs": 3,
       "version": "0.13.6",
-      "with": 0.83,
+      "with": 0.93,
       "without": 0.8
     },
     "59-big-debug-selective": {
@@ -473,11 +473,11 @@
       "without": 0.76
     },
     "60-big-route-nested-rule": {
-      "delta": 0.1,
-      "results": "2026-10-01T14-46-05-889Z",
+      "delta": 0.2,
+      "results": "2026-10-01T15-31-31-563Z",
       "runs": 3,
       "version": "0.13.6",
-      "with": 0.9,
+      "with": 1.0,
       "without": 0.8
     },
     "61-big-route-rules-conflict": {
@@ -489,12 +489,12 @@
       "without": 0.71
     },
     "62-big-review-planted-diff": {
-      "delta": 0.23,
-      "results": "2026-10-01T14-46-10-000Z",
+      "delta": 0.27,
+      "results": "2026-10-01T15-31-33-814Z",
       "runs": 3,
       "version": "0.13.6",
-      "with": 0.9,
-      "without": 0.67
+      "with": 1.0,
+      "without": 0.73
     },
     "63-big-review-after-fixes": {
       "delta": 0.3,
@@ -521,16 +521,16 @@
       "without": 0.87
     },
     "66-big-design-prior-adr": {
-      "delta": 0.08,
-      "results": "2026-10-01T14-55-26-885Z",
+      "delta": 0.17,
+      "results": "2026-10-01T15-31-35-891Z",
       "runs": 3,
       "version": "0.13.6",
-      "with": 0.92,
+      "with": 1.0,
       "without": 0.83
     },
     "67-big-neg-one-line": {
       "delta": 0.0,
-      "results": "2026-10-01T14-55-28-681Z",
+      "results": "2026-10-01T15-31-37-762Z",
       "runs": 3,
       "version": "0.13.6",
       "with": 1.0,
