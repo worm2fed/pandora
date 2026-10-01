@@ -220,7 +220,13 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   you make (especially in `executive` mode), every verdict — append it when it happens, not
   in a sweep at the end. The phase skills say which events are theirs, and
   `journal.py vocab --shape <type>` prints the payload each one takes, so no skill has to
-  quote it. Four rules keep the recording cheap and honest:
+  quote it. Five rules keep the recording cheap and honest:
+  - **The stream exists before the first event.** The stream is the branch the work takes
+    (the config's **Branching** pattern), whether or not that branch exists yet; when the brief
+    lists no stream of that name, the first phase skill to run opens it with `flow-started` in
+    the same append as its own event — on `main`, before `workspace` has made the branch, is
+    the normal case. The integration branch is never a stream, and "there is no stream yet" is
+    never a reason to skip an event.
   - **Pointer, not prose.** The worklog / PRD / ADR holds the text; the event holds `refs`
     (paths, section anchors, seq numbers) and one sentence. A payload over 1 KB on a work
     stream is refused for exactly this reason.
@@ -241,8 +247,12 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
     otherwise; a worker that appends passes `--actor worker`. The form is `role[@label]` —
     omit the label and `append` fills in the current session.
 
-  Hooks capture what the harness can see and will stop the session ending with a semantic
-  event missing, so deferring the appends only means being told to go back and do them.
+  Hooks capture what the harness can see — artifact writes, session start and end — and the
+  Stop hook blocks a session that ticked build-plan boxes without `task-done`, recorded
+  `task-done` without a passing `verify-run`, or wrote a PRD in clarify with no
+  `gate-decision`. Nothing checks the phase events (`phase-entered`, `bug-reproduced`,
+  `debug-root-cause`, `design-committed`, `review-verdict`): the phase skill's own step writes
+  them, in the turn the fact is established, or they are never written.
 - **Match model tier to the work** (`model-tiers`) — when the work is big enough to
   dispatch, the master session orchestrates only: Implement-phase code changes go to
   worker subagents with self-contained briefs, and mechanical sub-work sinks to Sonnet.

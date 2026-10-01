@@ -39,6 +39,19 @@ or reopened, each new finding with `file:line`). Journaled projects record one
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
+> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
+> the verdict is owed to a stream, and the stream is the branch under review: the checked-out
+> branch when it is a work branch; for a commit reviewed on the integration branch, the branch
+> the config's **Branching** pattern gives its issue (`feat/455-cancel-order` for a subject
+> ending `(#455 T1)`; `<type>/<slug>` with no issue). The integration branch (`main`, `master`,
+> `develop`) is never a stream. No stream of that name in the brief? Open it with `flow-started
+> {request, branch}` in the same append as the verdict — not recording because the stream does
+> not exist is the one wrong answer. The event owed here is `review-verdict`, appended the
+> moment Step 6 states the verdict, in that turn and before the MR/PR question. The Stop hook
+> does not check it, so Step 6 is the only thing that writes it; the standalone risk ranking
+> reaches no verdict and records nothing.
+
 ## Step 1 — Review in parallel, up to three lenses
 
 This review is the flow's **independent verification** — fresh-context reviewers catch what
@@ -243,6 +256,10 @@ codes, real pass counts. Then give a clear verdict:
 - **Not ready** — list blockers; route back to `implement` (code wrong) or `design`
   (approach wrong). Don't soften a blocker into a suggestion.
 
+**Journaled: append `review-verdict` as you state the verdict** (the form is under **Record the
+outcome**) — the same turn, before the MR/PR question, Ready and Not ready alike. A verdict
+delivered without the event leaves the stream saying the review never happened.
+
 **Cap the internal loop at two rounds.** Not-ready → fix → re-review is normal once; a
 second round should close the gap. If blockers still stand after two rounds, surface the
 open list to the user instead of looping — a review that can't converge is signalling a
@@ -321,12 +338,23 @@ what you did not — coverage honesty is part of the review.
 ## Record the outcome (journaled projects)
 
 On a project whose config declares a **Journal**, three moments here are events, each appended
-when it happens: the Step 6 verdict, the MR/PR going up, and reviewer feedback landing.
+when it happens: the Step 6 verdict (as it is stated, not after the MR/PR question), the MR/PR
+going up, and reviewer feedback landing.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type review-verdict \
   --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3}}'
+```
+
+When the stream does not exist yet (a commit reviewed on the integration branch), opening it
+and recording the verdict is one `--batch` (JSONL on stdin — stdin form: see `verify`):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <type>/<issue>-<slug> --batch <<'EOF'
+{"type":"flow-started","data":{"request":"<the change, one line>","branch":"<type>/<issue>-<slug>"}}
+{"type":"review-verdict","data":{"verdict":"not-ready","findings":{"blocker":1,"high":0,"medium":2}}}
+EOF
 ```
 
 The verdict is `ready` or `not-ready` — those two spellings and no others, because the

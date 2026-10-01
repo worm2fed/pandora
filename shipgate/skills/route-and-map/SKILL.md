@@ -17,11 +17,25 @@ the commit at HEAD; `blast <paths>` for named files) and report its `by_dir` gro
 `files` list is the full transitive set, so mark the direct importers by grepping for imports
 of the changed files, and name any `unknown_seeds` as unmapped. The answer is the affected
 set and nothing else: do not name files you ruled out, and add routing notes (CLAUDE.md rules,
-cross-cutting risks) only when the user asked for them. Do not branch, journal or explore
-afterwards unless asked.
+cross-cutting risks) only when the user asked for them. Do not branch or explore afterwards
+unless asked, and record nothing — a blast-radius answer starts no flow. The routing ask for
+*new* work — "where does this go and what does it touch?" — is the opposite case: it is the
+first phase of a flow, and step 5 records it.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
+
+> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
+> this map is owed to a stream, and the stream is the branch the work will take: the checked-out
+> branch when it is a work branch, otherwise the name the config's **Branching** pattern gives
+> it (`feat/<issue-id>-<slug>`; `feat/<slug>` with no issue — `workspace` reuses the name when
+> it creates the branch). The integration branch (`main`, `master`, `develop`) is never a
+> stream. No stream of that name in the brief? Open it with `flow-started {request, branch}` in
+> the same append as the map's `phase-entered` — routing on `main` before any branch exists is
+> the normal case, not a reason to skip. The event owed here is `phase-entered {phase:
+> route-and-map}`, appended as the map is emitted (step 5), in that turn, not after the user
+> confirms it. The Stop hook does not check it, so step 5 is the only thing that writes it.
 
 The rules that decide routing are **not** hardcoded here — they live in the repo's
 `CLAUDE.md` files and drift over time. Your job is to *consult* them, not memorize them.
@@ -68,7 +82,9 @@ The rules that decide routing are **not** hardcoded here — they live in the re
    - Feature flags → if the project uses flags, add the flag to each reading service's registry.
    - Frontend → the frontend app, in the right bounded context.
 
-5. **Emit the impact map.** Produce this and confirm it with the user before exploring
+5. **Emit the impact map — and, journaled, append its `phase-entered` in the same turn** (the
+   form is under **Record the map**; the append is part of emitting the map, not a follow-up
+   once the user has confirmed it). Produce this and confirm it with the user before exploring
    (drop sections that don't apply):
 
 ```
@@ -105,15 +121,30 @@ The rules that decide routing are **not** hardcoded here — they live in the re
 
 ## Record the map (journaled projects)
 
-On a project whose config declares a **Journal**, append the phase entry as the impact map is
-emitted, carrying the map's essentials in `data` — enough for a later session to route from:
+Step 5's append: the phase entry, carrying the map's essentials in `data` — enough for a later
+session to route from:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type phase-entered \
   --data '{"phase":"route-and-map","primary_home":"api",
            "touched":["api","web"],"schema":false,"flag":"export-filters",
-           "signals":{"modules":{"api":{"churn":"top","fix":"high","fan_in":"mid"}},"blast":37}}'
+           "signals":{"modules":{"api":{"churn":"top","fix":"high","fan_in":"mid"}},"blast":37},
+           "skipped":["workspace"]}'
+```
+
+`skipped` names the phases this stream never entered: `append` refuses a forward jump over a
+phase it was not told about, and a stream that `workspace` did not open — the standalone routing
+ask, a branch made by hand, a stream opened here — has skipped exactly that one. Keep it unless
+the brief shows the stream already at `workspace` (a superfluous entry is tolerated; a missing
+one is a refusal). When the stream does not exist yet, opening it and recording the map is one
+`--batch` (JSONL on stdin — stdin form: see `verify`):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream feat/<slug> --batch <<'EOF'
+{"type":"flow-started","data":{"request":"<the ask, one line>","branch":"feat/<slug>"}}
+{"type":"phase-entered","data":{"phase":"route-and-map","primary_home":"<module>","touched":["<module>"],"skipped":["workspace"]}}
+EOF
 ```
 
 `signals` carries labels and sizes only, never the table — or `{"unavailable":"shallow"}` when

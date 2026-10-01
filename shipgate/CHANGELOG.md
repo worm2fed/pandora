@@ -2,6 +2,51 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.13.6 — phase skills record their journal events. The large journaled fixture (evals 58–67:
+a monorepo with 44 commits, 12 ADRs, a config with a Journal section, sidecar and a database
+seeded with three streams) showed the skills firing on 8 of 9 fire cases while appending a phase
+event in 2 — `review-verdict` on the re-review and `clarify-passed` — and nothing from
+`structured-debug` (58, 59), `route-and-map` (60, 61), `review` (62) or `design` (66), the same
+shape the production journal has worn for weeks (a handful of `debug-root-cause` rows across
+dozens of bug fixes, phases "done inline", capture from memory). Every skill carried a *Record …
+(journaled projects)* section with the exact command, so the traces were read rather than the
+sections rewritten blind, and they named a different defect from the one assumed: the agent did
+not forget the append, it **declined it for want of a stream**. Each fixture checks out the
+integration branch and seeds streams only for earlier issues, which is also how real work
+arrives — a bug reported on `main`, a routing question before any branch, a commit at HEAD
+reviewed before the PR — and the three misses said so in their answers ("there's no branch or
+issue for this work yet", "no journal stream for #455, so I didn't record a verdict rather than
+make up a stream name"); the fourth deferred `design-committed` until the user approved an
+escalated migration. The two runs that did append had a pre-seeded stream for their issue. Two
+mechanical faults sat underneath: `route-and-map`'s quoted `phase-entered` is refused on any
+stream that never entered `workspace` (`append` rejects a forward jump without `skipped`, and
+`workspace` appended only `flow-started`, which sets no phase), and the orchestrator promised the
+Stop hook would catch a missing semantic event when `journal.py check` gates only `task-done`,
+`verify-run` and clarify's `gate-decision` — none of the phase events. Fixes, all in skill
+bodies: each phase skill (`structured-debug`, `route-and-map`, `review`, `design`, `clarify`)
+opens with a *journaled project — name the stream before you start* pre-flight (the stream is the
+branch the work takes per the config's Branching pattern, whether or not that branch exists;
+the integration branch is never a stream; no stream in the brief → open it with `flow-started` in
+the same append as the first event; the event the phase owes, and the step that writes it); the
+append moves into the workflow step where the fact exists — `bug-reproduced` at reproduce,
+`debug-root-cause` at root cause before the ledger jot, `phase-entered` as the map is emitted
+rather than after the user confirms it, `review-verdict` as the verdict is stated and before the
+MR/PR question, `design-committed` as the worklog lands with an `open` list for ADRs still
+awaiting the user — and the record sections become the reference form plus the `--batch` that
+opens a stream and records into it in one call; `route-and-map`'s example carries
+`"skipped":["workspace"]` and says why, its standalone blast-radius note no longer says "do not
+journal" (that answer starts no flow; the routing ask for new work does); `workspace` records
+`flow-started` and `phase-entered workspace` as one batch and continues on a stream a phase
+skill opened earlier instead of starting a second; the orchestrator gains the stream rule and
+states what the Stop hook actually checks. On the harness (3 runs, with/without, Opus, judged by
+Sonnet): `journal-phase-event-appended` passes 3/3 with-runs on 58, 60, 62 and 66 (was 0/1 in the
+pilot on each), no invented type names, every with-run opening a pattern-named stream
+(`fix/<slug>`, `feat/<slug>`, `feat/455-cancel-order`); with-arm scores 0.93 / 1.00 / 1.00 / 1.00
+against baselines of 0.83 / 0.90 / 0.90 / 0.92 (58's one miss is a judge FAIL on an answer that
+names the commit, the line and the rounding-mode change and ends with a proposal); 67 (a one-line
+config change) still makes no journal write, 3/3 both arms, 1.00. No script or hook changed; the
+Stop-hook gap on phase events is recorded here as a known limit, not papered over in the prose.
+
 v0.13.5 — `review` on the re-review after a round of fixes. Eval 47 (the review suite's
 after-fixes case: a worklog whose *Review round 1* section lists F1 and F2 as fixed at HEAD, a fix
 commit that closes both and quietly drops the export's header row, and the ask "I've addressed

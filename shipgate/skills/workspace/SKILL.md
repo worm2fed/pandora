@@ -93,16 +93,25 @@ confirmation — it's a guard, not ceremony.
 ## Record the start (journaled projects)
 
 On a project whose config declares a **Journal**, the established branch is where the flow gets a
-name. Append it here, the moment it happens — not in a batch later:
+name. Append it here, the moment it happens — not later — as one `--batch` (JSONL on stdin):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
-  --stream <branch> --type flow-started \
-  --data '{"request":"add export filters","branch":"feat/1234-add-export-filters"}'
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <branch> --batch <<'EOF'
+{"type":"flow-started","data":{"request":"add export filters","branch":"feat/1234-add-export-filters"}}
+{"type":"phase-entered","data":{"phase":"workspace"}}
+EOF
 ```
 
+`flow-started` names the flow; `phase-entered workspace` puts the stream in its first phase, so
+the next phase's entry is a single step forward — `append` refuses a forward jump over a phase it
+was never told about, and a stream holding only `flow-started` has no phase at all.
+
 The stream is named for the branch you just established — one stream per issue, so an epic's
-children each get their own (`epic/<slug>` for the epic-level work itself). Keep `request` to
-one line — the journal records position and pointers to artifacts, never their contents. A missing
-or unreadable database is an infrastructure failure, not a reason to skip the append: surface it
-loudly and continue in legacy mode only with the user's acknowledgement.
+children each get their own (`epic/<slug>` for the epic-level work itself). A stream of that name
+already in the brief was opened by a phase skill that ran before the branch existed
+(`route-and-map` on `main`, a bug diagnosed before its fix branch): it is the same flow — append
+only the `phase-entered workspace` line (a backward step, which the gate allows) and continue on
+it, with no second `flow-started`. Keep `request` to one line — the journal records position and
+pointers to artifacts, never their contents. A missing or unreadable database is an
+infrastructure failure, not a reason to skip the append: surface it loudly and continue in
+legacy mode only with the user's acknowledgement.

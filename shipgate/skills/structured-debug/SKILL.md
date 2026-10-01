@@ -25,6 +25,19 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
+> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
+> this bug's events are owed to a stream, and the stream is this work's branch: the checked-out
+> branch when it is a work branch, otherwise the name the config's **Branching** pattern gives
+> the fix (`fix/<issue-id>-<slug>`; `fix/<slug>` with no issue — `workspace` reuses the name
+> when it creates the branch). The integration branch (`main`, `master`, `develop`) is never a
+> stream. No stream of that name in the brief? Open it with `flow-started {request, branch}` in
+> the same append as the first event — a bug reported on `main` before any branch exists is the
+> normal case, not a reason to skip. Two events are owed here: `bug-reproduced` at step 2 and
+> `debug-root-cause` at step 4, each appended in the step that establishes it (the form is under
+> **Record the diagnosis**). The Stop hook checks neither, so the step is the only thing that
+> writes them; a standalone "which file?" ask establishes neither and records nothing.
+
 ## Workflow
 
 1. **Clarify.** State observed vs expected behavior as one concise diff. Confirm scope and
@@ -67,6 +80,10 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
    Unavailable (`no-git`, `shallow`, `empty-history` — suspects needs the history) → note
    `Risk signals: unavailable (<reason>)` in one line and form hypotheses as before.
 
+   **Journaled: append `bug-reproduced` now** — expected vs actual in one sentence and `refs`
+   to where the steps live, the moment the repro fails the way the report says. The steps and
+   the environment fingerprint stay in the worklog or on the issue, not in the event.
+
 3. **Hypothesize and test — one variable at a time.** For each hypothesis, write down: what
    evidence you'd see if it's true, what you'd see if it's false, and the exact command/check
    that distinguishes them. Run it. Let the evidence kill hypotheses; don't pattern-match to
@@ -93,6 +110,11 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
    Then name *why it slipped through* — no test covered the path, the review missed it, the
    spec was ambiguous, a cross-repo contract drifted, a migration went unrefreshed. That one
    line is what turns a fixed bug into a pattern the team can act on.
+
+   **Journaled: append `debug-root-cause` the moment the cause is confirmed** — with the
+   introducing commit once you have it, and in any case before step 5: the root-cause report,
+   the ledger jot and this event describe one fact and land in the same turn. A diagnosis
+   delivered without the event leaves the stream saying nothing happened.
 
 5. **Jot the trap to the ledger — now, before the fix plan.** The confirmed cause is the
    moment the learning exists in full; by the time the fix is verified and reported it has
@@ -142,9 +164,9 @@ before the report, not instead of it.
 
 ## Record the diagnosis (journaled projects)
 
-On a project whose config declares a **Journal**, a bug flow records the same way a feature
-does — the stream is this work's branch (`fix/1290-date-off-by-one`), one stream per issue like
-any other flow:
+The appends in steps 2 and 4 take this form — the stream named in the pre-flight above
+(`fix/1290-date-off-by-one`: one stream per issue, like any other flow), the diagnosis by
+pointer:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
@@ -152,8 +174,20 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --data '{"cause":"<one sentence>","introduced_by":"<commit>","refs":["docs/prd/<slug>.worklog.md#root-cause"]}'
 ```
 
-Four events carry a debug flow, each appended when it happens: `bug-reproduced` once expected
-vs actual is pinned down, `debug-root-cause` when the cause is established, `gate-decision`
+When the stream does not exist yet, opening it and recording into it is one `--batch` (JSONL
+on stdin — stdin form: see `verify`), never a reason to wait for a branch:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream fix/<slug> --batch <<'EOF'
+{"type":"flow-started","data":{"request":"<the report, one line>","branch":"fix/<slug>"}}
+{"type":"debug-root-cause","data":{"cause":"<one sentence>","introduced_by":"<commit>","refs":["<where the evidence lives>"]}}
+EOF
+```
+
+On a journaled project the diagnosis is not delivered until its event is in: the report and
+the append go out in the same turn. Four events carry a debug flow, each appended when it
+happens: `bug-reproduced` once expected vs actual is pinned down, `debug-root-cause` when the
+cause is established, `gate-decision`
 for every fork you settle on the way to the fix — *that is the event for a decision*, whatever
 you would naturally call it, and it carries `raised_by` (`user` when the user raised or
 corrected the point, `orchestrator` when you asked or decided it, plus `--actor user` for the

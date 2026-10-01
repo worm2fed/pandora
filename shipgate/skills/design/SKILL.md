@@ -12,6 +12,16 @@ to building. The output is two things: a **design** the implementer can follow, 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
+> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
+> the design is owed to a stream, and the stream is the branch this PRD's work takes: the stream
+> the brief lists for the PRD's `Issue:` (it exists from clarify in the normal flow), otherwise
+> the name the config's **Branching** pattern gives the issue — whether or not that branch is
+> checked out, or exists yet. No stream of that name? Open it with `flow-started {request,
+> branch}` in the same append. The event owed here is `design-committed`, appended as the
+> working doc is written (Step 4), in that turn, whether or not a fork is still awaiting the
+> user. The Stop hook does not check it, so Step 4 is the only thing that writes it.
+
 ## Step 1 — Explore design options in parallel
 
 First, **recall prior decisions** (`knowledge-base`): skim the configured ADR home (default the
@@ -111,17 +121,29 @@ feature slices, then polish. Verify every PRD requirement (FR-###) and success c
 (SC-###) maps to at least one task — a requirement with no task is a requirement you'll
 forget to build.
 
+**Journaled: append `design-committed` as the working doc lands** (the form is under **Record
+the commit**). It records that the design and build plan exist at a path, not that every fork
+is closed: an escalated one-way door stays `proposed` in its ADR and is named in the event's
+`open` list, and the user's answer lands later as `gate-decision {gate: design, raised_by:
+user}` (a `deviation` if they veto the design). Holding the event back until the answer leaves
+the brief at the previous phase with a worklog on disk — the stuck flow the journal exists to
+prevent.
+
 ## Record the commit (journaled projects)
 
-On a project whose config declares a **Journal**, append `design-committed` as the working doc
-lands — artifacts by path, so a later session knows exactly what to open:
+Step 4's append — `design-committed` as the working doc lands, artifacts by path, so a later
+session knows exactly what to open:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type design-committed \
   --data '{"issue":"<issue-id>","worklog":"docs/prd/<slug>.worklog.md",
-           "adrs":["docs/adr/0007-async-export.md"]}'
+           "adrs":["docs/adr/0007-async-export.md"],"open":["docs/adr/0008-schema-change.md"]}'
 ```
+
+`open` lists the ADRs still awaiting the user's answer (omit it when there are none); the
+design is committed from your side the moment the worklog exists. A stream the brief does not
+list is opened in the same `--batch` (a `flow-started` line first — stdin form: see `verify`).
 
 Designing ahead in epic mode uses the epic stream: `design-queued` {issue, assumes} on
 `epic/<slug>` when a design is parked for a later child, and `design-invalidated` {issue, reason}

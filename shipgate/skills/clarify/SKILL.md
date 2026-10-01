@@ -19,6 +19,17 @@ own questions — see the Executive mode section below.
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
+> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
+> this gate is owed to a stream, and the stream is the branch this feature's work takes: the
+> one the brief lists for the issue, otherwise the name the config's **Branching** pattern gives
+> it (`feat/<issue-id>-<slug>`); a stream the brief does not list is opened with `flow-started
+> {request, branch}` in the same append as the first decision. The events owed here: one
+> `gate-decision` per resolved question, as it is decided, and `clarify-passed` as the PRD's last
+> marker goes (Step 3) — each in the turn where it happens, the form under **Record the gate**.
+> The Stop hook catches a PRD written with no `gate-decision` behind it and nothing else, so
+> Step 3 is the only thing that writes `clarify-passed`.
+
 ## Step 1 — Coverage scan
 
 First, anchor the *why*: what job is the user actually hiring this feature to do? The stated

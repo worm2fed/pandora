@@ -148,6 +148,14 @@ a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. 
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the current session. A stream ends with `flow-completed` and leaves the brief.
 
+Each phase skill names its stream before it works — the branch the work takes, per the
+config's **Branching** pattern, opened with `flow-started` by whichever skill runs first when
+the brief lists no such stream (`workspace` then continues on it) — and appends its event in the
+step that establishes the fact: the map emitted, the defect reproduced, the root cause
+confirmed, the working doc written, the verdict stated. Not at the end of the turn, and never
+skipped for want of a branch. The Stop hook enforces the build-side gates only (`task-done`,
+`verify-run`, clarify's `gate-decision`); the phase events rely on those steps.
+
 ## Code signals
 
 Per-file risk computed from the code and its history, on demand, by
