@@ -73,7 +73,7 @@ What the sections configure:
 - `clarify` — the hard gate: coverage scan, prioritized questions, writes the PRD (FR-###/SC-###).
 - `design` — parallel architects → recommendation → ADR(s) + worklog (Design + Build Plan).
 - `implement` — reuse-first execution, breaking-change discipline, per-task `verify`.
-- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate coordinator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk".
+- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate coordinator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk", and the re-review after a round of fixes ("I've addressed F1 and F2 — good to push?"), scoped to the fix diff.
 - `verify` _(cross-cutting)_ — no "done" without fresh command evidence.
 - `model-tiers` _(cross-cutting)_ — the master session orchestrates only; implementation goes to worker subagents, mechanical sub-work sinks to the cheapest capable tier.
 - `knowledge-base` _(cross-cutting)_ — recall/capture durable knowledge, routed by type to the stores the project config declares (default: repo docs). Named to avoid colliding with Claude's built-in session memory.

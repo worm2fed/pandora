@@ -2,6 +2,35 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.13.5 — `review` on the re-review after a round of fixes. Eval 47 (the review suite's
+after-fixes case: a worklog whose *Review round 1* section lists F1 and F2 as fixed at HEAD, a fix
+commit that closes both and quietly drops the export's header row, and the ask "I've addressed
+the round-1 review findings F1 and F2 (see the worklog); the fix is the commit at HEAD. Good to
+push?") showed the skill never firing — 0 of 3 with-arm runs, against 9 of 9 on "Review the
+change at HEAD before I open the PR" (44–46) — and the traces show why: the model reads the
+two-file fix diff itself from the first turn, the ask being one it believes it can answer
+unaided. The description's triggers ("review a change before an MR/PR or push", the risk
+ranking, "implementation is complete") never named this shape, which is the one that bites on
+real work: the fixes land, the new diff gets no pass, and that is where the next finding lives.
+The description now carries the re-review from the user's side ("I've addressed the review
+findings F1 and F2 — good to push?", "round 2", "re-review the fix", "the follow-up commit", a
+worklog listing findings as fixed at HEAD), says the size of the fix diff does not matter, and
+promises the two things a glance at the worklog cannot settle — whether each listed finding is
+actually fixed in the code, and what the fixes broke; its negative trigger now also names a
+docstring or comment edit and explaining what a diff does. The body gains a *Re-review after a
+round of fixes* section beside the standalone-asks note: scope the pass to the fix diff (HEAD
+against the base the previous round reviewed), scale it to that diff (one reviewer carrying all
+lenses, or the coordinator alone for a couple of files — never the three-lens fan), confirm
+each finding on evidence, then hunt the regressions the fixes introduced through the FR/SC the
+fixed code serves, append *Review round N+1* to the worklog, and give the Step 6 verdict — a new
+regression is Not ready however many findings closed; one `review-verdict` per round, counted
+toward the two-round cap. On the harness (3 runs, with/without, Opus): 47 fires 3/3 (was 0/3) with
+no reviewer agent dispatched in any run (the coordinator reviews the two-file fix diff itself and
+says so), scoring 0.90 and 1.00 over two trees (the one with-arm miss is a judge FAIL on an answer that confirms F1 and F2, names the dropped header at a file:line and says Not ready — within the judge's noise); 44 and 46 fire 3/3 and score 1.00 / 1.00 (baseline 0.90 / ~1.0); the
+negatives 49 and 50 stay silent 0/3 with zero Agent calls and score 1.00. The with-arm cost of a
+47 run is about 1.8× the bare model's and ~15 s longer, the price of the worklog round entry and
+the scoped verify, not of a fan. No script or hook changed.
+
 v0.13.4 — mid-flow ledger jots. Eval 43 (the knowledge-base suite's implicit-jot case: a
 failing test whose cause is SQLite's off-by-default foreign-key enforcement, the user's go-ahead
 to fix, and a `docs/ledger.md` already in the repo) showed the plugin writing the dated ledger

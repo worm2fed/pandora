@@ -1,6 +1,6 @@
 ---
 name: review
-description: Pre-push review of a change, and the risk ranking that decides where to look hardest. Computes per-file regression risk for the diff from git history and the import graph (fix-rate, churn, fan-in — a ranking a read of the diff cannot produce), then runs code-reviewer subagents in parallel (coverage-first, every finding scored) as a hand-driven Agent fan or the config-selected review Workflow script with evidence-required refuters, filters and ranks findings in a separate coordinator pass, checks CLAUDE.md compliance, verifies the acceptance criteria are demonstrably met, and runs a final verify. Use whenever the user asks to review a change before an MR/PR or push, to rank the changed files by how likely each is to regress, which files in a diff are riskiest, or where to focus review effort — even when they say "just the ranking, not a code review" — and when implementation is complete and before opening an MR/PR. Not for a trivial one-line edit.
+description: Pre-push review of a change, and the risk ranking that decides where to look hardest. Computes per-file regression risk for the diff from git history and the import graph (fix-rate, churn, fan-in — a ranking a read of the diff cannot produce), then runs code-reviewer subagents in parallel (coverage-first, every finding scored) as a hand-driven Agent fan or the config-selected review Workflow script with evidence-required refuters, filters and ranks findings in a separate coordinator pass, checks CLAUDE.md compliance, verifies the acceptance criteria are demonstrably met, and runs a final verify. Use whenever the user asks to review a change before an MR/PR or push, to rank the changed files by how likely each is to regress, which files in a diff are riskiest, or where to focus review effort — even when they say "just the ranking, not a code review" — and when implementation is complete and before opening an MR/PR. Also the re-review after a round of fixes, however small the fix diff: "I've addressed the review findings F1 and F2 — good to push?", "round 2", "re-review the fix", "here's the follow-up commit", a worklog listing findings as fixed at HEAD. That pass is scoped to the fix diff (one reviewer, not the full fan) and answers two things a glance at the worklog cannot: is each listed finding actually fixed in the code, and what did the fixes break — the new bugs hide there. Not for a trivial one-line edit (a docstring, a comment) or for explaining what a diff does.
 ---
 
 # Review
@@ -15,6 +15,26 @@ look hardest?", "not a code review, just the ranking": the risk table *is* the d
 the commit at HEAD), keep the JSON's order (risk, then fixes, then commits), and answer with a
 numbered list of the changed files and one line of evidence each (fix%, commits, fan-in,
 staleness). Dispatch no reviewers and do not review the diff's contents unless asked.
+
+**Re-review after a round of fixes (before the MR/PR is open)** — "I've addressed F1 and F2,
+good to push?", a follow-up commit, a worklog whose *Review round N* section marks findings
+fixed at HEAD. The pass is scoped to the **fix diff** — HEAD against the base the previous
+round reviewed (the commit before the fix, unless the round entry names another) — not the
+whole change again, and it is scaled to that diff: one reviewer carrying all lenses, or the
+coordinator alone for a fix of a couple of files (say which, and why). Never the three-lens
+fan. It answers two questions, in order, and the worklog's "fixed" settles neither:
+
+1. **Is each listed finding actually fixed?** Read the code at HEAD against the finding's
+   claim; a finding is closed on evidence (the line that now does it right, or a test that
+   pins it), not on the round entry.
+2. **What did the fixes break?** A fix that rewrites a function drops behaviour the tests
+   never pinned — a boundary row, a default, an ordering, an edge case — so walk the FR/SC the fixed code
+   serves, not only the findings, and run the suite on the fix scope.
+
+Then the Step 6 verdict: a new regression is **Not ready** even when every listed finding is
+closed, and the round is appended to the worklog (*Review round N+1*: each finding confirmed
+or reopened, each new finding with `file:line`). Journaled projects record one
+`review-verdict` per round. The round counts toward the two-round cap in Step 6.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
