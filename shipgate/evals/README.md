@@ -54,3 +54,11 @@ runs; the same `review` skill without signals manages 2/6, no plugin 3/6.
 
 Graders are outcome checks (regex over the answer, LLM rubrics for evidence quality);
 `skill-fired` is display-only under ablation except in 12–14, where it is scored.
+
+## Backlog
+
+- **Multi-turn flows** — `feature` (start path: branch + confirm), `workspace`, `implement`,
+  `setup`, `model-tiers`. A single-prompt eval only measures "did it ask the right first
+  question"; testing them properly needs a scripted multi-turn harness (a pre-answered second
+  turn: "yes, that branch", an answered clarify question, a worker brief observed). Not
+  started; recorded 2026-10-01 after suites 01–57 covered every single-prompt-observable skill.
