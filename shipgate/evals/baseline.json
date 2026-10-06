@@ -361,12 +361,12 @@
       "without": 0.67
     },
     "46-review-clean-diff": {
-      "delta": 0.0,
-      "results": "2026-10-06T17-31-16-739Z",
+      "delta": -0.11,
+      "results": "2026-10-06T22-13-33-580Z",
       "runs": 3,
       "version": "0.14.1",
-      "with": 0.56,
-      "without": 0.56
+      "with": 0.78,
+      "without": 0.89
     },
     "47-review-after-fixes": {
       "delta": 0.0,
@@ -522,9 +522,9 @@
     },
     "66-big-design-prior-adr": {
       "delta": 0.17,
-      "results": "2026-10-01T15-31-35-891Z",
+      "results": "2026-10-06T22-13-33-563Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.83
     },
