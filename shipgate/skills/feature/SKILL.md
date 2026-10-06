@@ -169,6 +169,15 @@ even the smallest fix needs to land on the right branch, though it's often a one
 - **Real feature / cross-service / schema change**: the full flow, with PRD, ADR(s) for forks,
   and the worklog.
 
+Size is one axis. The other is how cause relates to effect in this work (**Cynefin**):
+**clear** (obvious to anyone) → the known pattern, don't over-engineer; **complicated**
+(knowable with analysis) → the flow above; **complex** (only visible in hindsight — new domain,
+emergent behaviour, unknown load) → a spike or probe *before* the PRD, then clarify from what
+it showed, because planning harder won't help; **chaotic** (an active incident) → stabilize
+first (`structured-debug`'s OODA lens), understand after. A medium change in a complex domain
+earns a spike; a large one in a clear domain may be mostly typing. Re-check as you go — domains
+shift.
+
 When you skip phases, say so and why ("one-file fix, going straight to implement + verify")
 so the user can pull you back if they wanted more rigor.
 

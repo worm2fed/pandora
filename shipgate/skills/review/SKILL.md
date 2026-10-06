@@ -322,6 +322,12 @@ not a new phase:
    (the main Capture already ran when the review verdict landed — anything new here came
    from this feedback cycle).
 
+**When a finding is disputed** — by the user before the push or by a reviewer in a thread —
+**steel-man** first: state the strongest case for their position (the real concern it answers),
+then hold or concede against *that*. A finding that survives the strong version stays; one that
+only beat the weak version is withdrawn — and the reply says which. Settled facts (a failing
+test, a security anti-pattern, a violated requirement) are corrected, not debated.
+
 Jot anything reusable from the review to the project **ledger** the moment it shows up — a
 finding class that recurred across files, a convention the reviewers had to infer, a check
 that would have caught the defect earlier — one dated line each (the path the config

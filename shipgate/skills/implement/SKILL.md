@@ -134,6 +134,14 @@ loudly and continue in legacy mode only with the user's acknowledgement.
 - If a task reveals a requirements gap, route back to `clarify`.
 - If you're tempted to "while I'm here" refactor something unrelated — don't. Note it as a
   follow-up; keep the change scoped to the plan.
+- **Sunk cost**: the same approach has failed twice → stop; no third variant. Ask "would I
+  choose this path starting fresh, ignoring the work already done?" — if not, route back to
+  `design` with what the two attempts proved.
+- **Bounded rationality**: an open-ended search (greps, candidate libraries, places to hook in)
+  gets a stated "good enough" before it starts and stops at the first option that clears it.
+  Never for a correctness gate — a test, a security check, "did the fix work" need the right
+  answer, not a sufficient-looking one — nor for an irreversible pick (a new dependency, a
+  schema).
 
 ## Committing
 

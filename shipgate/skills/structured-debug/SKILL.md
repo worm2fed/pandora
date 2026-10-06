@@ -97,6 +97,17 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
      all), map what IS vs IS-NOT affected; the boundary points at the cause.
    - **five-whys-plus** — once you have the proximate cause, chain "why" (with evidence at each
      step) to reach the systemic root, not just the surface trigger.
+   - **map-territory** — when behaviour contradicts a doc, test, comment or diagram: those are
+     maps; the code path that runs and the real data are the territory. Read that path, run
+     it, query the data — *then* theorize. The territory wins; the map gets fixed after. (A
+     generated type or schema the code is derived from *is* territory — don't second-guess it.)
+   - **OODA** — in an incident under time pressure: observe → orient → decide → *propose* a
+     reversible stabilizing move at ~70% confidence (rollback, failover, flag off) for the
+     user's go-ahead, re-observe once it lands, and only then root-cause. Hold two hypotheses
+     while orienting; an irreversible move waits for evidence. The approval gate above holds.
+   - **systems** — when a fix here breaks something there, or no single component is at fault:
+     map the components and their feedback loops (retry storm, cache stampede, queue backup),
+     trace the symptom upstream, and look for the delay that hides the cause from the effect.
 
 4. **Trace the provenance.** Once the root cause is confirmed, find the commit that
    introduced it — this is part of the root cause, not an optional extra:

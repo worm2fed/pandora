@@ -39,6 +39,11 @@ lenses** section maps a lens skill to Clarify (e.g. a jobs-to-be-done skill), in
 otherwise just ask "what progress is the user trying to make, and how will they know it
 worked?"
 
+Then **first-principles** on anything the request treats as fixed ("must stay on X", "can't
+touch the schema", "too expensive"): is it physics, cost or regulation — or convention? A
+verified constraint is recorded as one; a conventional one becomes a question. Don't re-derive
+a settled standard or a working pattern.
+
 Then walk these dimensions and mark each **Clear / Partial / Missing** based on the request +
 exploration findings. This tells you where the real gaps are instead of asking random
 questions:

@@ -535,8 +535,24 @@
       "version": "0.13.6",
       "with": 1.0,
       "without": 1.0
+    },
+    "68-design-steel-man": {
+      "delta": 0.22,
+      "results": "2026-10-06T12-24-53-595Z",
+      "runs": 3,
+      "version": "0.14.0",
+      "with": 0.67,
+      "without": 0.44
+    },
+    "69-debug-map-territory": {
+      "delta": 0.0,
+      "results": "2026-10-06T12-24-53-614Z",
+      "runs": 3,
+      "version": "0.14.0",
+      "with": 1.0,
+      "without": 1.0
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
-  "updated": "2026-10-01"
+  "updated": "2026-10-06"
 }

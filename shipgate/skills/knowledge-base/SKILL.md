@@ -70,8 +70,11 @@ Pull the right context from the right store — match the question to the store'
   config's mapped store).
 
 Cite what you recall by file path (repo) or as "[wiki] …" (a vault/MCP store) so it's clear it came
-from the knowledge base, not fresh derivation. An empty search is fine — proceed, and consider
-capturing what you learn.
+from the knowledge base, not fresh derivation. An empty recall is reported as empty — "nothing
+recorded on X" — then proceed, and consider capturing what you learn. Never fill the gap with a
+plausible-sounding answer (**circle of competence**): what you can cite from a store is recall,
+what you cannot is a guess, and the user hears which. A fact that is cheap to fetch (a file, a
+command) is fetched, not abstained on.
 
 ## Ledger — the staging inbox
 

@@ -2,6 +2,71 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.0 — thinking lenses inlined into the phase skills. A standalone thinking-skills plugin lists
+39 skills; the session's skill listing has a budget of roughly 1% of context, so most of those
+descriptions are truncated and the skills never fire (in the maintainer's usage, only the 4 whose
+descriptions survived ever triggered). shipgate already carried the lenses that matter inline —
+design: reversibility, pre-mortem; structured-debug: occam's-razor, kepner-tregoe, five-whys-plus;
+code-reviewer: red-team / inversion; clarify: jobs-to-be-done via the config's **Thinking lenses**
+hook — where they fire deterministically at the right phase and cost nothing in the listing. This
+release absorbs the remaining engineering-flow lenses the same way, each as a bullet or short
+paragraph in the existing voice with the condition under which it applies, condensed from the
+original `SKILL.md` texts of
+[cc-thinking-skills](https://github.com/tjboudreaux/cc-thinking-skills) (MIT, © 2025 TJ Boudreaux
+— credited in the new `NOTICE` and in the README): `design` gains steel-manning (the runner-up
+blueprint's strongest case before the recommendation — doubly when the runner-up is the user's own
+preference), second-order ("and then what?" at the next request / next deploy / 10× horizons,
+stopping at the first effect that changes the decision), via-negativa (does the problem go away by
+removing something, asked of every blueprint), TRIZ (two requirements that seem mutually exclusive
+are separated in time, space, condition or level rather than compromised) and margin-of-safety (a
+timeout, limit or capacity is sized to the cost of being wrong, after measuring);
+`structured-debug` gains map-territory (behaviour contradicts a doc, test or comment → read and
+run the path that actually runs; the territory wins), OODA (an incident under time pressure →
+propose a reversible stabilizing move at ~70% confidence for the go-ahead, re-observe, then root
+cause) and systems (a fix here breaks something there → map components, feedback loops and
+delays); `feature` scales ceremony by Cynefin as well as size (clear / complicated / complex →
+spike before the PRD / chaotic → stabilize first); `clarify` runs first-principles on constraints
+stated as fixed (physics, cost, regulation — or convention?); `implement`'s stop rules gain
+sunk-cost (from the debiasing skill's self-check: the same approach failed twice → stop, re-plan)
+and bounded-rationality (an open-ended search gets a stated "good enough" — never a correctness
+gate); `review` steel-mans a disputed finding before holding or conceding; `knowledge-base`
+reports an empty recall as empty instead of filling the gap (circle of competence). via-negativa
+and first-principles already sit in `code-architect` as per-philosophy lenses; the
+coordinator-level via-negativa line stays because the coordinator, not one architect, commits
+across all three blueprints, and first-principles lands in clarify where constraints are decided.
+Out of scope, by design: regret-minimization, effectuation, archetypes, leverage-points,
+feedback-loops, lindy, fermi, probabilistic, opportunity-cost, thought-experiment and the
+model-router / selection / combination skills — not engineering-flow lenses. **Body-only**: no
+skill's frontmatter changed (verified byte-for-byte against the previous release — descriptions
+are the triggering surface the evals measure). File size deltas: design +1,678 B (+15.5%),
+structured-debug +1,045 (+7.2%), feature +667 (+3.5%), implement +621 (+6.2%), review +467
+(+1.8%), clarify +321 (+3.9%), knowledge-base +302 (+2.7%); 5,101 B in total. Two eval cases cover
+the lenses most likely to change behaviour: **68-design-steel-man** (the clarified billing PRD
+from 51–57, with the user arriving set on synchronous in-request rendering; pass = the answer
+builds and answers the strongest case for the queue / stored-file alternative rather than agreeing
+by reflex) and **69-debug-map-territory** (README, docstring and a green test all describe
+discount-before-tax and are right about `pricing.quote()`, which the live `checkout.charge_total`
+stopped calling in a "one pass" perf commit that re-implements the arithmetic inline and scales
+the discount back out of the taxed gross, so only the pre-tax 10.00 comes off the taxed 120.00 —
+110.00 instead of 108.00 (order alone would not matter; the scale-back line is the defect); pass =
+the answer names the live path, says what the green test does and does not cover, shows a repro
+and names the perf commit). On the harness (3 runs, with/without, Opus, judged by Sonnet): 68
+scores 0.67 with / 0.44 without (+0.22), the skill firing 3/3 and all three with-arm transcripts
+building the alternative's case explicitly ("I looked for the strongest argument for a worker",
+"the best argument for a worker plus stored files") and answering it point by point, against none
+of the three bare-model runs; the `strongest-case-stated` regex grader splits 2/3 vs 0/3 (the miss
+says "best argument", which the regex does not list — left as is rather than widened to the
+transcript), while the five-claim Sonnet rubric passed only 1 of the 3 with-runs and is read as
+the noisier of the two. 69 is a ceiling case like 01 — 1.00 / 1.00, both arms find the live path,
+the skill firing 3/3 and taking 7–8 turns to the bare model's 4 for the same verdict; it stays as
+regression coverage for the lens. Case 68's first rubric failed the two with-runs that visibly
+steel-manned because two claims demanded the steel-man precede the words "I agree"; both ordering
+nits were dropped (grade presence and engagement, not sentence order) and the case re-run; case
+69's first rubric misdescribed its own defect as "wrong order" (percentage tax and discount
+commute — the scale-back line is the bug) and was corrected and re-run before recording. The
+standalone plugin remains an optional integration: the **Thinking lenses** config section can
+still map a phase to a lens *skill* to invoke instead of the inline bullet.
+
 v0.13.6 — phase skills record their journal events. The large journaled fixture (evals 58–67:
 a monorepo with 44 commits, 12 ADRs, a config with a Journal section, sidecar and a database
 seeded with three streams) showed the skills firing on 8 of 9 fire cases while appending a phase

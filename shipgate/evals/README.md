@@ -55,6 +55,19 @@ runs; the same `review` skill without signals manages 2/6, no plugin 3/6.
 Graders are outcome checks (regex over the answer, LLM rubrics for evidence quality);
 `skill-fired` is display-only under ablation except in 12–14, where it is scored.
 
+Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a fact found):
+
+- Pair the LLM rubric with one short regex over the behaviour's vocabulary and read the with-arm
+  transcripts before trusting either. In case 68 a five-claim conjunctive Sonnet rubric failed
+  2 of 3 with-runs that visibly steel-manned, while a regex (`strongest case|best case for|
+  steel-man…`) split 2/3 vs 0/3; the judge is the noisier signal on behaviour.
+- Never grade sentence *order* ("states the case against before agreeing"). Answers that open
+  "I agree" and then build and answer the opposing case are correct; grade presence and
+  engagement.
+- Any edit to a grader's text — rubric or regex — invalidates the recorded run: re-run the
+  case and `compare.py --record` before committing, so `baseline.json` always describes the
+  graders on disk.
+
 ## Backlog
 
 - **Multi-turn flows** — `feature` (start path: branch + confirm), `workspace`, `implement`,

@@ -63,14 +63,34 @@ decision). Escalate to the user only when the reversibility lens says one-way do
 the choice changes user-visible scope, or when you genuinely can't rank the approaches.
 Present the committed choice and its rationale in the phase summary so the user can veto.
 
-Before you commit to the recommendation, run two quick lenses on the leading approach
+Before you commit to the recommendation, run a few quick lenses on the leading approach
 (invoke the lens skills the config's **Thinking lenses** section maps to Design, if any;
-otherwise just apply the idea):
+otherwise just apply the idea). Reversibility and pre-mortem always; the rest when their
+condition holds:
 - **reversibility** — is this a one-way door (schema migration, public API, shared write path)
   or easily undone? One-way doors deserve more deliberation *and* an ADR; reversible choices
   can move fast. This directly informs what you record in Step 3.
 - **pre-mortem** — "assume this design shipped and caused an incident — why?" Surface the top
   failure mode now, while changing the design is free, and fold the mitigation into the plan.
+- **steel-manning** — when the runner-up is close, or is the user's own preference: state its
+  strongest case (the real concern it answers, as its best advocate would put it) and answer
+  *that*. A choice that only beats the weak version is not yet a decision; agreement by reflex
+  is the failure mode. Skip when the choice is trivial or cheaply reversible.
+- **second-order** — when the change has downstream coupling (not a two-way door): "and then
+  what?" at three horizons — the next request, the next deploy (what the team does because of
+  this), 10× scale or adoption. Stop at the first effect that changes the decision; don't
+  invent cascades.
+- **via-negativa** — does the problem go away by removing or not adding something (a layer, a
+  flag, a dependency)? Ask it of every blueprint, not only the minimal-change one; never
+  remove a load-bearing guard, test or validation to get there.
+- **TRIZ** — when two requirements seem mutually exclusive ("stable AND evolving", "fresh AND
+  cached"), don't take the midpoint: separate them in time, space, condition or level
+  (versioned contract over an evolving implementation; TTL; strict only for sensitive ops).
+  If one option is plainly better, or a standard pattern already resolves it, just pick it; if
+  a cheap measurement would settle which side matters, measure instead.
+- **margin-of-safety** — when the design sets a timeout, limit, pool size or capacity: size
+  the buffer to the cost of being wrong, not to the point estimate. Measure before padding,
+  and skip the buffer where the value adjusts live at no cost.
 
 ## Step 3 — Record decision forks as ADRs
 

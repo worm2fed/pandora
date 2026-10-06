@@ -84,6 +84,17 @@ separate skills: the `code-reviewer` agent carries a security + simplicity lens,
 writes the failing test first, and Claude Code's built-in `/security-review` and `/simplify`
 cover dedicated audits/cleanups.
 
+**Thinking lenses** are folded in the same way — a few lines in the phase that needs them,
+each with the condition under which it applies, so they fire at the right moment and cost
+nothing in the skill listing: `design` (reversibility, pre-mortem, steel-manning, second-order,
+via-negativa, TRIZ, margin-of-safety), `structured-debug` (occam's-razor, kepner-tregoe,
+five-whys-plus, map-territory, OODA, systems), `feature` (Cynefin, to scale ceremony by
+uncertainty as well as size), `clarify` (jobs-to-be-done, first-principles), `implement`
+(sunk-cost, bounded-rationality), `review` (steel-manning on a disputed finding),
+`knowledge-base` (circle-of-competence), and the `code-reviewer` agent (red-team / inversion).
+The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudreaux/cc-thinking-skills)
+(MIT, © 2025 TJ Boudreaux) — see `NOTICE`.
+
 **Subagents** (the engine, run in parallel)
 
 - `code-explorer` — grounded exploration, file:line, essential-files list.
@@ -210,7 +221,7 @@ are Python 3 standard library only, and the signals skip themselves where there 
 
 | Integration                                                            | Kind                  | Unlocks                                                                                                                                                            | Without it                                         |
 | ---------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
-| [`thinking-skills`](https://github.com/tjboudreaux/cc-thinking-skills) | plugin                | structured lenses in Clarify (JTBD), Design (reversibility, pre-mortem), Review (red-team), Debug (Occam/Kepner-Tregoe/5-whys), + `thinking-model-router` fallback | the skills apply the idea inline, unaided          |
+| [`thinking-skills`](https://github.com/tjboudreaux/cc-thinking-skills) | plugin                | the config's **Thinking lenses** section can map a phase to a lens *skill* to invoke instead of the inline bullet                                                  | the phase skills apply the lens inline (see above) |
 | a knowledge-base MCP (named in config)                                 | MCP                   | team/product memory — recall & store in a wiki/vault                                                                                                               | memory falls back to repo docs (`CLAUDE.md`, ADRs) |
 | forge CLI + tracker MCP (`gh` / `glab`, named in config)               | CLI/MCP               | `clarify` seeds the PRD from the issue; `review` opens the MR/PR and checks its acceptance criteria                                                                | capture the issue link manually; push by hand      |
 | a log-query skill (named in config)                                    | skill                 | prod/QA log evidence in `structured-debug`                                                                                                                         | use `docker logs` / local sources                  |
