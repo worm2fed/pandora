@@ -16,9 +16,9 @@ worklog honest about what actually happened.
 
 ## Who types the code
 
-Check the `model-tiers` skill first: when the build is big enough to dispatch, the master
-session doesn't work tasks inline — each coherent unit goes to a worker subagent with a
-self-contained brief, and the session reviews the worker's diff against the design before
+Check the `model-tiers` skill first: when the build is big enough to dispatch, the orchestrator
+doesn't work tasks inline — each coherent unit goes to a worker subagent with a
+self-contained brief, and the orchestrator reviews the worker's diff against the design before
 anything is staged. Workers delegate mechanical sub-work to Sonnet subagents. Every brief
 carries the config's **Worker guardrails** section pasted verbatim (see `model-tiers`) — the
 project's hard rules are not yours to compress. For small builds, work the tasks directly.
@@ -98,10 +98,10 @@ introducing new domain shapes), the slice runs "type, define, refine":
 3. **Review the declarations alone** before any body task starts: against the style
    skill(s) the config names (a typed-FP canon usually carries a type-review checklist —
    closed vocabularies as unions, totality, no representable invalid combinations,
-   branded ids, unconsumed types deleted). A small slice can be gated by the coordinator
+   branded ids, unconsumed types deleted). A small slice can be gated by the orchestrator
    directly; a shape-heavy one gets a reviewer pass.
 4. **Reviewed signatures are frozen.** A body task that needs a reviewed signature to
-   change escalates back to the coordinator/design instead of silently reshaping it, and
+   change escalates back to the orchestrator/design instead of silently reshaping it, and
    the change lands as a worklog deviation (journaled projects: a `deviation` event).
    The freeze is what makes this a gate rather than a decoration.
 
@@ -125,7 +125,7 @@ done — both in one `append --batch`, since they close the same boundary (stdin
 own `deviation` {note} event beside the worklog line — a pointer and a sentence; the prose
 stays in the worklog, and a payload over 1 KB is refused to keep it that way. A missing or
 unreadable database is an infrastructure failure, not a reason to skip the append: surface it
-loudly and continue in legacy mode only with the user's acknowledgement.
+loudly and continue un-journaled only with the user's acknowledgement.
 
 ## When to stop and reconsider
 
@@ -153,7 +153,7 @@ loudly and continue in legacy mode only with the user's acknowledgement.
 - **Keep commits atomic.** Each commit is one complete, self-contained change that builds and
   passes on its own — one logical thing done fully, with nothing half-finished and nothing
   unrelated bundled in. This scales by itself: a trivial feature is a single atomic commit; a
-  large one is several (per task or stage). Let the size of the change decide the count, not a
+  large one is several (per task or group of tasks). Let the size of the change decide the count, not a
   fixed rule.
 - **Only commit verified code.** Don't commit a task whose `verify` gate hasn't passed; a red
   commit is a landmine for the next person (and for `git bisect`).

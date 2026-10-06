@@ -1,25 +1,25 @@
 ---
 name: design
-description: Turn a clarified PRD into a committed design and a build plan. Runs code-architect subagents in parallel to compare approaches, recommends one, lets the user pick, records genuine decision forks as ADRs, and writes the working doc (Design + Build Plan sections). Use after the Clarify gate passes and before implementation.
+description: Turn a clarified PRD into a committed design and a build plan. Runs code-architect subagents in parallel to compare approaches, recommends one, lets the user pick, records genuine decision forks as ADRs, and writes the worklog (Design + Build Plan sections). Use after the Clarify gate passes and before implementation.
 ---
 
 # Design
 
 Design is where you decide *how*, with real alternatives, before committing the team's time
 to building. The output is two things: a **design** the implementer can follow, and a
-**build plan** they can execute task by task. Both live in one working doc.
+**build plan** they can execute task by task. Both live in one worklog.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
-> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> **Journaled project — name the stream before you start.** A status brief headed "shipgate
 > flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
 > the design is owed to a stream, and the stream is the branch this PRD's work takes: the stream
-> the brief lists for the PRD's `Issue:` (it exists from clarify in the normal flow), otherwise
+> the status brief lists for the PRD's `Issue:` (it exists from clarify in the normal flow), otherwise
 > the name the config's **Branching** pattern gives the issue — whether or not that branch is
 > checked out, or exists yet. No stream of that name? Open it with `flow-started {request,
 > branch}` in the same append. The event owed here is `design-committed`, appended as the
-> working doc is written (Step 4), in that turn, whether or not a fork is still awaiting the
+> worklog is written (Step 4), in that turn, whether or not a fork is still awaiting the
 > user. The Stop hook does not check it, so Step 4 is the only thing that writes it.
 
 ## Step 1 — Explore design options in parallel
@@ -27,7 +27,7 @@ to building. The output is two things: a **design** the implementer can follow, 
 First, **recall prior decisions** (`knowledge-base`): skim the configured ADR home (default the
 repo's `docs/adr/`) for forks already settled in this area, so you extend past decisions rather
 than re-litigate them. Give the architects any relevant ADR as context. Subagents don't read the
-project config themselves, so each dispatch brief must include the relevant config excerpts —
+project config themselves, so each brief must include the relevant config excerpts —
 the knowledge-base recall pointers and any store/page conventions they'd otherwise miss.
 
 Then dispatch **`code-architect` subagents scaled to how open the solution space is**. When
@@ -42,7 +42,7 @@ surfaced during exploration, and any relevant prior ADRs.
 ## Step 2 — Synthesize and recommend
 
 Read all three blueprints. Then **read the key files they cite yourself** — don't design off
-their summaries alone; the coordinator reading the actual code is what keeps the design
+their summaries alone; the orchestrator reading the actual code is what keeps the design
 honest. Present to the user:
 
 - A short summary of each approach and its core trade-off.
@@ -106,9 +106,9 @@ it in the knowledge base (via `knowledge-base`) with a link back to the ADR.
 Carry the `Issue:` reference from the PRD header into every ADR and the worklog — each
 artifact should stand alone so a reader (or `grep #ID`) finds the whole trail without hopping.
 
-## Step 4 — Write the working doc
+## Step 4 — Write the worklog
 
-Create the working doc at the configured worklog home (default
+Create the worklog at the configured worklog home (default
 `docs/prd/<feature-kebab>.worklog.md`, next to its PRD, following any page conventions the
 project config declares) from `${CLAUDE_PLUGIN_ROOT}/skills/design/references/worklog-template.md`. It has two sections with
 different lifecycles:
@@ -141,17 +141,17 @@ feature slices, then polish. Verify every PRD requirement (FR-###) and success c
 (SC-###) maps to at least one task — a requirement with no task is a requirement you'll
 forget to build.
 
-**Journaled: append `design-committed` as the working doc lands** (the form is under **Record
+**Journaled: append `design-committed` as the worklog lands** (the form is under **Record
 the commit**). It records that the design and build plan exist at a path, not that every fork
 is closed: an escalated one-way door stays `proposed` in its ADR and is named in the event's
 `open` list, and the user's answer lands later as `gate-decision {gate: design, raised_by:
 user}` (a `deviation` if they veto the design). Holding the event back until the answer leaves
-the brief at the previous phase with a worklog on disk — the stuck flow the journal exists to
+the status brief at the previous phase with a worklog on disk — the stuck flow the journal exists to
 prevent.
 
 ## Record the commit (journaled projects)
 
-Step 4's append — `design-committed` as the working doc lands, artifacts by path, so a later
+Step 4's append — `design-committed` as the worklog lands, artifacts by path, so a later
 session knows exactly what to open:
 
 ```bash
@@ -162,7 +162,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
 ```
 
 `open` lists the ADRs still awaiting the user's answer (omit it when there are none); the
-design is committed from your side the moment the worklog exists. A stream the brief does not
+design is committed from your side the moment the worklog exists. A stream the status brief does not
 list is opened in the same `--batch` (a `flow-started` line first — stdin form: see `verify`).
 
 Designing ahead in epic mode uses the epic stream: `design-queued` {issue, assumes} on
@@ -171,7 +171,7 @@ at the round boundary where a merge breaks what it assumed — each when it happ
 Carry `issue` on all three: `status` drains a queued design by matching that key, so a
 `design-committed` without it leaves the design listed as queued forever.
 A missing or unreadable database is an infrastructure failure, not a reason to skip the append:
-surface it loudly and continue in legacy mode only with the user's acknowledgement.
+surface it loudly and continue un-journaled only with the user's acknowledgement.
 
 ## Guardrails
 

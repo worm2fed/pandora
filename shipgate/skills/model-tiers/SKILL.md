@@ -1,14 +1,14 @@
 ---
 name: model-tiers
-description: Use when starting implementation in an orchestrating session, when a task is big enough to split across workers, when writing a worker brief, or when asked to "dispatch this to workers", "orchestrate the implementation", "delegate the coding", or "spawn workers for this". Matches model cost to judgment density — the master session orchestrates (analysis, design, review, dispatch) instead of typing product code, implementation goes to worker subagents one tier below the session's model, and workers hand mechanical sub-work down (cheaper model, or low effort).
+description: Use when starting implementation as the orchestrator, when a task is big enough to split across workers, when writing a worker brief, or when asked to "dispatch this to workers", "orchestrate the implementation", "delegate the coding", or "spawn workers for this". Matches model cost to judgment density — the orchestrator does the judgment work (analysis, design, review, dispatch) instead of typing product code, implementation goes to worker subagents one tier below the session's model, and workers hand mechanical sub-work down (cheaper model, or low effort).
 ---
 
 # Model tiers — orchestrate, don't type
 
-The master session's context is the most expensive context in the run — spend it on
+The orchestrator's context is the most expensive context in the run — spend it on
 judgment (analysis, design, review, verification), not keystrokes. Push the typing down to
 cheaper tiers. The roles are relative, not tied to specific model names (those rotate with
-subscriptions): the *master session* orchestrates, *workers* one tier down implement, and
+subscriptions): the *orchestrator* directs, *workers* one tier down implement, and
 the cheapest capable tier does the mechanical grind.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
@@ -16,8 +16,8 @@ the cheapest capable tier does the mechanical grind.
 
 | Role | Who | Does | Never does |
 |------|-----|------|------------|
-| **Orchestrator** | the master session | analysis, design, review, tracker/knowledge-base writes, dispatching workers, checking their evidence | edit product code (when workers are in play) |
-| **Implementer** | worker subagents on the strongest model *below the orchestrator's tier* (a session on the top available tier dispatches workers one tier down (e.g. `model: "opus"`); a session already on Opus dispatches `model: "sonnet"` — or same-tier workers where isolation, not cost, is the point) | design-sensitive coding: seams, encodings, debugging, anything where a wrong call is expensive | grind through bulk mechanical edits itself |
+| **Orchestrator** | the session running the flow | analysis, design, review, tracker/knowledge-base writes, dispatching workers, checking their evidence | edit product code (when workers are in play) |
+| **Worker** | subagents on the strongest model *below the orchestrator's tier* (a session on the top available tier dispatches workers one tier down (e.g. `model: "opus"`); a session already on Opus dispatches `model: "sonnet"` — or same-tier workers where isolation, not cost, is the point) | design-sensitive coding: seams, encodings, debugging, anything where a wrong call is expensive | grind through bulk mechanical edits itself |
 | **Mechanic** | subagents on the cheapest capable tier (`model: "sonnet"`, or `haiku` for the truly trivial) | bulk migrations, repetitive multi-file edits, long test-output collection | make design decisions |
 
 **Effort is the second lever, alongside model.** Agent definitions take an `effort:`
@@ -37,7 +37,7 @@ the whole point is judgment.
 
 Two invariants survive any model lineup:
 
-1. **The master session orchestrates.** Once work is big enough to dispatch, the session
+1. **The orchestrator does not type product code.** Once work is big enough to dispatch, the session
    doing the thinking does not also do the typing.
 2. **Trivial work sinks to Sonnet.** Mechanical, judgment-free sub-work never occupies an
    expensive context — whoever holds it delegates it down.
@@ -46,7 +46,7 @@ If the session itself already runs on the same tier as its workers would, dispat
 parallelism and context isolation, not cost — apply it when the task splits well, skip it
 when it doesn't; the sink-to-Sonnet rule still applies either way.
 
-## Orchestrator rules (master session)
+## Orchestrator rules
 
 - **Don't edit product code yourself** while orchestrating. Analysis, design artifacts
   (ADR/worklog), tracker and knowledge-base writes, and review are yours; every product-code
@@ -76,8 +76,8 @@ when it doesn't; the sink-to-Sonnet rule still applies either way.
 
 A worker starts with zero context; the brief must be self-contained:
 
-1. **The design spec inline** — the relevant ADR/worklog excerpt pasted in, not a pointer
-   to "the design doc". Workers shouldn't re-derive decisions. Also point at the **source
+1. **The design inline** — the relevant ADR/worklog excerpt pasted in, not a pointer
+   to "the worklog". Workers shouldn't re-derive decisions. Also point at the **source-of-truth
    artifacts** the excerpt digests (the contract, the legacy code, the issue) and invite
    the check: your digest is a transcription, the artifact outranks it — a worker that
    finds the brief contradicting the artifact reports the conflict and gets credited,
@@ -117,7 +117,7 @@ A worker starts with zero context; the brief must be self-contained:
    holding the template's `<e.g. …>` placeholders counts as absent: say that too, and never
    paste a placeholder into a brief as though it were this project's rule.
 
-## Implementer rules (worker)
+## Worker rules
 
 - Keep design-sensitive work at your own level: module seams, data encodings, tricky
   debugging — inline, or in a same-tier subagent if it needs isolation.
@@ -154,5 +154,5 @@ A worker that just finished holds context a fresh spawn would pay to rebuild. Ch
 - The change is smaller than the dispatch overhead (one-file fix, typo, config tweak) —
   briefing a worker for three lines costs more than typing them. Say you're editing
   directly and why.
-- The work has no mechanical component — nothing to sink; a single implementer context
+- The work has no mechanical component — nothing to sink; a single worker context
   handles it end to end.

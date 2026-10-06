@@ -83,7 +83,7 @@ If you can't make it fail before the fix, you don't yet know the test is testing
 
 Fresh evidence is worth nothing tomorrow if only your conclusion survives. On a project
 whose config declares a **Journal**, a passing gate is appended as a `verify-run` event —
-the command, its exit code, and a trimmed head/tail of the output — against the feature's
+the command, its exit code, and a trimmed head/tail of the output — against its
 stream:
 
 ```bash

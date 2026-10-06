@@ -1,6 +1,6 @@
 ---
 name: shipgate
-description: Start, resume, or advance a feature/bug through the lean gate-driven flow (workspace → route → explore → clarify → design → implement → review → capture).
+description: Start, resume, or advance a feature/bug through the lean gate-driven flow (workspace → route & map → explore → clarify → design → implement → review → capture).
 argument-hint: "[feature or bug description, or leave blank to resume]"
 ---
 

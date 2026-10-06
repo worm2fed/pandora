@@ -1,6 +1,6 @@
 ---
 name: feature
-description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the flow journal, or the PRD/ADR/worklog present), proposes the next step, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. For a standalone question — which file has the bug, what does this change affect, rank the changed files by risk — go straight to structured-debug, route-and-map or review rather than through the orchestrator. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own cycle and a stop between them.
+description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the flow journal, or the PRD/ADR/worklog present), proposes the next phase, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. For a standalone question — which file has the bug, what does this change affect, rank the changed files by risk — go straight to structured-debug, route-and-map or review rather than through the orchestrator. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own flow and a stop between them.
 ---
 
 # Feature orchestrator
@@ -100,11 +100,11 @@ anything else.
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" status [--branch <branch>] [--feature <slug>] [--all]
 ```
 
-That brief is the authoritative position — the phase, the gate decisions on record, the last
+That status brief is the authoritative position — the phase, the gate decisions on record, the last
 verify, any queued designs. Route from it and then open only the artifacts it names. Do not
 reconstruct position by scanning worklog checkboxes; the journal exists precisely so nobody
 has to. Completed streams are hidden and long-dormant ones collapse to a line; `--all` shows
-everything. A session-start hook usually hands you this brief before you ask, in which case
+everything. The SessionStart hook usually hands you this status brief before you ask, in which case
 use what you already have rather than re-running the command.
 
 Three rules follow from the journal being the position of record:
@@ -123,7 +123,7 @@ Three rules follow from the journal being the position of record:
   `journal.py doctor`, and only fall back to artifact inference for the session with the
   user's explicit acknowledgement.
 
-**Un-journaled projects** (no Journal section — legacy mode): infer position from what exists,
+**Un-journaled projects** (no Journal section): infer position from what exists,
 using the same semantics. Offer `/shipgate:setup` once, briefly, if the project looks like it
 would benefit; don't nag.
 
@@ -144,13 +144,13 @@ The phase semantics — what each position means and where it goes next — are 
   "remember this" — that hits Claude's built-in session memory, not the knowledge base.
   **Not gated on the MR/PR merging or on a further user go-ahead.** Then done — and on a
   journaled project the stream is closed with `flow-completed` once nothing is owed on it,
-  which is what makes it leave every later session's brief.
+  which is what makes it leave every later session's status brief.
 - An **MR-watcher event** (if the config declares a watcher) naming an issue is a valid resume
   signal for that issue — enter at the phase the event unlocks, not at the start: reviewer
   comments → the review-feedback cycle (defined in `review`: re-enter implement for the
   fixes, re-verify the changed scope, reply and resolve threads); own MR/PR merged → *residual*
   capture only — triage whatever the review-feedback cycle added to the ledger since the
-  main Capture, which already ran when review passed (then the next epic child, if any);
+  main Capture, which already ran when review passed (then the next child issue, if any);
   watched MR/PR merged → resume the held work per its watch-list note; conflicts / failed CI →
   fix before review continues. The watcher only suggests — the user triggers the resume.
 
@@ -174,7 +174,7 @@ Size is one axis. The other is how cause relates to effect in this work (**Cynef
 (knowable with analysis) → the flow above; **complex** (only visible in hindsight — new domain,
 emergent behaviour, unknown load) → a spike or probe *before* the PRD, then clarify from what
 it showed, because planning harder won't help; **chaotic** (an active incident) → stabilize
-first (`structured-debug`'s OODA lens), understand after. A medium change in a complex domain
+first (`structured-debug`'s OODA thinking lens), understand after. A medium change in a complex domain
 earns a spike; a large one in a clear domain may be mostly typing. Re-check as you go — domains
 shift.
 
@@ -191,7 +191,7 @@ a plain checklist in the epic PRD when it doesn't). **Each child issue is a sepa
 deliverable**: its own branch, its own MR/PR, its own review. Work them one at a time.
 
 - **Loop, issue by issue.** Take the next child issue (respect the dependency ordering the
-  tracker expresses, e.g. blocked-by links). Run the near-full cycle for *that issue*: Workspace
+  tracker expresses, e.g. blocked-by links). Run the near-full flow for *that issue*: Workspace
   (branch named for that issue's id) → Route & Map → Explore (as needed) → Implement → Review
   **including its acceptance-criteria check** → its own MR/PR.
 - **Pipeline the rounds — don't idle while workers build.** While workers implement issue N,
@@ -231,7 +231,7 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   `journal.py vocab --shape <type>` prints the payload each one takes, so no skill has to
   quote it. Five rules keep the recording cheap and honest:
   - **The stream exists before the first event.** The stream is the branch the work takes
-    (the config's **Branching** pattern), whether or not that branch exists yet; when the brief
+    (the config's **Branching** pattern), whether or not that branch exists yet; when the status brief
     lists no stream of that name, the first phase skill to run opens it with `flow-started` in
     the same append as its own event — on `main`, before `workspace` has made the branch, is
     the normal case. The integration branch is never a stream, and "there is no stream yet" is
@@ -263,9 +263,9 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   `debug-root-cause`, `design-committed`, `review-verdict`): the phase skill's own step writes
   them, in the turn the fact is established, or they are never written.
 - **Match model tier to the work** (`model-tiers`) — when the work is big enough to
-  dispatch, the master session orchestrates only: Implement-phase code changes go to
+  dispatch, the orchestrator does not type product code: Implement-phase code changes go to
   worker subagents with self-contained briefs, and mechanical sub-work sinks to Sonnet.
-  See `model-tiers` for the brief format and delegation rules.
+  See `model-tiers` for the worker-brief format and delegation rules.
 - **Test-first on real behavior** — adding logic or fixing a bug, write the failing test
   before the code (see `implement` / `verify`).
 - **Use `structured-debug`** when the work is a bug, regression, or incident rather than a
@@ -274,7 +274,7 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   security-sensitive area) or a release check, fire the built-in `/security-review` — the
   in-flow reviewer security lens is a routine sweep, not a full audit. Built-in `/simplify` is
   there for standalone cleanup.
-- **Structured thinking where it pays**: each phase describes its lens inline and applies
+- **Structured thinking where it pays**: each phase describes its thinking lens inline and applies
   the idea by default; the config's **Thinking lenses** section may map phases to actual
   lens skills to invoke (typically the early, judgment-dense phases — clarify, design).
-  Don't force a lens on routine or trivial work.
+  Don't force a thinking lens on routine or trivial work.

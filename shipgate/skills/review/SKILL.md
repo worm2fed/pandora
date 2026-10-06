@@ -1,6 +1,6 @@
 ---
 name: review
-description: Pre-push review of a change, and the risk ranking that decides where to look hardest. Computes per-file regression risk for the diff from git history and the import graph (fix-rate, churn, fan-in — a ranking a read of the diff cannot produce), then runs code-reviewer subagents in parallel (coverage-first, every finding scored) as a hand-driven Agent fan or the config-selected review Workflow script with evidence-required refuters, filters and ranks findings in a separate coordinator pass, checks CLAUDE.md compliance, verifies the acceptance criteria are demonstrably met, and runs a final verify. Use whenever the user asks to review a change before an MR/PR or push, to rank the changed files by how likely each is to regress, which files in a diff are riskiest, or where to focus review effort — even when they say "just the ranking, not a code review" — and when implementation is complete and before opening an MR/PR. Also the re-review after a round of fixes, however small the fix diff: "I've addressed the review findings F1 and F2 — good to push?", "round 2", "re-review the fix", "here's the follow-up commit", a worklog listing findings as fixed at HEAD. That pass is scoped to the fix diff (one reviewer, not the full fan) and answers two things a glance at the worklog cannot: is each listed finding actually fixed in the code, and what did the fixes break — the new bugs hide there. Not for a trivial one-line edit (a docstring, a comment) or for explaining what a diff does.
+description: Pre-push review of a change, and the risk ranking that decides where to look hardest. Computes per-file regression risk for the diff from git history and the import graph (fix-rate, churn, fan-in — a ranking a read of the diff cannot produce), then runs code-reviewer subagents in parallel (coverage-first, every finding scored) as a hand-driven Agent fan or the config-selected review Workflow script with evidence-required refuters, filters and ranks findings in a separate orchestrator pass, checks CLAUDE.md compliance, verifies the acceptance criteria are demonstrably met, and runs a final verify. Use whenever the user asks to review a change before an MR/PR or push, to rank the changed files by how likely each is to regress, which files in a diff are riskiest, or where to focus review effort — even when they say "just the ranking, not a code review" — and when implementation is complete and before opening an MR/PR. Also the re-review after a round of fixes, however small the fix diff: "I've addressed the review findings F1 and F2 — good to push?", "round 2", "re-review the fix", "here's the follow-up commit", a worklog listing findings as fixed at HEAD. That pass is scoped to the fix diff (one reviewer, not the full fan) and answers two things a glance at the worklog cannot: is each listed finding actually fixed in the code, and what did the fixes break — the new bugs hide there. Not for a trivial one-line edit (a docstring, a comment) or for explaining what a diff does.
 ---
 
 # Review
@@ -21,7 +21,7 @@ good to push?", a follow-up commit, a worklog whose *Review round N* section mar
 fixed at HEAD. The pass is scoped to the **fix diff** — HEAD against the base the previous
 round reviewed (the commit before the fix, unless the round entry names another) — not the
 whole change again, and it is scaled to that diff: one reviewer carrying all lenses, or the
-coordinator alone for a fix of a couple of files (say which, and why). Never the three-lens
+orchestrator alone for a fix of a couple of files (say which, and why). Never the three-lens
 fan. It answers two questions, in order, and the worklog's "fixed" settles neither:
 
 1. **Is each listed finding actually fixed?** Read the code at HEAD against the finding's
@@ -39,13 +39,13 @@ or reopened, each new finding with `file:line`). Journaled projects record one
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
-> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> **Journaled project — name the stream before you start.** A status brief headed "shipgate
 > flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
 > the verdict is owed to a stream, and the stream is the branch under review: the checked-out
 > branch when it is a work branch; for a commit reviewed on the integration branch, the branch
 > the config's **Branching** pattern gives its issue (`feat/455-cancel-order` for a subject
 > ending `(#455 T1)`; `<type>/<slug>` with no issue). The integration branch (`main`, `master`,
-> `develop`) is never a stream. No stream of that name in the brief? Open it with `flow-started
+> `develop`) is never a stream. No stream of that name in the status brief? Open it with `flow-started
 > {request, branch}` in the same append as the verdict — not recording because the stream does
 > not exist is the one wrong answer. The event owed here is `review-verdict`, appended the
 > moment Step 6 states the verdict, in that turn and before the MR/PR question. The Stop hook
@@ -62,10 +62,10 @@ diff; the full three-lens fan only for changes where each lens has real surface*
 - **conventions + design-alignment** — matches repo patterns and the agreed design/worklog;
   flags drift from the chosen approach.
 - **simplicity + security** — needless complexity / wrong abstractions, plus OWASP-class
-  issues and (if relevant) prompt injection.
+  weaknesses and (if relevant) prompt injection.
 
 Give each the diff, the worklog (design + build plan), the PRD, and the impact map — plus
-two coordinator lists: **do-not-flag** (deviations already logged and authorized in the
+two orchestrator lists: **do-not-flag** (deviations already logged and authorized in the
 worklog, so reviewers don't spend findings re-litigating settled calls) and any
 **pre-rulings** (items you already know are must-fix; reviewers confirm scope rather than
 re-discover them).
@@ -86,7 +86,7 @@ of the table and the review runs as it always has; structure-only data (fan-in, 
 still be mentioned. `no-adapter` arrives in `structure.reason` and only drops the fan-in column.
 
 For a genuinely trivial, pattern-mirroring diff (a config line, a one-file change copying
-a vetted shape), the coordinator may gate directly with no reviewer subagent — say you're
+a vetted shape), the orchestrator may gate directly with no reviewer subagent — say you're
 doing that and record the ruling (journaled projects: a `gate-decision` event). The
 independent-review requirement is for changes with judgment surface, not for every diff.
 
@@ -109,7 +109,7 @@ a persisted copy you can pass as `scriptPath` on a re-run) and `args`:
   cannot put all three lenses in one reviewer.
 - `finderBrief` — the brief you just built, as one string. **Required**: the script throws
   before spending anything without it, because the refuters read it too.
-- `doNotFlag`, `preRulings` — your two coordinator lists, one entry per string.
+- `doNotFlag`, `preRulings` — your two orchestrator lists, one entry per string.
 - `confidenceFloor` — a number 0-100, default 60; findings under it come back unverified.
 - `model` — **required**, one tier below the session per `model-tiers`.
 - `verify` — `'high-only'` (default), `'all'` or `'none'`. `high-only` spends refuters
@@ -170,11 +170,11 @@ verification (`verify: 'all'`) is expensive, so keep it for high-stakes diffs.
 **A return carrying `aborted`** means every lens finder died and the run reviewed nothing —
 a clean review and a dead run must not be confused. Treat it as the degradation case below.
 
-**Degradation.** `Workflow` unavailable in this host, or the user refuses the call → run the
+**Degradation.** `Workflow` unavailable in this harness, or the user refuses the call → run the
 `agents` path above and record a `deviation` event (journaled projects) noting the fallback.
 The fan is not optional; the mechanism is.
 
-## Step 2 — Filter and rank (the coordinator's pass)
+## Step 2 — Filter and rank (the orchestrator's pass)
 
 Reviewers report **everything** they found, scored with confidence and severity — filtering
 at generation time makes models silently drop real bugs, so the filter lives here instead,
@@ -226,8 +226,8 @@ one; if there's no tracked issue, the PRD's SC-### *are* the acceptance criteria
 criterion, point to the **concrete evidence** it's satisfied — a test, a manual walkthrough, a
 screenshot — not an assertion that it "should" be. Any criterion you can't demonstrate is
 **unfinished work on this issue**, not a follow-up — route back to `implement`. Only when *every*
-AC is demonstrably met does the issue earn a Ready verdict. (This applies to every issue, epic
-child or standalone.)
+AC is demonstrably met does the issue earn a Ready verdict. (This applies to every issue, child
+issue or standalone.)
 
 ## Step 5 — Parity gate (ports and migrations only)
 
@@ -239,7 +239,7 @@ behavioral difference. It must
 parse the whole artifact — trigger config, error paths, transactionality, timeouts,
 concurrency — not just the happy path.
 
-The coordinator arbitrates each finding: **accept as an improvement** (add it to that same
+The orchestrator arbitrates each finding: **accept as an improvement** (add it to that same
 worklog section with the reasoning — journaled projects record a
 `gate-decision`) or **route back to `implement`**. Silent-failure semantics in the source
 (swallow-and-continue flags, bare catches) are usually bugs to fix rather than contracts
@@ -265,7 +265,7 @@ second round should close the gap. If blockers still stand after two rounds, sur
 open list to the user instead of looping — a review that can't converge is signalling a
 design or requirements problem, not a code problem.
 
-This phase **is** the flow's verification — one independent review plus one evidence gate.
+This phase **is** the flow's verification — one independent review plus one verify gate.
 Don't stack further self-check passes on top ("double-check once more", a second verify of
 the same claims, a subagent to re-review the review): current models already self-verify
 while working, and extra re-checking adds cost without catching more.
@@ -392,4 +392,4 @@ word — are required, so a flow cannot authorize its own publish by raising the
 answering it itself. An instruction to start the next piece of work authorizes neither route.
 
 A missing or unreadable database is an infrastructure failure, not a reason to skip the append:
-surface it loudly and continue in legacy mode only with the user's acknowledgement.
+surface it loudly and continue un-journaled only with the user's acknowledgement.

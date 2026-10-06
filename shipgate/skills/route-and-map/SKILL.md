@@ -25,13 +25,13 @@ first phase of a flow, and step 5 records it.
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
-> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> **Journaled project — name the stream before you start.** A status brief headed "shipgate
 > flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
 > this map is owed to a stream, and the stream is the branch the work will take: the checked-out
 > branch when it is a work branch, otherwise the name the config's **Branching** pattern gives
 > it (`feat/<issue-id>-<slug>`; `feat/<slug>` with no issue — `workspace` reuses the name when
 > it creates the branch). The integration branch (`main`, `master`, `develop`) is never a
-> stream. No stream of that name in the brief? Open it with `flow-started {request, branch}` in
+> stream. No stream of that name in the status brief? Open it with `flow-started {request, branch}` in
 > the same append as the map's `phase-entered` — routing on `main` before any branch exists is
 > the normal case, not a reason to skip. The event owed here is `phase-entered {phase:
 > route-and-map}`, appended as the map is emitted (step 5), in that turn, not after the user
@@ -136,7 +136,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
 `skipped` names the phases this stream never entered: `append` refuses a forward jump over a
 phase it was not told about, and a stream that `workspace` did not open — the standalone routing
 ask, a branch made by hand, a stream opened here — has skipped exactly that one. Keep it unless
-the brief shows the stream already at `workspace` (a superfluous entry is tolerated; a missing
+the status brief shows the stream already at `workspace` (a superfluous entry is tolerated; a missing
 one is a refusal). When the stream does not exist yet, opening it and recording the map is one
 `--batch` (JSONL on stdin — stdin form: see `verify`):
 
@@ -152,8 +152,8 @@ the signals could not be computed — so the entry stays well under the 1 KB cap
 
 Essentials only — the map itself stays in the conversation and in the artifacts that follow it;
 the journal points at position, it doesn't copy documents. A missing or unreadable database is an
-infrastructure failure, not a reason to skip the append: surface it loudly and continue in legacy
-mode only with the user's acknowledgement.
+infrastructure failure, not a reason to skip the append: surface it loudly and continue
+un-journaled only with the user's acknowledgement.
 
 ## Guardrails
 

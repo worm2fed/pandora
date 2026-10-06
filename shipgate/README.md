@@ -18,7 +18,7 @@ Nothing project-specific is hardcoded. Two files adapt the plugin to a project:
 Workspace → Route & Map → Explore → Clarify (gate) → Design → Implement → Review → Capture
 ```
 
-Ceremony scales to the change: a one-line bugfix goes Workspace → Route → fix → verify; a real
+Ceremony scales to the change: a one-line bugfix goes Workspace → Route & Map → fix → verify; a real
 feature runs the whole flow. Backward transitions (review → implement, design → clarify) are normal.
 
 Start or resume work with **`/shipgate [description]`**, or just describe a feature/bug and the
@@ -33,7 +33,7 @@ than clobbering what's there.
 
 Or do it by hand: copy `config-template.md` from this plugin into your project as
 **`.claude/shipgate.md`** and fill in what applies. Skills read it at the start of a flow and treat it as overriding
-their defaults; subagents get the relevant excerpts pasted into their dispatch briefs.
+their defaults; subagents get the relevant excerpts pasted into their briefs.
 Every section is optional — with no config at all, shipgate still works on sensible
 defaults (in-repo `docs/prd|adr/`, forge auto-detected from the git remote).
 
@@ -68,14 +68,14 @@ What the sections configure:
 
 - `feature` — orchestrator: detects phase from artifacts, routes, owns escape hatches, drives epics issue-by-issue.
 - `setup` — bootstrap: detects the repo's shape, interviews with recommended defaults, writes `.claude/shipgate.md` + its generated `.claude/shipgate.json` sidecar, and initializes the flow journal. Re-run to update.
-- `workspace` — Phase 0: get onto the right branch (`<type>/<issue-id>-<slug>`) off a clean base before any work; never builds on the wrong checkout — and never on an umbrella repo.
+- `workspace` — the first phase: get onto the right branch (`<type>/<issue-id>-<slug>`) off a clean base before any work; never builds on the wrong checkout — and never on an umbrella repo.
 - `route-and-map` — reads CLAUDE.md (root + each touched module) + the knowledge base, emits an impact map. Also answers a standalone "what does this change affect?".
-- `clarify` — the hard gate: coverage scan, prioritized questions, writes the PRD (FR-###/SC-###).
+- `clarify` — the Clarify gate: coverage scan, prioritized questions, writes the PRD (FR-###/SC-###).
 - `design` — parallel architects → recommendation → ADR(s) + worklog (Design + Build Plan).
 - `implement` — reuse-first execution, breaking-change discipline, per-task `verify`.
-- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate coordinator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk", and the re-review after a round of fixes ("I've addressed F1 and F2 — good to push?"), scoped to the fix diff.
+- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate orchestrator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk", and the re-review after a round of fixes ("I've addressed F1 and F2 — good to push?"), scoped to the fix diff.
 - `verify` _(cross-cutting)_ — no "done" without fresh command evidence.
-- `model-tiers` _(cross-cutting)_ — the master session orchestrates only; implementation goes to worker subagents, mechanical sub-work sinks to the cheapest capable tier.
+- `model-tiers` _(cross-cutting)_ — the orchestrator never types product code; implementation goes to worker subagents, mechanical sub-work sinks to the cheapest capable tier.
 - `knowledge-base` _(cross-cutting)_ — recall/capture durable knowledge, routed by type to the stores the project config declares (default: repo docs). Named to avoid colliding with Claude's built-in session memory.
 - `structured-debug` — on-demand: evidence-first debugging for bugs, regressions, incidents — a pasted stack trace with no repo access included, and a report that says "just fix it" (the fix still waits for an approved plan). Also answers a standalone "which file has the defect?".
 
@@ -99,11 +99,13 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 
 - `code-explorer` — grounded exploration, file:line, essential-files list.
 - `code-architect` _(opus)_ — one committed design philosophy per instance.
-- `code-reviewer` — every finding scored (confidence + severity), file:line; the coordinator filters.
+- `code-reviewer` — every finding scored (confidence + severity), file:line; the orchestrator filters.
 
 **Scripts** (Python 3 stdlib)
 
 - `scripts/journal.py` — the flow journal CLI; `scripts/signals.py` — per-file risk signals, read by `route-and-map`, `review` and `structured-debug` (see [Code signals](#code-signals)).
+
+**Glossary** — [`docs/glossary.md`](docs/glossary.md): one term per shipgate concept, what it means and what it is not to be confused with. Prose in this plugin uses those terms and no synonyms.
 
 ## Artifacts (3 per feature)
 
@@ -111,17 +113,17 @@ Homes are set by the config's Knowledge base section; defaults shown:
 
 - `docs/prd/<name>.md` — PRD: what & why (FR-###, SC-###). No implementation.
 - `docs/adr/NNNN-<title>.md` — one ADR per genuine decision fork. Immutable; supersede.
-- `docs/prd/<name>.worklog.md` — one working doc next to its PRD: **Design** section +
+- `docs/prd/<name>.worklog.md` — one worklog next to its PRD: **Design** section +
   **Build Plan** section (tasks with tests, `[P]` markers, progress). Tests are tasks, never
   a separate doc.
 
-## Memory
+## Knowledge base
 
 `knowledge-base` routes durable knowledge **by type** to its natural home, rather than dumping
 everything in one store. The stores themselves come from the project config — a team wiki
 over MCP, in-repo docs, or both; without config:
 
-- **Engineering** — decisions, specs, conventions, gotchas, root causes → the **repo**
+- **Engineering** — decisions, PRDs, conventions, gotchas, root causes → the **repo**
   (`docs/adr/`, `docs/prd/`, `CLAUDE.md`). Lives with the code, versioned and reviewed with it.
 - **Product/domain insight** → a vault MCP if one is available — sparingly; otherwise the repo.
 
@@ -137,12 +139,12 @@ Capture, where each line is promoted to its home or dropped.
 
 On a journaled project (`/shipgate:setup` writes the config and creates the database) position
 is an append-only event stream — **one stream per issue, named for its branch** — rather than
-something re-inferred from artifacts every session. The session-start hook injects the brief;
+something re-inferred from artifacts every session. The SessionStart hook injects the status brief;
 `scripts/journal.py` is the whole interface:
 
 | Command | Does |
 | --- | --- |
-| `status [--branch B] [--feature SLUG] [--all]` | the position brief: the checked-out branch's stream first and in full, dormant streams as one line, completed ones hidden unless `--all` |
+| `status [--branch B] [--feature SLUG] [--all]` | the status brief: the checked-out branch's stream first and in full, dormant streams as one line, completed ones hidden unless `--all` |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
@@ -157,13 +159,13 @@ must read each new version back from the output instead of assuming +1 — refus
 the stream holds, after its last `task-done`, either a `review-verdict` with `verdict=ready` or
 a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
-the current session. A stream ends with `flow-completed` and leaves the brief.
+the current session. A stream ends with `flow-completed` and leaves the status brief.
 
 Each phase skill names its stream before it works — the branch the work takes, per the
 config's **Branching** pattern, opened with `flow-started` by whichever skill runs first when
-the brief lists no such stream (`workspace` then continues on it) — and appends its event in the
+the status brief lists no such stream (`workspace` then continues on it) — and appends its event in the
 step that establishes the fact: the map emitted, the defect reproduced, the root cause
-confirmed, the working doc written, the verdict stated. Not at the end of the turn, and never
+confirmed, the worklog written, the verdict stated. Not at the end of the turn, and never
 skipped for want of a branch. The Stop hook enforces the build-side gates only (`task-done`,
 `verify-run`, clarify's `gate-decision`); the phase events rely on those steps.
 
@@ -221,7 +223,7 @@ are Python 3 standard library only, and the signals skip themselves where there 
 
 | Integration                                                            | Kind                  | Unlocks                                                                                                                                                            | Without it                                         |
 | ---------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
-| a knowledge-base MCP (named in config)                                 | MCP                   | team/product memory — recall & store in a wiki/vault                                                                                                               | memory falls back to repo docs (`CLAUDE.md`, ADRs) |
+| a knowledge-base MCP (named in config)                                 | MCP                   | team/product knowledge — recall & store in a wiki/vault                                                                                                               | recall falls back to repo docs (`CLAUDE.md`, ADRs) |
 | forge CLI + tracker MCP (`gh` / `glab`, named in config)               | CLI/MCP               | `clarify` seeds the PRD from the issue; `review` opens the MR/PR and checks its acceptance criteria                                                                | capture the issue link manually; push by hand      |
 | a log-query skill (named in config)                                    | skill                 | prod/QA log evidence in `structured-debug`                                                                                                                         | use `docker logs` / local sources                  |
 | `chrome-devtools-mcp`                                                  | MCP/skill             | frontend/browser evidence in `structured-debug`                                                                                                                    | use other evidence sources                         |
@@ -273,7 +275,7 @@ disproves the finding, and a finding dies only on a full quorum — every reques
 reported and every one of them refuted with evidence — so an uncertain, uncited or dead
 refuter leaves it standing. The return is compact — ranked survivors carrying `verification`
 and `quorum`, the killed list with its evidence, one-line below-floor entries, counts and
-run-level `coverage` — so the coordinator's filtering pass starts from data, the raw
+run-level `coverage` — so the orchestrator's filtering pass starts from data, the raw
 reviewer reports never enter its context, and the run id lands in
 `review-verdict.data.workflow_run_id`. **Explore**: `explore-workflow.js` runs the lenses
 as `shipgate:code-explorer` agents and merges their essential files, capped at 25; the
@@ -284,18 +286,18 @@ bundled-file references in `clarify`, `design`, `review` and `feature` now go th
 the finders cost what the `Agent` fan costs, so the gain is structure, dedupe and context
 hygiene rather than fewer tokens, and full verification (`verify: all`) is worth it only on
 high-stakes diffs. Implement stays on `Agent` workers (mid-flight `SendMessage`, warm reuse,
-environment repair and the shared working tree have no workflow equivalent). A host without
+environment repair and the shared working tree have no workflow equivalent). A harness without
 the tool keeps the `agents` path and records a `deviation`.
 
 v0.11.0 — the flow journal made cheap and trustworthy, from two weeks of its own data.
-**Cost**: the session brief drops finished work (a stream now ends with `flow-completed`, and a
+**Cost**: the status brief drops finished work (a stream now ends with `flow-completed`, and a
 `capture-done` left alone for 48 h reads terminal; `--all` still shows everything), collapses
 streams dormant over a week to one line, caps each stream at its last three gate decisions
 (five on the checked-out branch's stream), and puts the checked-out branch's stream first
 (`status --branch`, passed by the SessionStart hook); semantic events go up as one `append
 --batch` per phase boundary, and a payload over 1 KB is refused so the prose stays in the
 worklog and the event carries `refs`. **Position reliability**: a phase-owning event records
-the `phase-entered` it implies instead of leaving the brief's headline field to memory (ADR
+the `phase-entered` it implies instead of leaving the status brief's headline field to memory (ADR
 0002), `append` validates each type's payload against a canonical shape and normalizes the
 aliases that had been drifting silently past the gates (`chosen→decision`, `kind→gate`,
 `result→outcome`, `tasks→task_ids`, verdict `pass→ready`), and `actor` becomes `role[@label]`
@@ -316,12 +318,12 @@ delivers types with `unimplemented` bodies, gates on a test-inclusive type-check
 the declarations alone, and freezes reviewed signatures (changes escalate + land as
 `deviation`). **Parity gate** for ports/migrations: design declares pre-authorized deltas;
 review adds a fresh adversarial pass hunting unauthorized behavioral differences across the
-whole source artifact. **Review arbitration**: reviewer briefs carry do-not-flag lists and
+whole source-of-truth artifact. **Review arbitration**: reviewer briefs carry do-not-flag lists and
 pre-rulings, killed findings are recorded so they aren't re-litigated, trivial diffs may be
-coordinator-gated (recorded as `gate-decision`), and the internal not-ready→fix loop caps
+orchestrator-gated (recorded as `gate-decision`), and the internal not-ready→fix loop caps
 at two rounds before surfacing. **Worker discipline** (model-tiers): self-sufficient
 follow-up dispatches, amnesia symptoms → cold-spawn, environment repair is orchestrator
-work, briefs point at source artifacts (the artifact outranks the digest) and name a vetted
+work, briefs point at source-of-truth artifacts (the artifact outranks the digest) and name a vetted
 reference implementation, validation via workspace-level scripts with a baseline run on
 shared code. All new gates reuse the existing journal vocabulary — no new event types.
 

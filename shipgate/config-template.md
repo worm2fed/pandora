@@ -53,8 +53,9 @@ When this section is present the project is **journaled**, and three things chan
   evidence, and review verdicts are appended as events; `feature` routes from the
   journal alone. Artifact inference is not a fallback here — a missing event reads as
   "still in the previous phase" until it is recorded.
-- **Capture is enforced by the plugin's hooks**, not by remembering: artifact writes are
-  recorded automatically, and a session cannot end while an expected event is missing.
+- **Recording is enforced by the plugin's hooks**, not by remembering: artifact writes are
+  auto-captured, and the Stop hook blocks a session from ending while an expected event is
+  missing.
   The hooks read `.claude/shipgate.json` (a generated sidecar holding the database path,
   the artifact-home globs, and the ledger path) — `setup` writes it; never hand-edit it,
   re-run `setup` instead. If that sidecar is absent, every hook exits immediately and the project
@@ -126,8 +127,8 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
     instruction, not trivia. Say what you're registering as you do it.
   - **feature**, resume detection: a watcher event naming an issue is a valid resume
     trigger. Map it: reviewer comments → the review-feedback cycle (defined in the
-    `review` skill); own MR/PR merged → residual ledger triage only — the main capture
-    already ran when review passed (then next epic child, if any); a watched one merged →
+    `review` skill); own MR/PR merged → residual ledger triage only — the main Capture
+    already ran when review passed (then the next child issue, if any); a watched one merged →
     resume the held work per its note; conflicts / failed CI → fix before review continues.
 - The watcher is strictly read-only. It suggests; the user triggers every resume.
 - Optional, when a **Journal** is configured: a watcher may append what it observes to
@@ -246,15 +247,15 @@ broken one. One imperative line per rule, no rationale, no grouping:
 `workflow` runs that phase's fan-out through the `Workflow` tool and a script bundled with
 the plugin: the fan becomes deterministic (fixed lenses, in-script dedupe) and the raw
 reviewer/explorer reports never land in the orchestrator's context — findings come back
-schema-typed and deduped across lenses, and the coordinator reads only that return. Review
+schema-typed and deduped across lenses, and the orchestrator reads only that return. Review
 additionally sends its top-severity findings to refuters that must cite the line disproving
 them (capped, and off for the rest); explore just runs its lenses in parallel and merges
 their essential files. Neither is cheaper than the `agents` path — the fan-out itself is the
 cost, and the gain is structure, dedupe and context hygiene. `agents` keeps every subagent's
-full report inline, which costs context but leaves all of the judgment in the session.
+full report inline, which costs context but leaves all of the judgment in the orchestrator's context.
 
 Degradation is automatic and never blocks: when the `Workflow` tool is unavailable in the
-host or the user refuses the call, the phase runs its `agents` path and records a
+harness or the user refuses the call, the phase runs its `agents` path and records a
 `deviation` event. The fan still happens, just the old way.
 
 ## Thinking lenses
@@ -268,7 +269,7 @@ host or the user refuses the call, the phase runs its `agents` path and records 
 
 - <phase → lens skill(s) to actually invoke at that phase, e.g.
   `clarify → thinking-jobs-to-be-done; design → thinking-pre-mortem`.
-  Only the main session can invoke skills — subagents apply lens ideas inline regardless.>
+  Only the orchestrator can invoke skills — subagents apply lens ideas inline regardless.>
 
 ## Autonomy
 

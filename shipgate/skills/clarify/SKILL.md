@@ -1,6 +1,6 @@
 ---
 name: clarify
-description: The hard gate before design — drive ambiguity out of a feature and capture it as a PRD. Runs a coverage scan, asks a few prioritized questions (each leading with a recommended answer), and writes docs/prd/<name>.md with numbered requirements (FR-###) and success criteria (SC-###). Use after exploration and before design; don't skip it.
+description: The Clarify gate before design — drive ambiguity out of a feature and capture it as a PRD. Runs a coverage scan, asks a few prioritized questions (each leading with a recommended answer), and writes docs/prd/<name>.md with numbered requirements (FR-###) and success criteria (SC-###). Use after exploration and before design; don't skip it.
 ---
 
 # Clarify
@@ -19,11 +19,11 @@ own questions — see the Executive mode section below.
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
-> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> **Journaled project — name the stream before you start.** A status brief headed "shipgate
 > flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
 > this gate is owed to a stream, and the stream is the branch this feature's work takes: the
-> one the brief lists for the issue, otherwise the name the config's **Branching** pattern gives
-> it (`feat/<issue-id>-<slug>`); a stream the brief does not list is opened with `flow-started
+> one the status brief lists for the issue, otherwise the name the config's **Branching** pattern gives
+> it (`feat/<issue-id>-<slug>`); a stream the status brief does not list is opened with `flow-started
 > {request, branch}` in the same append as the first decision. The events owed here: one
 > `gate-decision` per resolved question, as it is decided, and `clarify-passed` as the PRD's last
 > marker goes (Step 3) — each in the turn where it happens, the form under **Record the gate**.
@@ -55,7 +55,7 @@ questions:
 5. Non-functional (performance, security, scale, accessibility)
 6. Integration points / cross-cutting effects (pull from the impact map)
 7. Terminology (domain words used precisely?)
-8. Done-criteria (how we'll know it's complete and correct)
+8. Success criteria (how we'll know it's complete and correct)
 9. Constraints & assumptions
 10. Backward compatibility / migration / rollout
 11. Dependencies (other teams, external systems)
@@ -97,7 +97,7 @@ section declares. Number things so later phases can trace them:
 - **FR-###** — functional requirements
 - **SC-###** — success criteria (measurable, technology-agnostic)
 
-A success criterion that can't be measured isn't done-criteria, it's a wish — push back on
+A success criterion that can't be measured isn't one, it's a wish — push back on
 "fast", "intuitive", "robust" until they're observable.
 
 **Capture the issue.** Record the tracker issue in the PRD header (`Issue:`). If the user gave
@@ -129,7 +129,7 @@ When the last marker is gone, append `clarify-passed` {prd, fr_count} — the PR
 never its text (`vocab --shape clarify-passed`). That event is gate-validated: it is refused
 while the PRD still contains `[NEEDS CLARIFICATION]`, which is this gate made mechanical, not an
 obstacle to route around. A missing or unreadable database is an infrastructure failure, not a
-reason to skip the append: surface it loudly and continue in legacy mode only with the user's
+reason to skip the append: surface it loudly and continue un-journaled only with the user's
 acknowledgement.
 
 ## Guardrails

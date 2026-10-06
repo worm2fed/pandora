@@ -2,6 +2,23 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.1 — one term per concept. A terminology audit of every file the model reads (skills,
+agents, the command, README, config template, the user-facing strings of the hooks and scripts)
+found the same concept under several names — "working doc" beside "worklog", "coordinator" and
+"master session" beside "orchestrator", "legacy mode" beside "un-journaled", "session brief"
+and "position brief" for the `status` output — and a few words carrying two concepts
+("capture" for both the phase and the hooks' artifact recording, "brief" for both the status
+brief and a subagent's instructions, "lens" unqualified). Prose now uses one canonical term per
+concept, preferring the contract name where one exists (`worklog`, actor roles `orchestrator`
+and `worker`, hook event names), and the new `docs/glossary.md` records each term, its
+definition and what it is not to be confused with. Contract names — journal events and fields,
+CLI flags, config keys, sidecar fields, file names — are unchanged. Four printed strings
+changed wording only (`status` with no streams, two `--help` lines, the `vocab` line for
+`design-queued`); the hooks were audited and left unchanged. No behaviour change. The full
+69-case eval suite re-run at 3 runs per arm: mean with-arm score 0.976 vs 0.972 at baseline, mean delta
++0.095 vs +0.080; no case lost more than judge noise except 46, whose fixture carries a "revisit
+2026-10-05" date and now fails identically in both arms (a dated fixture, logged for repair).
+
 v0.14.0 — thinking lenses inlined into the phase skills. A standalone thinking-skills plugin lists
 39 skills; the session's skill listing has a budget of roughly 1% of context, so most of those
 descriptions are truncated and the skills never fire (in the maintainer's usage, only the 4 whose

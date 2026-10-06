@@ -85,7 +85,7 @@ EVENT_VOCABULARY: Dict[str, str] = {
     "gate-decision": "a decision taken at a gate (this is the one for 'decision')",
     "clarify-passed": "the clarify gate closed — PRD has no open questions",
     "design-committed": "design + build plan landed",
-    "design-queued": "a design parked for a later epic child",
+    "design-queued": "a design parked for a later child issue",
     "design-invalidated": "a queued design broken by what merged",
     # building
     "task-done": "a build-plan task completed",
@@ -1225,7 +1225,7 @@ def feature_slug(stream: str) -> str:
 def fold_stream(
     events: Sequence[Event], now: Optional[datetime] = None
 ) -> Dict[str, Any]:
-    """Fold a stream's events into the resume brief for one feature."""
+    """Fold a stream's events into its entry in the status brief."""
     phase: Optional[str] = None
     phase_entered_at: Optional[str] = None
     phase_implied = False
@@ -1567,7 +1567,7 @@ def render_status(status: Dict[str, Any]) -> str:
     features = status["features"]
     if not features:
         return "\n".join([
-            "No feature streams recorded.",
+            "No work streams recorded.",
             *_render_hidden(status),
             *_render_ledger(status),
         ])
@@ -1583,7 +1583,7 @@ def render_status(status: Dict[str, Any]) -> str:
 
 
 # --------------------------------------------------------------------------
-# check — the Stop-hook gate
+# check — the Stop hook gate
 # --------------------------------------------------------------------------
 
 
@@ -2331,10 +2331,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_session.add_argument("--json", action="store_true",
                            help="machine-readable output")
 
-    p_status = subparsers.add_parser("status", help="resume brief per feature stream")
+    p_status = subparsers.add_parser("status", help="status brief per stream")
     _add_db_flag(p_status)
     p_status.add_argument("--feature", default=None, metavar="SLUG",
-                          help="restrict to one feature stream")
+                          help="restrict to one stream, by slug")
     p_status.add_argument("--branch", default=None, metavar="NAME",
                           help="git branch of the current checkout; the stream it "
                                "names renders first and in full")
@@ -2354,7 +2354,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="machine-readable output")
 
     p_check = subparsers.add_parser(
-        "check", help="Stop-hook gate: find semantic events missing for a session"
+        "check", help="Stop hook gate: find semantic events missing for a session"
     )
     _add_db_flag(p_check)
     p_check.add_argument("--session", required=True, metavar="ID",

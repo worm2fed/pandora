@@ -1,6 +1,6 @@
 ---
 name: knowledge-base
-description: Use to pull prior context before routing/design/debugging, to jot a mid-flow learning, or to record something a future session would re-derive. Triggers: "what do we know about X", "capture this for the team", "log this to the knowledge base", "triage the ledger", end of a feature. The durable knowledge layer, routed by type — recall before non-trivial work, append quick learnings to the project ledger as they happen, and capture/promote after, sending each finding to the store the project config declares for its type (repo docs by default). Prefer this over Claude's built-in session memory for any feature, domain, or convention learning.
+description: Use to pull prior context before routing/design/debugging, to jot a mid-flow learning, or to record something a future session would re-derive. Triggers: "what do we know about X", "capture this for the team", "log this to the knowledge base", "triage the ledger", end of a feature. The durable knowledge layer, routed by type — recall before non-trivial work, append quick learnings to the project ledger as they happen, and capture/promote after, sending each learning to the store the project config declares for its type (repo docs by default). Prefer this over Claude's built-in session memory for any feature, domain, or convention learning.
 ---
 
 # Knowledge base
@@ -32,8 +32,8 @@ optional vault for anything that genuinely transcends the project:
 
 | Knowledge | Home | Notes |
 |-----------|------|-------|
-| **Product / domain insight** — a business rule, why a feature exists, what a customer needs, a domain definition | Target repo — **`docs/adr/`** for a decision that turned on it, **`docs/prd/`** for feature specs, longer notes under `docs/` | The product *why*, kept next to the code it shapes. |
-| **Engineering knowledge** — decisions, feature specs, gotchas, reusable fixes, root causes, conventions | Target repo — decisions to **`docs/adr/`** (numbered `NNNN-<title>.md`), feature specs to **`docs/prd/`** (`<name>.md` + `<name>.worklog.md`), operating rules Claude must read in-context to **`CLAUDE.md`**, longer notes under `docs/` | The HOW-WE-RUN layer. |
+| **Product / domain insight** — a business rule, why a feature exists, what a customer needs, a domain definition | Target repo — **`docs/adr/`** for a decision that turned on it, **`docs/prd/`** for PRDs, longer notes under `docs/` | The product *why*, kept next to the code it shapes. |
+| **Engineering knowledge** — decisions, PRDs, gotchas, reusable fixes, root causes, conventions | Target repo — decisions to **`docs/adr/`** (numbered `NNNN-<title>.md`), PRDs and worklogs to **`docs/prd/`** (`<name>.md` + `<name>.worklog.md`), operating rules Claude must read in-context to **`CLAUDE.md`**, longer notes under `docs/` | The HOW-WE-RUN layer. |
 
 If an Obsidian-type vault MCP is available (e.g. `obsidian-vault`), it can also take *general,
 transferable* findings or short *project-status* notes — a technique useful beyond this project, or
@@ -66,7 +66,7 @@ Pull the right context from the right store — match the question to the store'
   need → the store the config maps for product/domain insight; by default the repo's `docs/`,
   `docs/adr/`, `docs/prd/`, plus a vault search if one is available.
 - **Engineering / operational context** — *how* this area was decided, prior ADRs, known
-  gotchas, feature specs → the repo's `docs/adr/`, `docs/prd/`, `CLAUDE.md`, `docs/` (or the
+  gotchas, PRDs → the repo's `docs/adr/`, `docs/prd/`, `CLAUDE.md`, `docs/` (or the
   config's mapped store).
 
 Cite what you recall by file path (repo) or as "[wiki] …" (a vault/MCP store) so it's clear it came
@@ -135,7 +135,7 @@ ALL of these must hold:
 ### Worth capturing
 Business/domain rules and customer use cases; engineering decisions (→ `docs/adr/`); service
 conventions, setup gotchas, reusable fixes, root causes, non-obvious constraints like "schema lives
-in one service; refresh dumps after migrations"; feature specs (→ `docs/prd/`); genuinely general
+in one service; refresh dumps after migrations"; PRDs (→ `docs/prd/`); genuinely general
 techniques or short project-status notes (→ a vault, if one is configured).
 
 ### Not worth capturing
@@ -163,10 +163,10 @@ or store names written to, never the knowledge itself, which now lives in those 
 and `dropped` one short line per entry that was let go, so a later session can tell what was
 judged not worth keeping.
 
-**Close the stream when nothing is owed on it.** No open MR/PR, no residual triage, no next epic
-child ⇒ append `flow-completed` {reason} straight after `capture-done`, as the second line of
+**Close the stream when nothing is owed on it.** No open MR/PR, no residual triage, no next child
+issue ⇒ append `flow-completed` {reason} straight after `capture-done`, as the second line of
 the same `append --batch` (stdin form: see `verify`). That is what lets a finished stream leave every later session's
-brief; a stream nobody closes is read as live work forever.
+status brief; a stream nobody closes is read as live work forever.
 
 A missing or unreadable database is an infrastructure failure, not a reason to skip the append:
-surface it loudly and continue in legacy mode only with the user's acknowledgement.
+surface it loudly and continue un-journaled only with the user's acknowledgement.

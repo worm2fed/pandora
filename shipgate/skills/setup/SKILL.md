@@ -5,7 +5,7 @@ description: Bootstrap a project for shipgate — detect its shape, interview wi
 
 # Setup
 
-One pass that turns an un-bootstrapped checkout into a shipgate project: the prose config the
+One pass that turns an un-bootstrapped checkout into a shipgate project: the config the
 skills read, the sidecar the hooks read, and the journal both write to. The alternative is what
 users do today — copy `config-template.md` by hand, fill in placeholders they can't evaluate
 yet, and never create a journal at all.
@@ -26,7 +26,7 @@ Run these before asking anything, and report the findings as a short list:
   the rest of setup.
 - **Forge** — `git remote get-url origin`: `github.com` → GitHub / `gh` / PRs, `gitlab` → GitLab
   / `glab` / MRs. Anything else, or no remote, is a question.
-- **Default branch** — `git symbolic-ref --short refs/remotes/origin/HEAD`, falling back to
+- **Integration branch** — git's default branch: `git symbolic-ref --short refs/remotes/origin/HEAD`, falling back to
   `git remote show origin`. **Never assume `main`** — plenty of repos are on `master`.
 - **Existing config** — `.claude/shipgate.md` and `.claude/shipgate.json`. Either present ⇒
   **update mode** (Step 4), not a fresh write.
@@ -114,7 +114,7 @@ Then print what was created (one line each) and the one-line **what changes now*
 is journaled — phase is recorded rather than guessed, artifact writes are auto-captured, and a
 session won't end with a lifecycle event missing. Say the stream rule while you are there:
 **one stream per issue, named for its branch** (an epic's children are separate branches, so
-separate streams), which is what lets the session-start hook put the checked-out branch's
+separate streams), which is what lets the SessionStart hook put the checked-out branch's
 stream first and drop the finished ones.
 
 ## Step 4 — Update mode
@@ -127,7 +127,7 @@ Config and/or sidecar already present. **Never clobber.**
 2. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" doctor`. Apply any pending schema
    migration with `init` (idempotent, safe to re-run). When a migration actually ran, append
    `--type schema-migrated` to the `shipgate` stream with the from/to schema versions.
-3. **Reconcile drift.** If the prose config's `## Journal` database path and the sidecar's `db`
+3. **Reconcile drift.** If the config's `## Journal` database path and the sidecar's `db`
    disagree, surface both and ask which is right — then fix the loser. Same for artifact homes
    that no longer exist on disk. Don't guess: the sidecar drives the hooks, the prose drives the
    model, and a silent mismatch makes capture look broken.
@@ -137,12 +137,12 @@ Config and/or sidecar already present. **Never clobber.**
 ## Degradation
 
 - **No `python3`** — configure *without* a journal: omit the `## Journal` section, write no
-  sidecar, and say plainly that the flow will run in legacy mode (phase inferred from artifact
+  sidecar, and say plainly that the flow will run un-journaled (phase inferred from artifact
   shape, exactly as shipgate has always worked). Setup succeeds; it does not fail on this.
 - **User declines the journal** — same outcome: no `## Journal` section, no sidecar. Every hook
   then exits immediately in this project, which is the intended no-op.
 - **Abandoned halfway** — safe by construction if you keep Step 3's order. A config without a
-  sidecar is legacy mode; a db without a sidecar is an unused file. A sidecar pointing at a db
+  sidecar is un-journaled; a db without a sidecar is an unused file. A sidecar pointing at a db
   that doesn't exist is the one broken state — never write it.
 - **`init` or `doctor` fails** (locked, corrupt, unwritable path) — report the actual error, leave
   the project in whatever consistent state it was in, and offer a different journal location.

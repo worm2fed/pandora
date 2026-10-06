@@ -25,13 +25,13 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
-> **Journaled project — name the stream before you start.** A session brief headed "shipgate
+> **Journaled project — name the stream before you start.** A status brief headed "shipgate
 > flow journal", a **Journal** section in the config or a `.claude/shipgate.json` sidecar means
 > this bug's events are owed to a stream, and the stream is this work's branch: the checked-out
 > branch when it is a work branch, otherwise the name the config's **Branching** pattern gives
 > the fix (`fix/<issue-id>-<slug>`; `fix/<slug>` with no issue — `workspace` reuses the name
 > when it creates the branch). The integration branch (`main`, `master`, `develop`) is never a
-> stream. No stream of that name in the brief? Open it with `flow-started {request, branch}` in
+> stream. No stream of that name in the status brief? Open it with `flow-started {request, branch}` in
 > the same append as the first event — a bug reported on `main` before any branch exists is the
 > normal case, not a reason to skip. Two events are owed here: `bug-reproduced` at step 2 and
 > `debug-root-cause` at step 4, each appended in the step that establishes it (the form is under
@@ -164,7 +164,7 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
 config declares a forge, post a root-cause comment (on the user's go-ahead, like any
 outward-facing post): the root cause in a sentence, the introducing commit (hash + one line
 on what it changed), and why it slipped through. This is how the team maps *where and why*
-bugs enter the development cycle — a fix without the provenance comment loses that signal.
+bugs enter the codebase — a fix without the provenance comment loses that signal.
 
 When you land the root cause, capture it via `knowledge-base`: a root cause + fix is **technical**
 knowledge, so it routes to the store configured for engineering knowledge (default: an ADR if it
@@ -217,5 +217,5 @@ an event named something plausible-but-unlisted is inert: it records, and no gat
 ever reads it, which looks like success. If a debug flow genuinely needs a concept the
 vocabulary lacks, mint it deliberately with `--new-type` rather than inventing a near-miss of a
 name that already exists. A missing or unreadable database is an infrastructure failure, not a
-reason to skip the append: surface it loudly and continue in legacy mode only with the user's
+reason to skip the append: surface it loudly and continue un-journaled only with the user's
 acknowledgement.

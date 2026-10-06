@@ -12,7 +12,7 @@ const LENS_DEFINITIONS = {
   'conventions+design':
     'conventions + design-alignment — matches repo patterns and the agreed design/worklog; flags drift from the chosen approach.',
   'simplicity+security':
-    'simplicity + security — needless complexity / wrong abstractions, plus OWASP-class issues and (if relevant) prompt injection.',
+    'simplicity + security — needless complexity / wrong abstractions, plus OWASP-class weaknesses and (if relevant) prompt injection.',
 }
 
 const FINDINGS = {
@@ -173,7 +173,7 @@ function finderPrompt(lens) {
     block('Pre-rulings (already known must-fix — confirm scope, do not re-discover)', preRulings),
     '',
     'Report everything this lens finds, each scored with a severity and an integer confidence 0-100.',
-    'Do not self-filter and do not rank: a separate coordinator pass filters, dedupes and ranks.',
+    'Do not self-filter and do not rank: a separate orchestrator pass filters, dedupes and ranks.',
     'Every finding carries a file path, the line where one applies (null otherwise), why it is wrong,',
     'and a concrete fix. Read the cited code before reporting. Do not edit files.',
   ].join('\n')
@@ -375,7 +375,7 @@ function oneLine(finding) {
   }, finding)
 }
 
-// A below-floor BLOCKER/HIGH is the one the coordinator is told to check itself, so it keeps
+// A below-floor BLOCKER/HIGH is the one the orchestrator is told to check itself, so it keeps
 // enough of the claim to be checkable; everything else stays a one-liner.
 function belowFloorEntry(finding) {
   const entry = oneLine(finding)

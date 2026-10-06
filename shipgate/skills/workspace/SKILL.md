@@ -1,6 +1,6 @@
 ---
 name: workspace
-description: First step before any feature work — get onto the right branch off a clean base instead of silently building on whatever's checked out. Detects git state, branches off the up-to-date integration branch (main/master/develop, never hardcoded) using the repo's naming convention, confirms before switching, and offers a worktree when isolation is wanted. Use at the very start of a feature/bug, or when resuming and unsure which branch you should be on.
+description: First phase before any feature work — get onto the right branch off a clean base instead of silently building on whatever's checked out. Detects git state, branches off the up-to-date integration branch (main/master/develop, never hardcoded) using the repo's naming convention, confirms before switching, and offers a worktree when isolation is wanted. Use at the very start of a feature/bug, or when resuming and unsure which branch you should be on.
 ---
 
 # Workspace
@@ -87,7 +87,7 @@ config and no nested repos, the working dir is the repo and this section doesn't
 Report the active branch, the base it was cut from, whether it's in-place or a worktree, and any
 caveats (dirty tree handled, deps to install). Then hand off to Route & Map.
 
-If you're already on the correct branch for this work, this whole step collapses to a one-line
+If you're already on the correct branch for this work, this whole phase collapses to a one-line
 confirmation — it's a guard, not ceremony.
 
 ## Record the start (journaled projects)
@@ -108,10 +108,10 @@ was never told about, and a stream holding only `flow-started` has no phase at a
 
 The stream is named for the branch you just established — one stream per issue, so an epic's
 children each get their own (`epic/<slug>` for the epic-level work itself). A stream of that name
-already in the brief was opened by a phase skill that ran before the branch existed
+already in the status brief was opened by a phase skill that ran before the branch existed
 (`route-and-map` on `main`, a bug diagnosed before its fix branch): it is the same flow — append
 only the `phase-entered workspace` line (a backward step, which the gate allows) and continue on
 it, with no second `flow-started`. Keep `request` to one line — the journal records position and
 pointers to artifacts, never their contents. A missing or unreadable database is an
 infrastructure failure, not a reason to skip the append: surface it loudly and continue in
-legacy mode only with the user's acknowledgement.
+un-journaled only with the user's acknowledgement.

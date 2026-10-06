@@ -87,7 +87,7 @@ Tests are tasks, not a separate phase. Tick boxes as you go; log deviations inli
 
 ## Rejected findings
 
-Filled during review: findings the review coordinator killed on evidence, and why — so a
+Filled during review: findings the orchestrator killed on evidence, and why — so a
 later round doesn't re-litigate them.
 
 - <finding, with `file:line`> — killed because <...>
