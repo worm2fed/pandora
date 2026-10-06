@@ -260,10 +260,14 @@ host or the user refuses the call, the phase runs its `agents` path and records 
 ## Thinking lenses
 
 <!-- Default when absent: no lens skills are invoked — the phase skills apply each
-     lens's idea inline (each describes it in one line where it's used). -->
+     lens inline (each names it where it's used, with the condition it applies under).
+     This section overrides that with a lens *skill* to invoke, e.g. one from
+     cc-thinking-skills (https://github.com/tjboudreaux/cc-thinking-skills). A large
+     lens plugin costs skill-listing space in every session — descriptions get truncated
+     past the listing's budget and stop triggering — so install and map only what you need. -->
 
 - <phase → lens skill(s) to actually invoke at that phase, e.g.
-  `clarify → thinking-jobs-to-be-done; design → thinking-pre-mortem, thinking-reversibility`.
+  `clarify → thinking-jobs-to-be-done; design → thinking-pre-mortem`.
   Only the main session can invoke skills — subagents apply lens ideas inline regardless.>
 
 ## Autonomy

@@ -64,8 +64,11 @@ steel-manned because two claims demanded the steel-man precede the words "I agre
 nits were dropped (grade presence and engagement, not sentence order) and the case re-run; case
 69's first rubric misdescribed its own defect as "wrong order" (percentage tax and discount
 commute — the scale-back line is the bug) and was corrected and re-run before recording. The
-standalone plugin remains an optional integration: the **Thinking lenses** config section can
-still map a phase to a lens *skill* to invoke instead of the inline bullet.
+`thinking-skills` row leaves the README's integrations table: recommending a 39-skill plugin
+pushes a user's skill listing past its budget, which is what truncated the descriptions in the
+first place. The **Thinking lenses** config section stays as the generic override hook — map a
+phase to a lens *skill* when one is worth its listing space — and its docs name cc-thinking-skills
+once as an example source.
 
 v0.13.6 — phase skills record their journal events. The large journaled fixture (evals 58–67:
 a monorepo with 44 commits, 12 ADRs, a config with a Journal section, sidecar and a database

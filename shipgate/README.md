@@ -55,7 +55,7 @@ What the sections configure:
 | Code signals | window, fix-commit pattern and extra excludes for the bundled risk signals (the one section a script reads, not the model) | 12-month window, built-in fix pattern and excludes |
 | Worker guardrails | the project's hard rules, pasted verbatim into every worker brief | only the built-in worker discipline (branch check, no staging, evidence) |
 | Orchestration | whether Review / Explore fan out via bundled `Workflow` scripts or `Agent` subagents | `agents` for both |
-| Thinking lenses | which lens skills to actually invoke at which phase | no lens skills invoked — the phase skills apply each lens's idea inline |
+| Thinking lenses | which lens *skills* to invoke at which phase, overriding the inline bullet (e.g. one from [cc-thinking-skills](https://github.com/tjboudreaux/cc-thinking-skills)); a large lens plugin costs skill-listing space in every session, so map only what you need | no lens skills invoked — the phase skills apply each lens inline |
 | Autonomy | `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them) | `ask` — every gate question goes to the user |
 
 ## What's inside
@@ -221,7 +221,6 @@ are Python 3 standard library only, and the signals skip themselves where there 
 
 | Integration                                                            | Kind                  | Unlocks                                                                                                                                                            | Without it                                         |
 | ---------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
-| [`thinking-skills`](https://github.com/tjboudreaux/cc-thinking-skills) | plugin                | the config's **Thinking lenses** section can map a phase to a lens *skill* to invoke instead of the inline bullet                                                  | the phase skills apply the lens inline (see above) |
 | a knowledge-base MCP (named in config)                                 | MCP                   | team/product memory — recall & store in a wiki/vault                                                                                                               | memory falls back to repo docs (`CLAUDE.md`, ADRs) |
 | forge CLI + tracker MCP (`gh` / `glab`, named in config)               | CLI/MCP               | `clarify` seeds the PRD from the issue; `review` opens the MR/PR and checks its acceptance criteria                                                                | capture the issue link manually; push by hand      |
 | a log-query skill (named in config)                                    | skill                 | prod/QA log evidence in `structured-debug`                                                                                                                         | use `docker logs` / local sources                  |
