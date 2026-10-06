@@ -82,8 +82,29 @@ scores it (`min`/`max` set). `summarize.py` prints per case: with score, without
 delta, per-run turns per arm, and `skill-fired k/n` for the with arm (from the run's
 graders, else the trace if kept, else `n/a`).
 
-Cost rule of thumb: ~$1 per case per with+without tree at 3 runs; a whole 14-case suite is
-~$15. Probes are ~$0.10 a run. Set `--max-cost-usd` when exploring.
+Cost rule of thumb (measured 2026-10-06, 69 cases, 3 runs per arm): $1.46 per case per
+with+without tree — small cases ~$1.40, the large journaled fixtures (58–67) ~$1.80, the design
+fan (51) $4 — so the whole suite is ~$100 and ~95 min on 3 parallel lanes. Probes are ~$0.10 a
+run. Set `--max-cost-usd` when exploring.
+
+## Running many cases
+
+One `run-case.sh` per case, a few in parallel. Two limits bite: the account's 5-hour session
+limit (4 lanes exhausted it twice in one afternoon — every run after that returns `score 0.00
+$0.00 error: You've hit your session limit`, exit 1; 3 lanes fit a full pass in one window),
+and macOS `xargs -I{}`, whose replacement string is capped at 255 bytes ("command line cannot
+be assembled, too long"). Export a function instead:
+
+```bash
+export S=.claude/skills/run-evals/scripts CFG=<config-dir> L=<log-dir>
+run_one() { "$S/run-case.sh" --config-dir "$CFG" shipgate "$1" > "$L/$1.log" 2>&1; echo "$1 exit=$?" >> "$L/progress.txt"; }
+export -f run_one
+ls shipgate/evals | grep -E '^[0-9]{2}-' | cut -c1-2 | xargs -P 3 -n 1 bash -c 'run_one "$0"'
+```
+
+Afterwards grep each log for `hit your session limit` before trusting its score, and re-run
+those cases: `compare.py` takes the latest results dir per case, so a clean re-run supersedes
+a limit-hit one.
 
 ## When a run scores 0.00
 

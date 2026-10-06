@@ -70,6 +70,13 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
 
 ## Backlog
 
+- **Dated fixtures** — two fixtures carry absolute dates and flip with the wall clock:
+  `46-review-clean-diff` (its worklog says "revisit 2026-10-05", so from 2026-10-06 every
+  model flags the expired deviation and `no-invented-findings` fails in both arms — with 0.56,
+  without 0.56, baseline 1.00) and `tests/test_journal.py::TestBriefRendering::
+  test_an_imported_event_type_cannot_add_lines_to_the_brief` (an event dated 2026-09-02
+  collapses as dormant after 30 days). Make the dates relative to "now" or pin `now`.
+  Recorded 2026-10-06.
 - **Multi-turn flows** — `feature` (start path: branch + confirm), `workspace`, `implement`,
   `setup`, `model-tiers`. A single-prompt eval only measures "did it ask the right first
   question"; testing them properly needs a scripted multi-turn harness (a pre-answered second
