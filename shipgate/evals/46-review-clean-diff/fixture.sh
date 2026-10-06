@@ -79,9 +79,13 @@ cat > docs/prd/csv-export.worklog.md <<'EOF_F'
 - [x] T3 status filter (FR-003 / SC-002)
 
 ## Deviations (authorised)
-- 2026-09-20 — Export logs at INFO instead of DEBUG (CLAUDE.md says DEBUG): the ops team asked to see exports in the default log level for the first two weeks after launch. Authorised by the user; revisit 2026-10-05.
+- 2026-09-20 — Export logs at INFO instead of DEBUG (CLAUDE.md says DEBUG): the ops team asked to see exports in the default log level for the first two weeks after launch. Authorised by the user; revisit REVISIT_DATE.
 - 2026-09-20 — No CSV formula-injection guard (values starting with `=`, `+`, `-`, `@`) in v1: the file is consumed by finance's own sheet from CRM-sourced names, and the guard changes displayed values. Decided at Clarify; authorised by the user. Revisit if the export is ever exposed to customers.
 EOF_F
+# The revisit date must stay in the future whenever the case runs, or every model flags the
+# deviation as expired and `no-invented-findings` fails in both arms (it did on 2026-10-06).
+REVISIT=$(date -v+30d +%F 2>/dev/null || date -d "+30 days" +%F)
+sed -i.bak "s/REVISIT_DATE/$REVISIT/" docs/prd/csv-export.worklog.md && rm -f docs/prd/csv-export.worklog.md.bak
 c 2026-09-15 "feat: billing base; PRD + worklog for CSV export"
 cat > export.py <<'EOF_F'
 """Invoice CSV export (FR-001..003)."""
