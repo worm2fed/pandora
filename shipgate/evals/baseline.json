@@ -2,523 +2,523 @@
   "cases": {
     "01-regression-failing-test": {
       "delta": 0.0,
-      "results": "2026-09-29T12-43-22-600Z",
+      "results": "2026-10-06T16-41-58-884Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "02-selective-bug": {
       "delta": 0.33,
-      "results": "2026-09-29T12-52-13-403Z",
+      "results": "2026-10-06T16-41-58-614Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 0.89,
       "without": 0.56
     },
     "03-suggested-quickfix": {
-      "delta": 0.52,
-      "results": "2026-09-29T12-43-22-675Z",
+      "delta": 0.38,
+      "results": "2026-10-06T16-41-58-613Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.9,
-      "without": 0.38
+      "version": "0.14.1",
+      "with": 1.0,
+      "without": 0.62
     },
     "04-pasted-stack-trace": {
-      "delta": 0.0,
-      "results": "2026-09-26T22-45-37-388Z",
+      "delta": 0.22,
+      "results": "2026-10-06T18-14-09-608Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 1.0,
-      "without": 1.0
+      "version": "0.14.1",
+      "with": 0.78,
+      "without": 0.56
     },
     "05-fix-it-wording": {
       "delta": 0.67,
-      "results": "2026-09-26T22-45-37-328Z",
+      "results": "2026-10-06T16-46-12-056Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.33
     },
     "06-neg-feature-request": {
       "delta": 0.0,
-      "results": "2026-09-26T22-45-37-329Z",
+      "results": "2026-10-06T16-47-46-250Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "07-neg-explain-code": {
-      "delta": -0.11,
-      "results": "2026-09-26T22-45-37-241Z",
+      "delta": 0.0,
+      "results": "2026-10-06T16-48-32-556Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.89,
+      "version": "0.14.1",
+      "with": 1.0,
       "without": 1.0
     },
     "08-bug-localization-history": {
       "delta": 0.0,
-      "results": "2026-09-26T09-07-31-246Z",
+      "results": "2026-10-06T16-49-26-604Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "09-blast-radius-diff": {
       "delta": 0.0,
-      "results": "2026-09-26T09-07-22-435Z",
+      "results": "2026-10-06T16-50-16-194Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "10-risk-ranked-review": {
       "delta": 0.0,
-      "results": "2026-09-26T08-55-43-019Z",
+      "results": "2026-10-06T16-50-51-738Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "11-neg-one-line-change": {
       "delta": 0.0,
-      "results": "2026-09-26T08-55-42-995Z",
+      "results": "2026-10-06T16-52-42-989Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "12-bug-localization-explicit": {
       "delta": 0.0,
-      "results": "2026-09-25T23-01-04-017Z",
+      "results": "2026-10-06T16-53-22-790Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "13-blast-radius-explicit": {
-      "delta": 0.05,
-      "results": "2026-09-25T23-01-03-924Z",
+      "delta": 0.0,
+      "results": "2026-10-06T16-53-49-435Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 0.95
+      "without": 1.0
     },
     "14-risk-ranked-review-explicit": {
-      "delta": 0.17,
-      "results": "2026-09-25T23-01-04-015Z",
+      "delta": 0.0,
+      "results": "2026-10-06T16-55-10-506Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.67,
-      "without": 0.5
+      "version": "0.14.1",
+      "with": 1.0,
+      "without": 1.0
     },
     "15-clarify-exec-issue-seeded": {
-      "delta": 0.22,
-      "results": "2026-09-26T22-19-43-924Z",
+      "delta": 0.28,
+      "results": "2026-10-06T16-56-42-154Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.94,
-      "without": 0.72
+      "version": "0.14.1",
+      "with": 0.89,
+      "without": 0.61
     },
     "16-clarify-exec-one-way-door": {
-      "delta": 0.2,
-      "results": "2026-09-26T22-19-43-838Z",
+      "delta": 0.33,
+      "results": "2026-10-06T16-57-58-084Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.87,
+      "version": "0.14.1",
+      "with": 1.0,
       "without": 0.67
     },
     "17-clarify-exec-stale-assumption": {
       "delta": 0.0,
-      "results": "2026-09-26T22-36-52-685Z",
+      "results": "2026-10-06T17-00-02-061Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "18-clarify-ask-vague": {
       "delta": 0.49,
-      "results": "2026-09-26T22-36-52-757Z",
+      "results": "2026-10-06T17-04-18-308Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.51
     },
     "19-clarify-ask-fully-specified": {
-      "delta": 0.16,
-      "results": "2026-09-26T22-19-43-902Z",
+      "delta": 0.19,
+      "results": "2026-10-06T17-05-35-385Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.97,
+      "version": "0.14.1",
+      "with": 1.0,
       "without": 0.81
     },
     "20-neg-clarify-one-line-fix": {
       "delta": 0.0,
-      "results": "2026-09-26T22-19-44-017Z",
+      "results": "2026-10-06T17-06-20-639Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "21-neg-clarify-explain-code": {
-      "delta": 0.17,
-      "results": "2026-09-26T22-19-44-110Z",
+      "delta": 0.0,
+      "results": "2026-10-06T17-07-38-104Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 0.83
+      "without": 1.0
     },
     "22-verify-stale-after-fix": {
-      "delta": 0.05,
-      "results": "2026-09-28T21-55-35-565Z",
+      "delta": 0.19,
+      "results": "2026-10-06T17-08-57-076Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.9,
-      "without": 0.86
+      "version": "0.14.1",
+      "with": 1.0,
+      "without": 0.81
     },
     "23-verify-edit-then-claim": {
-      "delta": 0.06,
-      "results": "2026-09-28T21-55-38-638Z",
+      "delta": 0.17,
+      "results": "2026-10-06T17-09-25-536Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 1.0,
-      "without": 0.94
+      "version": "0.14.1",
+      "with": 0.94,
+      "without": 0.78
     },
     "24-verify-pasted-evidence": {
-      "delta": 0.04,
-      "results": "2026-09-28T21-52-25-856Z",
+      "delta": 0.0,
+      "results": "2026-10-06T17-10-53-191Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 0.96
+      "without": 1.0
     },
     "25-verify-zero-tests-ran": {
-      "delta": -0.08,
-      "results": "2026-09-28T21-55-41-773Z",
+      "delta": 0.0,
+      "results": "2026-10-06T17-11-57-657Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.92,
+      "version": "0.14.1",
+      "with": 1.0,
       "without": 1.0
     },
     "26-verify-multi-claim": {
-      "delta": 0.1,
-      "results": "2026-09-28T21-55-44-862Z",
+      "delta": 0.19,
+      "results": "2026-10-06T17-12-49-893Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.9,
+      "version": "0.14.1",
+      "with": 1.0,
       "without": 0.81
     },
     "27-neg-verify-explain": {
       "delta": 0.0,
-      "results": "2026-09-28T21-52-28-821Z",
+      "results": "2026-10-06T17-13-11-621Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "28-neg-verify-run-once": {
       "delta": 0.0,
-      "results": "2026-09-28T21-52-31-830Z",
+      "results": "2026-10-06T17-14-00-768Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "29-route-nested-rule": {
       "delta": 0.06,
-      "results": "2026-09-28T22-40-49-683Z",
+      "results": "2026-10-06T17-14-30-395Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.94
     },
     "30-route-cross-cutting-split": {
       "delta": 0.0,
-      "results": "2026-09-28T22-40-49-756Z",
+      "results": "2026-10-06T17-15-01-314Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "31-route-schema-and-dump": {
       "delta": 0.0,
-      "results": "2026-09-28T22-40-49-635Z",
+      "results": "2026-10-06T17-15-02-929Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "32-route-rules-conflict": {
       "delta": 0.0,
-      "results": "2026-09-28T22-40-49-538Z",
+      "results": "2026-10-06T17-18-07-251Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "33-route-signals-vs-rule": {
       "delta": 0.0,
-      "results": "2026-09-28T22-40-49 (log only; aggregate lost to a results-dir collision)",
+      "results": "2026-10-06T17-18-50-392Z",
       "runs": 3,
-      "version": "0.13.4",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "34-neg-route-one-line": {
       "delta": 0.0,
-      "results": "2026-09-28T22-40-49-534Z",
+      "results": "2026-10-06T17-19-00-738Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "35-neg-route-explain": {
       "delta": 0.0,
-      "results": "2026-09-28T22-40-49-551Z",
+      "results": "2026-10-06T17-19-52-307Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "36-kb-recall-explicit": {
       "delta": 0.0,
-      "results": "2026-09-29T12-19-16-528Z",
+      "results": "2026-10-06T17-21-46-665Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "37-kb-recall-implicit": {
       "delta": 0.0,
-      "results": "2026-09-29T12-19-17-403Z",
+      "results": "2026-10-06T17-22-43-013Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "38-kb-ledger-jot": {
       "delta": 0.38,
-      "results": "2026-09-29T12-34-28-766Z",
+      "results": "2026-10-06T17-24-27-945Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.62
     },
     "39-kb-triage": {
       "delta": 0.0,
-      "results": "2026-09-29T12-19-19-530Z",
+      "results": "2026-10-06T17-25-01-760Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "40-kb-capture-update": {
       "delta": 0.0,
-      "results": "2026-09-29T12-19-20-501Z",
+      "results": "2026-10-06T17-25-57-027Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "41-neg-kb-personal-pref": {
       "delta": 0.0,
-      "results": "2026-09-29T12-34-28-813Z",
+      "results": "2026-10-06T17-26-16-109Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "42-neg-kb-code-question": {
       "delta": 0.0,
-      "results": "2026-09-29T12-34-28-617Z",
+      "results": "2026-10-06T17-27-37-068Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "43-kb-implicit-jot": {
       "delta": 0.22,
-      "results": "2026-09-29T12-52-13-325Z",
+      "results": "2026-10-06T17-28-10-328Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.78
     },
     "44-review-planted-diff": {
-      "delta": -0.1,
-      "results": "2026-09-29T13-16-31-451Z",
+      "delta": 0.1,
+      "results": "2026-10-06T17-28-30-522Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 0.9,
-      "without": 1.0
+      "version": "0.14.1",
+      "with": 0.81,
+      "without": 0.71
     },
     "45-review-unmet-sc": {
-      "delta": 0.0,
-      "results": "2026-09-29T13-16-32-216Z",
+      "delta": 0.33,
+      "results": "2026-10-06T17-29-31-408Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 1.0
+      "without": 0.67
     },
     "46-review-clean-diff": {
       "delta": 0.0,
-      "results": "2026-09-29T15-42-52-530Z",
+      "results": "2026-10-06T17-31-16-739Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 1.0,
-      "without": 1.0
+      "version": "0.14.1",
+      "with": 0.56,
+      "without": 0.56
     },
     "47-review-after-fixes": {
       "delta": 0.0,
-      "results": "2026-10-01T11-45-32-975Z",
+      "results": "2026-10-06T17-33-00-864Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "48-review-small-diff": {
       "delta": 0.0,
-      "results": "2026-09-29T13-16-35-359Z (recomputed offline after a grader fix)",
+      "results": "2026-10-06T17-33-38-453Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "49-neg-review-explain-diff": {
       "delta": 0.0,
-      "results": "2026-09-29T15-42-52-524Z (recomputed offline after a grader fix)",
+      "results": "2026-10-06T17-36-21-899Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "50-neg-review-trivial": {
       "delta": 0.0,
-      "results": "2026-09-29T15-42-52-523Z",
+      "results": "2026-10-06T17-36-38-881Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "51-design-exec-genuine-fork": {
-      "delta": 0.23,
-      "results": "2026-10-01T12-04-07-549Z",
+      "delta": 0.18,
+      "results": "2026-10-06T17-36-40-885Z",
       "runs": 3,
-      "version": "0.13.5",
-      "with": 1.0,
-      "without": 0.77
+      "version": "0.14.1",
+      "with": 0.98,
+      "without": 0.8
     },
     "52-design-exec-no-fork": {
       "delta": 0.0,
-      "results": "2026-10-01T12-04-09-666Z",
+      "results": "2026-10-06T17-38-55-688Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "53-design-ask-recommend": {
       "delta": 0.08,
-      "results": "2026-10-01T12-24-02-390Z",
+      "results": "2026-10-06T17-38-57-537Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.92
     },
     "54-design-prior-adr": {
       "delta": 0.0,
-      "results": "2026-10-01T12-04-14-133Z",
+      "results": "2026-10-06T17-44-26-639Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "55-design-exec-one-way-door": {
-      "delta": 0.0,
-      "results": "2026-10-01T12-04-15-751Z (recomputed offline after a grader fix)",
+      "delta": 0.11,
+      "results": "2026-10-06T21-41-56-160Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 1.0
+      "without": 0.89
     },
     "56-neg-design-already-designed": {
       "delta": 0.0,
-      "results": "2026-10-01T12-04-18-235Z",
+      "results": "2026-10-06T17-49-26-169Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "57-neg-design-adr-question": {
       "delta": 0.0,
-      "results": "2026-10-01T12-04-19-578Z",
+      "results": "2026-10-06T17-52-47-119Z",
       "runs": 3,
-      "version": "0.13.5",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "58-big-debug-regression": {
       "delta": 0.13,
-      "results": "2026-10-01T15-31-29-670Z",
+      "results": "2026-10-06T17-53-52-277Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 0.93,
       "without": 0.8
     },
     "59-big-debug-selective": {
-      "delta": 0.12,
-      "results": "2026-10-01T14-46-03-797Z",
+      "delta": 0.18,
+      "results": "2026-10-06T17-56-36-681Z",
       "runs": 3,
-      "version": "0.13.6",
-      "with": 0.88,
+      "version": "0.14.1",
+      "with": 0.94,
       "without": 0.76
     },
     "60-big-route-nested-rule": {
       "delta": 0.2,
-      "results": "2026-10-01T15-31-31-563Z",
+      "results": "2026-10-06T17-58-49-395Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 0.8
     },
     "61-big-route-rules-conflict": {
-      "delta": 0.14,
-      "results": "2026-10-01T14-46-07-875Z",
+      "delta": 0.24,
+      "results": "2026-10-06T18-00-42-737Z",
       "runs": 3,
-      "version": "0.13.6",
-      "with": 0.86,
+      "version": "0.14.1",
+      "with": 0.95,
       "without": 0.71
     },
     "62-big-review-planted-diff": {
-      "delta": 0.27,
-      "results": "2026-10-01T15-31-33-814Z",
+      "delta": 0.2,
+      "results": "2026-10-06T18-02-33-060Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 0.73
+      "without": 0.8
     },
     "63-big-review-after-fixes": {
-      "delta": 0.3,
-      "results": "2026-10-01T14-55-19-393Z",
+      "delta": 0.2,
+      "results": "2026-10-06T18-03-29-615Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 0.7
+      "without": 0.8
     },
     "64-big-kb-recall-implicit": {
       "delta": 0.0,
-      "results": "2026-10-01T14-55-20-672Z",
+      "results": "2026-10-06T18-06-04-249Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "65-big-clarify-stale-assumption": {
-      "delta": 0.13,
-      "results": "2026-10-01T14-55-23-781Z",
+      "delta": 0.2,
+      "results": "2026-10-06T18-08-06-952Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 1.0,
-      "without": 0.87
+      "without": 0.8
     },
     "66-big-design-prior-adr": {
       "delta": 0.17,
@@ -530,25 +530,25 @@
     },
     "67-big-neg-one-line": {
       "delta": 0.0,
-      "results": "2026-10-01T15-31-37-762Z",
+      "results": "2026-10-06T18-11-06-525Z",
       "runs": 3,
-      "version": "0.13.6",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     },
     "68-design-steel-man": {
       "delta": 0.22,
-      "results": "2026-10-06T12-24-53-595Z",
+      "results": "2026-10-06T18-12-32-764Z",
       "runs": 3,
-      "version": "0.14.0",
+      "version": "0.14.1",
       "with": 0.67,
       "without": 0.44
     },
     "69-debug-map-territory": {
       "delta": 0.0,
-      "results": "2026-10-06T12-24-53-614Z",
+      "results": "2026-10-06T21-41-56-176Z",
       "runs": 3,
-      "version": "0.14.0",
+      "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
     }
