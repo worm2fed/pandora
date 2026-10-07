@@ -1352,6 +1352,25 @@ def branch_match(branch: str, streams: Sequence[str]) -> Optional[str]:
     return None
 
 
+def nested_branch_match(branches: Sequence[str],
+                        folded: Sequence[Dict[str, Any]]) -> Optional[str]:
+    """The stream to put first when the checkout is an umbrella.
+
+    `branches` are the branches checked out in the nested repos (the hook collects
+    them; the session directory's own branch, if any, was tried first and named no
+    stream). Several may name a stream — one live, the rest dormant — so the most
+    recently active match wins; a tie keeps the given order.
+    """
+    streams = [f["stream"] for f in folded]
+    last_at = {f["stream"]: (f.get("last_event") or {}).get("ts") or "" for f in folded}
+    best: Optional[str] = None
+    for branch in branches:
+        matched = branch_match(branch, streams)
+        if matched is not None and (best is None or last_at[matched] > last_at[best]):
+            best = matched
+    return best
+
+
 def _brief_rank(feature: Dict[str, Any]) -> int:
     if feature.get("branch_match"):
         return 0
@@ -1366,6 +1385,7 @@ def build_status(
     branch: Optional[str] = None,
     show_all: bool = False,
     now: Optional[datetime] = None,
+    nested_branches: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     if feature:
         # Accept a bare slug, a `feature/` stream, or any other work stream name
@@ -1388,6 +1408,8 @@ def build_status(
         folded.append(fold_stream(events, now=now))
 
     matched = branch_match(branch, [f["stream"] for f in folded]) if branch else None
+    if matched is None and nested_branches:
+        matched = nested_branch_match(nested_branches, folded)
     # Hiding finished work is what keeps the brief small, but someone who names a
     # stream is asking about that stream — answering "nothing here" would be a lie.
     keep_terminal = show_all or bool(feature)
@@ -2338,6 +2360,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--branch", default=None, metavar="NAME",
                           help="git branch of the current checkout; the stream it "
                                "names renders first and in full")
+    p_status.add_argument("--nested-branch", action="append", default=None,
+                          dest="nested_branches", metavar="NAME",
+                          help="a branch checked out in a nested repo of an umbrella "
+                               "checkout (repeatable); tried only when --branch names "
+                               "no stream, the most recently active match first")
     p_status.add_argument("--all", action="store_true", dest="show_all",
                           help="include completed and abandoned streams")
     p_status.add_argument("--json", action="store_true", help="machine-readable output")
@@ -2677,7 +2704,8 @@ def cmd_status(args, resolution: Resolution) -> int:
     conn = connect(resolution.db_path)
     try:
         status = build_status(
-            conn, args.feature, branch=args.branch, show_all=args.show_all
+            conn, args.feature, branch=args.branch, show_all=args.show_all,
+            nested_branches=args.nested_branches,
         )
     finally:
         conn.close()

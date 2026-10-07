@@ -1969,6 +1969,38 @@ class TestBranchOrdering(JournalTestCase):
         self.assertIsNone(payload["branch_match"])
         self.assertEqual([f["stream"] for f in payload["features"]], ["feature/a"])
 
+    # An umbrella checkout: the session directory's branch names no stream (or there is
+    # none), the nested repos' branches may — the hook passes them as --nested-branch.
+    def test_nested_branches_are_tried_when_the_branch_names_no_stream(self):
+        self.seed("feature/a")
+        self.seed("fix/1-b")
+        payload = self.status_json("--branch", "main", "--nested-branch", "feature/a")
+        self.assertEqual(payload["branch_match"], "feature/a")
+        self.assertEqual([f["stream"] for f in payload["features"]],
+                         ["feature/a", "fix/1-b"])
+
+    def test_the_own_branch_wins_over_nested_branches(self):
+        self.seed("feature/a")
+        self.seed("fix/1-b")
+        payload = self.status_json("--branch", "fix/1-b", "--nested-branch", "feature/a")
+        self.assertEqual(payload["branch_match"], "fix/1-b")
+
+    def test_the_most_recently_active_nested_match_wins(self):
+        """Several nested repos sit on branches with streams — one live, the rest
+        dormant. Directory order must not decide."""
+        self.seed("feature/a")
+        self.seed("fix/1-b")
+        self.backdate("feature/a", days=3)
+        for order in (["feature/a", "fix/1-b"], ["fix/1-b", "feature/a"]):
+            args = [t for b in order for t in ("--nested-branch", b)]
+            self.assertEqual(self.status_json(*args)["branch_match"], "fix/1-b", order)
+
+    def test_unmatched_nested_branches_are_not_an_error(self):
+        self.seed("feature/a")
+        payload = self.status_json("--branch", "main", "--nested-branch", "feature/nothing")
+        self.assertIsNone(payload["branch_match"])
+        self.assertEqual([f["stream"] for f in payload["features"]], ["feature/a"])
+
     def test_no_branch_flag_reports_no_match(self):
         self.seed("feature/a")
         self.assertIsNone(self.status_json()["branch_match"])

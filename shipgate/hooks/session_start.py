@@ -29,6 +29,12 @@ from _common import (  # noqa: E402
 
 META_STREAM = "shipgate"
 GIT_TIMEOUT_SECONDS = 2
+# Where an umbrella keeps its nested repos — the same three places `setup` looks.
+NESTED_REPO_PARENTS = ("", "source", "packages")
+NESTED_REPO_LIMIT = 64
+NESTED_ENTRY_LIMIT = 512  # directory entries examined per parent
+HEAD_REF_PREFIX = "ref: refs/heads/"
+MAX_BRANCH_LENGTH = 255
 
 
 def current_branch(cwd):
@@ -60,8 +66,128 @@ def current_branch(cwd):
         return None
     if result.returncode != 0:
         return None
-    branch = (result.stdout or "").strip()
-    return branch if branch and branch != "HEAD" else None
+    return _branch_name((result.stdout or "").strip())
+
+
+def _read_first_line(path):
+    """The first line of a regular file, or None.
+
+    A checkout is untrusted content: `path` may be a FIFO, a device or a symlink to one,
+    and a plain `open()` would block the hook on it. Open non-blocking, refuse anything
+    that is not a regular file, read a bounded number of bytes.
+    """
+    import stat
+
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        raw = os.read(fd, MAX_BRANCH_LENGTH + len(HEAD_REF_PREFIX) + 8)
+    except (OSError, ValueError):
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return raw.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+
+
+def _branch_name(text):
+    """`text` as a branch name worth passing on, else None.
+
+    The name travels as one argv token: a NUL would make `subprocess` refuse the whole
+    call, a control character has no business in a branch. Over-long names are noise.
+    """
+    if not text or len(text) > MAX_BRANCH_LENGTH or text == "HEAD":
+        return None
+    if "\0" in text or not text.isprintable():
+        return None
+    return text
+
+
+def _within(path, root):
+    """True when `path` resolves to somewhere under `root` (symlinks followed)."""
+    real_root = os.path.realpath(root)
+    return os.path.realpath(path).startswith(real_root.rstrip(os.sep) + os.sep)
+
+
+def head_branch(git_entry, root):
+    """The branch a nested repo's `.git` names, read from its HEAD file — no subprocess.
+
+    `.git` is a directory, or (a worktree, a submodule) a file `gitdir: <path>`, followed
+    once and only when it stays under `root`, the session's directory — a checkout must
+    not point the hook at files elsewhere on disk. A detached HEAD holds a hash, not a
+    `ref:` line, and names no branch; so does anything unreadable, over-long or not a
+    regular file. Only ever a hint for ordering the brief.
+    """
+    git_dir = git_entry
+    if os.path.isfile(git_entry):
+        line = _read_first_line(git_entry)
+        if not line or not line.startswith("gitdir:"):
+            return None
+        target = line[len("gitdir:"):].strip()
+        if not target:
+            return None
+        git_dir = os.path.join(os.path.dirname(git_entry), target)
+        if not _within(git_dir, root):
+            return None
+    line = _read_first_line(os.path.join(git_dir, "HEAD"))
+    if not line or not line.startswith(HEAD_REF_PREFIX):
+        return None
+    return _branch_name(line[len(HEAD_REF_PREFIX):])
+
+
+def nested_branches(cwd, own=None):
+    """Branches checked out in the nested repos of an umbrella checkout, deduplicated.
+
+    An umbrella holds the real repos one level down (`*/`, `source/*`, `packages/*`);
+    its own directory is a plain folder or a repo on a branch that carries no stream.
+    Dot-directories, `node_modules` and symlinked entries are not looked into; at most
+    NESTED_ENTRY_LIMIT entries per parent are examined and NESTED_REPO_LIMIT repos read,
+    alphabetically, top level first. A single repo with no nested `.git` costs three
+    directory scans. Nothing here may raise: the branches are an ordering hint for the
+    brief, and losing the brief over a hint would invert the hook's priorities.
+    """
+    if not isinstance(cwd, str):
+        return []
+    seen = {own} if own else set()
+    found = []
+    read = 0
+    try:
+        for parent in NESTED_REPO_PARENTS:
+            base = os.path.join(cwd, parent) if parent else cwd
+            try:
+                with os.scandir(base) as entries:
+                    names = sorted(
+                        entry.name
+                        for entry in _bounded(entries, NESTED_ENTRY_LIMIT)
+                        if entry.is_dir(follow_symlinks=False)
+                        and not entry.name.startswith(".")
+                        and entry.name != "node_modules"
+                    )
+            except OSError:
+                continue
+            for name in names:
+                git_entry = os.path.join(base, name, ".git")
+                if not os.path.lexists(git_entry) or os.path.islink(git_entry):
+                    continue
+                read += 1
+                if read > NESTED_REPO_LIMIT:
+                    return found
+                branch = head_branch(git_entry, cwd)
+                if branch and branch not in seen:
+                    seen.add(branch)
+                    found.append(branch)
+    except Exception:  # noqa: BLE001 — a hint, never the brief
+        return found
+    return found
+
+
+def _bounded(iterable, limit):
+    for index, item in enumerate(iterable):
+        if index >= limit:
+            return
+        yield item
 
 
 def main() -> None:
@@ -94,10 +220,15 @@ def main() -> None:
 
     branch = current_branch(payload.get("cwd"))
     # `--branch=<name>`, never two tokens: a branch may be literally named `--all`,
-    # and argparse would read the second token as a flag.
-    result = run_journal(
-        project, ["status", f"--branch={branch}"] if branch else ["status"]
-    )
+    # and argparse would read the second token as a flag. In an umbrella checkout the
+    # nested repos' branches go along as `--nested-branch=<name>`; which of them (if
+    # any) orders the brief is the journal's call, not the hook's.
+    status_args = ["status"] + ([f"--branch={branch}"] if branch else [])
+    status_args += [
+        f"--nested-branch={nested}"
+        for nested in nested_branches(payload.get("cwd"), own=branch)
+    ]
+    result = run_journal(project, status_args)
     if result is None or result.returncode != 0:
         # The journal is configured but unreachable. Say so rather than starting the
         # session silently blind — the orchestrator treats this as an infrastructure

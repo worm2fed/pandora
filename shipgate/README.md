@@ -144,7 +144,7 @@ something re-inferred from artifacts every session. The SessionStart hook inject
 
 | Command | Does |
 | --- | --- |
-| `status [--branch B] [--feature SLUG] [--all]` | the status brief: the checked-out branch's stream first and in full, dormant streams as one line, completed ones hidden unless `--all` |
+| `status [--branch B] [--nested-branch B …] [--feature SLUG] [--all]` | the status brief: the checked-out branch's stream first and in full, dormant streams as one line, completed ones hidden unless `--all`; in an umbrella the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream, the most recently active match first |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
@@ -294,7 +294,7 @@ v0.11.0 — the flow journal made cheap and trustworthy, from two weeks of its o
 `capture-done` left alone for 48 h reads terminal; `--all` still shows everything), collapses
 streams dormant over a week to one line, caps each stream at its last three gate decisions
 (five on the checked-out branch's stream), and puts the checked-out branch's stream first
-(`status --branch`, passed by the SessionStart hook); semantic events go up as one `append
+(`status --branch`, passed by the SessionStart hook — plus `--nested-branch` per nested repo in an umbrella); semantic events go up as one `append
 --batch` per phase boundary, and a payload over 1 KB is refused so the prose stays in the
 worklog and the event carries `refs`. **Position reliability**: a phase-owning event records
 the `phase-entered` it implies instead of leaving the status brief's headline field to memory (ADR

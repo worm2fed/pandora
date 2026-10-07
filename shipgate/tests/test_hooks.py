@@ -392,6 +392,102 @@ class TestSessionStartBranch(StubJournalMixin, HookTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.status_args(), ["status"])
 
+    # Umbrella checkouts: the real repos sit one level down (`*/`, `source/*`,
+    # `packages/*`), the session directory is a plain folder or a repo of its own.
+    def test_a_plain_folder_umbrella_passes_the_nested_repos_branches(self):
+        for relative, branch in (
+            ("svc-a", "feat/a"),
+            ("svc-c", "feat/a"),  # a second repo on the same branch: passed once
+            ("source/svc-b", "feat/b"),
+            (".hidden", "feat/hidden"),  # dot-directories are not looked into
+            ("node_modules/dep", "feat/dep"),  # nor node_modules
+        ):
+            (self.root / relative).mkdir(parents=True)
+            init_git_checkout(self.root / relative, branch)
+        (self.root / "notes").mkdir()  # a plain folder is not a repo
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), [
+            "status", "--nested-branch=feat/a", "--nested-branch=feat/b",
+        ])
+
+    def test_a_git_umbrella_passes_its_own_branch_and_the_nested_ones(self):
+        init_git_checkout(self.root, "main")
+        (self.root / "packages" / "svc").mkdir(parents=True)
+        init_git_checkout(self.root / "packages" / "svc", "feat/a")
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), [
+            "status", "--branch=main", "--nested-branch=feat/a",
+        ])
+
+    def test_a_nested_worktree_is_read_through_its_gitdir_file_and_a_detached_one_skipped(self):
+        (self.root / "svc-a").mkdir()
+        init_git_checkout(self.root / "svc-a", "feat/a")
+        added = subprocess.run(
+            ["git", "worktree", "add", "-q", "-b", "feat/wt", str(self.root / "wt")],
+            cwd=str(self.root / "svc-a"), capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertTrue((self.root / "wt" / ".git").is_file())  # `gitdir: …`, not a dir
+        (self.root / "loose").mkdir()
+        init_git_checkout(self.root / "loose", "feat/loose")
+        subprocess.run(
+            ["git", "checkout", "-q", "--detach"], cwd=str(self.root / "loose"),
+            check=True, capture_output=True,
+        )
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), [
+            "status", "--nested-branch=feat/a", "--nested-branch=feat/wt",
+        ])
+
+    # A checkout is untrusted content: nothing in a nested `.git` may hang the hook,
+    # abort it, or point it at files outside the session directory.
+    def test_a_fifo_or_a_nul_byte_in_a_nested_head_costs_that_hint_only(self):
+        (self.root / "ok").mkdir()
+        init_git_checkout(self.root / "ok", "feat/ok")
+        fifo = self.root / "fifo" / ".git"
+        fifo.mkdir(parents=True)
+        os.mkfifo(fifo / "HEAD")  # a plain open() would block until a writer appears
+        nul = self.root / "nul" / ".git"
+        nul.mkdir(parents=True)
+        (nul / "HEAD").write_bytes(b"ref: refs/heads/x\0y\n")
+        ctrl = self.root / "ctrl" / ".git"
+        ctrl.mkdir(parents=True)
+        (ctrl / "HEAD").write_bytes(b"ref: refs/heads/x\x1b[31my\n")
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status", "--nested-branch=feat/ok"])
+        self.assertIn("stub brief", result.stdout)
+
+    def test_a_gitdir_file_pointing_outside_the_session_directory_is_not_followed(self):
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        other = Path(elsewhere.name).resolve()
+        init_git_checkout(other, "feat/elsewhere")
+        (self.root / "ptr").mkdir()
+        (self.root / "ptr" / ".git").write_text(
+            f"gitdir: {other / '.git'}\n", encoding="utf-8"
+        )
+        (self.root / "rel").mkdir()
+        (self.root / "rel" / ".git").write_text(
+            "gitdir: ../../" + other.name + "/.git\n", encoding="utf-8"
+        )
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status"])
+
+    def test_a_symlinked_nested_directory_is_not_looked_into(self):
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        other = Path(elsewhere.name).resolve()
+        init_git_checkout(other, "feat/elsewhere")
+        os.symlink(other, self.root / "link")
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.status_args(), ["status"])
+
     def test_a_detached_head_is_not_a_branch_name(self):
         init_git_checkout(self.root, "feature/x")
         subprocess.run(

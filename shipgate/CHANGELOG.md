@@ -2,6 +2,23 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.3 — the status brief keeps its checked-out-first ordering in an umbrella. The
+SessionStart hook took the branch from `git rev-parse` in the session directory only, so in
+an umbrella checkout (a plain folder, or a repo of its own on an integration branch, with
+the real repos one level down) it passed no branch, or one that names no stream, and the
+brief listed every stream unsorted. The hook now also collects the branch of each nested
+repo (`*/`, `source/*`, `packages/*`; dot-directories, `node_modules` and symlinked entries
+skipped, at most 64 repos) by reading its `.git/HEAD` — a `gitdir:` file is followed once
+and only within the session directory, a detached HEAD names nothing, no subprocess per
+repo — and passes them as `--nested-branch=<name>`. A checkout is untrusted content, so the
+read is non-blocking and refuses anything but a regular file (a FIFO at `HEAD` cannot hang
+the session), and a name with a NUL or a control character is dropped rather than aborting
+the hook and losing the brief.
+`journal.py status` gained that repeatable flag: tried only when `--branch` names no
+stream, and among the matches the most recently active stream wins, so a dormant stream
+on another nested repo's branch cannot shadow the live one. Hooks hold no policy: which
+branch orders the brief stays the journal's call. Ten tests added.
+
 v0.14.2 — umbrella roots that are not git repos. An umbrella is a scaffolding directory with
 the real repos nested beneath it; `setup` writes the config, sidecar and journal at its root,
 and that root is often a plain folder, not a repo of its own. Three places assumed a git repo:
