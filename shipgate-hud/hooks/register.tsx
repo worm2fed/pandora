@@ -124,8 +124,24 @@ export async function locateJournal($: Engine, journalScript: string): Promise<s
   return null
 }
 
-/** The session's directory, no trailing slash. */
-const sessionDir = async ($: Engine): Promise<string> => (await $.session.cwd()).replace(/\/+$/, '') || '/'
+/**
+ * The session's project root, no trailing slash: where the session started (or `/cd` took it).
+ * Not `$.session.cwd()`, which follows the shell's `cd` — a turn that steps into a nested repo
+ * must not move the HUD's journal, sidecar or branch along with it. The same anchor as
+ * shipgate's hooks, which read the session's directory from their payload.
+ */
+const sessionRoot = async ($: Engine): Promise<string> => {
+  let dir: string
+  try {
+    dir = await $.session.root()
+  } catch {
+    dir = await $.session.cwd()
+  }
+  return dir.replace(/\/+$/, '') || '/'
+}
+
+/** Where a relative path a tool was given resolves: the shell's directory, which `cd` moves. */
+const shellDir = async ($: Engine): Promise<string> => (await $.session.cwd()).replace(/\/+$/, '') || '/'
 
 /**
  * The directory the sidecar marks as the project: the session's own, or the nearest ancestor
@@ -133,7 +149,7 @@ const sessionDir = async ($: Engine): Promise<string> => (await $.session.cwd())
  * journal this way, as shipgate's hooks do. Null when no ancestor has a sidecar.
  */
 async function locateProject($: Engine): Promise<string | null> {
-  let dir = await sessionDir($)
+  let dir = await sessionRoot($)
   for (;;) {
     if (await exists($, `${dir}/${SIDECAR}`)) return dir
     const cut = dir.lastIndexOf('/')
@@ -182,8 +198,8 @@ async function readHomes($: Engine): Promise<Homes> {
 
 /** A written path relative to the project root; null when it lies outside it. */
 async function projectRelative($: Engine, path: string): Promise<string | null> {
-  const root = projectRoot ?? (await sessionDir($))
-  const absolute = normalizePath(path.startsWith('/') ? path : `${prefixOf(await sessionDir($))}${path}`)
+  const root = projectRoot ?? (await sessionRoot($))
+  const absolute = normalizePath(path.startsWith('/') ? path : `${prefixOf(await shellDir($))}${path}`)
   const prefix = prefixOf(root)
   return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : null
 }
@@ -196,11 +212,11 @@ const runJson = async ($: Engine, argv: readonly string[]): Promise<unknown> => 
   return JSON.parse(ran.stdout) as unknown
 }
 
-/** The branch checked out in `dir` (the session's directory when absent); null when detached or not a repo. */
+/** The branch checked out in `dir`, relative to the session root (the root itself when absent); null when detached or not a repo. */
 const branchIn = async ($: Engine, dir?: string): Promise<string | null> => {
   const argv = dir ? ['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'] : ['git', 'rev-parse', '--abbrev-ref', 'HEAD']
   try {
-    const ran = await $.process.run(argv, { timeoutMs: 5_000 })
+    const ran = await $.process.run(argv, { timeoutMs: 5_000, cwd: await sessionRoot($) })
     const name = ran.stdout.trim()
     return ran.exitCode === 0 && name && name !== 'HEAD' ? name : null
   } catch {
@@ -216,10 +232,11 @@ const WORKTREES_DIR = '.worktrees'
 /** The most nested repos and worktrees one refresh probes (each costs a git run); the hook keeps the same cap. */
 const NESTED_REPO_LIMIT = 64
 
-/** The child directories of `base` (the session directory when empty), sorted; dot-names, node_modules and links left out. */
+/** The child directories of `base` under the session root (the root itself when empty), as root-relative paths, sorted; dot-names, node_modules and links left out. */
 async function childDirs($: Engine, base: string): Promise<string[]> {
   try {
-    const entries = await $.fs.list(base || undefined)
+    const root = await sessionRoot($)
+    const entries = await $.fs.list(base ? `${prefixOf(root)}${base}` : root)
     return entries
       .filter(e => e.kind === 'dir' && !e.isLink && !e.name.startsWith('.') && e.name !== 'node_modules')
       .map(e => (base ? `${base}/${e.name}` : e.name))
@@ -230,7 +247,7 @@ async function childDirs($: Engine, base: string): Promise<string[]> {
 }
 
 /**
- * The nested repos of an umbrella checkout, relative to the session's directory. An umbrella
+ * The nested repos of an umbrella checkout, relative to the session root. An umbrella
  * is a plain folder or a repo of its own holding the real repos one level down; its own
  * branch (if any) carries no stream, the nested repos' branches do. A worktree sits in
  * `.worktrees/` beside the repos or inside one, so those are looked into as well: a repo,
@@ -239,14 +256,17 @@ async function childDirs($: Engine, base: string): Promise<string[]> {
  */
 async function nestedRepos($: Engine): Promise<string[]> {
   const found: string[] = []
+  const prefix = prefixOf(await sessionRoot($))
+  // root-relative paths, checked absolute: a relative one would resolve from the shell's directory
+  const isRepo = (dir: string) => exists($, `${prefix}${dir}/.git`)
   const take = async (dir: string): Promise<boolean> => {
     if (found.length >= NESTED_REPO_LIMIT) return false
-    if (!found.includes(dir) && (await exists($, `${dir}/.git`))) found.push(dir)
+    if (!found.includes(dir) && (await isRepo(dir))) found.push(dir)
     return true
   }
   for (const parent of NESTED_REPO_PARENTS) {
     for (const repo of await childDirs($, parent)) {
-      if (!(await exists($, `${repo}/.git`))) continue
+      if (!(await isRepo(repo))) continue
       if (!(await take(repo))) return found
       for (const worktree of await childDirs($, `${repo}/${WORKTREES_DIR}`)) {
         if (!(await take(worktree))) return found
@@ -401,9 +421,11 @@ async function detect($: EngineInterface): Promise<boolean> {
 }
 
 async function refreshOnce($: EngineInterface): Promise<void> {
-  if (projectRoot === null) {
-    // detect() found no sidecar since the last refresh (a /clear elsewhere, a removed sidecar)
+  // Module state is empty after a plugin reload while $.state (the position, the last error)
+  // survives it: locate the project again rather than show what an older module left behind.
+  if (projectRoot === null && !(await detect($))) {
     await update($, position, () => null)
+    await update($, lastError, () => null)
     return
   }
   if (script === null) script = await locateJournal($, journalScript)

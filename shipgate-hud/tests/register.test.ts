@@ -76,6 +76,53 @@ describe('register', () => {
     await band.unmount()
   })
 
+  test('a shell cd into a nested repo does not move the HUD: sidecar, journal, branch and writes stay anchored on the session root', async ($, on) => {
+    const { opened } = engineWorld(on, START.cwd, `${START.cwd}/source/svc`) // the shell stepped into a nested repo
+    const existsAsked: string[] = []
+    on('fs.list', async (_$, e) => {
+      if (e.path === START.cwd) return { value: [{ name: 'svc-a', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }] }
+      return { deny: `no such directory: ${e.path}` }
+    })
+    on('tool.call', { tool: ['Write', 'Edit'] }, async () => ({ result: { filePath: 'x', content: '' } as never }))
+    const runs: { argv: string[]; cwd: string | undefined }[] = []
+    const asked: string[] = []
+    on('fs.exists', async (_$, e) => {
+      asked.push(e.path)
+      existsAsked.push(e.path)
+      return { value: e.path === `${START.cwd}/.claude/shipgate.json` || e.path === `${START.cwd}/svc-a/.git` || e.path.endsWith('/shipgate/scripts/journal.py') }
+    })
+    on('fs.read', async (_$, e) => {
+      if (e.path === `${START.cwd}/.claude/shipgate.json`) return { value: JSON.stringify(SIDECAR) }
+      if (e.path === `${START.cwd}/docs/prd/example.worklog.md`) return { value: WORKLOG }
+      return { deny: `no such fixture: ${e.path}` }
+    })
+    on('process.run', async (_$, e) => {
+      const argv = [...e.argv]
+      runs.push({ argv, cwd: e.init?.cwd })
+      // the root is an umbrella on a branch with no stream; the nested repo carries it
+      if (argv[0] === 'git') return ok(argv[1] === '-C' ? 'feat/example-stream\n' : 'main\n')
+      if (argv.includes('status')) return ok(JSON.stringify(argv.includes('--branch=main') ? { ...STATUS, features: [], branch_match: null } : STATUS))
+      if (argv.includes('log')) return ok(JSON.stringify(LOG))
+      return ok('')
+    })
+    await $.session.start(START)
+    expect(opened).toEqual(['shipgate-hud'])
+    // the sidecar was looked for from the root, never from the shell's directory
+    expect(asked.filter(p => p.endsWith('/.claude/shipgate.json'))).toEqual([`${START.cwd}/.claude/shipgate.json`])
+    // the nested repo was found by an absolute check under the root, and probed from the root
+    expect(existsAsked).toContain(`${START.cwd}/svc-a/.git`)
+    expect(runs.find(r => r.argv[1] === '-C')?.argv[2]).toBe('svc-a')
+    // every git and journal.py run happened in the root
+    expect(runs.every(r => r.cwd === START.cwd)).toBe(true)
+    expect(runs.find(r => r.argv.includes('log'))).toBeDefined()
+    // a relative write path resolves where the tool resolves it (the shell's directory) and is matched against the root
+    // one refresh = one log fetch (the status probes per branch vary with the checkout)
+    const refreshes = () => runs.filter(r => r.argv.includes('log')).length
+    const before = refreshes()
+    await $.tool.call({ tool: 'Write', tool_use_id: 'w-cd', file_path: '../../plugin/docs/prd/example-stream.worklog.md', content: '' } as never)
+    expect(refreshes()).toBe(before + 1)
+  })
+
   test('a session inside a nested repo of an umbrella: the sidecar above is found, the journal runs there, artifacts read from there', async ($, on) => {
     const nested = `${START.cwd}/source/svc`
     engineWorld(on, nested)
@@ -105,9 +152,9 @@ describe('register', () => {
     await $.session.start({ ...START, cwd: nested })
     // the sidecar was looked for in the session directory first, then upward
     expect(asked.filter(p => p.endsWith('/.claude/shipgate.json'))).toEqual([`${nested}/.claude/shipgate.json`, `${START.cwd}/source/.claude/shipgate.json`, `${START.cwd}/.claude/shipgate.json`])
-    // journal.py ran in the project root, git in the session directory
+    // journal.py ran in the project root, git in the session root (here the nested repo)
     expect(runs.filter(r => r.argv[0] === 'python3').map(r => r.cwd)).toEqual([START.cwd, START.cwd])
-    expect(runs.find(r => r.argv[0] === 'git')?.cwd).toBeUndefined()
+    expect(runs.find(r => r.argv[0] === 'git')?.cwd).toBe(nested)
     // every artifact was read under the project root, none under the nested repo
     expect(reads.every(p => p.startsWith(`${START.cwd}/`) && !p.startsWith(`${nested}/`))).toBe(true)
     const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })

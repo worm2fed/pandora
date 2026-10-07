@@ -24,14 +24,18 @@ export const ok = (stdout: string) => ({
   value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
 })
 
-/** What every session needs answered beneath the plugin, journaled or not. */
-export function engineWorld(on: On, cwd: string = START.cwd): { commands: string[]; opened: string[]; submitted: string[] } {
+/**
+ * What every session needs answered beneath the plugin, journaled or not. `cwd` is the session
+ * root; `shell` is where the shell's `cd` has taken the session (the root unless given).
+ */
+export function engineWorld(on: On, cwd: string = START.cwd, shell: string = cwd): { commands: string[]; opened: string[]; submitted: string[] } {
   const commands: string[] = []
   const opened: string[] = []
   const submitted: string[] = []
   mock.clock(on)
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  on('session.cwd', async () => ({ value: cwd }))
+  on('session.cwd', async () => ({ value: shell }))
+  on('session.root', async () => ({ value: cwd }))
   // The engine draws nothing of its own in the band: an empty box stands for that here.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e) => {
     const { Box } = $.ui.resolve(e)

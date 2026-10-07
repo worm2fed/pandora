@@ -2,6 +2,16 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.2.3 — anchored on the session root. The HUD took the session's directory from
+`$.session.cwd()`, which follows the shell's `cd`: a turn that stepped into a nested repo moved
+the sidecar lookup, the journal run and the branch along with it, and the pane then reported
+"journal database not found" under that repo. Everything now hangs off `$.session.root()` —
+where the session started, unmoved by a shell `cd` — the same anchor shipgate's hooks use;
+only a relative path a tool was given still resolves where the tool resolved it. A refresh
+with no project located yet (module state is empty after a plugin reload, while the stored
+position and error survive it) now locates the project again and clears a stale error instead
+of leaving an older module's message on screen. One test.
+
 v0.2.2 — a stream checked out in a git worktree is found. The umbrella scan (0.2.0) skipped
 dot-directories, so a branch checked out in a worktree under `.worktrees/` — where shipgate's
 `workspace` skill puts one, beside the repos or inside one — was never probed and the pane said
