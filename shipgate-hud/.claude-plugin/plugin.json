@@ -1,0 +1,26 @@
+{
+  "name": "shipgate-hud",
+  "version": "0.1.0",
+  "description": "A Claude Code mod that draws a shipgate flow's position: stream, phase, tasks and verify evidence in a band above the prompt, and a phase-aware pane with the gate decisions (veto in one press), the Build Plan with journal evidence, and the committed design. Reads shipgate's journal through its CLI; draws nothing in a project without a shipgate journal.",
+  "author": {
+    "name": "worm2fed",
+    "email": "worm2fed@gmail.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "shipgate",
+    "mod",
+    "hud",
+    "pane",
+    "flow-journal"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "journalScript": {
+      "type": "string",
+      "title": "journal.py path",
+      "description": "Absolute path to shipgate's scripts/journal.py when the HUD cannot find it beside itself (marketplace checkout or plugin cache).",
+      "default": ""
+    }
+  }
+}

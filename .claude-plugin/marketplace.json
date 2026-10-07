@@ -28,6 +28,26 @@
       "category": "workflow"
     },
     {
+      "name": "shipgate-hud",
+      "source": "./shipgate-hud",
+      "displayName": "shipgate-hud",
+      "description": "A Claude Code mod for shipgate: the flow's position as a band above the prompt (stream, phase, tasks, last verify, decisions to veto) and a phase-aware pane — gate decisions with one-press veto, the Build Plan cross-checked against the journal, the committed design. Reads the journal through shipgate's CLI; draws nothing in a project without a shipgate journal.",
+      "version": "0.1.0",
+      "author": {
+        "name": "worm2fed",
+        "email": "worm2fed@gmail.com"
+      },
+      "license": "MIT",
+      "keywords": [
+        "shipgate",
+        "mod",
+        "hud",
+        "pane",
+        "flow-journal"
+      ],
+      "category": "workflow"
+    },
+    {
       "name": "astrolabe",
       "source": "./astrolabe",
       "displayName": "astrolabe",
