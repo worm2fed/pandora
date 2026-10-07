@@ -89,5 +89,5 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | **integration branch** | The branch work branches off and merges into (main / master / develop), detected, never hardcoded. | — |
 | **forge / tracker** | GitHub or GitLab (CLI `gh` / `glab`) / where issues live. | — |
 | **MR/PR** | The merge or pull request. Contract keeps `MR` in `mr-opened` and the `MR watcher` section. | — |
-| **umbrella** | A scaffolding repo with real repos nested beneath it; never branched. | — |
+| **umbrella** | A scaffolding directory — a git repo of its own or a plain folder — with real repos nested beneath it; never branched. | — |
 | **epic / child issue** | A tracked decomposition / one of its issues, each its own branch, stream and MR/PR. | — |

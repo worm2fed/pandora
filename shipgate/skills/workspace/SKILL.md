@@ -19,12 +19,13 @@ creating a branch.**
 
 ## Which repo — resolve this FIRST if repos are nested
 
-Some checkouts are an **umbrella**: a scaffolding repo with each real project a nested git repo
-beneath it. Detect this by the **nested repos, not the absence of the umbrella's own `.git`** —
-the umbrella *is* itself a git repo, so a naive "is this a git repo?" check answers *yes* and it
-looks branchable. It is not: if nested `*/.git` directories exist (e.g. `source/*/.git`), you
-are in an umbrella and its own branch is off-limits. Branching the umbrella by mistake is the
-recurring failure this section exists to stop.
+Some checkouts are an **umbrella**: a scaffolding directory with each real project a nested git
+repo beneath it. Detect this by the **nested repos, never by the umbrella's own `.git`** — an
+umbrella may be a git repo itself (then a naive "is this a git repo?" check answers *yes* and it
+looks branchable; it is not) or a plain folder (then git commands fail at the root, and the
+repos are one level down). Either way: if nested `*/.git` directories exist (e.g.
+`source/*/.git`), you are in an umbrella and its own branch is off-limits. Branching the
+umbrella by mistake is the recurring failure this section exists to stop.
 
 **Hard rule: never run a branch-changing command — `git switch -c`, `git checkout -b`,
 `git worktree add`, branch creation/deletion/reset — in the umbrella.** So:

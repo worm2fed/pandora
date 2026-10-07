@@ -2,6 +2,19 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.2.0 — umbrella checkouts. The branch came from `git rev-parse` in the session directory
+only, so in an umbrella — a plain folder or a repo of its own with the real repos one level
+down — the HUD found no branch (or the umbrella's own, which carries no stream) and drew
+nothing. Now, when the session directory's branch matches no stream, the refresh asks each
+nested repo (`*/.git`, `source/*/.git`, `packages/*/.git`, where setup looks; dot-directories
+and `node_modules` skipped) for its branch, probes each distinct branch once, and shows the
+most recently active stream among the matches — several nested repos may sit on branches
+with streams, one live and the rest dormant. A single repo on a branch with a stream still
+costs one status call. Also: the band's summary was cut with an ellipsis once it outgrew
+the band's width, which on a normal terminal lost the verify time and the veto count; it
+now wraps onto further rows at its ` · ` separators, no segment split, the `h: hud` button
+staying on the first row.
+
 v0.1.0 — first slice. A Claude Code mod (function hooks) that draws a shipgate flow's
 position: a band above the prompt with stream, phase, tasks done, last verify and the count
 of orchestrator decisions open to veto; a pane (`/hud`, or opened at session start) with the

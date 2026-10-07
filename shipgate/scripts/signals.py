@@ -37,6 +37,7 @@ EXIT_USAGE = 2
 OUTPUT_VERSION = 1
 
 CONFIG_RELPATH = os.path.join(".claude", "shipgate.md")
+SIDECAR_RELPATH = os.path.join(".claude", "shipgate.json")  # written by setup at a project root
 CONFIG_SECTION = "code signals"
 
 DEFAULT_WINDOW_MONTHS = 12
@@ -198,6 +199,33 @@ def parse_code_signals(text: str) -> Dict[str, Any]:
     return out
 
 
+def _umbrella_roots(repo: Path) -> List[Path]:
+    """The umbrella directories a nested repo sits in, nearest first (usually one).
+
+    Two things mark an umbrella: the sidecar `/shipgate:setup` writes at its root
+    (`.claude/shipgate.json`, looked for from the parent upward — `source/<service>`
+    layouts put it two levels up — as far as the parent's own git toplevel, else the
+    filesystem root, the same walk `journal.py` makes), and the parent being inside a
+    git work tree of its own. A plain parent with neither (say, $HOME) is not read.
+    """
+    parent = repo.parent
+    if parent == repo:
+        return []
+    top = _git_toplevel(parent)
+    roots: List[Path] = []
+    current = parent
+    while True:
+        if (current / SIDECAR_RELPATH).is_file():
+            roots.append(current)
+            break
+        if current == top or current.parent == current:
+            break
+        current = current.parent
+    if top is not None and top not in roots:
+        roots.append(top)
+    return roots
+
+
 def _config_candidates(repo: Path, start: Optional[Path]) -> List[Path]:
     """`.claude/shipgate.md` from start up to the repo root, then the umbrella's."""
     repo = repo.resolve()
@@ -208,12 +236,10 @@ def _config_candidates(repo: Path, start: Optional[Path]) -> List[Path]:
         if current == repo or current.parent == current:
             break
         current = current.parent
-    # An umbrella is itself a git work tree; a plain parent (say, $HOME) is not read.
-    parent = repo.parent
-    umbrella = _git_toplevel(parent) if parent != repo else None
-    if umbrella is not None and umbrella != repo:
-        candidates.append(parent / CONFIG_RELPATH)
-        candidates.append(umbrella / CONFIG_RELPATH)
+    umbrellas = _umbrella_roots(repo)
+    if umbrellas:
+        candidates.append(repo.parent / CONFIG_RELPATH)
+        candidates.extend(root / CONFIG_RELPATH for root in umbrellas)
     seen = set()
     unique = []
     for candidate in candidates:
@@ -1307,7 +1333,8 @@ exit codes:
 
 configuration:
   the `## Code signals` section of .claude/shipgate.md (the repository's, then
-  an umbrella parent's when the parent is itself a git work tree) — backticked
+  the umbrella's — a parent that holds the setup sidecar .claude/shipgate.json
+  or is itself a git work tree; a plain parent is not read) — backticked
   values on the `Window`, `Fix pattern` and `Exclude` bullets. Flags override
   the file; --exclude adds to the defaults.
   Labels are quartiles over the whole repository (or --scope); zero is always

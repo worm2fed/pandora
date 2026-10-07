@@ -18,12 +18,17 @@ things `git remote get-url origin` already answers is a worse setup.
 
 Run these before asking anything, and report the findings as a short list:
 
-- **Git root** — `git rev-parse --show-toplevel`. Not a git repo? Say so and stop; shipgate's
-  branching, forge, and artifact conventions all assume one.
+- **Git root** — `git rev-parse --show-toplevel`. Not a git repo? That alone is no reason to
+  stop: an umbrella root is often a plain folder (next bullet). Stop, and say so, only when the
+  directory is no git repo **and** holds no nested repos; shipgate's branching, forge, and
+  artifact conventions all assume one.
 - **Umbrella layout** — nested repos (`ls -d */.git source/*/.git packages/*/.git 2>/dev/null`).
-  If nested repos exist, this is an umbrella: config and journal belong at the **umbrella root**
-  (features span services), branches never do. Flag it — it decides what "the repo" means for
-  the rest of setup.
+  If nested repos exist, this is an umbrella — whether or not the umbrella root is itself a git
+  repo: config, sidecar and journal belong at the **umbrella root** (features span services),
+  branches never do. Flag it — it decides what "the repo" means for the rest of setup. In a
+  plain-folder umbrella the forge and integration-branch detection below run inside a nested
+  repo, not at the root, and the sidecar at the root is what the scripts use to find the
+  umbrella's config from inside a nested repo.
 - **Forge** — `git remote get-url origin`: `github.com` → GitHub / `gh` / PRs, `gitlab` → GitLab
   / `glab` / MRs. Anything else, or no remote, is a question.
 - **Integration branch** — git's default branch: `git symbolic-ref --short refs/remotes/origin/HEAD`, falling back to

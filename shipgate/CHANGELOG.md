@@ -2,6 +2,18 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.2 — umbrella roots that are not git repos. An umbrella is a scaffolding directory with
+the real repos nested beneath it; `setup` writes the config, sidecar and journal at its root,
+and that root is often a plain folder, not a repo of its own. Three places assumed a git repo:
+`signals.py` read the umbrella's `## Code signals` only when the parent was a git work tree,
+so a plain-folder umbrella's `Exclude` had no effect inside a nested repo — it now also treats
+a parent (or an ancestor up to the parent's own git toplevel, for `source/<service>` layouts)
+holding the setup sidecar `.claude/shipgate.json` as the umbrella; a plain parent with neither
+is still not read. `setup`'s Step 1 told the model to stop when the directory is not a git
+repo, which contradicted its own umbrella bullet — it now checks for nested repos first and
+stops only when there are none. `workspace` described an umbrella as always being a git repo
+of its own; it now says either form, detected by the nested repos. Two tests added.
+
 v0.14.1 — one term per concept. A terminology audit of every file the model reads (skills,
 agents, the command, README, config template, the user-facing strings of the hooks and scripts)
 found the same concept under several names — "working doc" beside "worklog", "coordinator" and

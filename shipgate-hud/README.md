@@ -4,7 +4,8 @@ A Claude Code **mod** for [shipgate](../shipgate): it draws where a flow stands,
 interface, from the journal shipgate already keeps.
 
 - **Band above the prompt** — `feat/x · implement · tasks 3/11 · verify pass 12:30 · 2 to veto`,
-  and a `hud` button that opens the pane.
+  and a `hud` button that opens the pane. A band narrower than the summary wraps it onto more
+  rows at the ` · ` separators rather than cutting it.
 - **Pane** (`/hud`, or opened at session start in a wide terminal) with the phase timeline
   `WS ✓ MAP ✓ EXP ✓ CLR ✓ DSN ✓ IMP ● REV · CAP ·` and three tabs:
   - **Flow** — the stream's gate decisions, newest first, with who raised each one. A
@@ -52,7 +53,13 @@ One refresh is `git rev-parse --abbrev-ref HEAD`, then shipgate's own CLI —
 `journal.py status --json --branch=<current>` and `journal.py log --stream <s> --json` —
 then bounded reads of the worklog and ADR files those events point at (relative paths
 inside the project only). Only the stream of the checked-out branch is shown; on a branch
-with no stream the band is empty and the pane says so. When the events name no worklog yet,
+with no stream the band is empty and the pane says so. In an umbrella checkout (the
+session directory is a plain folder or a repo of its own, the real repos one level down,
+in `source/` or in `packages/`) the session directory's branch carries no stream, so the
+HUD then asks each nested repo for its branch (`git -C <repo> rev-parse --abbrev-ref HEAD`),
+probes each distinct branch once, and shows the most recently active stream among the
+matches (several nested repos may sit on branches with streams, one live, the rest dormant).
+Dot-directories and `node_modules` are not looked into. When the events name no worklog yet,
 the HUD looks in the sidecar's worklog home for a `*.worklog.md` whose name carries the
 stream's slug (`feat/x-y` → `x-y`) and otherwise shows no plan. It writes nothing: a veto
 goes through the prompt, and the orchestrator records the outcome.

@@ -42,14 +42,40 @@ export function defaultTab(phase: string): Tab {
   return 'flow'
 }
 
-/** The one-line summary the band shows. */
-export function summaryOf(position: Position): string {
+/** The summary the band shows, as its ` · `-separated segments: stream, phase, tasks, verify, veto count. */
+export function summarySegments(position: Position): string[] {
   const done = position.tasks.filter(t => t.doneInJournal).length
   const tasks = position.tasks.length > 0 ? `tasks ${done}/${position.tasks.length}` : 'no plan'
   const verify = position.lastVerify ? `verify ${position.lastVerify.outcome} ${clock(position.lastVerify.at)}` : 'no verify'
   const toVeto = position.decisions.filter(isVetoable).length
   const veto = toVeto > 0 ? `${toVeto} to veto` : null
-  return [position.stream, position.phase, tasks, verify, veto].filter(Boolean).join(' · ')
+  return [position.stream, position.phase, tasks, verify, veto].filter((s): s is string => Boolean(s))
+}
+
+/** The summary as one line (the prompt-context form). */
+export function summaryOf(position: Position): string {
+  return summarySegments(position).join(' · ')
+}
+
+/**
+ * Segments packed into lines of at most `width` cells, joined by ` · `, a segment never split
+ * across lines: a band narrower than the summary gets more rows, not an ellipsis. Only a lone
+ * segment wider than the whole line is cut.
+ */
+export function packSegments(segments: readonly string[], width: number): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const segment of segments.filter(Boolean)) {
+    const joined = line ? `${line} · ${segment}` : segment
+    if (line && joined.length > width) {
+      lines.push(line)
+      line = segment
+    } else {
+      line = joined
+    }
+  }
+  if (line) lines.push(line)
+  return lines.map(l => fit(l, width))
 }
 
 /** `████████░░` over `width` cells. */
@@ -61,14 +87,25 @@ export function progressBar(done: number, total: number, width: number): string 
 
 export function bandOf(ui: Ui, position: Position, actions: Actions, columns: number): ReturnType<Ui['Box']> {
   const { Box, Text, Button } = ui
-  const summary = summaryOf(position)
+  // the first row shares its width with the `h: hud` button; the rest have the band to themselves
   const room = Math.max(10, columns - 12)
+  const [first = '', ...rest] = packSegments(summarySegments(position), room)
   return (
-    <Box flexDirection="row" columnGap={2}>
-      <Text wrap="truncate-end" dimColor>
-        {fit(summary, room)}
-      </Text>
-      <Button key="open-hud" label="hud" plain hotkey="h" dimColor onPress={() => actions.openPane()} />
+    <Box flexDirection="column">
+      <Box flexDirection="row" columnGap={2}>
+        <Text wrap="truncate-end" dimColor>
+          {first}
+        </Text>
+        <Button key="open-hud" label="hud" plain hotkey="h" dimColor onPress={() => actions.openPane()} />
+      </Box>
+      {rest.map((line, index) => (
+        // a keyed Box per row: Text takes no key, and a list without keys re-mounts on every resize
+        <Box key={`row-${index}`}>
+          <Text wrap="truncate-end" dimColor>
+            {line}
+          </Text>
+        </Box>
+      ))}
     </Box>
   )
 }

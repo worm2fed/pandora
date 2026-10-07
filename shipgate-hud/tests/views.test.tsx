@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { clock, parseAdr, toPosition } from '../hooks/position'
-import { defaultTab, summaryOf } from '../hooks/views'
+import { defaultTab, packSegments, summaryOf } from '../hooks/views'
 import { ADR, FEATURE, LOG, WORKLOG } from './fixtures'
 import { BAND, PANE, START, engineWorld, journaledWorld } from './world'
 
@@ -22,6 +22,29 @@ describe('views', () => {
   test('summary line carries stream, phase, tasks, verify and the veto count', async () => {
     const at = clock('2026-10-01T09:20:00+00:00')
     expect(summaryOf(POSITION)).toBe(`feat/example-stream · implement · tasks 2/4 · verify pass ${at} · 1 to veto`)
+  })
+
+  test('segments pack into lines of the given width, never split, never cut unless alone too wide', async () => {
+    const segments = ['feat/example-stream', 'implement', 'tasks 2/4', 'verify pass 09:20', '1 to veto']
+    expect(packSegments(segments, 120)).toEqual(['feat/example-stream · implement · tasks 2/4 · verify pass 09:20 · 1 to veto'])
+    expect(packSegments(segments, 40)).toEqual(['feat/example-stream · implement', 'tasks 2/4 · verify pass 09:20', '1 to veto'])
+    expect(packSegments(segments, 10)).toEqual(['feat/exam…', 'implement', 'tasks 2/4', 'verify pa…', '1 to veto'])
+    expect(packSegments([], 40)).toEqual([])
+  })
+
+  test('a narrow band wraps the summary onto more rows instead of cutting it', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on)
+    await $.session.start(START)
+    const narrow = { ...BAND, props: { ...BAND.props, bodyColumns: 52 } }
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...narrow })
+    const first = await ui.find({ type: 'Text', text: /feat\/example-stream/ })
+    expect(first?.text).toBe('feat/example-stream · implement')
+    expect(await ui.find({ type: 'Text', text: /^tasks 2\/4 · verify pass/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /1 to veto/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /…/ })).toBeUndefined()
+    expect(await ui.find({ key: 'open-hud' })).toBeDefined()
+    await ui.unmount()
   })
 
   test('band draws the summary on terminal and desktop once a position is known', async ($, on) => {

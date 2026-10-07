@@ -157,14 +157,42 @@ const runJson = async ($: Engine, argv: readonly string[]): Promise<unknown> => 
   return JSON.parse(ran.stdout) as unknown
 }
 
-const currentBranch = async ($: Engine): Promise<string | null> => {
+/** The branch checked out in `dir` (the session's directory when absent); null when detached or not a repo. */
+const branchIn = async ($: Engine, dir?: string): Promise<string | null> => {
+  const argv = dir ? ['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'] : ['git', 'rev-parse', '--abbrev-ref', 'HEAD']
   try {
-    const ran = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5_000 })
+    const ran = await $.process.run(argv, { timeoutMs: 5_000 })
     const name = ran.stdout.trim()
     return ran.exitCode === 0 && name && name !== 'HEAD' ? name : null
   } catch {
     return null
   }
+}
+
+/** Where setup looks for an umbrella's nested repos: `<dir>/.git`, `source/<dir>/.git`, `packages/<dir>/.git`. */
+const NESTED_REPO_PARENTS = ['', 'source', 'packages']
+
+/**
+ * The nested repos of an umbrella checkout, relative to the session's directory. An umbrella
+ * is a plain folder or a repo of its own holding the real repos one level down; its own
+ * branch (if any) carries no stream, the nested repos' branches do.
+ */
+async function nestedRepos($: Engine): Promise<string[]> {
+  const found: string[] = []
+  for (const parent of NESTED_REPO_PARENTS) {
+    let entries: Awaited<ReturnType<Engine['fs']['list']>>
+    try {
+      entries = await $.fs.list(parent || undefined)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.kind !== 'dir' || entry.name.startsWith('.') || entry.name === 'node_modules') continue
+      const dir = parent ? `${parent}/${entry.name}` : entry.name
+      if (await exists($, `${dir}/.git`)) found.push(dir)
+    }
+  }
+  return found
 }
 
 type Feature = { feature?: unknown; stream?: unknown; branch_match?: unknown }
@@ -220,12 +248,45 @@ export async function worklogForStream($: Engine, stream: string, homes: Homes):
 
 export type Refreshed = { position: Position | null; error: string | null }
 
+const lastEventAt = (feature: Feature): string => {
+  const last = (feature as { last_event?: { ts?: unknown } }).last_event
+  return typeof last?.ts === 'string' ? last.ts : ''
+}
+
+/**
+ * The stream of the checked-out branch. The session directory's branch first; when it has none
+ * or no stream carries it, the branch of each nested repo (an umbrella checkout: the real repos
+ * one level down), each distinct branch probed once. Several nested repos may sit on branches
+ * with streams of their own (a dormant one beside the live one), so among the matches the most
+ * recently active stream wins, not the first directory. A single repo on a branch with a stream
+ * costs one status call, as before.
+ */
+async function streamOfCheckout($: Engine, script: string): Promise<Feature | null> {
+  const probe = async (branch: string) => pickFeature(await runJson($, ['python3', script, 'status', '--json', `--branch=${branch}`]))
+  const own = await branchIn($)
+  const found = own === null ? null : await probe(own)
+  if (found) return found
+  const tried = new Set(own === null ? [] : [own])
+  let best: Feature | null = null
+  for (const dir of await nestedRepos($)) {
+    const branch = await branchIn($, dir)
+    if (branch === null || tried.has(branch)) continue
+    tried.add(branch)
+    let feature: Feature | null
+    try {
+      feature = await probe(branch)
+    } catch {
+      continue // one nested repo's failed probe must not discard another's match
+    }
+    if (feature && (best === null || lastEventAt(feature) > lastEventAt(best))) best = feature
+  }
+  return best
+}
+
 /** One refresh: git branch, status, the stream's log, then the artifacts those events point at. */
 export async function refreshPosition($: Engine, script: string, homes: Homes): Promise<Refreshed> {
   try {
-    const branch = await currentBranch($)
-    if (branch === null) return { position: null, error: null }
-    const feature = pickFeature(await runJson($, ['python3', script, 'status', '--json', `--branch=${branch}`]))
+    const feature = await streamOfCheckout($, script)
     const stream = typeof feature?.stream === 'string' ? feature.stream : typeof feature?.feature === 'string' ? feature.feature : null
     if (!feature || stream === null) return { position: null, error: null }
     const log = (await runJson($, ['python3', script, 'log', '--stream', stream, '--json'])) as { events?: unknown[] }

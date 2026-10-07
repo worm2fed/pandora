@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { FEATURE_PREFIXED, LOG, STATUS } from './fixtures'
+import { FEATURE_PREFIXED, LOG, SIDECAR, STATUS } from './fixtures'
 import { BAND, PANE, START, bareWorld, engineWorld, journaledWorld, ok } from './world'
 import { WORKLOG } from './fixtures'
 
@@ -73,6 +73,71 @@ describe('register', () => {
     await pane.unmount()
     const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
     expect(await band.find({ key: 'open-hud' })).toBeUndefined()
+    await band.unmount()
+  })
+
+  test('an umbrella: the session directory is no git repo, the stream is found through a nested repo', async ($, on) => {
+    engineWorld(on)
+    const runs: string[][] = []
+    const listed: string[] = []
+    // a second nested repo on a branch whose stream went quiet a day earlier
+    const DORMANT = {
+      ...FEATURE_PREFIXED,
+      feature: 'feat/older-stream',
+      stream: 'feat/older-stream',
+      last_event: { seq: 7, ts: '2026-09-30T09:30:00+00:00', type: 'phase-entered' },
+    }
+    on('fs.exists', async (_$, e) => ({
+      value:
+        e.path.endsWith('.claude/shipgate.json') ||
+        e.path.endsWith('/shipgate/scripts/journal.py') ||
+        e.path.endsWith('/service/.git') ||
+        e.path.endsWith('/older/.git'),
+    }))
+    on('fs.read', async (_$, e) => {
+      if (e.path.endsWith('.claude/shipgate.json')) return { value: JSON.stringify(SIDECAR) }
+      if (e.path.endsWith('example.worklog.md')) return { value: WORKLOG }
+      return { deny: `no such fixture: ${e.path}` }
+    })
+    // the umbrella root: two nested repos (the dormant one listed first), a plain folder, a
+    // dot-directory, and no `source/` or `packages/` (the engine may pass those relative or absolute)
+    on('fs.list', async (_$, e) => {
+      listed.push(e.path ?? '')
+      if (/(^|\/)(source|packages)$/.test(e.path ?? '')) return { deny: 'no such directory' }
+      return {
+        value: [
+          { name: 'older', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false },
+          { name: 'service', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false },
+          { name: 'notes', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false },
+          { name: '.claude', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false },
+          { name: 'README.md', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false },
+        ],
+      }
+    })
+    on('process.run', async (_$, e) => {
+      const argv = [...e.argv]
+      runs.push(argv)
+      if (argv[0] === 'git' && argv[1] === '-C') return ok(argv[2] === 'service' ? 'feat/example-stream\n' : argv[2] === 'older' ? 'feat/older-stream\n' : '')
+      if (argv[0] === 'git') return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
+      if (argv.includes('status')) {
+        if (argv.includes('--branch=feat/example-stream')) return ok(JSON.stringify(STATUS))
+        if (argv.includes('--branch=feat/older-stream')) return ok(JSON.stringify({ ...STATUS, features: [DORMANT], branch_match: 'feat/older-stream' }))
+        return ok(JSON.stringify({ ...STATUS, features: [], branch_match: null }))
+      }
+      if (argv.includes('log')) return ok(JSON.stringify(LOG))
+      return ok('')
+    })
+    await $.session.start(START)
+    // the root and the two setup globs were listed, once each
+    expect(listed.map(p => p.split('/').pop())).toEqual(expect.arrayContaining(['source', 'packages']))
+    expect(listed.length).toBe(3)
+    // every nested repo's branch was asked for; never the plain folder or the dot-directory
+    expect(runs.filter(argv => argv[0] === 'git' && argv[1] === '-C').map(argv => argv[2])).toEqual(['older', 'service'])
+    expect(runs.filter(argv => argv.includes('status')).map(argv => argv.at(-1))).toEqual(['--branch=feat/older-stream', '--branch=feat/example-stream'])
+    // the live stream wins over the dormant one, whatever the directory order
+    expect(runs.find(argv => argv.includes('log'))).toContain('feat/example-stream')
+    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect((await band.find({ type: 'Text', text: /feat\/example-stream/ }))?.text).toContain('implement')
     await band.unmount()
   })
 

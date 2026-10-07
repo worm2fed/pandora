@@ -357,6 +357,49 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["window_months"], 9)
         self.assertEqual(cfg["source"]["window_months"], "shipgate.md")
 
+    def test_a_sidecar_marks_a_plain_parent_as_the_umbrella(self):
+        """An umbrella bootstrapped by setup is not always a git work tree: the sidecar
+        it wrote is the marker, and the nested repo reads the umbrella's config."""
+        root = Path(self.umbrella.parent) / "plain-umbrella"
+        repo = FixtureRepo(root / "repo")
+        repo.commit("one", ts(2020, 1, 1), writes={"a.py": "1\n"})
+        sidecar = root / ".claude" / "shipgate.json"
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text('{"version": 1, "db": ".claude/shipgate.db"}', encoding="utf-8")
+        self.write_config(root, "## Code signals\n- Window: `9`\n- Exclude: `gen/`\n")
+        cfg = self.signals_json("hotspots", "--repo", repo.path)["config"]
+        self.assertEqual(cfg["window_months"], 9)
+        self.assertIn("gen/", cfg["exclude"])  # the file's excludes add to the defaults
+        self.assertEqual(cfg["source"], {"window_months": "shipgate.md",
+                                         "fix_pattern": "default",
+                                         "exclude": "shipgate.md"})
+
+    def test_a_sidecar_below_a_git_umbrella_adds_a_config_without_dropping_the_umbrellas(self):
+        """A sidecar between the repo and the umbrella's git toplevel: both configs
+        apply, the nearer one first per key."""
+        repo = FixtureRepo(self.umbrella / "source" / "repo")
+        repo.commit("one", ts(2020, 1, 1), writes={"a.py": "1\n"})
+        sidecar = self.umbrella / "source" / ".claude" / "shipgate.json"
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text("{}", encoding="utf-8")
+        self.write_config(self.umbrella / "source", "## Code signals\n- Window: `5`\n")
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
+                                         "- Fix pattern: `^umbrella`\n")
+        cfg = self.signals_json("hotspots", "--repo", repo.path)["config"]
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (5, "^umbrella"))
+
+    def test_the_sidecar_is_found_above_a_nested_parent_directory(self):
+        """`source/<service>` layouts: the sidecar sits two levels up, not in the parent."""
+        root = Path(self.umbrella.parent) / "plain-umbrella"
+        repo = FixtureRepo(root / "source" / "repo")
+        repo.commit("one", ts(2020, 1, 1), writes={"a.py": "1\n"})
+        sidecar = root / ".claude" / "shipgate.json"
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text("{}", encoding="utf-8")
+        self.write_config(root, "## Code signals\n- Window: `7`\n")
+        cfg = self.signals_json("hotspots", "--repo", repo.path)["config"]
+        self.assertEqual(cfg["window_months"], 7)
+
     def test_the_repo_config_wins_over_the_umbrella(self):
         self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
                                          "- Fix pattern: `^umbrella`\n")
