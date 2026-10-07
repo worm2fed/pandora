@@ -25,13 +25,13 @@ export const ok = (stdout: string) => ({
 })
 
 /** What every session needs answered beneath the plugin, journaled or not. */
-export function engineWorld(on: On): { commands: string[]; opened: string[]; submitted: string[] } {
+export function engineWorld(on: On, cwd: string = START.cwd): { commands: string[]; opened: string[]; submitted: string[] } {
   const commands: string[] = []
   const opened: string[] = []
   const submitted: string[] = []
   mock.clock(on)
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
-  on('session.cwd', async () => ({ value: START.cwd }))
+  on('session.cwd', async () => ({ value: cwd }))
   // The engine draws nothing of its own in the band: an empty box stands for that here.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e) => {
     const { Box } = $.ui.resolve(e)

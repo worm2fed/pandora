@@ -2,6 +2,16 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.2.1 — a session opened inside a nested repo of an umbrella. The HUD looked for the
+`.claude/shipgate.json` sidecar in the session directory only, so a session started in one
+of an umbrella's service repos got the status brief from shipgate's hooks (which walk up to
+the umbrella root) but a HUD that said there was no journal. The HUD now finds the sidecar
+the way the hooks do — the session directory, then each directory above it — runs
+`journal.py` in that project root (where it finds the sidecar and the database by itself),
+reads the worklog and ADRs under it, and matches artifact writes against it (a path written
+relative to the nested session directory, `../` included, is normalised first). In a plain
+project nothing changes. Two tests.
+
 v0.2.0 — umbrella checkouts. The branch came from `git rev-parse` in the session directory
 only, so in an umbrella — a plain folder or a repo of its own with the real repos one level
 down — the HUD found no branch (or the umbrella's own, which carries no stream) and drew

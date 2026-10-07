@@ -32,7 +32,9 @@ otherwise. A request that arrives during a refresh queues one trailing refresh.
 
 - Claude Code **2.1.290 or newer** (the mods API; early access, so a release may move it).
 - **shipgate** installed from the same marketplace, and a project that ran `/shipgate:setup`
-  with a journal: the HUD keys off the `.claude/shipgate.json` sidecar.
+  with a journal: the HUD keys off the `.claude/shipgate.json` sidecar, in the session's
+  directory or any directory above it (a session inside a nested repo of an umbrella uses
+  the umbrella's journal, as shipgate's hooks do).
 
 In a project **without** that sidecar the mod draws nothing, opens no pane and runs no
 process. `/hud` still exists and says so.

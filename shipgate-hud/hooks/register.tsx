@@ -124,10 +124,47 @@ export async function locateJournal($: Engine, journalScript: string): Promise<s
   return null
 }
 
+/** The session's directory, no trailing slash. */
+const sessionDir = async ($: Engine): Promise<string> => (await $.session.cwd()).replace(/\/+$/, '') || '/'
+
+/**
+ * The directory the sidecar marks as the project: the session's own, or the nearest ancestor
+ * holding one — a session opened inside a nested repo of an umbrella finds the umbrella's
+ * journal this way, as shipgate's hooks do. Null when no ancestor has a sidecar.
+ */
+async function locateProject($: Engine): Promise<string | null> {
+  let dir = await sessionDir($)
+  for (;;) {
+    if (await exists($, `${dir}/${SIDECAR}`)) return dir
+    const cut = dir.lastIndexOf('/')
+    if (cut <= 0) return (await exists($, `/${SIDECAR}`)) ? '/' : null
+    dir = dir.slice(0, cut)
+  }
+}
+
+/** `root` as the prefix an absolute path under it starts with (`/` is its own prefix). */
+const prefixOf = (root: string): string => (root === '/' ? '/' : `${root}/`)
+
+/** `a/./b/../c` as `a/c`: segments resolved, nothing above the start. */
+const normalizePath = (path: string): string => {
+  const out: string[] = []
+  for (const segment of path.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (out.length === 0) return '..'
+      out.pop()
+    } else out.push(segment)
+  }
+  return (path.startsWith('/') ? '/' : '') + out.join('/')
+}
+
+/** A project-relative path made absolute under the located project root; unchanged (session-relative) without one. */
+const inProject = (path: string): string => (path.startsWith('/') || projectRoot === null ? path : `${prefixOf(projectRoot)}${path}`)
+
 /** shipgate's defaults overlaid key by key with the sidecar's `artifact_homes`, as journal.py merges them. */
 async function readHomes($: Engine): Promise<Homes> {
   const merged: Record<string, string> = { ...DEFAULT_ARTIFACT_HOMES }
-  const text = await readText($, SIDECAR)
+  const text = await readText($, inProject(SIDECAR))
   if (text !== null) {
     try {
       const homes = (JSON.parse(text) as { artifact_homes?: unknown }).artifact_homes
@@ -143,15 +180,17 @@ async function readHomes($: Engine): Promise<Homes> {
   return homesOf(merged)
 }
 
-/** A written path relative to the session's directory; null when it lies outside it. */
+/** A written path relative to the project root; null when it lies outside it. */
 async function projectRelative($: Engine, path: string): Promise<string | null> {
-  if (!path.startsWith('/')) return path.replace(/^\.\//, '')
-  const cwd = (await $.session.cwd()).replace(/\/+$/, '')
-  return path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : null
+  const root = projectRoot ?? (await sessionDir($))
+  const absolute = normalizePath(path.startsWith('/') ? path : `${prefixOf(await sessionDir($))}${path}`)
+  const prefix = prefixOf(root)
+  return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : null
 }
 
+/** journal.py runs in the project root: there it finds the sidecar and the database by itself. */
 const runJson = async ($: Engine, argv: readonly string[]): Promise<unknown> => {
-  const ran = await $.process.run(argv, { timeoutMs: 10_000 })
+  const ran = await $.process.run(argv, { timeoutMs: 10_000, ...(projectRoot ? { cwd: projectRoot } : {}) })
   if (ran.exitCode !== 0) throw new Error(`${argv.slice(-2).join(' ')} failed: ${(ran.stderr || ran.stdout).trim().slice(0, 160)}`)
   if (ran.isStdoutTruncated) throw new Error(`${argv.slice(-2).join(' ')}: output over 4 MiB, not parsed`)
   return JSON.parse(ran.stdout) as unknown
@@ -216,7 +255,7 @@ async function worklogDirs($: Engine, glob: string): Promise<{ dir: string; file
   if (!dirGlob.startsWith('*/')) return [{ dir: dirGlob, file }]
   const rest = dirGlob.slice(2)
   try {
-    const top = await $.fs.list()
+    const top = await $.fs.list(projectRoot ?? undefined)
     return top.filter(e => e.kind === 'dir' && !e.name.startsWith('.')).map(e => ({ dir: `${e.name}/${rest}`, file }))
   } catch {
     return []
@@ -235,7 +274,7 @@ export async function worklogForStream($: Engine, stream: string, homes: Homes):
   let best: { path: string; mtimeMs: number } | null = null
   for (const { dir, file } of await worklogDirs($, homes.worklogGlob)) {
     try {
-      for (const entry of await $.fs.list(dir)) {
+      for (const entry of await $.fs.list(inProject(dir))) {
         if (entry.kind !== 'file' || !matchesHome(entry.name, file) || !named(entry.name)) continue
         if (!best || entry.mtimeMs > best.mtimeMs) best = { path: `${dir}/${entry.name}`, mtimeMs: entry.mtimeMs }
       }
@@ -293,10 +332,10 @@ export async function refreshPosition($: Engine, script: string, homes: Homes): 
     const events = Array.isArray(log?.events) ? log.events : []
     const refs = artifactRefs(events)
     const worklogPath = refs.worklog ?? (await worklogForStream($, stream, homes))
-    const worklogText = worklogPath ? await readText($, worklogPath) : null
+    const worklogText = worklogPath ? await readText($, inProject(worklogPath)) : null
     const adrs: Adr[] = []
     for (const path of refs.adrs) {
-      const text = await readText($, path)
+      const text = await readText($, inProject(path))
       if (text !== null) adrs.push(parseAdr(path, text))
     }
     const position = toPosition({
@@ -323,18 +362,25 @@ const JOURNAL_APPEND = /journal\.py\b[\s\S]*\bappend\b/
 let journalScript = ''
 let script: string | null = null
 let homes: Homes | null = null
+let projectRoot: string | null = null
 let inFlight: Promise<void> | null = null
 let isPending = false
 let hasSurface = false
 
 async function detect($: EngineInterface): Promise<boolean> {
-  const present = await exists($, SIDECAR)
+  projectRoot = await locateProject($)
+  const present = projectRoot !== null
   await update($, isJournaled, () => present)
   if (!present) homes = null
   return present
 }
 
 async function refreshOnce($: EngineInterface): Promise<void> {
+  if (projectRoot === null) {
+    // detect() found no sidecar since the last refresh (a /clear elsewhere, a removed sidecar)
+    await update($, position, () => null)
+    return
+  }
   if (script === null) script = await locateJournal($, journalScript)
   if (script === null) {
     await update($, lastError, () => 'shipgate-hud: cannot find shipgate/scripts/journal.py — set the journalScript option.')
@@ -442,7 +488,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'hud' }, async $ => {
     if (!(await detect($))) {
-      return { text: `shipgate-hud: no ${SIDECAR} in this project — run /shipgate:setup to create a flow journal.` }
+      return { text: `shipgate-hud: no ${SIDECAR} in this project or any directory above it — run /shipgate:setup to create a flow journal.` }
     }
     await $.ui.open({ id: PANE_ID, title: 'shipgate', focus: true, closeOnEscape: true })
     await refresh($)
