@@ -181,7 +181,9 @@ describe('register', () => {
         e.path.endsWith('.claude/shipgate.json') ||
         e.path.endsWith('/shipgate/scripts/journal.py') ||
         e.path.endsWith('/service/.git') ||
-        e.path.endsWith('/older/.git'),
+        e.path.endsWith('/older/.git') ||
+        e.path.endsWith('/service/.worktrees/wt-inside/.git') ||
+        e.path.endsWith('/.worktrees/wt-beside/.git'),
     }))
     on('fs.read', async (_$, e) => {
       if (e.path.endsWith('.claude/shipgate.json')) return { value: JSON.stringify(SIDECAR) }
@@ -189,10 +191,15 @@ describe('register', () => {
       return { deny: `no such fixture: ${e.path}` }
     })
     // the umbrella root: two nested repos (the dormant one listed first), a plain folder, a
-    // dot-directory, and no `source/` or `packages/` (the engine may pass those relative or absolute)
+    // dot-directory, a worktree inside `service` and one beside the repos, and no `source/` or
+    // `packages/` (the engine may pass paths relative or absolute)
     on('fs.list', async (_$, e) => {
       listed.push(e.path ?? '')
-      if (/(^|\/)(source|packages)$/.test(e.path ?? '')) return { deny: 'no such directory' }
+      const path = e.path ?? ''
+      if (/(^|\/)(source|packages)(\/\.worktrees)?$/.test(path)) return { deny: 'no such directory' }
+      if (/(^|\/)service\/\.worktrees$/.test(path)) return { value: [{ name: 'wt-inside', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }] }
+      if (/(^|\/)(older|notes)\/\.worktrees$/.test(path)) return { deny: 'no such directory' }
+      if (/(^|\/)\.worktrees$/.test(path)) return { value: [{ name: 'wt-beside', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }] }
       return {
         value: [
           { name: 'older', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false },
@@ -206,7 +213,10 @@ describe('register', () => {
     on('process.run', async (_$, e) => {
       const argv = [...e.argv]
       runs.push(argv)
-      if (argv[0] === 'git' && argv[1] === '-C') return ok(argv[2] === 'service' ? 'feat/example-stream\n' : argv[2] === 'older' ? 'feat/older-stream\n' : '')
+      if (argv[0] === 'git' && argv[1] === '-C') {
+        const branch = { service: 'feat/example-stream', older: 'feat/older-stream', 'service/.worktrees/wt-inside': 'feat/wt-inside', '.worktrees/wt-beside': 'feat/wt-beside' }[argv[2] ?? '']
+        return ok(branch ? `${branch}\n` : '')
+      }
       if (argv[0] === 'git') return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', isStdoutTruncated: false, isStderrTruncated: false } }
       if (argv.includes('status')) {
         if (argv.includes('--branch=feat/example-stream')) return ok(JSON.stringify(STATUS))
@@ -217,12 +227,11 @@ describe('register', () => {
       return ok('')
     })
     await $.session.start(START)
-    // the root and the two setup globs were listed, once each
-    expect(listed.map(p => p.split('/').pop())).toEqual(expect.arrayContaining(['source', 'packages']))
-    expect(listed.length).toBe(3)
-    // every nested repo's branch was asked for; never the plain folder or the dot-directory
-    expect(runs.filter(argv => argv[0] === 'git' && argv[1] === '-C').map(argv => argv[2])).toEqual(['older', 'service'])
-    expect(runs.filter(argv => argv.includes('status')).map(argv => argv.at(-1))).toEqual(['--branch=feat/older-stream', '--branch=feat/example-stream'])
+    // the root and the two setup globs were listed, plus the `.worktrees` of each repo and parent
+    expect(listed.map(p => p.split('/').pop())).toEqual(expect.arrayContaining(['source', 'packages', '.worktrees']))
+    // every nested repo's branch was asked for — a repo, its worktrees, then the parent's — never the plain folder or the dot-directory
+    expect(runs.filter(argv => argv[0] === 'git' && argv[1] === '-C').map(argv => argv[2])).toEqual(['older', 'service', 'service/.worktrees/wt-inside', '.worktrees/wt-beside'])
+    expect(runs.filter(argv => argv.includes('status')).map(argv => argv.at(-1))).toEqual(['--branch=feat/older-stream', '--branch=feat/example-stream', '--branch=feat/wt-inside', '--branch=feat/wt-beside'])
     // the live stream wins over the dormant one, whatever the directory order
     expect(runs.find(argv => argv.includes('log'))).toContain('feat/example-stream')
     const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })

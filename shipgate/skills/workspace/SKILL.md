@@ -82,11 +82,26 @@ config and no nested repos, the working dir is the repo and this section doesn't
    <branch> <base>` instead. Call out the costs so it's an informed choice: each worktree needs
    its own dependency install (costly if the project has heavy dependencies), and a dev stack
    bound to the main repo path won't see worktree code without reconfiguration. Don't default to this.
+   **The path is part of the contract:** run that command from the target repo, so the worktree
+   lands in its `.worktrees/<slug>` (add `.worktrees/` to `.git/info/exclude` once). The
+   SessionStart hook and the HUD look there — and in a `.worktrees/` beside an umbrella's repos,
+   for worktrees made by hand — one level deep; a worktree anywhere else is invisible to them, and
+   the brief and the pane then show no position for the live work. A session opened in the
+   worktree is "already on the branch" (step 2); from the main checkout, go to the worktree
+   rather than check the branch out a second time.
+
+7. **Never move started work silently.** A branch that carries changes moves — into a worktree,
+   out of one, to another checkout — only with the same proposal and confirmation as a new
+   branch, and on a journaled project with a `deviation` event naming the new path
+   (`{"note":"branch moved into a worktree .worktrees/<slug>: <why>"}`), so the next session and
+   the HUD find the work where the journal says. The usual trigger is a second issue wanting the
+   same checkout: **stop and ask** — finish or park the first, or (only on the user's explicit
+   say-so, and never inside epic mode's one-issue-at-a-time loop) put the *second* in a worktree.
 
 ## Output
 
-Report the active branch, the base it was cut from, whether it's in-place or a worktree, and any
-caveats (dirty tree handled, deps to install). Then hand off to Route & Map.
+Report the active branch, the base it was cut from, whether it's in-place or a worktree (with
+its path), and any caveats (dirty tree handled, deps to install). Then hand off to Route & Map.
 
 If you're already on the correct branch for this work, this whole phase collapses to a one-line
 confirmation — it's a guard, not ceremony.
@@ -99,9 +114,13 @@ name. Append it here, the moment it happens — not later — as one `--batch` (
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <branch> --batch <<'EOF'
 {"type":"flow-started","data":{"request":"add export filters","branch":"feat/1234-add-export-filters"}}
-{"type":"phase-entered","data":{"phase":"workspace"}}
+{"type":"phase-entered","data":{"phase":"workspace","note":"in place, off main"}}
 EOF
 ```
+
+When the branch lives in a worktree, say so in that `note` and put the path in `refs`
+(`{"phase":"workspace","note":"worktree, off main","refs":[".worktrees/add-export-filters"]}`):
+the journal is where a later session learns where the work is.
 
 `flow-started` names the flow; `phase-entered workspace` puts the stream in its first phase, so
 the next phase's entry is a single step forward — `append` refuses a forward jump over a phase it

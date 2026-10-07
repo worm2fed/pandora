@@ -210,25 +210,50 @@ const branchIn = async ($: Engine, dir?: string): Promise<string | null> => {
 
 /** Where setup looks for an umbrella's nested repos: `<dir>/.git`, `source/<dir>/.git`, `packages/<dir>/.git`. */
 const NESTED_REPO_PARENTS = ['', 'source', 'packages']
+/** Where shipgate's workspace skill puts a git worktree: `.worktrees/<slug>`, beside the repos or inside one. */
+const WORKTREES_DIR = '.worktrees'
+
+/** The most nested repos and worktrees one refresh probes (each costs a git run); the hook keeps the same cap. */
+const NESTED_REPO_LIMIT = 64
+
+/** The child directories of `base` (the session directory when empty), sorted; dot-names, node_modules and links left out. */
+async function childDirs($: Engine, base: string): Promise<string[]> {
+  try {
+    const entries = await $.fs.list(base || undefined)
+    return entries
+      .filter(e => e.kind === 'dir' && !e.isLink && !e.name.startsWith('.') && e.name !== 'node_modules')
+      .map(e => (base ? `${base}/${e.name}` : e.name))
+      .sort()
+  } catch {
+    return []
+  }
+}
 
 /**
  * The nested repos of an umbrella checkout, relative to the session's directory. An umbrella
  * is a plain folder or a repo of its own holding the real repos one level down; its own
- * branch (if any) carries no stream, the nested repos' branches do.
+ * branch (if any) carries no stream, the nested repos' branches do. A worktree sits in
+ * `.worktrees/` beside the repos or inside one, so those are looked into as well: a repo,
+ * then its own worktrees, then the parent's — each directory once, at most NESTED_REPO_LIMIT
+ * in all, the scan stopping there too. The same order and cap as shipgate's SessionStart hook.
  */
 async function nestedRepos($: Engine): Promise<string[]> {
   const found: string[] = []
+  const take = async (dir: string): Promise<boolean> => {
+    if (found.length >= NESTED_REPO_LIMIT) return false
+    if (!found.includes(dir) && (await exists($, `${dir}/.git`))) found.push(dir)
+    return true
+  }
   for (const parent of NESTED_REPO_PARENTS) {
-    let entries: Awaited<ReturnType<Engine['fs']['list']>>
-    try {
-      entries = await $.fs.list(parent || undefined)
-    } catch {
-      continue
+    for (const repo of await childDirs($, parent)) {
+      if (!(await exists($, `${repo}/.git`))) continue
+      if (!(await take(repo))) return found
+      for (const worktree of await childDirs($, `${repo}/${WORKTREES_DIR}`)) {
+        if (!(await take(worktree))) return found
+      }
     }
-    for (const entry of entries) {
-      if (entry.kind !== 'dir' || entry.name.startsWith('.') || entry.name === 'node_modules') continue
-      const dir = parent ? `${parent}/${entry.name}` : entry.name
-      if (await exists($, `${dir}/.git`)) found.push(dir)
+    for (const worktree of await childDirs($, parent ? `${parent}/${WORKTREES_DIR}` : WORKTREES_DIR)) {
+      if (!(await take(worktree))) return found
     }
   }
   return found

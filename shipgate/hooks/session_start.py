@@ -31,6 +31,8 @@ META_STREAM = "shipgate"
 GIT_TIMEOUT_SECONDS = 2
 # Where an umbrella keeps its nested repos — the same three places `setup` looks.
 NESTED_REPO_PARENTS = ("", "source", "packages")
+# Where `workspace` puts a git worktree: `.worktrees/<slug>` beside the repos or inside one.
+WORKTREES_DIR = ".worktrees"
 NESTED_REPO_LIMIT = 64
 NESTED_ENTRY_LIMIT = 512  # directory entries examined per parent
 HEAD_REF_PREFIX = "ref: refs/heads/"
@@ -137,50 +139,83 @@ def head_branch(git_entry, root):
     return _branch_name(line[len(HEAD_REF_PREFIX):])
 
 
+def _is_repo(directory):
+    """A `.git` entry of its own (directory or `gitdir:` file), never through a symlink."""
+    git_entry = os.path.join(directory, ".git")
+    return os.path.lexists(git_entry) and not os.path.islink(git_entry)
+
+
+def _child_dirs(base):
+    """Real (unlinked) child directories of `base`, sorted, dot-names and node_modules
+    left out, at most NESTED_ENTRY_LIMIT entries examined; [] when unreadable or when
+    `base` is itself a symlink (a checkout must not point the scan elsewhere)."""
+    if os.path.islink(base):
+        return []
+    try:
+        with os.scandir(base) as entries:
+            return sorted(
+                os.path.join(base, entry.name)
+                for entry in _bounded(entries, NESTED_ENTRY_LIMIT)
+                if entry.is_dir(follow_symlinks=False)
+                and not entry.name.startswith(".")
+                and entry.name != "node_modules"
+            )
+    except OSError:
+        return []
+
+
 def nested_branches(cwd, own=None):
     """Branches checked out in the nested repos of an umbrella checkout, deduplicated.
 
     An umbrella holds the real repos one level down (`*/`, `source/*`, `packages/*`);
     its own directory is a plain folder or a repo on a branch that carries no stream.
-    Dot-directories, `node_modules` and symlinked entries are not looked into; at most
-    NESTED_ENTRY_LIMIT entries per parent are examined and NESTED_REPO_LIMIT repos read,
-    alphabetically, top level first. A single repo with no nested `.git` costs three
-    directory scans. Nothing here may raise: the branches are an ordering hint for the
-    brief, and losing the brief over a hint would invert the hook's priorities.
+    A git worktree made by `workspace` sits in `.worktrees/<slug>` beside the repos or
+    inside one, so each parent's and each repo's `.worktrees/` is looked into as well.
+    Other dot-directories, `node_modules` and symlinked entries are not; the first
+    NESTED_ENTRY_LIMIT entries of a directory are examined (sorted among themselves) and
+    NESTED_REPO_LIMIT repos read in all, top level first, a repo's worktrees right after
+    it, and the scan stops where the reads do. A single repo with no nested `.git` costs
+    a few directory scans. Nothing here may raise: the branches are an ordering hint for
+    the brief, and losing the brief over a hint would invert the hook's priorities.
     """
     if not isinstance(cwd, str):
         return []
     seen = {own} if own else set()
     found = []
-    read = 0
     try:
-        for parent in NESTED_REPO_PARENTS:
-            base = os.path.join(cwd, parent) if parent else cwd
-            try:
-                with os.scandir(base) as entries:
-                    names = sorted(
-                        entry.name
-                        for entry in _bounded(entries, NESTED_ENTRY_LIMIT)
-                        if entry.is_dir(follow_symlinks=False)
-                        and not entry.name.startswith(".")
-                        and entry.name != "node_modules"
-                    )
-            except OSError:
-                continue
-            for name in names:
-                git_entry = os.path.join(base, name, ".git")
-                if not os.path.lexists(git_entry) or os.path.islink(git_entry):
-                    continue
-                read += 1
-                if read > NESTED_REPO_LIMIT:
-                    return found
-                branch = head_branch(git_entry, cwd)
-                if branch and branch not in seen:
-                    seen.add(branch)
-                    found.append(branch)
+        for directory in _bounded(_nested_repo_dirs(cwd), NESTED_REPO_LIMIT):
+            branch = head_branch(os.path.join(directory, ".git"), cwd)
+            if branch and branch not in seen:
+                seen.add(branch)
+                found.append(branch)
     except Exception:  # noqa: BLE001 — a hint, never the brief
         return found
     return found
+
+
+def _nested_repo_dirs(cwd):
+    """Yield each nested repo and worktree directory once, in brief order, lazily — so a
+    cap on the consumer bounds the scanning too."""
+    visited = set()
+
+    def fresh(directory):
+        if directory in visited or not _is_repo(directory):
+            return False
+        visited.add(directory)
+        return True
+
+    for parent in NESTED_REPO_PARENTS:
+        base = os.path.join(cwd, parent) if parent else cwd
+        for repo in _child_dirs(base):
+            if not fresh(repo):
+                continue
+            yield repo
+            for worktree in _child_dirs(os.path.join(repo, WORKTREES_DIR)):
+                if fresh(worktree):
+                    yield worktree
+        for worktree in _child_dirs(os.path.join(base, WORKTREES_DIR)):
+            if fresh(worktree):
+                yield worktree
 
 
 def _bounded(iterable, limit):

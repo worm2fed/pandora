@@ -2,6 +2,13 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.2.2 — a stream checked out in a git worktree is found. The umbrella scan (0.2.0) skipped
+dot-directories, so a branch checked out in a worktree under `.worktrees/` — where shipgate's
+`workspace` skill puts one, beside the repos or inside one — was never probed and the pane said
+there was no stream for exactly the work in progress. The scan now looks into each parent's and
+each nested repo's `.worktrees/` (a repo, then its own worktrees, then the parent's). One test
+extended.
+
 v0.2.1 — a session opened inside a nested repo of an umbrella. The HUD looked for the
 `.claude/shipgate.json` sidecar in the session directory only, so a session started in one
 of an umbrella's service repos got the status brief from shipgate's hooks (which walk up to

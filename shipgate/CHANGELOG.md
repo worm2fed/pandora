@@ -2,6 +2,20 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.4 — a stream checked out in a git worktree is found. The SessionStart hook's nested-repo
+scan (0.14.3) skipped dot-directories and looked one level down only, so a branch checked out
+in a worktree under `.worktrees/` — where the `workspace` skill puts one, beside the repos or
+inside one — never reached `--nested-branch`, and the brief lost its ordering for exactly the
+work in progress. The scan now looks into each parent's and each nested repo's `.worktrees/`
+(a repo, then its own worktrees, then the parent's); a directory's worktrees are read only
+when it is a repo itself. Same caps and reads as before. One test extended. The `workspace`
+skill now says where a worktree goes (`.worktrees/<slug>` inside the target repo, the command
+run from there — where the hook and the HUD look), that started work is never
+moved into or out of a worktree without the same confirmation a new branch gets and a
+`deviation` event naming the new path, and that the `phase-entered workspace` note carries the
+worktree path in `refs`. Prompted by a session that moved an issue's branch into a worktree late
+in the flow, unrecorded, leaving the HUD and the brief with no position for the live work.
+
 v0.14.3 — the status brief keeps its checked-out-first ordering in an umbrella. The
 SessionStart hook took the branch from `git rev-parse` in the session directory only, so in
 an umbrella checkout (a plain folder, or a repo of its own on an integration branch, with

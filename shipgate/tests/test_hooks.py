@@ -405,10 +405,22 @@ class TestSessionStartBranch(StubJournalMixin, HookTestCase):
             (self.root / relative).mkdir(parents=True)
             init_git_checkout(self.root / relative, branch)
         (self.root / "notes").mkdir()  # a plain folder is not a repo
+        # worktrees where `workspace` puts them: inside a repo, and beside the repos
+        for repo, target, branch in (
+            ("svc-a", self.root / "svc-a" / ".worktrees" / "x", "feat/wt-inside"),
+            ("source/svc-b", self.root / "source" / ".worktrees" / "svc-b-1", "feat/wt-beside"),
+        ):
+            added = subprocess.run(
+                ["git", "worktree", "add", "-q", "-b", branch, str(target)],
+                cwd=str(self.root / repo), capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(added.returncode, 0, added.stderr)
         result = self.run_session_start()
         self.assertEqual(result.returncode, 0, result.stderr)
+        # a repo, then its own worktrees; a parent's `.worktrees/` after that parent's repos
         self.assertEqual(self.status_args(), [
-            "status", "--nested-branch=feat/a", "--nested-branch=feat/b",
+            "status", "--nested-branch=feat/a", "--nested-branch=feat/wt-inside",
+            "--nested-branch=feat/b", "--nested-branch=feat/wt-beside",
         ])
 
     def test_a_git_umbrella_passes_its_own_branch_and_the_nested_ones(self):

@@ -57,8 +57,9 @@ then bounded reads of the worklog and ADR files those events point at (relative 
 inside the project only). Only the stream of the checked-out branch is shown; on a branch
 with no stream the band is empty and the pane says so. In an umbrella checkout (the
 session directory is a plain folder or a repo of its own, the real repos one level down,
-in `source/` or in `packages/`) the session directory's branch carries no stream, so the
-HUD then asks each nested repo for its branch (`git -C <repo> rev-parse --abbrev-ref HEAD`),
+in `source/` or in `packages/`, and worktrees under `.worktrees/` beside the repos or inside
+one) the session directory's branch carries no stream, so the HUD then asks each nested repo
+and worktree for its branch (`git -C <repo> rev-parse --abbrev-ref HEAD`),
 probes each distinct branch once, and shows the most recently active stream among the
 matches (several nested repos may sit on branches with streams, one live, the rest dormant).
 Dot-directories and `node_modules` are not looked into. When the events name no worklog yet,
