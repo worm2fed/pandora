@@ -238,6 +238,17 @@ The plugin also expects the repo to carry **`CLAUDE.md`** files (root + nested w
 that's how `route-and-map` decides where code belongs. Repos without them still work; routing is
 just less informed.
 
+## Backlog
+
+- **Narrow `code-explorer`'s shell to read-only git.** Since 0.14.6 the agent has plain `Bash`,
+  limited to read-only git by its prompt only — a prompt-injected instruction in the repo it
+  reads could ask for more, and the user's permission settings are then the only guard (the
+  same holds for `code-reviewer`). If agent frontmatter `tools:` accepts permission patterns,
+  grant `Bash(git show:*)`, `Bash(git log:*)`, `Bash(git diff:*)`, `Bash(git grep:*)`,
+  `Bash(git blame:*)` and `Bash(git ls-tree:*)` instead, and keep the contract test in
+  `tests/test_workflow_scripts.py` in step. Raised by the security review of 0.14.7.
+  Recorded 2026-10-08.
+
 ## Status
 
 v0.13.0 — code signals. The flow's intelligence was all *declared* (CLAUDE.md, ADRs, the
