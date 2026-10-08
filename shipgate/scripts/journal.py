@@ -1565,6 +1565,7 @@ def _render_dormant(feature: Dict[str, Any]) -> str:
 def _render_feature(feature: Dict[str, Any]) -> List[str]:
     lines = [
         f"{_one_line(feature['stream'])}  (v{feature['version']})"
+        + ("  · this session" if feature.get("session_match") else "")
         + ("  · terminal" if feature.get("terminal") else "")
     ]
     lines.append(

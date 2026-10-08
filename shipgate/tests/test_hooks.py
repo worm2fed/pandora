@@ -321,7 +321,11 @@ if "status" in sys.argv[1:]:
         self.fail(f"the hook never invoked `journal.py {subcommand}`")
 
     def status_args(self) -> list[str]:
-        return self.journal_args("status")
+        """The branch hints `status` got; the session flag is asserted on its own."""
+        return [a for a in self.journal_args("status") if not a.startswith("--session=")]
+
+    def session_args(self) -> list[str]:
+        return [a for a in self.journal_args("status") if a.startswith("--session=")]
 
     def run_session_start(
         self, payload: dict | None = None, env_extra: dict | None = None
@@ -367,6 +371,25 @@ class TestSessionStartBranch(StubJournalMixin, HookTestCase):
     def test_the_session_id_is_passed_as_a_single_token(self):
         self.run_session_start()
         self.assertEqual(self.journal_args("session"), ["session", f"--set={SESSION}"])
+
+    # The session's own stream (the one it last wrote to) leads the brief — what a resumed
+    # or compacted session was driving, which need not be any checkout's branch.
+    def test_the_session_id_goes_to_status_as_a_single_token(self):
+        self.run_session_start()
+        self.assertEqual(self.session_args(), [f"--session={SESSION}"])
+
+    def test_a_missing_session_id_passes_no_session(self):
+        self.run_session_start({"cwd": str(self.root), "source": "startup"})
+        self.assertEqual(self.session_args(), [])
+
+    def test_a_malformed_session_id_passes_no_session(self):
+        for odd in ("", "a b", "x\ny", "-" * 3 + "all", "s" * 200, 42):
+            with self.subTest(session_id=odd):
+                (self.plugin / "calls.log").unlink(missing_ok=True)
+                self.run_session_start(
+                    {"session_id": odd, "cwd": str(self.root), "source": "startup"}
+                )
+                self.assertEqual(self.session_args(), [])
 
     def test_a_non_string_cwd_costs_the_branch_hint_not_the_brief(self):
         init_git_checkout(self.root, "feature/x")
@@ -684,6 +707,30 @@ class TestSessionStartBranchOrdering(HookTestCase):
             context.index(STREAM), context.index("aaa-other"),
             "the stream named after the branch must render first",
         )
+
+
+class TestSessionStartSessionOrdering(HookTestCase):
+    def test_the_sessions_stream_leads_the_brief_over_the_branch(self):
+        """A resumed or compacted session driving a stream with no branch (an epic's
+        planning stream) gets that stream first, marked as its own."""
+        init_git_checkout(self.root, STREAM)
+        for stream, actor in (("epic-x", f"orchestrator@{SESSION}"), (STREAM, "orchestrator@other")):
+            appended = journal(
+                self.db, "append", "--stream", stream, "--type", "phase-entered",
+                "--actor", actor, "--data", json.dumps({"phase": "workspace"}),
+            )
+            self.assertEqual(appended.returncode, 0, appended.stderr)
+
+        result = run_hook(
+            "session_start",
+            {"session_id": SESSION, "cwd": str(self.root), "source": "compact"},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(STREAM, context, f"no brief was rendered: {context}")
+        self.assertLess(context.index("epic-x"), context.index(STREAM))
+        self.assertIn("epic-x  (v1)  · this session", context)
 
 
 class TestStopGate(HookTestCase):

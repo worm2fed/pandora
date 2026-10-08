@@ -2,6 +2,15 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.7 — the session-start brief leads with the stream this session drives. The SessionStart
+hook asked `status` by branch only, so after a compaction or a resume a session driving a
+stream with no branch (an epic's planning stream) got the checkout's stream first, and in an
+umbrella possibly another session's. The hook now also passes `--session=<session_id>` from its
+payload (0.14.5's flag) — one token, and only for a plain id (letters, digits, `.`, `_`, `-`, at
+most 128), so an absent or odd id costs the ordering hint, never the brief. The brief marks that
+stream `· this session`. A session that has written nothing yet (a fresh start, `/clear`) gets
+the branch ordering as before. Four tests.
+
 v0.14.6 — an explorer can read a ref that is not checked out. `code-explorer` had Glob, Grep
 and Read only, so a lens that had to read `origin/<integration>` — a staleness check of a
 dormant design against what merged since — or a file's history could not, and the explore

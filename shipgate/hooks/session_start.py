@@ -12,6 +12,7 @@ cannot see it and `append` needs it to attribute skill-written events (ADR 0003)
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -37,6 +38,9 @@ NESTED_REPO_LIMIT = 64
 NESTED_ENTRY_LIMIT = 512  # directory entries examined per parent
 HEAD_REF_PREFIX = "ref: refs/heads/"
 MAX_BRANCH_LENGTH = 255
+# A Claude Code session id is a UUID; anything else (absent, empty, odd characters) is not
+# passed to `status --session`, so a strange payload costs the ordering hint, never the brief.
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def current_branch(cwd):
@@ -259,6 +263,11 @@ def main() -> None:
     # nested repos' branches go along as `--nested-branch=<name>`; which of them (if
     # any) orders the brief is the journal's call, not the hook's.
     status_args = ["status"] + ([f"--branch={branch}"] if branch else [])
+    # The stream this session last wrote to leads the brief, ahead of the branch's: after a
+    # compaction or a resume, that is the work in hand, branch or no branch.
+    raw_session = payload.get("session_id")
+    if isinstance(raw_session, str) and SESSION_ID_RE.fullmatch(raw_session):
+        status_args.append(f"--session={raw_session}")
     status_args += [
         f"--nested-branch={nested}"
         for nested in nested_branches(payload.get("cwd"), own=branch)

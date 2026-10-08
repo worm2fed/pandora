@@ -139,7 +139,9 @@ Capture, where each line is promoted to its home or dropped.
 
 On a journaled project (`/shipgate:setup` writes the config and creates the database) position
 is an append-only event stream — **one stream per issue, named for its branch** — rather than
-something re-inferred from artifacts every session. The SessionStart hook injects the status brief;
+something re-inferred from artifacts every session. The SessionStart hook injects the status brief —
+led by the stream this session last wrote to (`--session`, marked `· this session`: what a
+compacted or resumed session was driving, branch or no branch), then the checked-out branch's;
 `scripts/journal.py` is the whole interface:
 
 | Command | Does |
