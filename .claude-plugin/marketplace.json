@@ -12,7 +12,7 @@
       "source": "./shipgate",
       "displayName": "shipgate",
       "description": "Lean, gate-driven feature development: route by CLAUDE.md, explore in parallel, clarify before building, design with options, orchestrate by model tier, never claim done without evidence, review against design, capture durable learnings. Run /shipgate:setup to record flow state in an append-only journal instead of re-inferring it. Configure per project via .claude/shipgate.md; integrations degrade gracefully.",
-      "version": "0.14.4",
+      "version": "0.14.5",
       "author": {
         "name": "worm2fed",
         "email": "worm2fed@gmail.com"
@@ -32,7 +32,7 @@
       "source": "./shipgate-hud",
       "displayName": "shipgate-hud",
       "description": "A Claude Code mod for shipgate: the flow's position as a band above the prompt (stream, phase, tasks, last verify, decisions to veto) and a phase-aware pane — gate decisions with one-press veto, the Build Plan cross-checked against the journal, the committed design. Reads the journal through shipgate's CLI; draws nothing in a project without a shipgate journal.",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "author": {
         "name": "worm2fed",
         "email": "worm2fed@gmail.com"

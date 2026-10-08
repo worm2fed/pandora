@@ -2,6 +2,16 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.2.4 — the HUD shows the stream this session drives, per session. It showed only the stream of
+the checked-out branch, so a session driving a stream with no branch (an epic's planning stream)
+saw whatever stream the checkout carried — in an umbrella, another session's work at another
+phase. The status call now carries `--session=<$.session.id()>` and the HUD takes the stream
+journal.py marks `session_match` (shipgate 0.14.5: the live stream this session last wrote to
+itself), then the branch's as before; parallel sessions on one project each see their own. Still
+one status call for a single repo. A `journal.py` older than `--session` refuses the flag as a
+usage error (exit 2) and the HUD then asks by branch alone; any other failure is shown, not
+papered over. Five tests; the umbrella test expects the session probe first.
+
 v0.2.3 — anchored on the session root. The HUD took the session's directory from
 `$.session.cwd()`, which follows the shell's `cd`: a turn that stepped into a nested repo moved
 the sidecar lookup, the journal run and the branch along with it, and the pane then reported

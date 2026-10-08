@@ -50,7 +50,8 @@ def run_hook(
     hooks_dir: Path | None = None,
     env_extra: dict | None = None,
 ):
-    env = dict(os.environ)
+    # Claude Code's session id would label the hooks' appends; a test sets it when it means to.
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
     env["CLAUDE_PROJECT_DIR"] = str(project_dir if project_dir else cwd)
     env.update(env_extra or {})
     return subprocess.run(

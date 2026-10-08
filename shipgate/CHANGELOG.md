@@ -2,6 +2,18 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.5 — parallel sessions keep their own events, and status knows each session's stream.
+`append` labelled an unlabelled actor with `meta.current_session`, which every session start
+overwrites, so with two sessions open on one project the later starter's id labelled the
+other's events. The label now comes from `CLAUDE_CODE_SESSION_ID` in the appending shell (a
+subagent's carries its parent's), with `meta.current_session` as the fallback (ADR 0005,
+amending 0003). `status --session ID` marks the live stream that session last wrote to itself
+(`session_match`; hook-written events do not count, a finished stream releases it) and renders
+it first, in full, ahead of the branch's — the call shipgate-hud 0.2.4 makes. The test helpers
+drop the variable from the environment they hand to journal.py and the hooks, so the suite
+gives the same result inside and outside a Claude Code shell. Prompted by a session planning
+an epic (a stream with no branch) whose HUD showed another session's stream instead.
+
 v0.14.4 — a stream checked out in a git worktree is found. The SessionStart hook's nested-repo
 scan (0.14.3) skipped dot-directories and looked one level down only, so a branch checked out
 in a worktree under `.worktrees/` — where the `workspace` skill puts one, beside the repos or

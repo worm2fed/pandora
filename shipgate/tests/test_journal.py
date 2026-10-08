@@ -45,7 +45,14 @@ def load_journal_module():
     return module
 
 
+# The variable Claude Code sets in every shell it starts (journal.py SESSION_ENV). The
+# suite runs inside such shells too, so a test sees it only when it sets it itself.
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+
+
 def run_journal(args, cwd=None, env=None):
+    if env is None:
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
     return subprocess.run(
         [sys.executable, str(JOURNAL)] + [str(a) for a in args],
         cwd=str(cwd) if cwd else None,
@@ -72,8 +79,12 @@ class JournalTestCase(unittest.TestCase):
 
     # -- helpers ---------------------------------------------------------
 
-    def journal(self, *args, cwd=None, rc=None):
-        proc = run_journal(args, cwd=cwd or self.root)
+    def journal(self, *args, cwd=None, rc=None, session_env=None):
+        env = None
+        if session_env is not None:
+            env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+            env[SESSION_ENV] = session_env
+        proc = run_journal(args, cwd=cwd or self.root, env=env)
         if rc is not None:
             self.assertEqual(
                 proc.returncode,
@@ -518,6 +529,33 @@ class TestActorCanon(JournalTestCase):
             "feature/x", "flow-suspended", None, "--actor", "worker@sub-3"
         )
         self.assertEqual(self.actor_of(), "worker@sub-3")
+
+    # Two sessions open on one project: the later starter owns meta.current_session, so
+    # the label comes from the appending shell's own CLAUDE_CODE_SESSION_ID instead.
+    def append_from_session(self, session_id, *args):
+        self.journal("--db", self.db, "append", "--stream", "feature/x",
+                     "--type", "flow-suspended", *args, rc=OK, session_env=session_id)
+
+    def test_the_session_env_labels_the_actor_over_the_current_session(self):
+        self.set_session("S2")
+        self.append_from_session("S1")
+        self.assertEqual(self.actor_of(), "orchestrator@S1")
+
+    def test_concurrent_sessions_keep_their_own_labels(self):
+        self.set_session("S2")  # S2 started last
+        self.append_from_session("S1")
+        self.append_from_session("S2", "--actor", "worker")
+        self.append_from_session("S1")
+        self.assertEqual([e["actor"] for e in self.events("feature/x")],
+                         ["orchestrator@S1", "worker@S2", "orchestrator@S1"])
+
+    def test_an_explicit_label_wins_over_the_session_env(self):
+        self.append_from_session("S1", "--actor", "worker@sub-3")
+        self.assertEqual(self.actor_of(), "worker@sub-3")
+
+    def test_the_session_env_does_not_label_a_sessionless_role(self):
+        self.append_from_session("S1", "--actor", "user")
+        self.assertEqual(self.actor_of(), "user")
 
     def test_an_unknown_role_is_a_usage_error(self):
         proc = self.append_event(
@@ -1906,6 +1944,79 @@ class TestBriefRendering(JournalTestCase):
         self.append_event("feature/x", "phase-entered", {"phase": "workspace"})
         self.assertFalse(self.status_json()["features"][0]["implied_phase"])
         self.assertNotIn("(implied)", self.render())
+
+
+class TestSessionMatch(JournalTestCase):
+    """The stream a session is driving is the one it last wrote to itself — which need not
+    be the checked-out branch's (an epic planning stream has no branch; an umbrella's nested
+    repo may sit on another stream's branch), and differs per session when several run."""
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+
+    SKIPPED = ["workspace", "route-and-map", "explore"]
+
+    def write_as(self, session_id, stream, etype="flow-started", data=None):
+        self.append_event(stream, etype, data or {"request": "build it"},
+                          "--actor", f"orchestrator@{session_id}")
+
+    def test_the_sessions_stream_wins_over_the_branch(self):
+        self.write_as("A", "epic-1")
+        self.write_as("B", "fix/1-b")
+        payload = self.status_json("--session", "A", "--branch", "fix/1-b")
+        self.assertEqual(payload["session_match"], "epic-1")
+        self.assertEqual(payload["branch_match"], "fix/1-b")
+        self.assertEqual([f["stream"] for f in payload["features"]], ["epic-1", "fix/1-b"])
+        self.assertEqual([f["session_match"] for f in payload["features"]], [True, False])
+
+    def test_parallel_sessions_each_get_their_own_stream(self):
+        self.write_as("A", "epic-1")
+        self.write_as("B", "fix/1-b")
+        self.write_as("A", "epic-1", "phase-entered", {"phase": "clarify", "skipped": self.SKIPPED})
+        self.assertEqual(self.status_json("--session", "A")["session_match"], "epic-1")
+        self.assertEqual(self.status_json("--session", "B")["session_match"], "fix/1-b")
+
+    def test_the_newest_write_decides_between_two_streams_of_one_session(self):
+        self.write_as("A", "epic-1")
+        self.write_as("A", "fix/1-b")
+        self.assertEqual(self.status_json("--session", "A")["session_match"], "fix/1-b")
+        self.write_as("A", "epic-1", "phase-entered", {"phase": "clarify", "skipped": self.SKIPPED})
+        self.assertEqual(self.status_json("--session", "A")["session_match"], "epic-1")
+
+    def test_hook_written_events_do_not_move_the_session(self):
+        """A hook files an artifact write under the checked-out branch's stream; that says
+        where the file landed, not which stream the session drives."""
+        self.write_as("A", "epic-1")
+        self.write_as("B", "fix/1-b")
+        self.append_event("fix/1-b", "artifact-written",
+                          {"path": "docs/prd/b.md", "session": "A"}, "--actor", "hook")
+        self.assertEqual(self.status_json("--session", "A")["session_match"], "epic-1")
+
+    def test_a_finished_stream_releases_the_session(self):
+        self.write_as("A", "epic-1")
+        self.write_as("A", "epic-1", "flow-completed", {})
+        self.write_as("B", "fix/1-b")
+        payload = self.status_json("--session", "A", "--branch", "fix/1-b")
+        self.assertIsNone(payload["session_match"])
+        self.assertEqual(payload["features"][0]["stream"], "fix/1-b")
+
+    def test_a_session_with_no_writes_matches_nothing(self):
+        self.write_as("B", "fix/1-b")
+        payload = self.status_json("--session", "A")
+        self.assertIsNone(payload["session_match"])
+        self.assertEqual([f["session_match"] for f in payload["features"]], [False])
+
+    def test_no_session_flag_reports_no_match(self):
+        self.write_as("A", "epic-1")
+        self.assertIsNone(self.status_json()["session_match"])
+
+    def test_the_sessions_stream_renders_first_in_the_brief(self):
+        self.write_as("A", "epic-1")
+        self.write_as("B", "fix/1-b")
+        text = self.journal("--db", self.db, "status", "--session", "A",
+                            "--branch", "fix/1-b", rc=OK).stdout
+        self.assertLess(text.index("epic-1"), text.index("fix/1-b"))
 
 
 class TestBranchOrdering(JournalTestCase):

@@ -204,10 +204,23 @@ async function projectRelative($: Engine, path: string): Promise<string | null> 
   return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : null
 }
 
+/** journal.py's exit code for a usage error — an unknown flag among them (EXIT_USAGE). */
+const EXIT_USAGE = 2
+
+/** A journal.py run that exited non-zero, with its exit code. */
+class RunFailed extends Error {
+  constructor(
+    message: string,
+    readonly exitCode: number | null,
+  ) {
+    super(message)
+  }
+}
+
 /** journal.py runs in the project root: there it finds the sidecar and the database by itself. */
 const runJson = async ($: Engine, argv: readonly string[]): Promise<unknown> => {
   const ran = await $.process.run(argv, { timeoutMs: 10_000, ...(projectRoot ? { cwd: projectRoot } : {}) })
-  if (ran.exitCode !== 0) throw new Error(`${argv.slice(-2).join(' ')} failed: ${(ran.stderr || ran.stdout).trim().slice(0, 160)}`)
+  if (ran.exitCode !== 0) throw new RunFailed(`${argv.slice(-2).join(' ')} failed: ${(ran.stderr || ran.stdout).trim().slice(0, 160)}`, ran.exitCode)
   if (ran.isStdoutTruncated) throw new Error(`${argv.slice(-2).join(' ')}: output over 4 MiB, not parsed`)
   return JSON.parse(ran.stdout) as unknown
 }
@@ -279,13 +292,23 @@ async function nestedRepos($: Engine): Promise<string[]> {
   return found
 }
 
-type Feature = { feature?: unknown; stream?: unknown; branch_match?: unknown }
+type Feature = { feature?: unknown; stream?: unknown; branch_match?: unknown; session_match?: unknown }
 
-/** The stream of the checked-out branch, and nothing else: another branch's stream is not this position. */
-const pickFeature = (status: unknown): Feature | null => {
+/** The stream status marked with `flag`, and nothing else: an unmarked stream is not this position. */
+const pickFeature = (status: unknown, flag: 'session_match' | 'branch_match'): Feature | null => {
   const features = (status as { features?: unknown })?.features
   if (!Array.isArray(features)) return null
-  return features.find((f: Feature) => f?.branch_match === true) ?? null
+  return features.find((f: Feature) => f?.[flag] === true) ?? null
+}
+
+/** This session's id, the label journal.py gives the events it appends; null when the engine cannot say. */
+const sessionIdOf = async ($: Engine): Promise<string | null> => {
+  try {
+    const id = (await $.session.id()).trim()
+    return id || null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -338,17 +361,36 @@ const lastEventAt = (feature: Feature): string => {
 }
 
 /**
- * The stream of the checked-out branch. The session directory's branch first; when it has none
- * or no stream carries it, the branch of each nested repo (an umbrella checkout: the real repos
- * one level down), each distinct branch probed once. Several nested repos may sit on branches
- * with streams of their own (a dormant one beside the live one), so among the matches the most
- * recently active stream wins, not the first directory. A single repo on a branch with a stream
- * costs one status call, as before.
+ * The stream this session is driving, else the stream of the checked-out branch. The session
+ * comes first: the live stream it last wrote to itself (`status --session`, journal.py's call),
+ * which may have no branch at all (an epic's planning stream) and differs per session when
+ * several run on one project — each HUD asks with its own id. A session that has written to no
+ * live stream gets the checkout's: the session directory's branch first; when it has none or no
+ * stream carries it, the branch of each nested repo (an umbrella checkout: the real repos one
+ * level down), each distinct branch probed once. Several nested repos may sit on branches with
+ * streams of their own (a dormant one beside the live one), so among the matches the most
+ * recently active stream wins, not the first directory. The session and the own branch share
+ * one status call.
  */
 async function streamOfCheckout($: Engine, script: string): Promise<Feature | null> {
-  const probe = async (branch: string) => pickFeature(await runJson($, ['python3', script, 'status', '--json', `--branch=${branch}`]))
+  const status = (branch: string | null, session: string | null) =>
+    runJson($, ['python3', script, 'status', '--json', ...(session ? [`--session=${session}`] : []), ...(branch ? [`--branch=${branch}`] : [])])
+  const probe = async (branch: string) => pickFeature(await status(branch, null), 'branch_match')
   const own = await branchIn($)
-  const found = own === null ? null : await probe(own)
+  const session = await sessionIdOf($)
+  let first: unknown = null
+  if (session !== null) {
+    try {
+      first = await status(own, session)
+    } catch (error) {
+      // a journal.py older than --session refuses the flag as a usage error: ask by branch alone.
+      // Any other failure (no database, a broken journal) is the HUD's error to show.
+      if (!(error instanceof RunFailed && error.exitCode === EXIT_USAGE)) throw error
+      first = null
+    }
+  }
+  if (first === null && own !== null) first = await status(own, null)
+  const found = pickFeature(first, 'session_match') ?? pickFeature(first, 'branch_match')
   if (found) return found
   const tried = new Set(own === null ? [] : [own])
   let best: Feature | null = null

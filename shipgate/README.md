@@ -144,7 +144,7 @@ something re-inferred from artifacts every session. The SessionStart hook inject
 
 | Command | Does |
 | --- | --- |
-| `status [--branch B] [--nested-branch B …] [--feature SLUG] [--all]` | the status brief: the checked-out branch's stream first and in full, dormant streams as one line, completed ones hidden unless `--all`; in an umbrella the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream, the most recently active match first |
+| `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all]` | the status brief: the stream the session drives first (`--session`: the live stream that session last wrote to itself, hook-written events not counted — it may have no branch, and parallel sessions each get their own), then the checked-out branch's, both in full; dormant streams as one line, completed ones hidden unless `--all`; in an umbrella the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream, the most recently active match first |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
@@ -159,7 +159,8 @@ must read each new version back from the output instead of assuming +1 — refus
 the stream holds, after its last `task-done`, either a `review-verdict` with `verdict=ready` or
 a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
-the current session. A stream ends with `flow-completed` and leaves the status brief.
+the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's shell
+carries its parent's), else the session that started last (ADR 0005). A stream ends with `flow-completed` and leaves the status brief.
 
 Each phase skill names its stream before it works — the branch the work takes, per the
 config's **Branching** pattern, opened with `flow-started` by whichever skill runs first when

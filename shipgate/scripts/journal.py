@@ -195,6 +195,12 @@ REVIVING_TYPES = frozenset(
 # count — defaulting a session id in would put it back and inflate that count.
 SESSIONLESS_ROLES = frozenset({"watcher", "user"})
 
+# Claude Code sets this in every shell it starts, subagents' included (they get the
+# parent's id). It names the session that is appending, where `meta.current_session`
+# names only the one that started last — two sessions open on one project would
+# otherwise label each other's events.
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+
 # A `capture-done` with nothing after it is a flow that ended without saying so; give
 # it two days in case review feedback lands, then treat it as finished.
 CAPTURE_TERMINAL_HOURS = 48
@@ -515,7 +521,7 @@ def parse_actor(
         session = data.get("session")
         if isinstance(session, str) and session:
             return role
-    session_id = current_session(conn)
+    session_id = os.environ.get(SESSION_ENV, "").strip() or current_session(conn)
     return f"{role}@{session_id}" if session_id else role
 
 
@@ -1371,12 +1377,37 @@ def nested_branch_match(branches: Sequence[str],
     return best
 
 
+def session_stream(folded: Sequence[Tuple[Dict[str, Any], Sequence[Event]]],
+                   session: str) -> Optional[str]:
+    """The live stream ``session`` last wrote to itself, or None.
+
+    A session can drive a stream no checkout names — an epic's planning stream has no
+    branch, and a stream opens before `workspace` makes its branch — and several sessions
+    can run at once on different streams. What each one last appended is its position.
+    Hook-written events do not count: a hook files an artifact write under the checked-out
+    branch's stream, which says where the file landed, not what the session is driving. A
+    finished stream releases the session to the branch fallback.
+    """
+    best: Optional[Tuple[int, Dict[str, Any]]] = None
+    for entry, events in folded:
+        for event in reversed(events):
+            if _actor_role(event) != "hook" and event_session(event) == session:
+                if best is None or event.seq > best[0]:
+                    best = (event.seq, entry)
+                break
+    if best is None or best[1]["terminal"]:
+        return None
+    return best[1]["stream"]
+
+
 def _brief_rank(feature: Dict[str, Any]) -> int:
-    if feature.get("branch_match"):
+    if feature.get("session_match"):
         return 0
+    if feature.get("branch_match"):
+        return 1
     if feature.get("terminal"):
-        return 3
-    return 2 if feature.get("dormant") else 1
+        return 4
+    return 3 if feature.get("dormant") else 2
 
 
 def build_status(
@@ -1386,6 +1417,7 @@ def build_status(
     show_all: bool = False,
     now: Optional[datetime] = None,
     nested_branches: Optional[Sequence[str]] = None,
+    session: Optional[str] = None,
 ) -> Dict[str, Any]:
     if feature:
         # Accept a bare slug, a `feature/` stream, or any other work stream name
@@ -1401,15 +1433,19 @@ def build_status(
         wanted = [s for s in list_streams(conn) if is_work_stream(s)]
 
     folded = []
+    with_events = []
     for stream in wanted:
         events = read_events(conn, stream=stream)
         if not events:
             continue
-        folded.append(fold_stream(events, now=now))
+        entry = fold_stream(events, now=now)
+        folded.append(entry)
+        with_events.append((entry, events))
 
     matched = branch_match(branch, [f["stream"] for f in folded]) if branch else None
     if matched is None and nested_branches:
         matched = nested_branch_match(nested_branches, folded)
+    driven = session_stream(with_events, session) if session else None
     # Hiding finished work is what keeps the brief small, but someone who names a
     # stream is asking about that stream — answering "nothing here" would be a lie.
     keep_terminal = show_all or bool(feature)
@@ -1417,6 +1453,7 @@ def build_status(
     hidden_terminal = 0
     for entry in folded:
         entry["branch_match"] = entry["stream"] == matched
+        entry["session_match"] = entry["stream"] == driven
         if entry["terminal"] and not keep_terminal and not entry["branch_match"]:
             hidden_terminal += 1
             continue
@@ -1429,6 +1466,7 @@ def build_status(
         "features": features,
         "hidden_terminal": hidden_terminal,
         "branch_match": matched,
+        "session_match": driven,
     }
 
 
@@ -1556,7 +1594,8 @@ def _render_feature(feature: Dict[str, Any]) -> List[str]:
     decisions = feature["gate_decisions"]
     if decisions:
         limit = (
-            BRIEF_DECISION_LIMIT if feature.get("branch_match")
+            BRIEF_DECISION_LIMIT
+            if feature.get("branch_match") or feature.get("session_match")
             else BRIEF_DECISION_LIMIT_OTHER
         )
         shown = decisions[-limit:]
@@ -1595,7 +1634,9 @@ def render_status(status: Dict[str, Any]) -> str:
         ])
     lines: List[str] = []
     for feature in features:
-        if feature.get("dormant") and not feature.get("branch_match"):
+        if feature.get("dormant") and not (
+            feature.get("branch_match") or feature.get("session_match")
+        ):
             lines.append(_render_dormant(feature))
         else:
             lines.extend(_render_feature(feature))
@@ -2365,6 +2406,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="a branch checked out in a nested repo of an umbrella "
                                "checkout (repeatable); tried only when --branch names "
                                "no stream, the most recently active match first")
+    p_status.add_argument("--session", default=None, metavar="ID",
+                          help="a Claude Code session id; the live stream it last "
+                               "wrote to itself renders first (session_match), ahead "
+                               "of the branch's")
     p_status.add_argument("--all", action="store_true", dest="show_all",
                           help="include completed and abandoned streams")
     p_status.add_argument("--json", action="store_true", help="machine-readable output")
@@ -2705,7 +2750,7 @@ def cmd_status(args, resolution: Resolution) -> int:
     try:
         status = build_status(
             conn, args.feature, branch=args.branch, show_all=args.show_all,
-            nested_branches=args.nested_branches,
+            nested_branches=args.nested_branches, session=args.session,
         )
     finally:
         conn.close()

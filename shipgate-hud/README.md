@@ -53,10 +53,15 @@ Or, for development, from a checkout: `claude --plugin-dir ./shipgate-hud`.
 
 The hooks module runs with no Node and no SQLite, so it never opens the journal database.
 One refresh is `git rev-parse --abbrev-ref HEAD`, then shipgate's own CLI —
-`journal.py status --json --branch=<current>` and `journal.py log --stream <s> --json` —
+`journal.py status --json --session=<id> --branch=<current>` and `journal.py log --stream <s> --json` —
 then bounded reads of the worklog and ADR files those events point at (relative paths
-inside the project only). Only the stream of the checked-out branch is shown; on a branch
-with no stream the band is empty and the pane says so. In an umbrella checkout (the
+inside the project only). The stream shown is the one **this session drives**: the status
+call carries `--session=<$.session.id()>` and journal.py marks the live stream this session
+last wrote to itself (hook-written events do not count). That stream may have no branch (an
+epic's planning stream), and several sessions open on one project each see their own. A
+session that has written to no live stream yet sees the stream of the checked-out branch; on a
+branch with no stream the band is empty and the pane says so. A `journal.py` older than
+`--session` refuses the flag, and the HUD then asks by branch alone. In an umbrella checkout (the
 session directory is a plain folder or a repo of its own, the real repos one level down,
 in `source/` or in `packages/`, and worktrees under `.worktrees/` beside the repos or inside
 one) the session directory's branch carries no stream, so the HUD then asks each nested repo

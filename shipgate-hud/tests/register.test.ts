@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { ADR, FEATURE_PREFIXED, LOG, SIDECAR, STATUS } from './fixtures'
-import { BAND, PANE, START, bareWorld, engineWorld, journaledWorld, ok } from './world'
+import { BAND, PANE, SESSION_ID, START, bareWorld, engineWorld, journaledWorld, ok } from './world'
 import { WORKLOG } from './fixtures'
 
 describe('register', () => {
@@ -74,6 +74,76 @@ describe('register', () => {
     const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
     expect(await band.find({ key: 'open-hud' })).toBeUndefined()
     await band.unmount()
+  })
+
+  // A session drives the stream it writes to, which need not be the checkout's: an epic's
+  // planning stream has no branch, and parallel sessions on one project drive different streams.
+  const drivenBy = (stream: string) => ({ ...FEATURE_PREFIXED, stream, feature: stream, branch_match: false, session_match: true, phase: 'clarify' })
+  const checkedOut = { ...STATUS.features[0], session_match: false }
+
+  test('the stream this session drives wins over the checked-out branch, in one status call', async ($, on) => {
+    engineWorld(on)
+    const { runs } = journaledWorld(on, (argv: string[]) => ({
+      ...STATUS,
+      features: argv.includes(`--session=${SESSION_ID}`) ? [drivenBy('epic-example'), checkedOut] : [checkedOut],
+    }))
+    await $.session.start(START)
+    const statusRuns = runs.filter(argv => argv.includes('status'))
+    expect(statusRuns.length).toBe(1)
+    expect(statusRuns[0]).toContain(`--session=${SESSION_ID}`)
+    expect(statusRuns[0]).toContain('--branch=feat/example-stream')
+    expect(runs.find(argv => argv.includes('log'))).toContain('epic-example')
+    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect(await band.find({ type: 'Text', text: /epic-example/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /feat\/example-stream/ })).toBeUndefined()
+    await band.unmount()
+  })
+
+  for (const [session, stream] of [['session-a', 'epic-example'], ['session-b', 'feat/other-stream']] as const) {
+    test(`parallel sessions on one checkout: ${session} sees the stream it drives`, async ($, on) => {
+      engineWorld(on, START.cwd, START.cwd, session)
+      // one journal, two sessions writing to different streams; status answers per --session
+      const drives: Record<string, string> = { 'session-a': 'epic-example', 'session-b': 'feat/other-stream' }
+      const { runs } = journaledWorld(on, (argv: string[]) => {
+        const asked = argv.find(a => a.startsWith('--session='))?.slice('--session='.length)
+        const driven = asked ? drives[asked] : undefined
+        return { ...STATUS, features: driven ? [drivenBy(driven), checkedOut] : [checkedOut] }
+      })
+      await $.session.start(START)
+      expect(runs.find(argv => argv.includes('log'))).toContain(stream)
+      const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+      expect(await band.find({ type: 'Text', text: new RegExp(stream.replace('/', '\\/')) })).toBeDefined()
+      await band.unmount()
+    })
+  }
+
+  test('a journal.py older than --session: the HUD asks by branch alone and shows no error', async ($, on) => {
+    engineWorld(on)
+    const { runs } = journaledWorld(on, (argv: string[]) =>
+      argv.some(a => a.startsWith('--session='))
+        ? { value: { exitCode: 2, stdout: '', stderr: 'journal.py: error: unrecognized arguments: --session=x', isStdoutTruncated: false, isStderrTruncated: false } }
+        : STATUS,
+    )
+    await $.session.start(START)
+    expect(runs.filter(argv => argv.includes('status')).length).toBe(2)
+    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect(await band.find({ type: 'Text', text: /feat\/example-stream/ })).toBeDefined()
+    await band.unmount()
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: /unrecognized/ })).toBeUndefined()
+    await pane.unmount()
+  })
+
+  test('a --session call that fails for another reason shows the error, not the branch fallback', async ($, on) => {
+    engineWorld(on)
+    const { runs } = journaledWorld(on, () => ({
+      value: { exitCode: 1, stdout: '', stderr: 'journal database not found', isStdoutTruncated: false, isStderrTruncated: false },
+    }))
+    await $.session.start(START)
+    expect(runs.filter(argv => argv.includes('status')).length).toBe(1)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: /journal database not found/ })).toBeDefined()
+    await pane.unmount()
   })
 
   test('a shell cd into a nested repo does not move the HUD: sidecar, journal, branch and writes stay anchored on the session root', async ($, on) => {
@@ -278,7 +348,8 @@ describe('register', () => {
     expect(listed.map(p => p.split('/').pop())).toEqual(expect.arrayContaining(['source', 'packages', '.worktrees']))
     // every nested repo's branch was asked for — a repo, its worktrees, then the parent's — never the plain folder or the dot-directory
     expect(runs.filter(argv => argv[0] === 'git' && argv[1] === '-C').map(argv => argv[2])).toEqual(['older', 'service', 'service/.worktrees/wt-inside', '.worktrees/wt-beside'])
-    expect(runs.filter(argv => argv.includes('status')).map(argv => argv.at(-1))).toEqual(['--branch=feat/older-stream', '--branch=feat/example-stream', '--branch=feat/wt-inside', '--branch=feat/wt-beside'])
+    // the session is asked first (it drives no stream here), then each nested branch once
+    expect(runs.filter(argv => argv.includes('status')).map(argv => argv.at(-1))).toEqual([`--session=${SESSION_ID}`, '--branch=feat/older-stream', '--branch=feat/example-stream', '--branch=feat/wt-inside', '--branch=feat/wt-beside'])
     // the live stream wins over the dormant one, whatever the directory order
     expect(runs.find(argv => argv.includes('log'))).toContain('feat/example-stream')
     const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })

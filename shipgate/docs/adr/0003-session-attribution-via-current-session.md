@@ -5,7 +5,7 @@ created: 2026-09-02
 updated: 2026-09-02
 tags:
   - adr
-status: accepted
+status: accepted (label default amended by 0005)
 date: 2026-09-02
 issue: "none / ad-hoc"
 related: ["../prd/journal-cost-and-workflows.md", "0001-sqlite-flow-journal.md"]
@@ -50,5 +50,7 @@ machine actor with no session, and `user` names a person — a bare `user` stays
 
 Two concurrent sessions on one machine share one `current_session` and the later starter
 wins; skill appends from the older session are attributed to the newer one. Acceptable
-for a single-user tool, and an explicit `@label` overrides the default. Role becomes
+for a single-user tool, and an explicit `@label` overrides the default. *Amended by ADR 0005:*
+the label now comes from the appending shell's `CLAUDE_CODE_SESSION_ID` when it is set, so
+concurrent sessions keep their own; `meta.current_session` remains the fallback. Role becomes
 queryable (`stats` groups by it), and the Stop gate's rule B starts working for skills.

@@ -18,6 +18,9 @@ export const PANE = {
   props: { title: 'shipgate', isFocused: false, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} },
 }
 
+/** This session's id, as the engine answers `$.session.id()`. */
+export const SESSION_ID = 'session-a'
+
 export const START = { cwd: '/tmp/project', surface: 'terminal' as const, isInteractive: true }
 
 export const ok = (stdout: string) => ({
@@ -26,9 +29,10 @@ export const ok = (stdout: string) => ({
 
 /**
  * What every session needs answered beneath the plugin, journaled or not. `cwd` is the session
- * root; `shell` is where the shell's `cd` has taken the session (the root unless given).
+ * root; `shell` is where the shell's `cd` has taken the session (the root unless given);
+ * `sessionId` is what `$.session.id()` answers.
  */
-export function engineWorld(on: On, cwd: string = START.cwd, shell: string = cwd): { commands: string[]; opened: string[]; submitted: string[] } {
+export function engineWorld(on: On, cwd: string = START.cwd, shell: string = cwd, sessionId: string = SESSION_ID): { commands: string[]; opened: string[]; submitted: string[] } {
   const commands: string[] = []
   const opened: string[] = []
   const submitted: string[] = []
@@ -36,6 +40,7 @@ export function engineWorld(on: On, cwd: string = START.cwd, shell: string = cwd
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: shell }))
   on('session.root', async () => ({ value: cwd }))
+  on('session.id', async () => ({ value: sessionId }))
   // The engine draws nothing of its own in the band: an empty box stands for that here.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e) => {
     const { Box } = $.ui.resolve(e)
@@ -67,7 +72,13 @@ export function bareWorld(on: On): { runs: string[][] } {
   return { runs }
 }
 
-/** A journaled project: the sidecar and journal.py exist, status and log answer the fixtures. */
+type Ran = ReturnType<typeof ok>
+
+/**
+ * A journaled project: the sidecar and journal.py exist, status and log answer the fixtures.
+ * `status` is the status JSON, or a function of the argv returning it (or a whole process
+ * result, for a run that fails).
+ */
 export function journaledWorld(on: On, status: unknown = STATUS): { runs: string[][]; reads: string[] } {
   const runs: string[][] = []
   const reads: string[] = []
@@ -85,7 +96,10 @@ export function journaledWorld(on: On, status: unknown = STATUS): { runs: string
     const argv = [...e.argv]
     runs.push(argv)
     if (argv[0] === 'git') return ok('feat/example-stream\n')
-    if (argv.includes('status')) return ok(JSON.stringify(status))
+    if (argv.includes('status')) {
+      const answer = typeof status === 'function' ? (status as (argv: string[]) => unknown)(argv) : status
+      return answer && typeof answer === 'object' && 'value' in answer ? (answer as Ran) : ok(JSON.stringify(answer))
+    }
     if (argv.includes('log')) return ok(JSON.stringify(LOG))
     return ok('')
   })
