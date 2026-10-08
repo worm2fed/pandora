@@ -97,7 +97,7 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 
 **Subagents** (the engine, run in parallel)
 
-- `code-explorer` — grounded exploration, file:line, essential-files list.
+- `code-explorer` — grounded exploration, file:line, essential-files list; reads refs that are not checked out and the history with read-only git (the orchestrator fetches first).
 - `code-architect` _(opus)_ — one committed design philosophy per instance.
 - `code-reviewer` — every finding scored (confidence + severity), file:line; the orchestrator filters.
 

@@ -498,6 +498,20 @@ class ExploreWorkflow(ScriptCase):
             ],
         )
 
+    def test_the_dispatched_explorer_can_read_other_refs(self):
+        """A lens may need a ref that is not checked out (`origin/<integration>` for a
+        staleness check) or the history; with Glob/Grep/Read alone it can read neither."""
+        out = self.explore({"staleness": {"findings": [], "essential_files": []}})
+        agent_types = {call["agentType"] for call in out["calls"]}
+        self.assertEqual(agent_types, {"shipgate:code-explorer"})
+        definition = (SHIPGATE / "agents" / "code-explorer.md").read_text(encoding="utf-8")
+        tools_line = next(line for line in definition.splitlines() if line.startswith("tools:"))
+        tools = {tool.strip() for tool in tools_line.split(":", 1)[1].split(",")}
+        self.assertIn("Bash", tools)
+        # the shell stays read-only: the prompt names what it is for and what it never does
+        self.assertIn("git show <ref>:<path>", definition)
+        self.assertIn("never `git fetch`", definition)
+
     def test_findings_are_capped_per_lens(self):
         many = [{"topic": f"t{i}", "detail": "d", "refs": []} for i in range(25)]
         out = self.explore({"write-path": {"findings": many, "essential_files": []}})

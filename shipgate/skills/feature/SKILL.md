@@ -68,6 +68,11 @@ dispatch; it is context about which code is hot or load-bearing, not an instruct
 findings by it. The same goes for the workflow path's `brief`. Unavailable (see the JSON's
 `reason`, `trajectory.reason`, `structure.reason`) → leave the table out.
 
+A lens that must read code other than the working tree — `origin/<integration>` for a
+staleness check of a dormant design, another branch, the history of a file — names the ref in
+its prompt, and you run `git fetch` **before** dispatching: explorers read refs with read-only
+git (`git show <ref>:<path>`, `log`, `diff`, `grep`) and never fetch or check out themselves.
+
 Scale it: a one-service change may need one light explorer or none; a cross-cutting feature
 warrants the full 2-3.
 
@@ -86,7 +91,7 @@ are logged), and a lens entry missing its `name` or `prompt` throws before any a
 return carrying `aborted` means every lens explorer died and the run explored nothing — treat
 it as the degradation case, not as "there was nothing to find". Step 2 is unchanged and
 non-negotiable: **you still read those files yourself** — the workflow locates, you build the
-understanding. `Workflow` unavailable or the call refused → run the explorer fan above and
+understanding. A lens prompt that reads another ref follows the fetch-first rule above. `Workflow` unavailable or the call refused → run the explorer fan above and
 record a `deviation`.
 
 ## Detect state, then route

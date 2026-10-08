@@ -2,6 +2,16 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.14.6 — an explorer can read a ref that is not checked out. `code-explorer` had Glob, Grep
+and Read only, so a lens that had to read `origin/<integration>` — a staleness check of a
+dormant design against what merged since — or a file's history could not, and the explore
+workflow (which dispatches `shipgate:code-explorer`) had to be re-run by hand with other agents.
+The agent now has `Bash`, limited by its prompt to read-only git (`git show <ref>:<path>`,
+`log`, `diff`, `grep`, `blame`, `ls-tree`): never fetch, checkout, switch, reset, stash, commit
+or a worktree, and a ref that does not resolve is reported, not fetched. The `feature` skill
+tells the orchestrator to fetch before dispatch and to name the ref in the lens prompt — the
+same tool set `code-reviewer` already has. One contract test pins it.
+
 v0.14.5 — parallel sessions keep their own events, and status knows each session's stream.
 `append` labelled an unlabelled actor with `meta.current_session`, which every session start
 overwrites, so with two sessions open on one project the later starter's id labelled the
