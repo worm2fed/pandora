@@ -61,7 +61,7 @@ For a feature, do it the feature-dev way:
 3. Carry that grounded context (plus the impact map) into Clarify.
 
 Subagents don't read `.claude/shipgate.md` themselves, so paste the config excerpts they need
-(e.g. the knowledge-base stores to recall from, the security-sensitive areas) into each
+(e.g. the knowledge base's stores to recall from, the security-sensitive areas) into each
 explorer brief. A brief may also carry the risk-signal table for the area it dispatches into
 (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <area> --by-dir 2`) — decide per
 dispatch; it is context about which code is hot or load-bearing, not an instruction to rank

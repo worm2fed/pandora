@@ -16,7 +16,7 @@ the cheapest capable tier does the mechanical grind.
 
 | Role | Who | Does | Never does |
 |------|-----|------|------------|
-| **Orchestrator** | the session running the flow | analysis, design, review, tracker/knowledge-base writes, dispatching workers, checking their evidence | edit product code (when workers are in play) |
+| **Orchestrator** | the session running the flow | analysis, design, review, tracker and knowledge base writes, dispatching workers, checking their evidence | edit product code (when workers are in play) |
 | **Worker** | subagents on the strongest model *below the orchestrator's tier* (a session on the top available tier dispatches workers one tier down (e.g. `model: "opus"`); a session already on Opus dispatches `model: "sonnet"` — or same-tier workers where isolation, not cost, is the point) | design-sensitive coding: seams, encodings, debugging, anything where a wrong call is expensive | grind through bulk mechanical edits itself |
 | **Mechanic** | subagents on the cheapest capable tier (`model: "sonnet"`, or `haiku` for the truly trivial) | bulk migrations, repetitive multi-file edits, long test-output collection | make design decisions |
 
@@ -49,7 +49,7 @@ when it doesn't; the sink-to-Sonnet rule still applies either way.
 ## Orchestrator rules
 
 - **Don't edit product code yourself** while orchestrating. Analysis, design artifacts
-  (ADR/worklog), tracker and knowledge-base writes, and review are yours; every product-code
+  (ADR/worklog), tracker and knowledge base writes, and review are yours; every product-code
   change goes through a worker.
 - **Dispatch implementation via the Agent tool** with an explicit `model` (per the tier
   table above), one worker per coherent unit of the build plan. Independent units →
@@ -59,7 +59,7 @@ when it doesn't; the sink-to-Sonnet rule still applies either way.
   a handful of tool calls.
 - **Send mid-flight course corrections with SendMessage** to the running worker — don't
   kill and respawn a worker that just needs a directive.
-- **Don't idle while workers run.** Their build time is your cheapest design time: spec the
+- **Don't idle while workers run.** Their build time is your cheapest design time: design the
   next round/issue with the user (see the `feature` skill's pipelining rules), answer
   architecture questions, triage the ledger. Interact with workers at natural boundaries
   via SendMessage — never poll them.
@@ -74,7 +74,7 @@ when it doesn't; the sink-to-Sonnet rule still applies either way.
 
 ## The worker brief — every dispatch includes
 
-A worker starts with zero context; the brief must be self-contained:
+A worker starts with zero context; the worker brief must be self-contained:
 
 1. **The design inline** — the relevant ADR/worklog excerpt pasted in, not a pointer
    to "the worklog". Workers shouldn't re-derive decisions. Also point at the **source-of-truth

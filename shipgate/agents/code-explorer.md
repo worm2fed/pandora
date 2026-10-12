@@ -54,7 +54,7 @@ most valuable thing you produce is a precise, prioritized map.
 1. **Recall first.** If your brief names a knowledge base (an MCP or docs path),
    search it first for domain/product context on this area — business rules, entities, why
    it exists. Cite hits as "[kb] …" so the orchestrator knows it's recalled, not re-derived.
-   If the brief names none, skip silently — don't fabricate.
+   If the explorer brief names none, skip silently — don't fabricate.
 
 2. **Find entry points.** Locate where this feature/area is entered — routes, controllers,
    CLI handlers, UI components, event consumers, jobs. Cite each with `file:line`.

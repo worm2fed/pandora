@@ -86,7 +86,7 @@ config and no nested repos, the working dir is the repo and this section doesn't
    lands in its `.worktrees/<slug>` (add `.worktrees/` to `.git/info/exclude` once). The
    SessionStart hook and the HUD look there — and in a `.worktrees/` beside an umbrella's repos,
    for worktrees made by hand — one level deep; a worktree anywhere else is invisible to them, and
-   the brief and the pane then show no position for the live work. A session opened in the
+   the status brief and the pane then show no position for the live work. A session opened in the
    worktree is "already on the branch" (step 2); from the main checkout, go to the worktree
    rather than check the branch out a second time.
 

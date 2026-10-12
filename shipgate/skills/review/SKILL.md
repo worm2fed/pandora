@@ -70,7 +70,7 @@ worklog, so reviewers don't spend findings re-litigating settled calls) and any
 **pre-rulings** (items you already know are must-fix; reviewers confirm scope rather than
 re-discover them).
 
-Add the diff's **per-file risk signals** to the brief, as a compact table (path, commits,
+Add the diff's **per-file risk signals** to the reviewer brief, as a compact table (path, commits,
 fix%, fan-in, `risk`) rather than raw JSON, so reviewers spend their reading time on the
 files most likely to regress — every changed file, since `--diff` mode does not truncate:
 
@@ -383,7 +383,7 @@ stream holds, appended after its last `task-done`, either a `review-verdict` wit
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type gate-decision --actor user \
-  --data '{"gate":"publish","question":"Open the MR now?","decision":"publish",
+  --data '{"gate":"publish","question":"Open the MR/PR now?","decision":"publish",
            "mode":"ask","raised_by":"user"}'
 ```
 

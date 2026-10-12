@@ -52,7 +52,7 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | **subagent** | Any agent dispatched by the Agent tool or a Workflow script: `code-explorer`, `code-architect`, `code-reviewer`, a worker. | *agent* (the definition file, or the `Agent` tool). |
 | **explorer / architect / reviewer** | Short for the three bundled subagents. | — |
 | **finder / refuter** | The two stages of the review workflow: a finder is a reviewer instance; a refuter tries to disprove one finding with evidence. | — |
-| **brief** | The self-contained instructions handed to a subagent. Qualified by recipient: worker brief, reviewer brief, explorer brief. Contract: `finderBrief`, `brief` args. | *status brief*. |
+| **brief** | The self-contained instructions handed to a subagent. Qualified by recipient at its first mention in a section (worker brief, reviewer brief, explorer brief); a bare "the brief" later in that section means that one. Contract: `finderBrief`, `brief` args. | *status brief*. |
 | **fan** | The parallel dispatch of 2-3 subagents (explorer fan, reviewer fan). | — |
 | **lens** | Qualified wherever the context does not make the kind clear: a *thinking lens* (a mental model applied at a phase; config `Thinking lenses`), a *review lens* (correctness, conventions+design, simplicity+security), an *explorer lens* (one explorer's focus). | — |
 

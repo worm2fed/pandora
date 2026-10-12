@@ -28,7 +28,7 @@ First, **recall prior decisions** (`knowledge-base`): skim the configured ADR ho
 repo's `docs/adr/`) for forks already settled in this area, so you extend past decisions rather
 than re-litigate them. Give the architects any relevant ADR as context. Subagents don't read the
 project config themselves, so each brief must include the relevant config excerpts —
-the knowledge-base recall pointers and any store/page conventions they'd otherwise miss.
+the knowledge base's recall pointers and any store/page conventions they'd otherwise miss.
 
 Then dispatch **`code-architect` subagents scaled to how open the solution space is**. When
 the design has a genuine fork, run the full fan of three at once, one per philosophy:

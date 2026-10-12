@@ -38,7 +38,7 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
 > **Record the diagnosis**). The Stop hook checks neither, so the step is the only thing that
 > writes them; a standalone "which file?" ask establishes neither and records nothing.
 
-## Workflow
+## Steps
 
 1. **Clarify.** State observed vs expected behavior as one concise diff. Confirm scope and
    what "fixed" means. Recall prior context (`knowledge-base`) — past root causes and gotchas live
