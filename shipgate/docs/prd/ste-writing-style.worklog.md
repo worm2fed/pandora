@@ -200,3 +200,12 @@ floor). All 13 survivors fixed in commit 85743a8. Below-floor rulings:
 - `structured-debug/SKILL.md:30` "Three signs mean" readable as all three — fixed in round 1.
 - `structured-debug/SKILL.md:191` reading sentence joined to the paragraph — fixed in round 1.
 - `README.md:51` config-table row order — fixed in round 1.
+
+Review round 2 (one reviewer, all lenses, scoped to the fix diff 25d292c..85743a8): all seven
+round-1 items confirmed fixed on evidence; 1 MEDIUM (ADR still said nine surfaces) and 7 LOW
+(CHANGELOG and worklog quoted the old callout phrase, "above" for callouts placed under
+headings, long lines, the reader test counted stems and tails separately, the verdict regex
+missed "blocked" and curly apostrophes, "about 60 words" stale, a lead-in missing before the
+model-tiers callout). All fixed in commit 04e2635. Rejected: none. The round-2 fixes are
+docs, one test and one grader, checked by the orchestrator with the test suite and parity, not
+by a third reviewer round (the cap is two).

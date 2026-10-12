@@ -24,7 +24,7 @@ fenced block, backticked token and number present before present after (one exam
 inside a fenced block changed, MR to MR/PR), and every frontmatter `description:`
 byte-identical, since those are the triggering surface. A new eval,
 `70-review-fact-retention`, plants three findings of different severity in three files and
-grades each fact: with the plugin every fact grader passes 3/3 (0.97 with, 0.89 without; the
+grades each fact: with the plugin every fact grader passes 3/3 (0.96 with, 0.69 without; the
 readability rubric is paired with a hedge-word regex and weighted low, because style rubrics
 are the noisier signal). The 23 affected cases re-run before and after the rewrite on the same
 day: no case lost more than 0.07 in the with arm, two gained, every negative case stayed at

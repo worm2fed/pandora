@@ -553,12 +553,12 @@
       "without": 1.0
     },
     "70-review-fact-retention": {
-      "delta": 0.08,
-      "results": "2026-10-12T12-44-39-728Z",
+      "delta": 0.27,
+      "results": "2026-10-12T13-59-28-967Z",
       "runs": 3,
       "version": "0.15.0",
-      "with": 0.97,
-      "without": 0.89
+      "with": 0.96,
+      "without": 0.69
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
