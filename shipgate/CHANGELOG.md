@@ -28,7 +28,8 @@ grades each fact: with the plugin every fact grader passes 3/3 (0.96 with, 0.69 
 readability rubric is paired with a hedge-word regex and weighted low, because style rubrics
 are the noisier signal). The 23 affected cases re-run before and after the rewrite on the same
 day: no case lost more than 0.07 in the with arm, two gained, every negative case stayed at
-zero skill-fired. Baseline re-recorded for those 24 cases at 0.15.0. Glossary gains `report`,
+zero skill-fired. Baseline re-recorded for those 24 cases at 0.15.0. `review` briefs reviewers with the working-tree diff and commits after the verdict (ledger,
+2026-10-08). Glossary gains `report`,
 `Writing for people`, `escalation contract` and `reference implementation`. No hook, script or
 Workflow change.
 

@@ -82,6 +82,10 @@ Also give two orchestrator lists:
 - **pre-rulings**: items you already know are must-fix. Reviewers confirm their scope rather
   than re-discover them.
 
+Brief reviewers with the working-tree diff (`git diff <base>`), not a commit made to give them
+a stable ref. Commit after the verdict, so the review sees what will land and a fix round does
+not stack commits. A commit the user asked for as its own reviewable step is the exception.
+
 Add the diff's **per-file risk signals** to the reviewer brief as a compact table (path,
 commits, fix%, fan-in, `risk`), not as raw JSON. Then reviewers spend their reading time on
 the files most likely to regress. Include every changed file, since `--diff` mode does not

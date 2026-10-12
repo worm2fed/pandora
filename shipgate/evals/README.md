@@ -68,6 +68,15 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
 - Any edit to a grader's text — rubric or regex — invalidates the recorded run: re-run the
   case and `compare.py --record` before committing, so `baseline.json` always describes the
   graders on disk.
+- A readability or style rubric is the extreme case. On case 70 a four-claim and then a
+  three-claim rubric failed 6/6 runs in both arms on a report that a direct Sonnet judge passes
+  on every claim; the harness judge split 2/3 at best. Keep such a rubric at a low weight
+  (0.25) and pair it with a deterministic regex for the part that can be matched (hedge
+  words, fenced blocks). Grade the facts with their own regexes; they are the signal.
+- Before trusting `baseline.json` across a model or judge update, re-run the affected cases
+  once on the unchanged tree the same day: on 2026-10-12, 5 of 23 rows moved by more than
+  0.10 against the 2026-10-06 baseline before any edit, mostly in the without arm. Compare the
+  after-run with that before-run, then `--record` the after-run.
 
 ## Backlog
 
