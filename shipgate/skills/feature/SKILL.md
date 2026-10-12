@@ -135,7 +135,7 @@ Three rules follow because the journal is the position of record:
   the hook's `--branch` lookup finds it. An epic's children are separate branches and
   therefore separate streams. Never carry two issues in one stream. Its phase, gate history
   and verdict would then describe no single deliverable.
-- **A missing event is a stuck flow, not a fallback.** Say the journal says `design` and the
+- **A missing event is a stuck flow, not a fallback.** Suppose the journal says `design` and the
   worklog is clearly further along. Do NOT quietly route to the later phase. Say what the
   journal says and what the artifacts show. Record the resolution as an event (`deviation`,
   or the phase event that was missed) before you move on. Silent reinterpretation is the
@@ -254,9 +254,9 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
 ## Always-on disciplines
 
 > **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
-> about 20 words with one idea each, common words, the glossary's term for each concept, one
-> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
-> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> about 20 words with one idea each, common words, one term per concept, the same term every
+> time, one action per step, active voice, no clause chains joined by dashes or parentheses.
+> Shorter sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
 > command, exit code, count and verdict the report carried stays in it. Code, commands and
 > error text go in fenced blocks, not in prose.
 

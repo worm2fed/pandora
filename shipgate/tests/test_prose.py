@@ -25,7 +25,20 @@ SURFACES = [
     "skills/design/SKILL.md",
     "skills/implement/SKILL.md",
     "skills/feature/SKILL.md",
+    "skills/knowledge-base/SKILL.md",
+    "skills/model-tiers/SKILL.md",
 ]
+
+READERS = {
+    "skills/clarify/SKILL.md": 1,
+    "skills/design/SKILL.md": 2,
+    "skills/implement/SKILL.md": 1,
+    "skills/knowledge-base/SKILL.md": 2,
+    "skills/review/SKILL.md": 1,
+    "skills/structured-debug/SKILL.md": 1,
+}
+READ_STEM = "The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to"
+READ_TAIL = re.compile(r"absent,\s+a placeholder,\s+or `plain`,\s+write (it|them) as\s+before\.")
 
 CALLOUT = re.compile(r"^> \*\*Writing for people\.\*\*.*?(?=\n(?!> ))", re.S | re.M)
 
@@ -63,6 +76,15 @@ class TestWritingForPeopleCallout(unittest.TestCase):
                 continue
             with self.subTest(file=p.relative_to(SHIPGATE).as_posix()):
                 self.assertEqual(callouts(p.read_text()), [], "the callout belongs to the listed surfaces only")
+
+
+class TestWritingStyleReaders(unittest.TestCase):
+    def test_every_artifact_writing_skill_reads_the_key_and_states_the_default(self):
+        for rel, count in READERS.items():
+            with self.subTest(skill=rel):
+                text = (SHIPGATE / rel).read_text()
+                self.assertEqual(text.count(READ_STEM), count, f"{rel}: reading sentences")
+                self.assertEqual(len(READ_TAIL.findall(text)), count, f"{rel}: each one states the default")
 
 
 class TestWritingStyleConfigSection(unittest.TestCase):

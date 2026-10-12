@@ -206,9 +206,9 @@ fallback. The fan is not optional; the mechanism is.
 ## Step 2 — Filter and rank (the orchestrator's pass)
 
 > **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
-> about 20 words with one idea each, common words, the glossary's term for each concept, one
-> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
-> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> about 20 words with one idea each, common words, one term per concept, the same term every
+> time, one action per step, active voice, no clause chains joined by dashes or parentheses.
+> Shorter sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
 > command, exit code, count and verdict the report carried stays in it. Code, commands and
 > error text go in fenced blocks, not in prose.
 
@@ -316,8 +316,8 @@ and extra re-checking adds cost without catching more.
 ## Opening the MR/PR (on the user's go-ahead)
 
 The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-the MR/PR body and every reply in the review-feedback cycle; absent, a placeholder, or
-`plain`, write them as before.
+the worklog's round entries and Rejected findings, ledger lines, the MR/PR body and every
+reply in the review-feedback cycle; absent, a placeholder, or `plain`, write them as before.
 
 With no tracker/remote, stop at "Ready, evidence attached" and let the user handle pushing.
 On a journaled project the verdict (or the user's publish decision) is recorded *before* the

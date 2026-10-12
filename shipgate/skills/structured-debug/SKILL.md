@@ -27,7 +27,7 @@ The suspect ranking is where to look first, not a verdict. Say so.
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
-> **Journaled project — name the stream before you start.** Three signs mean this bug's
+> **Journaled project — name the stream before you start.** Any one of three signs means this bug's
 > events are owed to a stream: a status brief headed "shipgate flow journal", a **Journal**
 > section in the config, or a `.claude/shipgate.json` sidecar. The stream is this work's
 > branch. That is the checked-out branch when it is a work branch. Otherwise it is the name
@@ -45,9 +45,9 @@ The suspect ranking is where to look first, not a verdict. Say so.
 ## Steps
 
 > **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
-> about 20 words with one idea each, common words, the glossary's term for each concept, one
-> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
-> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> about 20 words with one idea each, common words, one term per concept, the same term every
+> time, one action per step, active voice, no clause chains joined by dashes or parentheses.
+> Shorter sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
 > command, exit code, count and verdict the report carried stays in it. Code, commands and
 > error text go in fenced blocks, not in prose.
 
@@ -188,8 +188,10 @@ the user's go-ahead. The comment carries the root cause in a sentence, the intro
 commit (hash + one line on what it changed), and why it slipped through. This is how the
 team maps *where and why* bugs enter the codebase. A fix without the provenance comment
 loses that signal.
+
 The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-the provenance comment; absent, a placeholder, or `plain`, write it as before.
+the ledger line and the provenance comment; absent, a placeholder, or `plain`, write them as
+before.
 
 When you land the root cause, capture it via `knowledge-base`. A root cause + fix is
 **technical** knowledge. So it routes to the store configured for engineering knowledge, not

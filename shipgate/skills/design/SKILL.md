@@ -45,9 +45,9 @@ files surfaced during exploration, and any relevant prior ADRs.
 ## Step 2 — Synthesize and recommend
 
 > **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
-> about 20 words with one idea each, common words, the glossary's term for each concept, one
-> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
-> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> about 20 words with one idea each, common words, one term per concept, the same term every
+> time, one action per step, active voice, no clause chains joined by dashes or parentheses.
+> Shorter sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
 > command, exit code, count and verdict the report carried stays in it. Code, commands and
 > error text go in fenced blocks, not in prose.
 

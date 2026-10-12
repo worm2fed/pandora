@@ -14,14 +14,17 @@ related: ["../prd/ste-writing-style.md", "../glossary.md"]
 # 0006. The output-style rule is one callout repeated per surface, pinned by a test
 
 > The "Writing for people" rule is a short blockquote with identical text in every skill and
-> agent that prescribes a report for a person. A contract test fails when any copy drifts.
+> agent that prescribes a report for a person, and in the two skills that hand the rule on. A
+> contract test fails when any copy drifts.
 
 ## Context
 
 Nine surfaces prescribe prose a person reads: the reviewer's findings template, the explorer's
 and architect's return formats, review's rank-and-verdict output, verify's report,
 structured-debug's statements, the clarify, design and implement summaries, and the
-orchestrator's phase summaries. Each phase skill also runs standalone, so no single skill is
+orchestrator's phase summaries. Two more skills hand the rule on without prescribing a report: `model-tiers`
+pastes it into worker briefs, and `knowledge-base` applies it to ledger lines and captured pages
+under `ste-80`. Each phase skill also runs standalone, so no single skill is
 always loaded. Agent definition files are the whole system prompt of a subagent, so an agent
 cannot follow a pointer to a rule elsewhere. The rule must therefore reach each surface on its
 own, and it must say the same thing everywhere, or two surfaces will report in two styles.
@@ -29,7 +32,7 @@ own, and it must say the same thing everywhere, or two surfaces will report in t
 ## Decision
 
 Write the rule once, as a six-line blockquote headed **Writing for people**, and paste it
-verbatim into each surface, the way the **Project config** callout is already repeated in every
+verbatim into each of those surfaces and the two hand-on skills, the way the **Project config** callout is already repeated in every
 skill. `tests/test_prose.py` reads every copy and asserts they are identical and that each
 listed surface carries one. Executive decision; reversible.
 
@@ -45,7 +48,7 @@ listed surface carries one. Executive decision; reversible.
 
 ## Consequences
 
-Nine identical copies, about 60 words each, in files the model reads on every invocation.
-Any change to the rule is a nine-file edit, which the test turns from a risk into a
+Twelve identical copies, about 60 words each, in files the model reads on every invocation.
+Any change to the rule is a twelve-file edit, which the test turns from a risk into a
 checklist. The config's `Writing style` key extends the same callout to repo-side documents,
 so there is one rule in the plugin, not two.

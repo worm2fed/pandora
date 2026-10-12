@@ -43,7 +43,9 @@ Placed as a blockquote directly above the output format it governs, in: `agents/
 return format), `skills/review/SKILL.md` (Step 2), `skills/verify/SKILL.md` (above "The gate"),
 `skills/structured-debug/SKILL.md` (above step 1), `skills/clarify/SKILL.md` (Executive mode
 summary), `skills/design/SKILL.md` (Step 2), `skills/implement/SKILL.md` (On completion),
-`skills/feature/SKILL.md` (Always-on disciplines). `tests/test_prose.py` pins the copies.
+`skills/feature/SKILL.md` (Always-on disciplines), and after review round 1 also
+`skills/knowledge-base/SKILL.md` (above Ledger) and `skills/model-tiers/SKILL.md` (above The worker
+brief), which hand the rule on. `tests/test_prose.py` pins the copies.
 
 ## Config key
 
@@ -76,7 +78,7 @@ Unify against `docs/glossary.md`, contract names untouched:
 
 | residual | canonical | note |
 |---|---|---|
-| bare "the brief" for a subagent's instructions | worker brief / reviewer brief / explorer brief | glossary: always qualified |
+| bare "the brief" for a subagent's instructions | worker brief / reviewer brief / explorer brief | glossary rule refined in T002: qualified at first mention in a section, bare after that |
 | bare "MR" / "PR" in prose | MR/PR | contract `mr-opened`, `MR watcher` stay |
 | "knowledge-base" outside the skill name | knowledge base | `knowledge-base` skill name stays |
 | "defect", "problem" for a reviewer's finding | finding | "defect" stays for the bug itself in structured-debug |
@@ -170,6 +172,8 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings.
 - SC-006 → T004 (reading sentences state the default)
 
 ## Deviations & notes (filled during implementation)
+- 2026-10-12 — T002: one example string inside a fenced block in `review/SKILL.md` changed (MR → MR/PR) by the terminology pass; the fenced-block parity rule applies to the T005 rewrite, checked against that commit.
+- 2026-10-12 — Review round 1: 13 survivors, 0 killed, 8 below floor. Fixed: worker briefs carry the callout under `ste-80` (model-tiers item 8, callout added); implement, review and structured-debug reading sentences cover ledger lines and worklog round entries; knowledge-base and model-tiers carry the callout (12 copies, ADR 0006 updated); the callout says "one term per concept, the same term every time" instead of pointing at a glossary no runtime surface loads; case 70's file:line regexes get a left boundary and the verdict regex drops severity words; evals README weight, ADR counts, CHANGELOG fenced-block claim, README row order, two wording fixes; a test pins the reading sentences.
 - 2026-10-12 — T006: the readability rubric failed 6/6 runs in both arms on a with-arm report that a direct Sonnet judge passes on every claim; rewritten to three claims with explicit tolerance it splits the arms (with 2/3 judges pass, without 0/3) but stays noisy, so it is paired with a deterministic hedge-word regex and weighted 0.25, per the evals README's guidance on behaviour rubrics. Fact graders passed 3/3 in every with-arm run throughout.
 - 2026-10-12 — T001: the before-run (frozen copy at the branch base, 23 cases, 3 runs) differs from the 0.14.1 baseline on 5 rows by more than 0.10, mostly in the without arm (judge and model drift since 2026-10-06). The gate for the rewrite is therefore after-run vs before-run, same day and judge; the baseline is re-recorded from the after-run.
 - 2026-10-12 — explore: the Workflow call was refused by the permission classifier; the orchestrator ran the three lenses itself (journal `deviation`).

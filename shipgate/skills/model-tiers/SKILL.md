@@ -74,6 +74,13 @@ skip it when it doesn't. The sink-to-Sonnet rule still applies either way.
 
 ## The worker brief — every dispatch includes
 
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, one term per concept, the same term every
+> time, one action per step, active voice, no clause chains joined by dashes or parentheses.
+> Shorter sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
+
 A worker starts with zero context, so the worker brief must be self-contained:
 
 1. **The design inline** — paste in the relevant ADR/worklog excerpt, not a pointer to "the
@@ -116,9 +123,11 @@ A worker starts with zero context, so the worker brief must be self-contained:
    in the config ⇒ say so in the brief rather than inventing rules. A section still holding
    the template's `<e.g. …>` placeholders counts as absent. Say that too. Never paste a
    placeholder into a brief as though it were this project's rule.
-8. **Writing style excerpt** — the task may write a PRD, ADR, worklog line, ledger line, MR/PR
-   text or tracker comment. Then paste the config's **Writing style** section
-   (`Docs: plain | ste-80`). No such section, or a placeholder ⇒ say `plain`.
+8. **Writing style excerpt** — when the task writes a PRD, ADR, worklog line, ledger line,
+   MR/PR text or tracker comment, paste the config's **Writing style** section
+   (`Docs: plain | ste-80`). When it says `ste-80`, also paste the Writing for people
+   callout above verbatim, the way item 7 pastes the guardrails: a worker cannot apply a
+   rule it never sees. No such section, or a placeholder ⇒ say `plain`.
 
 ## Worker rules
 
