@@ -38,7 +38,10 @@ READERS = {
     "skills/structured-debug/SKILL.md": 1,
 }
 READ_STEM = "The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to"
-READ_TAIL = re.compile(r"absent,\s+a placeholder,\s+or `plain`,\s+write (it|them) as\s+before\.")
+READ_SENTENCE = re.compile(
+    re.escape(READ_STEM) + r"[^\n]*(?:\n[^\n]+)*?absent,\s+a placeholder,\s+or `plain`,\s+write (?:it|them) as\s+before\."
+)
+LEDGER_READERS = ("skills/implement/SKILL.md", "skills/review/SKILL.md", "skills/structured-debug/SKILL.md", "skills/knowledge-base/SKILL.md")
 
 CALLOUT = re.compile(r"^> \*\*Writing for people\.\*\*.*?(?=\n(?!> ))", re.S | re.M)
 
@@ -84,7 +87,10 @@ class TestWritingStyleReaders(unittest.TestCase):
             with self.subTest(skill=rel):
                 text = (SHIPGATE / rel).read_text()
                 self.assertEqual(text.count(READ_STEM), count, f"{rel}: reading sentences")
-                self.assertEqual(len(READ_TAIL.findall(text)), count, f"{rel}: each one states the default")
+                spans = [m.group(0) for m in READ_SENTENCE.finditer(text)]
+                self.assertEqual(len(spans), count, f"{rel}: each sentence states the default in the same paragraph")
+                if rel in LEDGER_READERS:
+                    self.assertTrue(any("ledger" in s for s in spans), f"{rel}: names the ledger lines it writes")
 
 
 class TestWritingStyleConfigSection(unittest.TestCase):

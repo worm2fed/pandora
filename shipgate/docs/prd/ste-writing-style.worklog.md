@@ -30,22 +30,23 @@ case 44 precedent for the eval, the v0.14.1 precedent for the terminology pass.
 ## The rule (the one text every surface carries)
 
 ```
-> **Writing for people.** A report a person reads follows the STE-80 principles: sentences
-> of about 20 words with one idea each, common words, the glossary's term for each concept,
-> one action per step, active voice, no clause chains joined by dashes or parentheses.
-> Shorter sentences, not fewer facts: every file:line, severity, confidence, failure
-> scenario, command, exit code, count and verdict the report carried stays in it. Code,
-> commands and error text go in fenced blocks, not in prose.
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, one term per concept, the same term every
+> time, one action per step, active voice, no clause chains joined by dashes or parentheses.
+> Shorter sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
 ```
 
-Placed as a blockquote directly above the output format it governs, in: `agents/code-reviewer.md`
-(above "## Findings"), `agents/code-explorer.md` and `agents/code-architect.md` (above their
-return format), `skills/review/SKILL.md` (Step 2), `skills/verify/SKILL.md` (above "The gate"),
-`skills/structured-debug/SKILL.md` (above step 1), `skills/clarify/SKILL.md` (Executive mode
-summary), `skills/design/SKILL.md` (Step 2), `skills/implement/SKILL.md` (On completion),
-`skills/feature/SKILL.md` (Always-on disciplines), and after review round 1 also
-`skills/knowledge-base/SKILL.md` (above Ledger) and `skills/model-tiers/SKILL.md` (above The worker
-brief), which hand the rule on. `tests/test_prose.py` pins the copies.
+Placed as a blockquote directly above the output format it governs, in:
+`agents/code-reviewer.md` (above "## Findings"), `agents/code-explorer.md` and
+`agents/code-architect.md` (above their return format), `skills/review/SKILL.md` (Step 2),
+`skills/verify/SKILL.md` (above "The gate"), `skills/structured-debug/SKILL.md` (above step
+1), `skills/clarify/SKILL.md` (Executive mode summary), `skills/design/SKILL.md` (Step 2),
+`skills/implement/SKILL.md` (On completion), `skills/feature/SKILL.md` (Always-on
+disciplines), and after review round 1 also `skills/knowledge-base/SKILL.md` (under the Ledger
+heading) and `skills/model-tiers/SKILL.md` (under The worker brief heading), which hand the
+rule on. `tests/test_prose.py` pins the copies.
 
 ## Config key
 
@@ -179,3 +180,23 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings.
 - 2026-10-12 — explore: the Workflow call was refused by the permission classifier; the orchestrator ran the three lenses itself (journal `deviation`).
 
 ## Rejected findings
+
+Review round 1 (workflow run, 3 lenses, 28 found → 21 deduped → 13 survivors, 0 killed, 8 below
+floor). All 13 survivors fixed in commit 85743a8. Below-floor rulings:
+
+- `structured-debug/SKILL.md:142` "the spec was ambiguous" — kept: "spec" there is the generic
+  word for whatever requirements the project had, in a debugging context that runs in any repo;
+  the PRD's residual list covers "spec" only where it names shipgate's PRD.
+- `tests/test_prose.py` callout regex "brittle at the first non-`> ` line" — accepted: the
+  callout is a single blockquote by construction, and a drifted copy fails loudly.
+- `CHANGELOG.md` "eval claims cannot be checked from the repo" — kept as written: results dirs
+  are gitignored by design; the claim is about the same-day before/after runs, both summarized in
+  this worklog's Deviations, and baseline.json carries the recorded rows.
+- `CHANGELOG.md` "case 44 lost 0.10 against the 0.14.1 baseline" — not a regression of this
+  change: 44 scored 0.71 in both the before-run and the after-run; the drop is against the
+  2026-10-06 baseline and predates the rewrite (Deviations, T001).
+- `clarify/SKILL.md:67` callout placement at Step 2 rather than the Executive summary — kept:
+  Step 2 holds both the questions and the executive summary, so one copy covers both modes.
+- `structured-debug/SKILL.md:30` "Three signs mean" readable as all three — fixed in round 1.
+- `structured-debug/SKILL.md:191` reading sentence joined to the paragraph — fixed in round 1.
+- `README.md:51` config-table row order — fixed in round 1.

@@ -27,20 +27,19 @@ The suspect ranking is where to look first, not a verdict. Say so.
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
-> **Journaled project — name the stream before you start.** Any one of three signs means this bug's
-> events are owed to a stream: a status brief headed "shipgate flow journal", a **Journal**
-> section in the config, or a `.claude/shipgate.json` sidecar. The stream is this work's
-> branch. That is the checked-out branch when it is a work branch. Otherwise it is the name
-> the config's **Branching** pattern gives the fix: `fix/<issue-id>-<slug>`, or `fix/<slug>`
-> with no issue. `workspace` reuses the name when it creates the branch. The integration
-> branch (`main`, `master`, `develop`) is never a stream. Is there no stream of that name in
-> the status brief? Then open it with `flow-started {request, branch}` in the same append as
-> the first event. A bug reported on `main` before any branch exists is the normal case, not
-> a reason to skip. Two events are owed here: `bug-reproduced` at step 2 and
+> **Journaled project — name the stream before you start.** Any one of three signs means this
+> bug's events are owed to a stream: a status brief headed "shipgate flow journal", a
+> **Journal** section in the config, or a `.claude/shipgate.json` sidecar. The stream is this
+> work's branch. That is the checked-out branch when it is a work branch. Otherwise it is the
+> name the config's **Branching** pattern gives the fix: `fix/<issue-id>-<slug>`, or
+> `fix/<slug>` with no issue. `workspace` reuses the name when it creates the branch. The
+> integration branch (`main`, `master`, `develop`) is never a stream. Is there no stream of
+> that name in the status brief? Then open it with `flow-started {request, branch}` in the
+> same append as the first event. A bug reported on `main` before any branch exists is the
+> normal case, not a reason to skip. Two events are owed here: `bug-reproduced` at step 2 and
 > `debug-root-cause` at step 4. Append each one in the step that establishes it (the form is
-> under **Record the diagnosis**). The Stop hook checks neither, so the step is the only
-> thing that writes them. A standalone "which file?" ask establishes neither and records
-> nothing.
+> under **Record the diagnosis**). The Stop hook checks neither, so the step is the only thing
+> that writes them. A standalone "which file?" ask establishes neither and records nothing.
 
 ## Steps
 

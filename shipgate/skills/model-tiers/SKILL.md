@@ -74,6 +74,8 @@ skip it when it doesn't. The sink-to-Sonnet rule still applies either way.
 
 ## The worker brief — every dispatch includes
 
+Item 8 pastes this callout into the brief when the config's **Writing style** says `ste-80`:
+
 > **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
 > about 20 words with one idea each, common words, one term per concept, the same term every
 > time, one action per step, active voice, no clause chains joined by dashes or parentheses.
