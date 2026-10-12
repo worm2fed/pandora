@@ -44,6 +44,12 @@ pandora is a **plugin marketplace**: one git repo holding several independent pl
   usually absent — include it as `<type>/<issue-id>-<slug>` when an issue does exist.
 - Examples: `feat/sqlite-journal`, `fix/hook-fast-path`, `chore/bump-astrolabe`.
 
+## Writing style
+
+- Docs: `ste-80`
+  <!-- the maintainer's own prose rule; pandora's PRDs, ADRs, worklogs and ledger follow
+       the Writing for people callout. -->
+
 ## Orchestration
 
 - review: workflow

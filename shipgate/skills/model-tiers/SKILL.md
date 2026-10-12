@@ -116,6 +116,9 @@ A worker starts with zero context; the worker brief must be self-contained:
    section in the config ⇒ say so in the brief rather than inventing rules. A section still
    holding the template's `<e.g. …>` placeholders counts as absent: say that too, and never
    paste a placeholder into a brief as though it were this project's rule.
+8. **Writing style excerpt** — when the task writes a PRD, ADR, worklog line, ledger line,
+   MR/PR text or tracker comment, paste the config's **Writing style** section
+   (`Docs: plain | ste-80`). No such section, or a placeholder ⇒ say `plain`.
 
 ## Worker rules
 

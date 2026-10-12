@@ -67,6 +67,10 @@ Cover only what the config actually needs and detection could not settle:
   appears in the session's tool list (that fan is the one that pays off); leave Explore on
   `agents` unless the user wants both. Either way the phase falls back to `agents` when the
   tool is absent.
+- **Writing style** — `plain` *(default)*: the PRD, ADR, worklog, ledger lines, MR/PR body
+  and tracker comments keep the prose style the project has today. `ste-80`: they follow the
+  same "Writing for people" rule the reports already do (short sentences, common words, one
+  term per concept, every fact kept). Offer it; never recommend it over a team's own style.
 - **Anything detection flagged as ambiguous** — umbrella layout confirmation, a tracker living
   in a different project than the code, an unrecognized forge.
 

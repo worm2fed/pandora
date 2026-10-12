@@ -62,6 +62,13 @@ questions:
 
 ## Step 2 — Ask, prioritized and one at a time
 
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, the glossary's term for each concept, one
+> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
+> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
+
 Generate **at most ~5 questions**, ordered by impact (a wrong answer here would most change
 the design). Prefer using `AskUserQuestion`. For each question, **lead with your recommended
 answer and the reasoning**, then offer alternatives — the user can accept, pick another, or
@@ -88,6 +95,9 @@ migration), a user-visible scope change, a configured security-sensitive area, o
 questions, not the bar for the consequential ones.
 
 ## Step 3 — Write the PRD
+
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+the PRD; absent, a placeholder, or `plain`, write it as before.
 
 Create or update the PRD at the configured PRD home (default `docs/prd/<feature-kebab>.md`,
 plain markdown in the repo — the *what & why*, never the *how*). Use the template at

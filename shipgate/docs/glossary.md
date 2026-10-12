@@ -74,6 +74,13 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | **verdict** | Review's outcome: Ready or Not ready (`ready` / `not-ready`). | — |
 | **round** | One review → fix → re-review pass; capped at two. | a worker's dispatch round (model-tiers). |
 
+## Prose
+
+| Term | Definition | Not to be confused with |
+|---|---|---|
+| **report** | Prose a person reads: a reviewer's findings, a verify result, a debug hypothesis or root cause, a phase summary, a verdict. | an *artifact* (PRD, ADR, worklog). |
+| **Writing for people** | The output-style rule every report follows (ADR 0006): sentences of about 20 words with one idea each, common words, one term per concept, one action per step, active voice, every fact kept. Config `Writing style` / `Docs: ste-80` extends it to the artifacts. | ASD-STE100 itself (the plugin adopts the principles, not the specification). |
+
 ## Code signals
 
 | Term | Definition | Not to be confused with |

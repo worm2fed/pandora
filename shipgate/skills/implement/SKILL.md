@@ -26,6 +26,10 @@ Either way, the loop below is what "done" means for each task — whoever execut
 
 ## The loop (per task)
 
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+the worklog lines this loop writes (ticks, deviations, notes); absent, a placeholder, or
+`plain`, write it as before.
+
 1. **Take the next task** in dependency order from the Build Plan. Respect `[P]` only as a
    signal that tasks are independent — don't start a task whose prerequisites are unchecked.
 
@@ -163,6 +167,13 @@ loudly and continue un-journaled only with the user's acknowledgement.
   stays correct; routing around them defeats the point of this whole flow.
 
 ## On completion
+
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, the glossary's term for each concept, one
+> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
+> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
 
 When the Build Plan is fully checked and verified, summarize what was built (completed,
 skipped, newly discovered, blocked), confirm every FR-### / SC-### has been satisfied, and

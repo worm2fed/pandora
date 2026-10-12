@@ -59,6 +59,13 @@ naming what each choice gives up.
 
 ## What to return
 
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, the glossary's term for each concept, one
+> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
+> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
+
 ```
 ## Philosophy
 [minimal-change | clean-architecture | pragmatic-balance]

@@ -162,6 +162,17 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 - Style skill(s): <project skill to invoke BEFORE writing or reviewing code — the
   implement/review phases invoke it, and every worker brief must instruct it too>
 
+## Writing style
+
+<!-- Default when absent: plain — the documents shipgate writes into this repo and forge
+     (PRD, ADR, worklog, ledger lines, MR/PR body, tracker comments) keep the prose style
+     they have today. `ste-80` applies the same "Writing for people" rule the reports to
+     the person driving the flow already follow: sentences of about 20 words with one idea
+     each, common words, one term per concept, one action per step, every fact kept. A
+     <placeholder> counts as absent. -->
+
+- Docs: <plain | ste-80>
+
 ## Security-sensitive areas
 
 <!-- Default when absent: auth, secrets, payments — the built-in judgment. -->

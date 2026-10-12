@@ -176,6 +176,13 @@ The fan is not optional; the mechanism is.
 
 ## Step 2 — Filter and rank (the orchestrator's pass)
 
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, the glossary's term for each concept, one
+> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
+> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
+
 Reviewers report **everything** they found, scored with confidence and severity — filtering
 at generation time makes models silently drop real bugs, so the filter lives here instead,
 as a separate pass. Consolidate by file, dedupe across lenses, then filter:
@@ -271,6 +278,10 @@ the same claims, a subagent to re-review the review): current models already sel
 while working, and extra re-checking adds cost without catching more.
 
 ## Opening the MR/PR (on the user's go-ahead)
+
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+the MR/PR body and every reply in the review-feedback cycle; absent, a placeholder, or
+`plain`, write them as before.
 
 With no tracker/remote, stop at "Ready, evidence attached" and let the user handle pushing.
 On a journaled project the verdict (or the user's publish decision) is recorded *before* the

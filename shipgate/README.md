@@ -48,6 +48,7 @@ What the sections configure:
 | Repo layout | umbrella / nested-repo checkouts, where the real repos live | working dir is the repo |
 | Style | a project style skill to invoke before writing/reviewing code | match surrounding code |
 | Security-sensitive areas | domains that trigger the full `/security-review` | auth, secrets, payments |
+| Writing style | whether the documents shipgate writes into the repo and forge (PRD, ADR, worklog, ledger, MR/PR body, tracker comments) follow the STE-80 "Writing for people" rule (`ste-80`) or keep plain prose; reports to the person driving the flow follow the rule regardless | `plain` |
 | Debug evidence sources | prod/QA log-query skill, CI-log integration | local logs, tests, debugger |
 | Epic workflow | epic decomposition command, ordering, delivery rules | issue-by-issue, manual decomposition |
 | MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR/PR opened" |

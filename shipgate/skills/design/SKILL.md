@@ -41,6 +41,13 @@ surfaced during exploration, and any relevant prior ADRs.
 
 ## Step 2 — Synthesize and recommend
 
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, the glossary's term for each concept, one
+> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
+> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
+
 Read all three blueprints. Then **read the key files they cite yourself** — don't design off
 their summaries alone; the orchestrator reading the actual code is what keeps the design
 honest. Present to the user:
@@ -94,6 +101,9 @@ condition holds:
 
 ## Step 3 — Record decision forks as ADRs
 
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+each ADR; absent, a placeholder, or `plain`, write it as before.
+
 For each genuine either/or the team will want to remember *why* it went one way (not every
 detail — real forks: a data model, a sync vs async boundary, a build-vs-reuse call), write
 an ADR at the configured ADR home (default `docs/adr/NNNN-<title>.md`, following any page
@@ -107,6 +117,9 @@ Carry the `Issue:` reference from the PRD header into every ADR and the worklog 
 artifact should stand alone so a reader (or `grep #ID`) finds the whole trail without hopping.
 
 ## Step 4 — Write the worklog
+
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+the worklog; absent, a placeholder, or `plain`, write it as before.
 
 Create the worklog at the configured worklog home (default
 `docs/prd/<feature-kebab>.worklog.md`, next to its PRD, following any page conventions the

@@ -40,6 +40,13 @@ code there does). Skip the ledger jot and the fix plan, and edit nothing. The su
 
 ## Steps
 
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, the glossary's term for each concept, one
+> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
+> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
+
 1. **Clarify.** State observed vs expected behavior as one concise diff. Confirm scope and
    what "fixed" means. Recall prior context (`knowledge-base`) — past root causes and gotchas live
    in the repo's `CLAUDE.md` / the configured ADR home, and domain context (what the behavior
@@ -165,6 +172,8 @@ config declares a forge, post a root-cause comment (on the user's go-ahead, like
 outward-facing post): the root cause in a sentence, the introducing commit (hash + one line
 on what it changed), and why it slipped through. This is how the team maps *where and why*
 bugs enter the codebase — a fix without the provenance comment loses that signal.
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+the provenance comment; absent, a placeholder, or `plain`, write it as before.
 
 When you land the root cause, capture it via `knowledge-base`: a root cause + fix is **technical**
 knowledge, so it routes to the store configured for engineering knowledge (default: an ADR if it

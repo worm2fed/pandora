@@ -78,6 +78,9 @@ command) is fetched, not abstained on.
 
 ## Ledger — the staging inbox
 
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+ledger lines; absent, a placeholder, or `plain`, write them as before.
+
 Learnings evaporate between "noticed mid-implement" and "curated capture at the end of the
 flow" — by Capture time the context is deep and half the small insights are gone. The
 **ledger** is the fix: one project-wide, append-cheap staging file (config-declared path;
@@ -116,6 +119,9 @@ keeping surfaces.
   and proactively nudge when you notice ~15+ unpromoted entries.
 
 ## Capture (after work) — pass the quality gate first
+
+The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+the pages and lines capture writes; absent, a placeholder, or `plain`, write them as before.
 
 Storing junk is worse than storing nothing; it pollutes recall. Before you write anything,
 ALL of these must hold:

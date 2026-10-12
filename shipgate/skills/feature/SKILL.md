@@ -227,6 +227,13 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
 
 ## Always-on disciplines
 
+> **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
+> about 20 words with one idea each, common words, the glossary's term for each concept, one
+> action per step, active voice, no clause chains joined by dashes or parentheses. Shorter
+> sentences, not fewer facts: every file:line, severity, confidence, failure scenario,
+> command, exit code, count and verdict the report carried stays in it. Code, commands and
+> error text go in fenced blocks, not in prose.
+
 - **Recall early** (`knowledge-base`) at Route & Map and Design — don't re-derive known
   conventions.
 - **Verify before "done"** (`verify`) at every completion claim, not just at Review.
