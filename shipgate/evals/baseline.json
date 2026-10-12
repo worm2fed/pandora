@@ -1,15 +1,19 @@
 {
   "cases": {
     "01-regression-failing-test": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T16-41-58-884Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-18-00-639Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "02-selective-bug": {
+      "claude": "2.1.296",
       "delta": 0.44,
+      "judge": "sonnet",
       "results": "2026-10-12T12-01-23-167Z",
       "runs": 3,
       "version": "0.15.0",
@@ -17,15 +21,19 @@
       "without": 0.44
     },
     "03-suggested-quickfix": {
-      "delta": 0.38,
-      "results": "2026-10-06T16-41-58-613Z",
+      "claude": "2.1.296",
+      "delta": 0.57,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-18-00-790Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 0.62
+      "without": 0.43
     },
     "04-pasted-stack-trace": {
+      "claude": "2.1.296",
       "delta": 0.44,
+      "judge": "sonnet",
       "results": "2026-10-12T12-01-23-189Z",
       "runs": 3,
       "version": "0.15.0",
@@ -33,7 +41,9 @@
       "without": 0.56
     },
     "05-fix-it-wording": {
+      "claude": "2.1.296",
       "delta": 0.67,
+      "judge": "sonnet",
       "results": "2026-10-12T12-01-23-178Z",
       "runs": 3,
       "version": "0.15.0",
@@ -41,7 +51,9 @@
       "without": 0.33
     },
     "06-neg-feature-request": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-04-14-436Z",
       "runs": 3,
       "version": "0.15.0",
@@ -49,7 +61,9 @@
       "without": 1.0
     },
     "07-neg-explain-code": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-04-32-119Z",
       "runs": 3,
       "version": "0.15.0",
@@ -57,23 +71,29 @@
       "without": 1.0
     },
     "08-bug-localization-history": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T16-49-26-604Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-18-00-683Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "09-blast-radius-diff": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T16-50-16-194Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-21-18-624Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "10-risk-ranked-review": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-05-51-055Z",
       "runs": 3,
       "version": "0.15.0",
@@ -81,31 +101,39 @@
       "without": 1.0
     },
     "11-neg-one-line-change": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T16-52-42-989Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-22-21-648Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "12-bug-localization-explicit": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T16-53-22-790Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-23-20-001Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "13-blast-radius-explicit": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T16-53-49-435Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-23-41-301Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "14-risk-ranked-review-explicit": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-06-44-062Z",
       "runs": 3,
       "version": "0.15.0",
@@ -113,31 +141,39 @@
       "without": 1.0
     },
     "15-clarify-exec-issue-seeded": {
-      "delta": 0.28,
-      "results": "2026-10-06T16-56-42-154Z",
+      "claude": "2.1.296",
+      "delta": 0.39,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-24-30-185Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.89,
-      "without": 0.61
+      "version": "0.15.0",
+      "with": 0.94,
+      "without": 0.56
     },
     "16-clarify-exec-one-way-door": {
-      "delta": 0.33,
-      "results": "2026-10-06T16-57-58-084Z",
+      "claude": "2.1.296",
+      "delta": 0.47,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-27-03-387Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 0.67
+      "without": 0.53
     },
     "17-clarify-exec-stale-assumption": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-00-02-061Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-27-40-032Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "18-clarify-ask-vague": {
+      "claude": "2.1.296",
       "delta": 0.18,
+      "judge": "sonnet",
       "results": "2026-10-12T12-06-52-015Z",
       "runs": 3,
       "version": "0.15.0",
@@ -145,15 +181,19 @@
       "without": 0.72
     },
     "19-clarify-ask-fully-specified": {
-      "delta": 0.19,
-      "results": "2026-10-06T17-05-35-385Z",
+      "claude": "2.1.296",
+      "delta": 0.17,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-32-05-482Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 1.0,
-      "without": 0.81
+      "version": "0.15.0",
+      "with": 0.92,
+      "without": 0.75
     },
     "20-neg-clarify-one-line-fix": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-10-13-139Z",
       "runs": 3,
       "version": "0.15.0",
@@ -161,15 +201,19 @@
       "without": 1.0
     },
     "21-neg-clarify-explain-code": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-07-38-104Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-33-41-550Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "22-verify-stale-after-fix": {
+      "claude": "2.1.296",
       "delta": 0.29,
+      "judge": "sonnet",
       "results": "2026-10-12T12-11-11-129Z",
       "runs": 3,
       "version": "0.15.0",
@@ -177,15 +221,19 @@
       "without": 0.71
     },
     "23-verify-edit-then-claim": {
-      "delta": 0.17,
-      "results": "2026-10-06T17-09-25-536Z",
+      "claude": "2.1.296",
+      "delta": 0.11,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-34-08-898Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.94,
-      "without": 0.78
+      "version": "0.15.0",
+      "with": 1.0,
+      "without": 0.89
     },
     "24-verify-pasted-evidence": {
+      "claude": "2.1.296",
       "delta": 0.04,
+      "judge": "sonnet",
       "results": "2026-10-12T12-11-20-553Z",
       "runs": 3,
       "version": "0.15.0",
@@ -193,15 +241,19 @@
       "without": 0.96
     },
     "25-verify-zero-tests-ran": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-11-57-657Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-35-41-336Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "26-verify-multi-claim": {
+      "claude": "2.1.296",
       "delta": 0.29,
+      "judge": "sonnet",
       "results": "2026-10-12T12-12-02-535Z",
       "runs": 3,
       "version": "0.15.0",
@@ -209,23 +261,29 @@
       "without": 0.71
     },
     "27-neg-verify-explain": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-13-11-621Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-35-43-634Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "28-neg-verify-run-once": {
-      "delta": 0.0,
-      "results": "2026-10-06T17-14-00-768Z",
+      "claude": "2.1.296",
+      "delta": 0.13,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-37-23-868Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 1.0
+      "without": 0.87
     },
     "29-route-nested-rule": {
+      "claude": "2.1.296",
       "delta": 0.06,
+      "judge": "sonnet",
       "results": "2026-10-12T12-13-07-573Z",
       "runs": 3,
       "version": "0.15.0",
@@ -233,39 +291,49 @@
       "without": 0.94
     },
     "30-route-cross-cutting-split": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-15-01-314Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-37-45-729Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "31-route-schema-and-dump": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-15-02-929Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-38-12-680Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "32-route-rules-conflict": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-18-07-251Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-38-28-779Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "33-route-signals-vs-rule": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-18-50-392Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-41-45-490Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "34-neg-route-one-line": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-14-03-682Z",
       "runs": 3,
       "version": "0.15.0",
@@ -273,15 +341,19 @@
       "without": 1.0
     },
     "35-neg-route-explain": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-19-52-307Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-41-54-311Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "36-kb-recall-explicit": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-15-24-103Z",
       "runs": 3,
       "version": "0.15.0",
@@ -289,39 +361,49 @@
       "without": 1.0
     },
     "37-kb-recall-implicit": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-22-43-013Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-42-15-152Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "38-kb-ledger-jot": {
+      "claude": "2.1.296",
       "delta": 0.38,
-      "results": "2026-10-06T17-24-27-945Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-45-13-022Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 0.62
     },
     "39-kb-triage": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-25-01-760Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-45-46-033Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "40-kb-capture-update": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-25-57-027Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-46-40-670Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "41-neg-kb-personal-pref": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-15-54-598Z",
       "runs": 3,
       "version": "0.15.0",
@@ -329,23 +411,29 @@
       "without": 1.0
     },
     "42-neg-kb-code-question": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-27-37-068Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-47-14-515Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "43-kb-implicit-jot": {
+      "claude": "2.1.296",
       "delta": 0.22,
-      "results": "2026-10-06T17-28-10-328Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-48-07-381Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 0.78
     },
     "44-review-planted-diff": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-16-50-662Z",
       "runs": 3,
       "version": "0.15.0",
@@ -353,7 +441,9 @@
       "without": 0.71
     },
     "45-review-unmet-sc": {
+      "claude": "2.1.296",
       "delta": 0.13,
+      "judge": "sonnet",
       "results": "2026-10-12T12-17-18-414Z",
       "runs": 3,
       "version": "0.15.0",
@@ -361,15 +451,19 @@
       "without": 0.87
     },
     "46-review-clean-diff": {
-      "delta": -0.11,
-      "results": "2026-10-06T22-13-33-580Z",
+      "claude": "2.1.296",
+      "delta": 0.11,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-48-51-580Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.78,
+      "version": "0.15.0",
+      "with": 1.0,
       "without": 0.89
     },
     "47-review-after-fixes": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-18-29-136Z",
       "runs": 3,
       "version": "0.15.0",
@@ -377,47 +471,59 @@
       "without": 1.0
     },
     "48-review-small-diff": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-33-38-453Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-50-26-568Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "49-neg-review-explain-diff": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-36-21-899Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-50-59-093Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "50-neg-review-trivial": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-36-38-881Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-52-52-826Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "51-design-exec-genuine-fork": {
-      "delta": 0.18,
-      "results": "2026-10-06T17-36-40-885Z",
+      "claude": "2.1.296",
+      "delta": 0.41,
+      "judge": "sonnet",
+      "results": "2026-10-12T18-53-10-136Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 0.98,
-      "without": 0.8
+      "without": 0.57
     },
     "52-design-exec-no-fork": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-38-55-688Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-53-40-591Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "53-design-ask-recommend": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-21-40-013Z",
       "runs": 3,
       "version": "0.15.0",
@@ -425,23 +531,29 @@
       "without": 1.0
     },
     "54-design-prior-adr": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-44-26-639Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T18-55-12-381Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "55-design-exec-one-way-door": {
-      "delta": 0.11,
-      "results": "2026-10-06T21-41-56-160Z",
+      "claude": "2.1.296",
+      "delta": 0.0,
+      "judge": "sonnet",
+      "results": "2026-10-12T19-01-32-584Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 0.89
+      "without": 1.0
     },
     "56-neg-design-already-designed": {
+      "claude": "2.1.296",
       "delta": 0.0,
+      "judge": "sonnet",
       "results": "2026-10-12T12-22-12-128Z",
       "runs": 3,
       "version": "0.15.0",
@@ -449,15 +561,19 @@
       "without": 1.0
     },
     "57-neg-design-adr-question": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T17-52-47-119Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T19-04-18-391Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "58-big-debug-regression": {
+      "claude": "2.1.296",
       "delta": 0.27,
+      "judge": "sonnet",
       "results": "2026-10-12T12-22-22-101Z",
       "runs": 3,
       "version": "0.15.0",
@@ -465,31 +581,39 @@
       "without": 0.73
     },
     "59-big-debug-selective": {
+      "claude": "2.1.296",
       "delta": 0.18,
-      "results": "2026-10-06T17-56-36-681Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T19-05-25-425Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.94,
-      "without": 0.76
+      "version": "0.15.0",
+      "with": 1.0,
+      "without": 0.82
     },
     "60-big-route-nested-rule": {
+      "claude": "2.1.296",
       "delta": 0.2,
-      "results": "2026-10-06T17-58-49-395Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T19-06-10-557Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 0.8
     },
     "61-big-route-rules-conflict": {
+      "claude": "2.1.296",
       "delta": 0.24,
-      "results": "2026-10-06T18-00-42-737Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T19-10-52-913Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 0.95,
       "without": 0.71
     },
     "62-big-review-planted-diff": {
+      "claude": "2.1.296",
       "delta": 0.2,
+      "judge": "sonnet",
       "results": "2026-10-12T12-25-52-297Z",
       "runs": 3,
       "version": "0.15.0",
@@ -497,63 +621,79 @@
       "without": 0.73
     },
     "63-big-review-after-fixes": {
+      "claude": "2.1.296",
       "delta": 0.2,
-      "results": "2026-10-06T18-03-29-615Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T19-10-57-891Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 0.8
     },
     "64-big-kb-recall-implicit": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T18-06-04-249Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T19-12-40-831Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "65-big-clarify-stale-assumption": {
+      "claude": "2.1.296",
       "delta": 0.2,
-      "results": "2026-10-06T18-08-06-952Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T21-31-57-116Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 0.8
     },
     "66-big-design-prior-adr": {
-      "delta": 0.17,
-      "results": "2026-10-06T22-13-33-563Z",
+      "claude": "2.1.296",
+      "delta": 0.11,
+      "judge": "sonnet",
+      "results": "2026-10-12T21-31-57-175Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 1.0,
+      "version": "0.15.0",
+      "with": 0.94,
       "without": 0.83
     },
     "67-big-neg-one-line": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T18-11-06-525Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T19-17-29-336Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "68-design-steel-man": {
-      "delta": 0.22,
-      "results": "2026-10-06T18-12-32-764Z",
+      "claude": "2.1.296",
+      "delta": 0.37,
+      "judge": "sonnet",
+      "results": "2026-10-12T21-31-57-227Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.67,
-      "without": 0.44
+      "version": "0.15.0",
+      "with": 0.85,
+      "without": 0.48
     },
     "69-debug-map-territory": {
+      "claude": "2.1.296",
       "delta": 0.0,
-      "results": "2026-10-06T21-41-56-176Z",
+      "judge": "sonnet",
+      "results": "2026-10-12T21-36-30-022Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "70-review-fact-retention": {
+      "claude": "2.1.296",
       "delta": 0.27,
+      "judge": "sonnet",
       "results": "2026-10-12T13-59-28-967Z",
       "runs": 3,
       "version": "0.15.0",

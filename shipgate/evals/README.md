@@ -73,20 +73,17 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
   on every claim; the harness judge split 2/3 at best. Keep such a rubric at a low weight
   (0.25) and pair it with a deterministic regex for the part that can be matched (hedge
   words, fenced blocks). Grade the facts with their own regexes; they are the signal.
-- Before trusting `baseline.json` across a model or judge update, re-run the affected cases
-  once on the unchanged tree the same day: on 2026-10-12, 5 of 23 rows moved by more than
-  0.10 against the 2026-10-06 baseline before any edit, mostly in the without arm. Compare the
-  after-run with that before-run, then `--record` the after-run.
+- `baseline.json` drifts with the harness. On 2026-10-12, 5 of 23 rows moved by more than
+  0.10 against the 2026-10-06 baseline on the unchanged tree, mostly in the without arm, and
+  the full suite was re-recorded that day. Each row now carries the harness (`claude`) and
+  `judge` that produced it, and `compare.py` marks a row recorded under a different harness
+  with `~` and prints the count. A flag on a `~` row is a question, not a verdict: re-run
+  the case once on the unchanged tree the same day, compare the after-run with that
+  before-run, then `--record` the after-run. After a harness update, re-record the whole
+  suite (about $100 and 95 minutes on 3 lanes) rather than reading 70 `~` rows one by one.
 
 ## Backlog
 
-- **Dated fixtures** — two fixtures carry absolute dates and flip with the wall clock:
-  `46-review-clean-diff` (its worklog says "revisit 2026-10-05", so from 2026-10-06 every
-  model flags the expired deviation and `no-invented-findings` fails in both arms — with 0.56,
-  without 0.56, baseline 1.00) and `tests/test_journal.py::TestBriefRendering::
-  test_an_imported_event_type_cannot_add_lines_to_the_brief` (an event dated 2026-09-02
-  collapses as dormant after 30 days). Make the dates relative to "now" or pin `now`.
-  Recorded 2026-10-06.
 - **Multi-turn flows** — `feature` (start path: branch + confirm), `workspace`, `implement`,
   `setup`, `model-tiers`. A single-prompt eval only measures "did it ask the right first
   question"; testing them properly needs a scripted multi-turn harness (a pre-answered second

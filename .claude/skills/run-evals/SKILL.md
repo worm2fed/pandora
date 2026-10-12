@@ -104,7 +104,9 @@ ls shipgate/evals | grep -E '^[0-9]{2}-' | cut -c1-2 | xargs -P 3 -n 1 bash -c '
 
 Afterwards grep each log for `hit your session limit` before trusting its score, and re-run
 those cases: `compare.py` takes the latest results dir per case, so a clean re-run supersedes
-a limit-hit one.
+a limit-hit one. In its table a `~` after the recorded date means the baseline row came from
+a different harness or judge than this run; treat a flag on such a row as drift until a
+same-day run on the unchanged tree says otherwise (evals README, "Writing graders").
 
 ## When a run scores 0.00
 
