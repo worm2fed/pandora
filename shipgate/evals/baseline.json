@@ -9,12 +9,12 @@
       "without": 1.0
     },
     "02-selective-bug": {
-      "delta": 0.33,
-      "results": "2026-10-06T16-41-58-614Z",
+      "delta": 0.44,
+      "results": "2026-10-12T12-01-23-167Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 0.89,
-      "without": 0.56
+      "without": 0.44
     },
     "03-suggested-quickfix": {
       "delta": 0.38,
@@ -25,34 +25,34 @@
       "without": 0.62
     },
     "04-pasted-stack-trace": {
-      "delta": 0.22,
-      "results": "2026-10-06T18-14-09-608Z",
+      "delta": 0.44,
+      "results": "2026-10-12T12-01-23-189Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.78,
+      "version": "0.15.0",
+      "with": 1.0,
       "without": 0.56
     },
     "05-fix-it-wording": {
       "delta": 0.67,
-      "results": "2026-10-06T16-46-12-056Z",
+      "results": "2026-10-12T12-01-23-178Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 0.33
     },
     "06-neg-feature-request": {
       "delta": 0.0,
-      "results": "2026-10-06T16-47-46-250Z",
+      "results": "2026-10-12T12-04-14-436Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
     "07-neg-explain-code": {
       "delta": 0.0,
-      "results": "2026-10-06T16-48-32-556Z",
+      "results": "2026-10-12T12-04-32-119Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -74,9 +74,9 @@
     },
     "10-risk-ranked-review": {
       "delta": 0.0,
-      "results": "2026-10-06T16-50-51-738Z",
+      "results": "2026-10-12T12-05-51-055Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -106,9 +106,9 @@
     },
     "14-risk-ranked-review-explicit": {
       "delta": 0.0,
-      "results": "2026-10-06T16-55-10-506Z",
+      "results": "2026-10-12T12-06-44-062Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -137,12 +137,12 @@
       "without": 1.0
     },
     "18-clarify-ask-vague": {
-      "delta": 0.49,
-      "results": "2026-10-06T17-04-18-308Z",
+      "delta": 0.18,
+      "results": "2026-10-12T12-06-52-015Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 1.0,
-      "without": 0.51
+      "version": "0.15.0",
+      "with": 0.9,
+      "without": 0.72
     },
     "19-clarify-ask-fully-specified": {
       "delta": 0.19,
@@ -154,9 +154,9 @@
     },
     "20-neg-clarify-one-line-fix": {
       "delta": 0.0,
-      "results": "2026-10-06T17-06-20-639Z",
+      "results": "2026-10-12T12-10-13-139Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -169,12 +169,12 @@
       "without": 1.0
     },
     "22-verify-stale-after-fix": {
-      "delta": 0.19,
-      "results": "2026-10-06T17-08-57-076Z",
+      "delta": 0.29,
+      "results": "2026-10-12T12-11-11-129Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 0.81
+      "without": 0.71
     },
     "23-verify-edit-then-claim": {
       "delta": 0.17,
@@ -185,12 +185,12 @@
       "without": 0.78
     },
     "24-verify-pasted-evidence": {
-      "delta": 0.0,
-      "results": "2026-10-06T17-10-53-191Z",
+      "delta": 0.04,
+      "results": "2026-10-12T12-11-20-553Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 1.0
+      "without": 0.96
     },
     "25-verify-zero-tests-ran": {
       "delta": 0.0,
@@ -201,12 +201,12 @@
       "without": 1.0
     },
     "26-verify-multi-claim": {
-      "delta": 0.19,
-      "results": "2026-10-06T17-12-49-893Z",
+      "delta": 0.29,
+      "results": "2026-10-12T12-12-02-535Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 0.81
+      "without": 0.71
     },
     "27-neg-verify-explain": {
       "delta": 0.0,
@@ -226,9 +226,9 @@
     },
     "29-route-nested-rule": {
       "delta": 0.06,
-      "results": "2026-10-06T17-14-30-395Z",
+      "results": "2026-10-12T12-13-07-573Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 0.94
     },
@@ -266,9 +266,9 @@
     },
     "34-neg-route-one-line": {
       "delta": 0.0,
-      "results": "2026-10-06T17-19-00-738Z",
+      "results": "2026-10-12T12-14-03-682Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -282,9 +282,9 @@
     },
     "36-kb-recall-explicit": {
       "delta": 0.0,
-      "results": "2026-10-06T17-21-46-665Z",
+      "results": "2026-10-12T12-15-24-103Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -322,9 +322,9 @@
     },
     "41-neg-kb-personal-pref": {
       "delta": 0.0,
-      "results": "2026-10-06T17-26-16-109Z",
+      "results": "2026-10-12T12-15-54-598Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -345,20 +345,20 @@
       "without": 0.78
     },
     "44-review-planted-diff": {
-      "delta": 0.1,
-      "results": "2026-10-06T17-28-30-522Z",
+      "delta": 0.0,
+      "results": "2026-10-12T12-16-50-662Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.81,
+      "version": "0.15.0",
+      "with": 0.71,
       "without": 0.71
     },
     "45-review-unmet-sc": {
-      "delta": 0.33,
-      "results": "2026-10-06T17-29-31-408Z",
+      "delta": 0.13,
+      "results": "2026-10-12T12-17-18-414Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 0.67
+      "without": 0.87
     },
     "46-review-clean-diff": {
       "delta": -0.11,
@@ -370,9 +370,9 @@
     },
     "47-review-after-fixes": {
       "delta": 0.0,
-      "results": "2026-10-06T17-33-00-864Z",
+      "results": "2026-10-12T12-18-29-136Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -417,12 +417,12 @@
       "without": 1.0
     },
     "53-design-ask-recommend": {
-      "delta": 0.08,
-      "results": "2026-10-06T17-38-57-537Z",
+      "delta": 0.0,
+      "results": "2026-10-12T12-21-40-013Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
-      "without": 0.92
+      "without": 1.0
     },
     "54-design-prior-adr": {
       "delta": 0.0,
@@ -442,9 +442,9 @@
     },
     "56-neg-design-already-designed": {
       "delta": 0.0,
-      "results": "2026-10-06T17-49-26-169Z",
+      "results": "2026-10-12T12-22-12-128Z",
       "runs": 3,
-      "version": "0.14.1",
+      "version": "0.15.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -457,12 +457,12 @@
       "without": 1.0
     },
     "58-big-debug-regression": {
-      "delta": 0.13,
-      "results": "2026-10-06T17-53-52-277Z",
+      "delta": 0.27,
+      "results": "2026-10-12T12-22-22-101Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 0.93,
-      "without": 0.8
+      "version": "0.15.0",
+      "with": 1.0,
+      "without": 0.73
     },
     "59-big-debug-selective": {
       "delta": 0.18,
@@ -490,11 +490,11 @@
     },
     "62-big-review-planted-diff": {
       "delta": 0.2,
-      "results": "2026-10-06T18-02-33-060Z",
+      "results": "2026-10-12T12-25-52-297Z",
       "runs": 3,
-      "version": "0.14.1",
-      "with": 1.0,
-      "without": 0.8
+      "version": "0.15.0",
+      "with": 0.93,
+      "without": 0.73
     },
     "63-big-review-after-fixes": {
       "delta": 0.2,
@@ -551,8 +551,16 @@
       "version": "0.14.1",
       "with": 1.0,
       "without": 1.0
+    },
+    "70-review-fact-retention": {
+      "delta": 0.08,
+      "results": "2026-10-12T12-44-39-728Z",
+      "runs": 3,
+      "version": "0.15.0",
+      "with": 0.97,
+      "without": 0.89
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
-  "updated": "2026-10-06"
+  "updated": "2026-10-12"
 }

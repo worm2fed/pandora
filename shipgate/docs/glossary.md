@@ -17,6 +17,7 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | **step** | A numbered instruction inside a skill ("Step 3 — Write the PRD"). | *phase*. |
 | **gate** | A point where the flow may stop and go back: the Clarify gate, the verify gate, the review verdict, the parity gate, the publish gate, the Stop hook. | *check* (one verification inside a phase or gate: the acceptance-criteria check, the branch check); the `check` subcommand (what a session still owes the journal). |
 | **verify gate** | Run the one command that proves a claim, read the whole output, report with the evidence (`verify` skill; recorded as `verify-run`). | The review workflow's refuter pass (its `verify` arg); the Review phase ("independent verification"); the orchestrator's filtering pass. |
+| **escalation contract** | In `executive` mode, the cases the orchestrator still asks the user about: a one-way door, a user-visible scope change, a security-sensitive area, a genuine 50/50, plus the config's **Extra escalations**. | *ask* mode (every gate question goes to the user). |
 | **position** | Where a stream stands: its phase, last events, gate decisions. Read from the journal, never inferred. | — |
 | **journal** | The append-only event log (`scripts/journal.py`; "flow journal" in full). | *database* (the SQLite file that holds it: config `Database:`, sidecar `db`). |
 | **stream** | The journal's event sequence for one piece of work, named for its branch. Contract: `--stream`. | *flow*; `--feature` (a `status` filter by slug). |
@@ -41,6 +42,7 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | **task** | One build plan item with a "done when". Contract: `task-done`, `task_ids`. | *slice* (a group of tasks introducing new domain shapes). |
 | **impact map** | Route & Map's output: primary home, modules touched, obligations, risk signals. | *blast radius* (one number inside it). |
 | **source-of-truth artifact** | The primary document or code a brief or a port derives from; it outranks any digest of it. | *artifact*. |
+| **reference implementation** | The vetted code new code mirrors, named in the worklog's **Reference implementation** section and in the worker brief; chosen by reading and by code signals, never by being the nearest sibling. | *source-of-truth artifact* (what a brief or port derives from). |
 | **ledger** | The staging inbox for learnings (`docs/ledger.md`), triaged at Capture. | *journal*; *knowledge base*. |
 
 ## Roles

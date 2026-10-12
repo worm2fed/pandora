@@ -46,6 +46,7 @@ claude plugin eval . --runs 3 --ablation with-without --scaffold --judge-model s
 | 10 risk ranking | "rank the changed files by regression risk" | bare model ≈ coin-flip on the two hot files |
 | 11 negative | one-line README typo | must not trigger the flow or run signals |
 | 12–14 explicit | same as 08–10, prompt names the shipgate skill | the signals path itself (`review` + `hotspots --diff`) |
+| 70 fact retention | review the change at HEAD; three planted findings in three files | the with arm's report keeps every planted fact (file:line, severity, failing input) while following the Writing for people rule; readability rubric at half weight |
 
 On naturally phrased prompts (08–10) no shipgate skill has fired in any run so far, so their
 Δ measures **triggering**, not the signals. Case 14 is the one that shows the signals'

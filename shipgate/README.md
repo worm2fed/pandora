@@ -106,7 +106,7 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 
 - `scripts/journal.py` — the flow journal CLI; `scripts/signals.py` — per-file risk signals, read by `route-and-map`, `review` and `structured-debug` (see [Code signals](#code-signals)).
 
-**Glossary** — [`docs/glossary.md`](docs/glossary.md): one term per shipgate concept, what it means and what it is not to be confused with. Prose in this plugin uses those terms and no synonyms.
+**Glossary** — [`docs/glossary.md`](docs/glossary.md): one term per shipgate concept, what it means and what it is not to be confused with. Prose in this plugin uses those terms and no synonyms. Every report a person reads follows the **Writing for people** rule (short sentences, one idea each, every fact kept; ADR 0006); the `Writing style` config section extends it to the documents shipgate writes into your repo.
 
 ## Artifacts (3 per feature)
 

@@ -2,6 +2,34 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.15.0 — writing for people, scoped by audience. Karpathy's advice is to ask a model for
+prose about 80% of the way to ASD-STE100 (Simplified Technical English): short sentences,
+common words, one term per concept, one action per instruction. The plugin adopts the
+principles, not the specification, and only where each audience gains. **Reports a person
+reads** (review findings, verify results, debug hypotheses, gate summaries, the orchestrator's
+phase summaries) follow a "Writing for people" rule by default: sentences of about 20 words
+with one idea each, the glossary's term for each concept, active voice, and the guard that
+matters, since strict STE prompting is known to drop facts: shorter sentences, never fewer
+facts; every file:line, severity, confidence, failure scenario, command, exit code, count and
+verdict stays. The rule is one blockquote repeated verbatim in the three agents and the seven
+skills that prescribe a report (ADR 0006), pinned by `tests/test_prose.py`. **Documents written
+into a repo or forge** (PRD, ADR, worklog, ledger lines, MR/PR body, tracker comments) keep
+their style unless the project opts in: a new `## Writing style` config section, `Docs: plain |
+ste-80`, default `plain`, read by `clarify`, `design`, `implement`, `knowledge-base`, `review`
+and `structured-debug` where they write, carried into worker briefs by `model-tiers`, offered
+by `setup`. **The prose the model reads** (12 skills, 3 agents, the command) was rewritten
+body-only after a second terminology pass against the glossary: mean sentence length fell from
+15–29 words to 8–16 per file, with every fenced block, backticked token and number present
+before present after, and every frontmatter `description:` byte-identical, since those are
+the triggering surface. A new eval, `70-review-fact-retention`, plants three findings of
+different severity in three files and grades each fact: with the plugin every fact grader
+passes 3/3 (0.97 with, 0.89 without; the readability rubric is paired with a hedge-word regex
+and weighted low, because style rubrics are the noisier signal). The 23 affected cases re-run before and after the
+rewrite on the same day: no case lost more than 0.07 in the with arm, two gained, every
+negative case stayed at zero skill-fired. Baseline re-recorded for those 24 cases at 0.15.0.
+Glossary gains `report`, `Writing for people`, `escalation contract` and `reference
+implementation`. No hook, script or Workflow change.
+
 v0.14.7 — the session-start brief leads with the stream this session drives. The SessionStart
 hook asked `status` by branch only, so after a compaction or a resume a session driving a
 stream with no branch (an epic's planning stream) got the checkout's stream first, and in an
