@@ -114,7 +114,7 @@ each, facts in fenced blocks or lists; presence, not order); `verdict-not-ready`
 ## Eval runs (FR-006)
 
 Subset, 3 runs, both arms, via `.claude/skills/run-evals/scripts/run-case.sh shipgate NN
---config-dir $HOME/workspace/voyager/.claude`: 02 04 05 06 07 10 14 18 20 22 24 26 29 34 36
+--config-dir <the paying account's config dir>`: 02 04 05 06 07 10 14 18 20 22 24 26 29 34 36
 41 44 45 47 53 56 58 62. Before: on the branch at T001, before any prose edit. After: at T007.
 Compare with `compare.py`; a |ΔΔ| over 0.10 is read in the transcript before it is believed.
 
@@ -146,7 +146,7 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings.
 ## Feature
 - [x] T003 — The Writing for people callout in the ten surfaces + `tests/test_prose.py` — file(s): the ten files above, `tests/test_prose.py` — done when: the test fails on a deliberately altered copy and passes on the tree.
 - [x] T004 — Config key: template section, README row, setup interview, reading sentences in clarify/design/implement/knowledge-base/review/structured-debug, worker-brief excerpt line in model-tiers, pandora opt-in — file(s): `config-template.md`, `README.md`, `skills/setup/SKILL.md`, the six skills, `skills/model-tiers/SKILL.md`, `.claude/shipgate.md` — done when: every artifact-writing step names the key and the default; `test_prose.py` asserts the template section exists with `Docs:`.
-- [ ] T005 — Skill-body rewrite, workers one tier down, four groups: (a) feature + review, (b) implement + structured-debug + verify, (c) clarify + design + route-and-map + workspace, (d) knowledge-base + model-tiers + setup + command + agents — file(s): those — done when: parity script passes per file (SC-005), frontmatter diff empty (SC-001), orchestrator has read each diff.
+- [x] T005 — Skill-body rewrite, workers one tier down, four groups: (a) feature + review, (b) implement + structured-debug + verify, (c) clarify + design + route-and-map + workspace, (d) knowledge-base + model-tiers + setup + command + agents — file(s): those — done when: parity script passes per file (SC-005), frontmatter diff empty (SC-001), orchestrator has read each diff.
 - [ ] T006 [P] — Eval case 70: fixture, prompt, graders; run; record — file(s): `evals/70-review-fact-retention/*`, `evals/baseline.json`, `evals/README.md` table row — done when: with-arm keeps all three facts 3/3 (SC-002) and the row is recorded.
 
 ## Polish

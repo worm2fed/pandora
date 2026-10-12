@@ -7,28 +7,27 @@ description: Load this at the start of any task that ends in a status the user w
 
 A claim of success without fresh evidence is a guess wearing a confident voice. This skill
 exists because the most expensive bugs are the ones reported as "done." Before you tell the
-user something works, prove it — in this session, with output you just saw.
+user something works, prove it. Prove it in this session, with output you just saw.
 
 ## The rule
 
 **Do not claim completion without fresh terminal evidence from the current session.**
 
 Cached output, output from earlier in the conversation, "I ran this before," and "CI will
-catch it" are all disqualified. State changes; the only evidence that counts is the command
+catch it" are all disqualified. State changes. The only evidence that counts is the command
 you just ran.
 
-**This gate is about evidence, not repetition.** Run the proving command once and read it —
-a claim you just evidenced this way is settled; don't re-verify it again later in the same
-state, don't follow a green proving run with ad-hoc spot checks of the same behaviour (the
-next action after the proving output is the report), and don't spawn subagents to
-double-check your own fresh output. Current models
-self-verify while working; the failure mode this skill exists for is the *unevidenced*
-claim, not the under-repeated one. Independent fresh-context review (the `review` phase) is
-a different thing and stays — a reviewer without your accumulated context catches what you
-are blind to.
+**This gate is about evidence, not repetition.** Run the proving command once and read it. A
+claim you just evidenced this way is settled. Don't re-verify it again later in the same
+state. Don't follow a green proving run with ad-hoc spot checks of the same behaviour; the
+next action after the proving output is the report. Don't spawn subagents to double-check
+your own fresh output. Current models self-verify while working. The failure mode this skill
+exists for is the *unevidenced* claim, not the under-repeated one. Independent fresh-context
+review (the `review` phase) is a different thing and stays. A reviewer without your
+accumulated context catches what you are blind to.
 
-These words in a completion claim are a red flag that you're asserting, not verifying —
-if you're about to write one, stop and run the command instead:
+These words in a completion claim are a red flag that you're asserting, not verifying. If
+you're about to write one, stop and run the command instead:
 
 > "should", "should be", "probably", "seems to", "looks like it", "I believe", "I think it
 > works", "this will fix it"
@@ -44,13 +43,13 @@ if you're about to write one, stop and run the command instead:
 
 1. **Identify** — What exact command proves this specific claim? Multiple claims ("tests
    pass and it builds") = multiple commands = multiple gates.
-2. **Run** — Execute the full command now. No partial runs, no "I'll just check the
+2. **Run** — Execute the full command now. No partial runs. No "I'll just check the
    relevant test" when the claim is about the suite.
-3. **Read** — Read the complete output. Check the exit code. Count passes and failures —
-   don't infer them from the absence of red text.
+3. **Read** — Read the complete output. Check the exit code. Count passes and failures.
+   Don't infer them from the absence of red text.
 4. **Confirm** — Does the output prove the *exact* claim? "It compiled" does not prove "the
    feature works." "0 failures" with "0 tests run" proves nothing.
-5. **Report** — State the result, cite the command, the exit code, and the key line of
+5. **Report** — State the result. Cite the command, the exit code, and the key line of
    output. Let the user see the evidence, not just your conclusion.
 
 ## Claim → evidence
@@ -70,9 +69,10 @@ if you're about to write one, stop and run the command instead:
 A test that has never failed proves nothing. For a fix:
 
 1. Write/identify the test for the bug.
-2. Run it against the **un**fixed code — it must **fail** (this proves the test detects the bug).
+2. Run it against the **un**fixed code. It must **fail**; this proves the test detects the
+   bug.
 3. Apply the fix.
-4. Run it again — it must **pass**.
+4. Run it again. It must **pass**.
 
 If you can't make it fail before the fix, you don't yet know the test is testing the bug.
 
@@ -80,18 +80,18 @@ If you can't make it fail before the fix, you don't yet know the test is testing
 
 - "It's a trivial change." Trivial changes break builds constantly.
 - "I ran something like it earlier." Earlier ≠ now. Re-run.
-- "The failing test is flaky." Maybe — but prove it's flaky, don't assume it.
+- "The failing test is flaky." Maybe, but prove it's flaky. Don't assume it.
 - "It compiles, so it works." Compilation is not behavior.
-- "The subagent said it was done." Require the *evidence* in its report — real command
-  output, not "tests pass". A report with evidence is accepted; a report without it gets the
-  command run, not the claim trusted. Don't re-derive work the evidence already proves.
+- "The subagent said it was done." Require the *evidence* in its report: real command
+  output, not "tests pass". Accept a report with evidence. For a report without it, run the
+  command; don't trust the claim. Don't re-derive work the evidence already proves.
 
 ## Record the evidence (journaled projects)
 
 Fresh evidence is worth nothing tomorrow if only your conclusion survives. On a project
-whose config declares a **Journal**, a passing gate is appended as a `verify-run` event —
-the command, its exit code, and a trimmed head/tail of the output — against its
-stream:
+whose config declares a **Journal**, append a passing gate as a `verify-run` event against
+its stream. The event carries the command, its exit code, and a trimmed head/tail of the
+output:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
@@ -99,12 +99,13 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --data '{"outcome":"pass","task_ids":["T010"],"commands":[{"cmd":"yarn test","exit":0,"tail":"42 passed"}]}'
 ```
 
-Three things this is not: it is not a substitute for *running* the command (the gate above
-is unchanged), not a place to paste whole logs (trim to the lines that prove the claim — a
-payload over 1 KB is refused), and not optional bookkeeping. `task-done` will not append
-without a passing `verify-run` naming that task, so an unrecorded verify blocks the very
-completion it was meant to prove — and since the two land together, send them as one
-`append --batch` (JSONL on stdin) rather than two calls:
+This record is not three things. First, it is not a substitute for *running* the command;
+the gate above is unchanged. Second, it is not a place to paste whole logs. Trim to the
+lines that prove the claim, because the journal refuses a payload over 1 KB. Third, it is
+not optional bookkeeping. `task-done` will not append without a passing `verify-run` that
+names that task. So an unrecorded verify blocks the very completion it was meant to prove.
+The two land together, so send them as one `append --batch` (JSONL on stdin) rather than
+two calls:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <branch> --batch <<'EOF'
@@ -115,13 +116,13 @@ EOF
 
 `journal.py vocab --shape verify-run` prints the payload if you need it.
 
-Record failures too, with `"outcome":"fail"` — a gate that caught something is the most
-useful entry in the log, and it is what lets a later session see that the fix was proven
-rather than assumed.
+Record failures too, with `"outcome":"fail"`. A gate that caught something is the most
+useful entry in the log. It is what lets a later session see that the fix was proven rather
+than assumed.
 
 ## When verification fails
 
-Report the failure honestly with the output — a failed check caught now is the skill
-working, not a setback. If the `knowledge-base` skill is available and the failure reveals a
-reusable trap (a command that lies, a test that needs a flag), note it so the pattern is
-captured. Then fix and re-run the gate.
+Report the failure honestly with the output. A failed check caught now is the skill
+working, not a setback. The failure may reveal a reusable trap (a command that lies, a test
+that needs a flag). If so, and the `knowledge-base` skill is available, note the trap so the
+pattern is captured. Then fix and re-run the gate.
