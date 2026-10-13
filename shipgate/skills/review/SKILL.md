@@ -137,7 +137,8 @@ The `args`:
   throws before it spends anything, because the refuters read it too.
 - `doNotFlag`, `preRulings`: your two orchestrator lists, one entry per string.
 - `confidenceFloor`: a number 0-100, default 60. Findings under it come back unverified.
-- `model`: **required**, one tier below the session per `model-tiers`.
+- `model`: **required**, the worker tier per `model-tiers`: one tier below the session,
+  never below Opus.
 - `verify`: `'high-only'` (default), `'all'` or `'none'`. `high-only` spends refuters on the
   BLOCKER/HIGH candidates only. `all` refutes every candidate above the floor.
 - `maxRefuters`: hard cap on refuter agents for the whole run, default 6. The script takes

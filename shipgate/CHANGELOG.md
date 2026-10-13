@@ -2,6 +2,22 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.16.0 — workers never run below Opus. `model-tiers` sent coding workers one tier below
+the session, so a session on Opus dispatched Sonnet workers for all product code. On a
+production project that put a change to a money type on Sonnet, and the user had to step in.
+Sonnet is now the mechanic tier only: the worker tier is one tier below the session but
+never below Opus, so a session on Opus dispatches same-tier Opus workers. A new definition
+says what "very mechanical" means: the brief fixes the exact edit and leaves no call to make.
+Work that touches a type, a data encoding, a business rule or money is never mechanical. A
+third invariant states the rule: judgment work never runs below Opus. The review fan follows
+it too: the review Workflow script's `model` is the worker tier, and the `code-reviewer`
+agent's default moves from `sonnet` to `opus`. The explore fan keeps one tier below the
+session with no floor, because explorers only locate code and the orchestrator reads the
+flagged files itself. `implement`, `feature`, `review` and the glossary carry the same rule.
+The cost is honest: an Opus session's workers and reviewers now cost Opus tokens.
+The README's `Status` section no longer copies release notes. It had drifted to v0.13.0, so
+it now points at this file and at `plugin.json`, the single home for each.
+
 v0.15.0 — writing for people, scoped by audience. Karpathy's advice is to ask a model for
 prose about 80% of the way to ASD-STE100 (Simplified Technical English): short sentences,
 common words, one term per concept, one action per instruction. The plugin adopts the

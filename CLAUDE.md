@@ -35,5 +35,7 @@ pattern and its paths; treat a hit as a blocker, not a nit.
   `.claude/shipgate.db` (local, gitignored).
 - A behaviour change to a plugin bumps its version in `<plugin>/.claude-plugin/plugin.json`
   and the matching entry in `.claude-plugin/marketplace.json`, in the same change.
+- Release notes have one home. A plugin with a `CHANGELOG.md` keeps them only there; its
+  `README.md` links to the changelog and never copies entries, because copies drift.
 - Hooks under `<plugin>/hooks/` run on every user's machine in every project they open:
   the no-op-when-not-applicable path is a correctness requirement.

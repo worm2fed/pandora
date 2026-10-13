@@ -18,7 +18,7 @@ description: |
   blinds it to; the orchestrator filters afterwards rather than asking them to self-filter.</commentary>
   </example>
 tools: Glob, Grep, Read, Bash, WebFetch, WebSearch
-model: sonnet
+model: opus
 effort: medium
 color: red
 ---

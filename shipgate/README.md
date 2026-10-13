@@ -76,7 +76,7 @@ What the sections configure:
 - `implement` — reuse-first execution, breaking-change discipline, per-task `verify`.
 - `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate orchestrator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk", and the re-review after a round of fixes ("I've addressed F1 and F2 — good to push?"), scoped to the fix diff.
 - `verify` _(cross-cutting)_ — no "done" without fresh command evidence.
-- `model-tiers` _(cross-cutting)_ — the orchestrator never types product code; implementation goes to worker subagents, mechanical sub-work sinks to the cheapest capable tier.
+- `model-tiers` _(cross-cutting)_ — the orchestrator never types product code; implementation goes to worker subagents one tier below the session but never below Opus, and only very mechanical sub-work sinks to the cheapest capable tier.
 - `knowledge-base` _(cross-cutting)_ — recall/capture durable knowledge, routed by type to the stores the project config declares (default: repo docs). Named to avoid colliding with Claude's built-in session memory.
 - `structured-debug` — on-demand: evidence-first debugging for bugs, regressions, incidents — a pasted stack trace with no repo access included, and a report that says "just fix it" (the fix still waits for an approved plan). Also answers a standalone "which file has the defect?".
 
@@ -100,7 +100,7 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 
 - `code-explorer` — grounded exploration, file:line, essential-files list; reads refs that are not checked out and the history with read-only git (the orchestrator fetches first).
 - `code-architect` _(opus)_ — one committed design philosophy per instance.
-- `code-reviewer` — every finding scored (confidence + severity), file:line; the orchestrator filters.
+- `code-reviewer` _(opus)_ — every finding scored (confidence + severity), file:line; the orchestrator filters.
 
 **Scripts** (Python 3 stdlib)
 
@@ -252,94 +252,5 @@ just less informed.
 
 ## Status
 
-v0.13.0 — code signals. The flow's intelligence was all *declared* (CLAUDE.md, ADRs, the
-journal); nothing computed what the code and its history say. **Signals**: a second bundled
-stdlib script, `scripts/signals.py` (`hotspots`, `blast`, `suspects`), computes per-file git
-trajectory (commits, fix-rate, age, staleness, author count and top share) and, for TS/JS,
-Python and Go, import-graph fan-in/out and blast radius, each labelled by quartile over the
-whole repository so `top` means top *here*; "now" is HEAD's commit time, so two runs on one
-state are byte-identical, and nothing persists (ADR 0004). A new `## Code signals` config
-section (window, fix pattern, extra excludes) is the first one a script reads itself, so the
-terminal and the flow compute the same numbers. **Wiring**: `route-and-map`'s impact map
-gains a **Risk signals** block and the journal entry its labels and sizes; `review` briefs
-carry the diff's risk table, and `review-workflow.js` takes an optional `fileRisk` that
-tie-breaks ranking after severity and confidence and spends the refuter budget severity →
-risk → confidence — risk never overrides severity, and absent it the output is byte-identical;
-`structured-debug` starts hypotheses from a ranked suspect list; `implement` and `design`
-prefer the precedent with the lower fix-rate, greater age and higher fan-in; explorer and
-worker briefs may carry the table. No git, a shallow clone, an empty history or no adapter
-degrades to one line and the phase as before. **Honesty**: fan-in is a lower bound in
-alias-heavy or dynamically-imported code (the output marks `partial` / `unresolved`; risk is
-a tie-break within a severity band only, so an undercount can cost a file its refuter slot in
-that band but never changes a severity or drops a finding); granularity is the file, not the method,
-and the semantic axis (embeddings, BM25, a glossary) is out of scope by decision. An indexed
-retrieval layer (TeaRAGs-style: daemon, embedding runtime, ~1 GB per repo) was evaluated and
-rejected as a dependency — see `docs/research/2026-09-25-tearags-vs-shipgate.md`. Evals
-08–11 (bug localization from history, blast radius of a diff, risk-ranked review, a negative
-one-line change) cover the new behaviour under `--ablation with-without`.
-
-v0.12.0 — orchestration by workflow, config-selected. A new `## Orchestration` config
-section (`review: agents | workflow`, `explore: agents | workflow`, default `agents`) lets
-a project run the Review fan and the Explore fan as `Workflow` scripts bundled with the
-skills instead of hand-driven `Agent` fans. **Review**: `review-workflow.js` runs the lens
-finders (`shipgate:code-reviewer`, schema-typed findings, do-not-flag and pre-rulings
-passed as `args`), dedupes across lenses in script, then spends a capped refuter budget
-(`verify: none | high-only | all`, defaulting to `high-only` with `maxRefuters: 6`) on the
-BLOCKER/HIGH candidates: a refutation counts only when it cites the `file:line` that
-disproves the finding, and a finding dies only on a full quorum — every requested refuter
-reported and every one of them refuted with evidence — so an uncertain, uncited or dead
-refuter leaves it standing. The return is compact — ranked survivors carrying `verification`
-and `quorum`, the killed list with its evidence, one-line below-floor entries, counts and
-run-level `coverage` — so the orchestrator's filtering pass starts from data, the raw
-reviewer reports never enter its context, and the run id lands in
-`review-verdict.data.workflow_run_id`. **Explore**: `explore-workflow.js` runs the lenses
-as `shipgate:code-explorer` agents and merges their essential files, capped at 25; the
-orchestrator still reads those files itself. Scripts always receive an explicit `model`
-(one tier below the session — the tool would otherwise inherit the session model), and the
-bundled-file references in `clarify`, `design`, `review` and `feature` now go through
-`${CLAUDE_PLUGIN_ROOT}` so they resolve after a marketplace install. The cost is honest:
-the finders cost what the `Agent` fan costs, so the gain is structure, dedupe and context
-hygiene rather than fewer tokens, and full verification (`verify: all`) is worth it only on
-high-stakes diffs. Implement stays on `Agent` workers (mid-flight `SendMessage`, warm reuse,
-environment repair and the shared working tree have no workflow equivalent). A harness without
-the tool keeps the `agents` path and records a `deviation`.
-
-v0.11.0 — the flow journal made cheap and trustworthy, from two weeks of its own data.
-**Cost**: the status brief drops finished work (a stream now ends with `flow-completed`, and a
-`capture-done` left alone for 48 h reads terminal; `--all` still shows everything), collapses
-streams dormant over a week to one line, caps each stream at its last three gate decisions
-(five on the checked-out branch's stream), and puts the checked-out branch's stream first
-(`status --branch`, passed by the SessionStart hook — plus `--nested-branch` per nested repo in an umbrella); semantic events go up as one `append
---batch` per phase boundary, and a payload over 1 KB is refused so the prose stays in the
-worklog and the event carries `refs`. **Position reliability**: a phase-owning event records
-the `phase-entered` it implies instead of leaving the status brief's headline field to memory (ADR
-0002), `append` validates each type's payload against a canonical shape and normalizes the
-aliases that had been drifting silently past the gates (`chosen→decision`, `kind→gate`,
-`result→outcome`, `tasks→task_ids`, verdict `pass→ready`), and `actor` becomes `role[@label]`
-over a closed set of roles, labelled by default from the session id the SessionStart hook
-records (ADR 0003) — so who decided, and whether they were asked or were correcting
-(`gate-decision.raised_by`), is finally queryable, via the new `stats`. **New gates**:
-`mr-opened` is refused unless a `ready` verdict or the user's own `gate=publish` /
-`decision=publish` call stands after the last `task-done` — "start the next item" cannot
-publish; duplicate `artifact-written` rows (same path, same mtime, under 5 s apart) collapse;
-and the Stop hook records its own blocks as `gate-blocked`. **Process**: the config template
-gains a `## Worker guardrails` section that `model-tiers` requires pasted word-for-word into
-every worker brief (every worker incident so far started as a compressed brief), and streams
-are one per issue, named for the branch.
-
-v0.10.0 — gates learned from a colleague's fleet-orchestration process. **Types round**:
-design plans a declarations-only task for any slice introducing domain shapes; implement
-delivers types with `unimplemented` bodies, gates on a test-inclusive type-check, reviews
-the declarations alone, and freezes reviewed signatures (changes escalate + land as
-`deviation`). **Parity gate** for ports/migrations: design declares pre-authorized deltas;
-review adds a fresh adversarial pass hunting unauthorized behavioral differences across the
-whole source-of-truth artifact. **Review arbitration**: reviewer briefs carry do-not-flag lists and
-pre-rulings, killed findings are recorded so they aren't re-litigated, trivial diffs may be
-orchestrator-gated (recorded as `gate-decision`), and the internal not-ready→fix loop caps
-at two rounds before surfacing. **Worker discipline** (model-tiers): self-sufficient
-follow-up dispatches, amnesia symptoms → cold-spawn, environment repair is orchestrator
-work, briefs point at source-of-truth artifacts (the artifact outranks the digest) and name a vetted
-reference implementation, validation via workspace-level scripts with a baseline run on
-shared code. All new gates reuse the existing journal vocabulary — no new event types.
-
-Full history: [CHANGELOG.md](CHANGELOG.md)
+Release notes, newest first, live only in [CHANGELOG.md](CHANGELOG.md). The current version
+is in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json).

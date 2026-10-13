@@ -94,7 +94,8 @@ the `Workflow` tool instead:
   an empty one. It carries the config excerpts and recall pointers each explorer needs. It
   also carries "one paragraph per finding, refs as file:line". Without that line explorer
   detail is unbounded, and the return object grows past what you want in context.
-- `model` is **required**: one tier below the session, per `model-tiers`.
+- `model` is **required**: one tier below the session, per `model-tiers`. The explore fan
+  has no Opus floor, because the explorers only locate code.
 
 The script returns `{lenses: [{lens, findings}], essentialFiles}`. Each essential file lists
 why every lens flagged it. The script caps the list at 25 files, in order of first mention,
@@ -305,8 +306,8 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   the fact is established, or nobody ever writes them.
 - **Match model tier to the work** (`model-tiers`). When the work is big enough to dispatch,
   the orchestrator does not type product code. Implement-phase code changes go to worker
-  subagents with self-contained briefs, and mechanical sub-work sinks to Sonnet. See
-  `model-tiers` for the worker-brief format and delegation rules.
+  subagents on Opus or above with self-contained briefs, and only very mechanical sub-work
+  sinks to Sonnet. See `model-tiers` for the worker-brief format and delegation rules.
 - **Test-first on real behavior.** When you add logic or fix a bug, write the failing test
   before the code (see `implement` / `verify`).
 - **Use `structured-debug`** when the work is a bug, regression, or incident rather than a

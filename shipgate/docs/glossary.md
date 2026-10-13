@@ -50,7 +50,8 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | Term | Definition | Not to be confused with |
 |---|---|---|
 | **orchestrator** | The main session running the flow: routes, dispatches subagents, filters findings, records decisions; the `feature` skill is its playbook. Contract: actor role `orchestrator`, `raised_by: orchestrator`. | *session* (the harness process, with an id); a *worker*. |
-| **worker** | A subagent the orchestrator dispatches to implement, one tier down. Contract: actor role `worker`. | *mechanic* (the cheapest-tier subagent for mechanical sub-work). |
+| **worker** | A subagent the orchestrator dispatches to implement. It runs on the *worker tier*: one tier below the session, never below Opus. The review fan uses the same tier. Contract: actor role `worker`. | *mechanic* (the cheapest-tier subagent for very mechanical sub-work). |
+| **very mechanical** | Work whose brief fixes the exact edit and leaves no call to make: a rename, a pattern applied file by file, collected output. Work that touches a type, a data encoding, a business rule or money never is. The only work that goes to a mechanic; defined in `model-tiers`. | *small* (a small change can still need a call). |
 | **subagent** | Any agent dispatched by the Agent tool or a Workflow script: `code-explorer`, `code-architect`, `code-reviewer`, a worker. | *agent* (the definition file, or the `Agent` tool). |
 | **explorer / architect / reviewer** | Short for the three bundled subagents. | — |
 | **finder / refuter** | The two stages of the review workflow: a finder is a reviewer instance; a refuter tries to disprove one finding with evidence. | — |

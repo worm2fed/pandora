@@ -1,6 +1,6 @@
 ---
 name: model-tiers
-description: Use when starting implementation as the orchestrator, when a task is big enough to split across workers, when writing a worker brief, or when asked to "dispatch this to workers", "orchestrate the implementation", "delegate the coding", or "spawn workers for this". Matches model cost to judgment density — the orchestrator does the judgment work (analysis, design, review, dispatch) instead of typing product code, implementation goes to worker subagents one tier below the session's model, and workers hand mechanical sub-work down (cheaper model, or low effort).
+description: Use when starting implementation as the orchestrator, when a task is big enough to split across workers, when writing a worker brief, or when asked to "dispatch this to workers", "orchestrate the implementation", "delegate the coding", or "spawn workers for this". Matches model cost to judgment density — the orchestrator does the judgment work (analysis, design, review, dispatch) instead of typing product code, implementation goes to worker subagents one tier below the session's model but never below Opus, and workers hand mechanical sub-work down (cheaper model, or low effort).
 ---
 
 # Model tiers — orchestrate, don't type
@@ -8,8 +8,8 @@ description: Use when starting implementation as the orchestrator, when a task i
 The orchestrator's context is the most expensive context in the run. Spend it on judgment
 (analysis, design, review, verification), not keystrokes. Push the typing down to cheaper
 tiers. The roles are relative. They are not tied to specific model names, because those
-rotate with subscriptions. The *orchestrator* directs. *Workers* one tier down implement. The
-cheapest capable tier does the mechanical grind.
+rotate with subscriptions. The *orchestrator* directs. *Workers* one tier down implement, but
+never below Opus. The cheapest capable tier does only the mechanical grind.
 
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
@@ -17,8 +17,14 @@ cheapest capable tier does the mechanical grind.
 | Role | Who | Does | Never does |
 |------|-----|------|------------|
 | **Orchestrator** | the session running the flow | analysis, design, review, tracker and knowledge base writes, dispatching workers, checking their evidence | edit product code (when workers are in play) |
-| **Worker** | subagents on the strongest model *below the orchestrator's tier* (a session on the top available tier dispatches workers one tier down (e.g. `model: "opus"`); a session already on Opus dispatches `model: "sonnet"` — or same-tier workers where isolation, not cost, is the point) | design-sensitive coding: seams, encodings, debugging, anything where a wrong call is expensive | grind through bulk mechanical edits itself |
-| **Mechanic** | subagents on the cheapest capable tier (`model: "sonnet"`, or `haiku` for the truly trivial) | bulk migrations, repetitive multi-file edits, long test-output collection | make design decisions |
+| **Worker** | subagents one tier below the orchestrator, **never below Opus**: a session above Opus dispatches `model: "opus"`, and a session on Opus dispatches same-tier `model: "opus"` workers | all product coding that needs a call: types, seams, encodings, debugging, business logic, anything where a wrong call is expensive | grind through bulk mechanical edits itself |
+| **Mechanic** | subagents on the cheapest capable tier (`model: "sonnet"`, or `haiku` for the truly trivial) | very mechanical work only: bulk migrations, repetitive multi-file edits, long test-output collection | make design decisions |
+
+**Very mechanical** means the brief fixes the exact edit and leaves no call to make: a rename,
+a pattern applied file by file, a moved import, collected output. If the work touches a type,
+a data encoding, a business rule or money, it is not mechanical, however small it looks. When
+in doubt, it goes to a worker. A wrong Sonnet call in design-sensitive code costs more in
+review rounds than the Opus tokens it saved.
 
 **Effort is the second lever, alongside model.** Agent definitions take an `effort:`
 frontmatter field (`low`–`max`). When the field is omitted, the agent inherits the session's
@@ -28,22 +34,28 @@ before you sink work a tier down, consider sinking the *effort* instead. Keep de
 effort for design-sensitive work and verification.
 
 **Workflow agents need the model passed explicitly.** A `Workflow` script's `agent()` call
-inherits the *session's* model when `opts.model` is omitted. That puts workers on the
-orchestrator's tier and quietly breaks the table above. So every shipgate script takes
-`model` in its `args` and passes it to each `agent()` call. Every skill that invokes a script
-sets `model` to one tier below the session. Effort follows the same split as anywhere else.
-Use `effort: 'low'` for mechanical stages. Use default effort for the verify and judge stages,
-where the whole point is judgment.
+inherits the *session's* model when `opts.model` is omitted. That runs every agent on the
+session's tier, which is wrong whenever a role belongs on a lower tier: the explore fan
+always, and workers in a session above Opus. So every shipgate script takes `model` in its
+`args` and passes it to each `agent()` call. Every skill that invokes a script sets `model`
+per role. The review script gets the worker tier, because finding
+and refuting bugs is judgment work. The `code-reviewer` agent defaults to Opus for the same
+reason. The explore script gets one tier below the session with no Opus floor: explorers
+only locate code, and the orchestrator reads the flagged files itself. Effort follows the
+same split as anywhere else. Use `effort: 'low'` for mechanical stages. Use default effort
+for the verify and judge stages, where the whole point is judgment.
 
-Two invariants survive any model lineup:
+Three invariants survive any model lineup:
 
 1. **The orchestrator does not type product code.** Once work is big enough to dispatch, the
    session doing the thinking does not also do the typing.
-2. **Trivial work sinks to Sonnet.** Mechanical, judgment-free sub-work never occupies an
-   expensive context. Whoever holds it delegates it down.
+2. **Very mechanical work sinks to Sonnet.** Work that leaves no call to make never occupies
+   an expensive context. Whoever holds it delegates it down.
+3. **Judgment work never runs below Opus.** Sonnet gets very mechanical work only. Product
+   code that needs a call goes to a worker on Opus or above.
 
-The session itself may already run on the same tier as its workers would. Then dispatch is
-about parallelism and context isolation, not cost. Apply it when the task splits well, and
+A session on Opus dispatches workers on Opus, its own tier. Then dispatch is about
+parallelism and context isolation, not cost. Apply it when the task splits well, and
 skip it when it doesn't. The sink-to-Sonnet rule still applies either way.
 
 ## Orchestrator rules
@@ -135,10 +147,10 @@ A worker starts with zero context, so the worker brief must be self-contained:
 
 - Keep design-sensitive work at your own level: module seams, data encodings, tricky
   debugging. Do it inline, or in a same-tier subagent if it needs isolation.
-- **Delegate mechanical sub-work down** (`model: "sonnet"`, or your own model at
+- **Delegate only very mechanical sub-work down** (`model: "sonnet"`, or your own model at
   `effort: low`): bulk migrations, repetitive edits across many files, collecting long test
-  output. Give each mechanic the same brief discipline, scaled down: exact files, exact
-  pattern, validation command.
+  output. A sub-task that needs a call stays with you. Give each mechanic the same brief
+  discipline, scaled down: exact files, exact pattern, validation command.
 - Check the mechanic's evidence (its validation-command output) before you fold its work into
   your report. You own the correctness of everything in your diff, whoever typed it. Require
   evidence rather than re-deriving the work.

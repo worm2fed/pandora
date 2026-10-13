@@ -19,10 +19,11 @@ honest about what actually happened.
 Check the `model-tiers` skill first. When the build is big enough to dispatch, the
 orchestrator does not work tasks inline. Each coherent unit goes to a worker with a
 self-contained worker brief. The orchestrator reviews the worker's diff against the design
-before anything is staged. Workers delegate mechanical sub-work to Sonnet subagents. Every
-brief carries the config's **Worker guardrails** section pasted verbatim (see `model-tiers`),
-because the project's hard rules are not yours to compress. For small builds, work the tasks
-directly. Either way, the loop below is what "done" means for each task, whoever executes it.
+before anything is staged. Workers run one tier below the session, never below Opus. They
+delegate only very mechanical sub-work to Sonnet subagents. Every brief carries the config's
+**Worker guardrails** section pasted verbatim (see `model-tiers`), because the project's hard
+rules are not yours to compress. For small builds, work the tasks directly. Either way, the
+loop below is what "done" means for each task, whoever executes it.
 
 ## The loop (per task)
 
