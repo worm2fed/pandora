@@ -25,6 +25,7 @@ SIDECAR_RELPATH = os.path.join(".claude", "shipgate.json")
 DEFAULT_DB_RELPATH = os.path.join(".claude", "shipgate.db")
 JOURNAL_TIMEOUT_SECONDS = 15
 MAX_WATCH_PATHS = 500
+MAX_GIT_POINTER_BYTES = 4096
 
 
 def _ancestors(start):
@@ -66,18 +67,114 @@ def likely_journaled():
     return journaled_root(os.environ.get("CLAUDE_PROJECT_DIR"), os.getcwd())
 
 
+def _read_pointer(path):
+    """The first line of a small regular file, or None — never blocks, never reads much.
+
+    The files read here (`.git`, `gitdir`, `commondir`) sit in a checkout, which is
+    untrusted content: `path` may be a FIFO or a device, and a plain `open()` would hang
+    the hook on it.
+    """
+    import stat
+
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        raw = os.read(fd, MAX_GIT_POINTER_BYTES)
+    except (OSError, ValueError):
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+    line = raw.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+    return line or None
+
+
+def main_worktree(directory):
+    """The main worktree of the linked worktree at `directory`, or None.
+
+    A linked worktree's `.git` is a file, `gitdir: <common>/worktrees/<name>`, and that
+    directory holds `commondir` (the shared git dir, relative to it) and `gitdir` (the
+    path back to the worktree's `.git`). Only that exact shape counts: the git dir sits
+    outside the worktree, directly under `<common>/worktrees/`, and its back-link names
+    this worktree. A submodule's `.git` file has no `commondir`, and a bare repository
+    has no main worktree. A `.git` file written into a checkout cannot borrow another
+    checkout's journal: the files it would need sit in that other repository's own git
+    dir, which the checkout does not hold. No subprocess: this runs inside the hooks.
+    """
+    real_directory = os.path.realpath(directory)
+    git_entry = os.path.join(directory, ".git")
+    if os.path.islink(git_entry):
+        return None
+    line = _read_pointer(git_entry)
+    if not line or not line.startswith("gitdir:"):
+        return None
+    git_dir = os.path.realpath(os.path.join(directory, line[len("gitdir:"):].strip()))
+    if git_dir.startswith(real_directory.rstrip(os.sep) + os.sep):
+        return None  # git keeps a worktree's git dir outside it; this one is planted
+    common = _read_pointer(os.path.join(git_dir, "commondir"))
+    back = _read_pointer(os.path.join(git_dir, "gitdir"))
+    if not common or not back:
+        return None
+    if os.path.realpath(os.path.join(git_dir, back)) != os.path.realpath(git_entry):
+        return None
+    common = os.path.realpath(os.path.join(git_dir, common))
+    if os.path.dirname(git_dir) != os.path.join(common, "worktrees"):
+        return None
+    if os.path.basename(common) != ".git":
+        return None  # a bare repository: no main worktree holds a journal
+    main = os.path.dirname(common)
+    if main == real_directory:
+        return None
+    return main
+
+
+def _declared_db(sidecar):
+    """The sidecar's `db`, `~` expanded, or the default; relative values stay relative."""
+    raw = sidecar.get("db") if isinstance(sidecar.get("db"), str) else None
+    return os.path.expanduser(raw or DEFAULT_DB_RELPATH)
+
+
+def _own_db_path(root, sidecar):
+    """A sidecar's `db` against its own directory: absolute values as given."""
+    path = _declared_db(sidecar)
+    return path if os.path.isabs(path) else os.path.join(root, path)
+
+
+def sidecar_db_path(root, sidecar):
+    """The journal a sidecar at `root` names, as a path; absolute `db` values as given.
+
+    A relative `db` (the default one included) resolves against the sidecar's directory,
+    except in a linked worktree of a repository that commits its sidecar: there it
+    resolves against the main worktree, when that holds a sidecar too, so every worktree
+    shares the main checkout's journal instead of starting an empty one of its own.
+    """
+    if os.path.isabs(_declared_db(sidecar)):
+        return _declared_db(sidecar)
+    main = main_worktree(root)
+    # isfile first, as journaled_root does: load_project's open() would block on a FIFO.
+    if main is not None and os.path.isfile(os.path.join(main, SIDECAR_RELPATH)):
+        project = load_project(main)
+        if project is not None:
+            # The main checkout's own setting, never followed further: one hop at most.
+            return _own_db_path(project.root, project.sidecar)
+    return _own_db_path(root, sidecar)
+
+
 class Project:
     """A journaled project: where it lives, its sidecar, and how to reach the journal."""
 
     def __init__(self, root, sidecar):
         self.root = root
         self.sidecar = sidecar
+        self._db_path = None
 
     @property
     def db_path(self):
-        raw = self.sidecar.get("db") or DEFAULT_DB_RELPATH
-        path = os.path.expanduser(raw)
-        return path if os.path.isabs(path) else os.path.join(self.root, path)
+        if self._db_path is None:
+            self._db_path = sidecar_db_path(self.root, self.sidecar)
+        return self._db_path
 
     @property
     def journal_paths(self):

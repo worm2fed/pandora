@@ -698,6 +698,119 @@ class TestHooksAndJournalAgreeOnTheDb(HookTestCase):
         self.assert_same_db(nested)
 
 
+class TestASidecarWithoutADbKey(HookTestCase):
+    """No `db` key means the default db at the sidecar's directory, for the hooks and
+    journal.py alike — never the default under journal.py's own cwd."""
+
+    def test_both_resolve_the_default_db_at_the_sidecar(self):
+        sidecar = self.root / ".claude" / "shipgate.json"
+        config = json.loads(sidecar.read_text(encoding="utf-8"))
+        del config["db"]
+        sidecar.write_text(json.dumps(config), encoding="utf-8")
+        nested = self.root / "a" / "b"
+        nested.mkdir(parents=True)
+        self.assertEqual(os.path.realpath(find_project(str(nested)).db_path), str(self.db))
+        result = subprocess.run(
+            [sys.executable, str(JOURNAL), "doctor", "--json"],
+            capture_output=True, text=True, cwd=str(nested), timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(os.path.realpath(json.loads(result.stdout)["db"]), str(self.db))
+
+
+class TestALinkedWorktreeUsesTheMainJournal(HookTestCase):
+    """A repo that commits its sidecar gives every linked worktree a copy of it.
+
+    The copy is the nearest sidecar for a session in the worktree, and its relative `db`
+    names a file inside the worktree: one empty journal per worktree. The journal is the
+    main worktree's, wherever the linked worktree sits; the hooks and journal.py agree.
+    """
+
+    GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+
+    def git(self, *args: str, cwd: Path) -> None:
+        result = subprocess.run(
+            ["git", "-c", "user.email=t@example.com", "-c", "user.name=t", *args],
+            cwd=str(cwd), capture_output=True, text=True, timeout=30,
+            env={**os.environ, **self.GIT_ENV},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def setUp(self) -> None:
+        super().setUp()
+        init_git_checkout(self.root, "main")
+        self.git("add", ".claude/shipgate.json", cwd=self.root)
+        self.git("commit", "-q", "-m", "sidecar", cwd=self.root)
+
+    def add_worktree(self, path: Path) -> Path:
+        self.git("worktree", "add", "-q", "-b", f"feature/{path.name}", str(path),
+                 cwd=self.root)
+        self.assertTrue((path / ".claude" / "shipgate.json").is_file())
+        return path
+
+    def assert_main_journal(self, cwd: Path) -> None:
+        project = find_project(str(cwd))
+        self.assertIsNotNone(project, "the hooks found no sidecar")
+        self.assertEqual(os.path.realpath(project.db_path), str(self.db))
+        result = subprocess.run(
+            [sys.executable, str(JOURNAL), "doctor", "--json"],
+            capture_output=True, text=True, cwd=str(cwd), timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(os.path.realpath(json.loads(result.stdout)["db"]), str(self.db))
+        self.assertFalse((cwd / ".claude" / "shipgate.db").exists())
+
+    def test_a_worktree_nested_in_the_main_checkout(self):
+        self.assert_main_journal(self.add_worktree(self.root / ".worktrees" / "x"))
+
+    def test_a_worktree_beside_the_main_checkout(self):
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        self.assert_main_journal(self.add_worktree(Path(elsewhere.name).resolve() / "y"))
+
+    def test_a_forged_git_file_cannot_borrow_another_checkouts_journal(self):
+        """A `.git` file names a real worktree's git dir, but git's back-link names that
+        worktree, not this directory: no redirect, the sidecar's own journal."""
+        real = self.add_worktree(self.root / ".worktrees" / "real")
+        forged = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(forged, ignore_errors=True))
+        (forged / ".claude").mkdir()
+        (forged / ".claude" / "shipgate.json").write_bytes(
+            (real / ".claude" / "shipgate.json").read_bytes())
+        git_dir = (self.root / ".git" / "worktrees" / "real").resolve()
+        self.assertTrue(git_dir.is_dir())
+        (forged / ".git").write_text(f"gitdir: {git_dir}\n", encoding="utf-8")
+        project = find_project(str(forged))
+        self.assertEqual(project.db_path, str(forged / ".claude" / "shipgate.db"))
+
+    def test_a_git_dir_planted_inside_the_checkout_is_not_followed(self):
+        """Every pointer file sits in the checkout, back-link included, and commondir
+        names the main checkout's git dir: still no redirect."""
+        planted = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(planted, ignore_errors=True))
+        (planted / ".claude").mkdir()
+        (planted / ".claude" / "shipgate.json").write_text("{}", encoding="utf-8")
+        fake = planted / "fake" / "wt"
+        fake.mkdir(parents=True)
+        (planted / ".git").write_text("gitdir: fake/wt\n", encoding="utf-8")
+        (fake / "gitdir").write_text("../../.git\n", encoding="utf-8")
+        (fake / "commondir").write_text(f"{self.root / '.git'}\n", encoding="utf-8")
+        project = find_project(str(planted))
+        self.assertEqual(project.db_path, str(planted / ".claude" / "shipgate.db"))
+
+    def test_without_a_sidecar_in_the_main_checkout_the_worktree_keeps_its_own(self):
+        worktree = self.add_worktree(self.root / ".worktrees" / "solo")
+        (self.root / ".claude" / "shipgate.json").unlink()
+        project = find_project(str(worktree))
+        self.assertEqual(project.db_path, str(worktree / ".claude" / "shipgate.db"))
+
+    def test_artifacts_stay_the_worktrees_own(self):
+        worktree = self.add_worktree(self.root / ".worktrees" / "z")
+        project = find_project(str(worktree))
+        self.assertEqual(os.path.realpath(project.root), str(worktree))
+        self.assertTrue(project.covers(str(worktree / "docs" / "prd" / "a.md")))
+
+
 class TestJournalDbIsNeverAnArtifact(HookTestCase):
     """A glob wide enough to match the db must not make the db an artifact."""
 

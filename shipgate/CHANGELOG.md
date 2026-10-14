@@ -2,12 +2,34 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.16.2 — a linked worktree uses the main checkout's journal. A repository that commits
+`.claude/shipgate.json` gives every linked worktree a copy of it. For a session in the
+worktree that copy is the nearest sidecar, and its relative `db` named a file inside the
+worktree. So each worktree started its own empty journal, and the hooks and `journal.py` both
+used it. Only a hand-made symlink to the main journal kept the flow on one journal. Now a
+relative `db` resolves against the main worktree when two things hold: git's back-link
+(`<git-common-dir>/worktrees/<name>/gitdir`) names this worktree, and the main worktree holds
+a sidecar too. The worktree stays its own project, so artifact capture and PRD paths do not
+change. The git dir must sit directly under `<git-common-dir>/worktrees/`, outside the
+worktree, so a checkout that plants its own `.git` pointer files cannot borrow another
+checkout's journal. The redirect follows one hop at most. A submodule or a bare repository
+keeps its own journal, and so does a worktree of a submodule or of a repository made
+with `--separate-git-dir`: only the standard layout, where the main worktree holds `.git`, is
+recognized. The rule is one function in `hooks/_common.py` (`sidecar_db_path`), and
+`journal.py` calls it. The hooks read three small files and start no subprocess. One more
+split is closed: a sidecar without a `db` key sent the hooks to the default db at the
+sidecar's directory but sent `journal.py` to the default under its working directory. Both
+now use the sidecar's directory. An existing worktree symlink to the main journal still
+works; it now names the same file the rule picks.
+
 v0.16.1 — the hooks and `journal.py` pick the same journal. The hooks took the nearest
 `.claude/shipgate.json` from the session's directory up to the filesystem root. `journal.py`
 stopped its walk at the first `.git`, a directory or a file. A session in a linked worktree
 (`<root>/.worktrees/x`) or in an independent repo nested in a journaled project
 (`<root>/sub`) therefore had two journals: the hooks wrote to `<root>`'s, and every skill's
-`journal.py` call fell back to `<cwd>/.claude/shipgate.db`. Nothing reported the split.
+`journal.py` call fell back to `<cwd>/.claude/shipgate.db`. That call failed with "journal
+database not found", unless someone had run `init` there. After an `init` the split was silent:
+the skills read and wrote a second journal that the hooks never saw.
 `journal.py` now uses the hooks' own walk (`hooks/_common.journaled_root`), so a nested
 `.git` is no boundary. `--db` still wins, and a relative sidecar `db` still resolves against
 the sidecar's directory. The hook code does not change. `signals.py` finds an umbrella's

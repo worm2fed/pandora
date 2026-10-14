@@ -352,10 +352,12 @@ def _resolve_against(base: Path, value: str) -> Path:
 def resolve_db(db_flag: Optional[str], cwd: Path) -> Resolution:
     """Work out which database to use.
 
-    ``--db`` wins. Otherwise the sidecar's ``db`` key, with relative values
-    resolved against the sidecar's *project directory* (never the cwd, because
-    hooks invoke this script from arbitrary directories). Otherwise the default
-    ``.claude/shipgate.db`` under the cwd.
+    ``--db`` wins. Otherwise the sidecar's ``db`` key (default
+    ``.claude/shipgate.db``), with relative values resolved against the sidecar's
+    *project directory* (never the cwd, because hooks invoke this script from
+    arbitrary directories), or against the main worktree when that directory is a
+    linked worktree with a committed sidecar. With no sidecar, the default under
+    the cwd.
     """
     sidecar = find_sidecar(cwd)
     project_dir = sidecar.project_dir if sidecar else cwd.resolve()
@@ -371,14 +373,18 @@ def resolve_db(db_flag: Optional[str], cwd: Path) -> Resolution:
         )
 
     if sidecar is not None:
+        # The hooks' rule, so both reach one journal: a relative db (the default one
+        # included) resolves against the sidecar's directory, or against the main
+        # worktree in a linked worktree that carries a committed sidecar.
         declared = sidecar.config.get("db")
-        if isinstance(declared, str) and declared:
-            return Resolution(
-                db_path=_resolve_against(sidecar.project_dir, declared),
-                sidecar=sidecar,
-                project_dir=project_dir,
-                source="sidecar",
-            )
+        return Resolution(
+            db_path=Path(
+                _hooks_common.sidecar_db_path(str(sidecar.project_dir), sidecar.config)
+            ).resolve(),
+            sidecar=sidecar,
+            project_dir=project_dir,
+            source="sidecar" if isinstance(declared, str) and declared else "default",
+        )
 
     return Resolution(
         db_path=(cwd / DEFAULT_DB_RELPATH).resolve(),
@@ -391,7 +397,9 @@ def resolve_db(db_flag: Optional[str], cwd: Path) -> Resolution:
 def sidecar_db_path(sidecar: Sidecar) -> Optional[Path]:
     declared = sidecar.config.get("db")
     if isinstance(declared, str) and declared:
-        return _resolve_against(sidecar.project_dir, declared)
+        return Path(
+            _hooks_common.sidecar_db_path(str(sidecar.project_dir), sidecar.config)
+        ).resolve()
     return None
 
 
@@ -2327,7 +2335,8 @@ database resolution:
   --db PATH, else the `db` key of the nearest .claude/shipgate.json sidecar
   from the current directory up to the filesystem root, the walk the hooks
   make (a nested .git is no boundary; relative values resolve against the
-  sidecar's project directory), else
+  sidecar's project directory, or the main worktree's in a linked worktree
+  that carries a committed sidecar), else
   .claude/shipgate.db under the current directory.
 """
 
