@@ -181,12 +181,20 @@ export function isSafeRef(path: string): boolean {
   return !path.split(/[\\/]/).some(segment => segment === '..')
 }
 
+/**
+ * The event types whose refs commit the stream to an artifact: the design landing, work on its
+ * tasks, its review and its decisions. A `flow-started`, `phase-entered` or `deviation` ref is
+ * context — often an older slice's PRD or worklog — and never names this stream's worklog.
+ */
+const ARTIFACT_EVENTS = new Set(['design-committed', 'design-queued', 'task-done', 'verify-run', 'review-verdict', 'gate-decision'])
+
 /** The paths the stream's events point at: the worklog and the ADRs the design committed to. */
 export function artifactRefs(events: readonly unknown[]): { worklog: string | null; adrs: string[] } {
   let worklog: string | null = null
   const adrs: string[] = []
   for (const raw of events) {
     const event = asRecord(raw)
+    if (!ARTIFACT_EVENTS.has(asString(event.type))) continue
     const data = asRecord(event.data)
     const candidates = [asString(data.worklog), ...asStringList(data.refs), ...asStringList(data.adrs)]
     for (const ref of candidates) {

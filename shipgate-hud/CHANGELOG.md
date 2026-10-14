@@ -2,6 +2,14 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.2.5 — a context ref is not the stream's worklog. A `flow-started` (or `phase-entered`,
+`deviation`) event often cites an older slice's PRD and worklog as context; the HUD took any
+`.worklog.md` ref from any event as this stream's worklog, so a new stream showed the previous
+slice's Build Plan with every task unrecorded. Refs now count only from the events that commit
+or work the artifact: `design-committed`, `design-queued`, `task-done`, `verify-run`,
+`review-verdict`, `gate-decision`. A stream with no committed worklog shows no plan until
+its design lands.
+
 v0.2.4 — the HUD shows the stream this session drives, per session. It showed only the stream of
 the checked-out branch, so a session driving a stream with no branch (an epic's planning stream)
 saw whatever stream the checkout carried — in an umbrella, another session's work at another

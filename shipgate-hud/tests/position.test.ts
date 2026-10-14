@@ -102,6 +102,17 @@ describe('position', () => {
     expect(position.worklogPath).toBe('docs/prd/example.worklog.md')
   })
 
+  test('artifact refs: a context ref on flow-started or phase-entered is not the stream\'s worklog', async () => {
+    const context = [
+      { seq: 1, type: 'flow-started', ts: 't', data: { request: 'slice 2', refs: ['docs/prd/older.md', 'docs/prd/older.worklog.md'] } },
+      { seq: 2, type: 'phase-entered', ts: 't', data: { phase: 'workspace', refs: ['docs/adr/0001-older.md'] } },
+      { seq: 3, type: 'deviation', ts: 't', data: { refs: ['docs/prd/older.worklog.md#deviations'] } },
+    ]
+    expect(artifactRefs(context)).toEqual({ worklog: null, adrs: [] })
+    const committed = [...context, { seq: 4, type: 'design-committed', ts: 't', data: { worklog: 'docs/prd/new.worklog.md', adrs: ['docs/adr/0002-new.md'] } }]
+    expect(artifactRefs(committed)).toEqual({ worklog: 'docs/prd/new.worklog.md', adrs: ['docs/adr/0002-new.md'] })
+  })
+
   test('artifact refs: only safe relative paths are kept', async () => {
     const refs = artifactRefs(LOG.events)
     expect(refs.worklog).toBe('docs/prd/example.worklog.md')
