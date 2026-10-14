@@ -74,7 +74,6 @@ class JournalTestCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        (self.root / ".git").mkdir()  # stop sidecar search inside the fixture
         self.db = self.root / "shipgate.db"
 
     # -- helpers ---------------------------------------------------------

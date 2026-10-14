@@ -2,6 +2,22 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.16.1 — the hooks and `journal.py` pick the same journal. The hooks took the nearest
+`.claude/shipgate.json` from the session's directory up to the filesystem root. `journal.py`
+stopped its walk at the first `.git`, a directory or a file. A session in a linked worktree
+(`<root>/.worktrees/x`) or in an independent repo nested in a journaled project
+(`<root>/sub`) therefore had two journals: the hooks wrote to `<root>`'s, and every skill's
+`journal.py` call fell back to `<cwd>/.claude/shipgate.db`. Nothing reported the split.
+`journal.py` now uses the hooks' own walk (`hooks/_common.journaled_root`), so a nested
+`.git` is no boundary. `--db` still wins, and a relative sidecar `db` still resolves against
+the sidecar's directory. The hook code does not change. `signals.py` finds an umbrella's
+sidecar with the same walk, so its `## Code signals` config comes from the journal's
+project, also when that sidecar sits above a git umbrella's toplevel. `signals.py` keeps
+`git rev-parse --show-toplevel` for the repository it reads, because history, `ls-files`
+and the import graph belong to one git repository. The shipgate-hud already walked like
+the hooks and ran `journal.py` in the project root, so it does not change. Regression
+tests pin both nested cases: the hooks and `journal.py` must resolve the same db path.
+
 v0.16.0 — workers never run below Opus. `model-tiers` sent coding workers one tier below
 the session, so a session on Opus dispatched Sonnet workers for all product code. On a
 production project that put a change to a money type on Sonnet, and the user had to step in.

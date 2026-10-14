@@ -25,7 +25,7 @@ JOURNAL = SHIPGATE / "scripts" / "journal.py"
 
 sys.path.insert(0, str(HOOKS))
 
-from _common import load_project  # noqa: E402
+from _common import find_project, load_project  # noqa: E402
 
 SESSION = "sess-integration-1"
 SLUG = "feat"
@@ -653,6 +653,49 @@ class TestProjectResolution(StubJournalMixin, HookTestCase):
             self.journal_args("check"),
             ["check", "--session", SESSION, "--json"],
         )
+
+
+class TestHooksAndJournalAgreeOnTheDb(HookTestCase):
+    """A session nested inside a journaled project uses that project's journal.
+
+    The hooks take the nearest sidecar up to the filesystem root. journal.py, run from the
+    same directory without `--db` (the way a skill runs it), must land on the same db: a
+    nested `.git`, file or directory, is no boundary. A split here gives the session a
+    second, silent journal under its own directory.
+    """
+
+    def assert_same_db(self, cwd: Path) -> None:
+        project = find_project(str(cwd))
+        self.assertIsNotNone(project, "the hooks found no sidecar")
+        hooks_db = os.path.realpath(project.db_path)
+        self.assertEqual(hooks_db, str(self.db))  # the sidecar's relative db, at the root
+        result = subprocess.run(
+            [sys.executable, str(JOURNAL), "doctor", "--json"],
+            capture_output=True, text=True, cwd=str(cwd), timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(os.path.realpath(json.loads(result.stdout)["db"]), hooks_db)
+        self.assertFalse((cwd / ".claude" / "shipgate.db").exists())
+
+    def test_a_linked_worktree_inside_the_project(self):
+        init_git_checkout(self.root, "main")
+        worktree = self.root / ".worktrees" / "x"
+        added = subprocess.run(
+            ["git", "worktree", "add", "-q", "-b", "feature/x", str(worktree)],
+            cwd=str(self.root), capture_output=True, text=True, timeout=30,
+            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
+                 "GIT_CONFIG_SYSTEM": os.devnull},
+        )
+        self.assertEqual(added.returncode, 0, added.stderr)
+        self.assertTrue((worktree / ".git").is_file())  # `gitdir: …`, not a dir
+        self.assert_same_db(worktree)
+
+    def test_an_independent_repo_nested_in_the_project(self):
+        nested = self.root / "sub"
+        nested.mkdir()
+        init_git_checkout(nested, "main")
+        self.assertTrue((nested / ".git").is_dir())
+        self.assert_same_db(nested)
 
 
 class TestJournalDbIsNeverAnArtifact(HookTestCase):

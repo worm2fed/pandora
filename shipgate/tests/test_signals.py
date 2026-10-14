@@ -388,6 +388,20 @@ class TestConfig(SignalsCase):
         cfg = self.signals_json("hotspots", "--repo", repo.path)["config"]
         self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (5, "^umbrella"))
 
+    def test_a_sidecar_above_a_git_umbrella_is_read_after_the_umbrella(self):
+        """The sidecar walk passes the umbrella's git toplevel, as the hooks' and
+        journal.py's walk does: the journal's project is the one whose config applies.
+        The git umbrella is nearer, so it wins per key."""
+        outer = self.umbrella.parent
+        sidecar = outer / ".claude" / "shipgate.json"
+        sidecar.parent.mkdir(parents=True)
+        sidecar.write_text("{}", encoding="utf-8")
+        self.write_config(outer, "## Code signals\n- Window: `4`\n"
+                                 "- Fix pattern: `^outer`\n")
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n")
+        cfg = self.config()
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (9, "^outer"))
+
     def test_the_sidecar_is_found_above_a_nested_parent_directory(self):
         """`source/<service>` layouts: the sidecar sits two levels up, not in the parent."""
         root = Path(self.umbrella.parent) / "plain-umbrella"

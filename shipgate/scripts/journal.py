@@ -44,8 +44,31 @@ EXIT_IMPORT_CONFLICT = 6
 SCHEMA_VERSION = 1
 BUSY_TIMEOUT_MS = 5000
 
-SIDECAR_RELPATH = os.path.join(".claude", "shipgate.json")
-DEFAULT_DB_RELPATH = os.path.join(".claude", "shipgate.db")
+def _load_hooks_common():
+    """The hooks' shared module, loaded by path: `hooks/` is not a package.
+
+    The plugin always ships `hooks/` beside `scripts/`; without it this script cannot
+    know which project a directory belongs to, so it stops with an infrastructure error
+    (exit 1). The same loader sits in `signals.py`: keep the two in step.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "hooks" / "_common.py"
+    try:
+        spec = importlib.util.spec_from_file_location("shipgate_hooks_common", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    except (OSError, ImportError) as exc:
+        sys.exit(f"error: cannot load {path} (shipgate install incomplete): {exc}")
+    return module
+
+
+# The hooks' sidecar walk, the only one: hooks and scripts must name the same project.
+_hooks_common = _load_hooks_common()
+journaled_root = _hooks_common.journaled_root
+SIDECAR_RELPATH = _hooks_common.SIDECAR_RELPATH
+DEFAULT_DB_RELPATH = _hooks_common.DEFAULT_DB_RELPATH
 
 PHASE_ORDER = [
     "workspace",
@@ -292,17 +315,18 @@ class Resolution(NamedTuple):
 
 
 def find_sidecar(start_dir: Path) -> Optional[Sidecar]:
-    """Look for ``.claude/shipgate.json`` in start_dir, then upward to the git root."""
-    current = start_dir.resolve()
-    while True:
-        candidate = current / SIDECAR_RELPATH
-        if candidate.is_file():
-            return _load_sidecar(candidate, current)
-        if (current / ".git").exists():
-            return None
-        if current.parent == current:
-            return None
-        current = current.parent
+    """The nearest ``.claude/shipgate.json`` from start_dir up to the filesystem root.
+
+    The walk is the hooks' own (``journaled_root``), so a session's hooks and this CLI
+    always pick the same journal. A nested ``.git`` is no boundary: a linked worktree
+    (``.git`` file) or an independent repo (``.git`` directory) inside a journaled
+    project uses that project's journal, not a second one under its own directory.
+    """
+    root = journaled_root(str(start_dir))
+    if root is None:
+        return None
+    project_dir = Path(root).resolve()
+    return _load_sidecar(project_dir / SIDECAR_RELPATH, project_dir)
 
 
 def _load_sidecar(path: Path, project_dir: Path) -> Sidecar:
@@ -2301,7 +2325,9 @@ exit codes:
 
 database resolution:
   --db PATH, else the `db` key of the nearest .claude/shipgate.json sidecar
-  (relative values resolve against the sidecar's project directory), else
+  from the current directory up to the filesystem root, the walk the hooks
+  make (a nested .git is no boundary; relative values resolve against the
+  sidecar's project directory), else
   .claude/shipgate.db under the current directory.
 """
 

@@ -37,8 +37,32 @@ EXIT_USAGE = 2
 OUTPUT_VERSION = 1
 
 CONFIG_RELPATH = os.path.join(".claude", "shipgate.md")
-SIDECAR_RELPATH = os.path.join(".claude", "shipgate.json")  # written by setup at a project root
 CONFIG_SECTION = "code signals"
+
+
+def _load_hooks_common():
+    """The hooks' shared module, loaded by path: `hooks/` is not a package.
+
+    The plugin always ships `hooks/` beside `scripts/`; without it this script cannot
+    know which project a directory belongs to, so it stops with an infrastructure error
+    (exit 1). The same loader sits in `journal.py`: keep the two in step.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "hooks" / "_common.py"
+    try:
+        spec = importlib.util.spec_from_file_location("shipgate_hooks_common", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    except (OSError, ImportError) as exc:
+        sys.exit(f"error: cannot load {path} (shipgate install incomplete): {exc}")
+    return module
+
+
+# The hooks' sidecar walk, the only one: hooks and scripts must name the same project.
+_hooks_common = _load_hooks_common()
+journaled_root = _hooks_common.journaled_root
 
 DEFAULT_WINDOW_MONTHS = 12
 MAX_WINDOW_MONTHS = 1200  # 100 years; beyond it date arithmetic overflows
@@ -203,27 +227,24 @@ def _umbrella_roots(repo: Path) -> List[Path]:
     """The umbrella directories a nested repo sits in, nearest first (usually one).
 
     Two things mark an umbrella: the sidecar `/shipgate:setup` writes at its root
-    (`.claude/shipgate.json`, looked for from the parent upward — `source/<service>`
-    layouts put it two levels up — as far as the parent's own git toplevel, else the
-    filesystem root, the same walk `journal.py` makes), and the parent being inside a
-    git work tree of its own. A plain parent with neither (say, $HOME) is not read.
+    (`.claude/shipgate.json`, the nearest one from the parent up to the filesystem root
+    — `source/<service>` layouts put it two levels up — the walk the hooks and
+    `journal.py` make, so the config read is the journal's project's), and the parent
+    being inside a git work tree of its own. A plain parent with neither (say, $HOME)
+    is not read.
     """
     parent = repo.parent
     if parent == repo:
         return []
-    top = _git_toplevel(parent)
     roots: List[Path] = []
-    current = parent
-    while True:
-        if (current / SIDECAR_RELPATH).is_file():
-            roots.append(current)
-            break
-        if current == top or current.parent == current:
-            break
-        current = current.parent
+    marked = journaled_root(str(parent))
+    if marked is not None:
+        roots.append(Path(marked).resolve())
+    top = _git_toplevel(parent)
     if top is not None and top not in roots:
         roots.append(top)
-    return roots
+    # Both are ancestors of the parent, so the deeper path is the nearer one.
+    return sorted(roots, key=lambda root: len(root.parts), reverse=True)
 
 
 def _config_candidates(repo: Path, start: Optional[Path]) -> List[Path]:
