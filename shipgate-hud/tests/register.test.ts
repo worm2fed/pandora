@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import { ADR, FEATURE_PREFIXED, LOG, SIDECAR, STATUS } from './fixtures'
 import { BAND, PANE, SESSION_ID, START, bareWorld, engineWorld, journaledWorld, ok } from './world'
 import { WORKLOG } from './fixtures'
-import { REVIEW_LAUNCH_RESULT, REVIEW_NOTIFICATION } from './fixtures.review'
+import { REVIEW_LAUNCH_RESULT, REVIEW_NOTIFICATION, REVIEW_NOTIFICATION_TRUNCATED, REVIEW_OUTPUT_FILE, REVIEW_OUTPUT_PATH } from './fixtures.review'
 import { findingPrompt, parseTaskNotification, toReviewBoard } from '../hooks/review'
 import type { ReviewState } from '../types'
 
@@ -776,6 +776,25 @@ describe('register', () => {
     const OTHER_NOTIFICATION = '<task-notification>\n<task-id>b2</task-id>\n<tool-use-id>toolu_other</tool-use-id>\n<status>completed</status>\n<result>{"ok":true}</result>\n</task-notification>'
     const notify = (text: string) => ({ text, origin: { kind: 'task-notification' } }) as never
 
+    /**
+     * The task output file beneath the plugin: `fs.stat` and `fs.read` of any `.output` path are
+     * recorded and answered here (the file for a path ending `/tasks/wabc.output`, else ENOENT).
+     * Register it before `journaledWorld`, whose catch-all `fs.read` would answer first otherwise.
+     */
+    const outputWorld = (on: Parameters<typeof engineWorld>[0], text: string = REVIEW_OUTPUT_FILE, size: number = text.length) => {
+      const stats: string[] = []
+      const reads: string[] = []
+      on('fs.stat', { path: /\.output$/ }, async (_$, e) => {
+        stats.push(e.path)
+        return e.path.endsWith('/tasks/wabc.output') ? { value: { kind: 'file' as const, size, mtimeMs: 0, isLink: false } } : { deny: 'ENOENT' }
+      })
+      on('fs.read', { path: /\.output$/ }, async (_$, e) => {
+        reads.push(e.path)
+        return e.path.endsWith('/tasks/wabc.output') ? { value: text } : { deny: 'ENOENT' }
+      })
+      return { stats, reads }
+    }
+
     /** The Bash tool beneath the plugin, so a journal append can run and refresh the position. */
     const appendWorld = (on: Parameters<typeof engineWorld>[0]): void => {
       on('tool.call', { tool: 'Bash' }, async () => ({ result: { stdout: 'appended', stderr: '' } }))
@@ -850,6 +869,78 @@ describe('register', () => {
       await launchReview($, 'toolu_other')
       await $.prompt.submit(notify(OTHER_NOTIFICATION))
       expect(watch.last()).toBe(held) // no write: the old board stands unchanged
+    })
+
+    test('a return cut in the notification is read whole from the task output file', async ($, on) => {
+      const { submitted } = engineWorld(on)
+      const { stats, reads } = outputWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION_TRUNCATED))
+      expect(submitted).toEqual([REVIEW_NOTIFICATION_TRUNCATED]) // passed on unchanged
+      expect(stats).toEqual([REVIEW_OUTPUT_PATH])
+      expect(reads).toEqual([REVIEW_OUTPUT_PATH])
+      expect(watch.last()?.board?.survivors.length).toBe(3)
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect(await pane.find({ type: 'Text', text: '▎ BLOCKER' })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: COUNTS })).toBeDefined()
+      await pane.unmount()
+    })
+
+    for (const [name, path] of [
+      ['a .. segment', '/tmp/project/.claude/tasks/../wabc.output'],
+      ['no /tasks/ segment', '/tmp/project/.claude/wabc.output'],
+      ['a relative path', 'tasks/wabc.output'],
+    ] as const) {
+      test(`an output-file path with ${name} is neither stat'ed nor read`, async ($, on) => {
+        engineWorld(on)
+        const { stats, reads } = outputWorld(on)
+        journaledWorld(on)
+        const watch = reviewWatch(on)
+        await $.session.start(START)
+        await $.prompt.submit(notify(REVIEW_NOTIFICATION_TRUNCATED.replace(`<output-file>${REVIEW_OUTPUT_PATH}</output-file>`, `<output-file>${path}</output-file>`)))
+        expect(stats).toEqual([])
+        expect(reads).toEqual([])
+        expect(watch.last()?.board ?? null).toBeNull()
+      })
+    }
+
+    test('an output file whose JSON lacks the return shape makes no board', async ($, on) => {
+      engineWorld(on)
+      const { reads } = outputWorld(on, JSON.stringify({ summary: 'x', result: { ok: true } }))
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION_TRUNCATED))
+      expect(reads).toEqual([REVIEW_OUTPUT_PATH])
+      expect(watch.last()?.board ?? null).toBeNull()
+    })
+
+    test('an output file that does not parse makes no board and shows no error', async ($, on) => {
+      engineWorld(on)
+      outputWorld(on, '{"result": {"survivors": [')
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION_TRUNCATED))
+      expect(watch.last()?.board ?? null).toBeNull()
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect(await pane.find({ type: 'Text', text: /shipgate-hud:/ })).toBeUndefined()
+      await pane.unmount()
+    })
+
+    test('an output file over 4 MiB per stat is not read', async ($, on) => {
+      engineWorld(on)
+      const { stats, reads } = outputWorld(on, REVIEW_OUTPUT_FILE, 4 * 1024 * 1024 + 1)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION_TRUNCATED))
+      expect(stats).toEqual([REVIEW_OUTPUT_PATH])
+      expect(reads).toEqual([])
+      expect(watch.last()?.board ?? null).toBeNull()
     })
 
     test('a killed review run is not captured', async ($, on) => {

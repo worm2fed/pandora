@@ -96,6 +96,31 @@ export const REVIEW_NOTIFICATION = `<task-notification>
 <result>${escapeHtml(JSON.stringify(REVIEW_RETURN))}</result>
 </task-notification>`
 
+/** Where the engine keeps the task's whole output; the truncated notification below names it. */
+export const REVIEW_OUTPUT_PATH = '/tmp/project/.claude/tasks/wabc.output'
+
+/** The same run as the engine delivers a long return: the result cut mid-JSON, then the engine's tail naming the output file. */
+export const REVIEW_NOTIFICATION_TRUNCATED = `<task-notification>
+<task-id>wabc</task-id>
+<tool-use-id>toolu_01AAAAAAAAAAAAAAAAAAAAAA</tool-use-id>
+<output-file>${REVIEW_OUTPUT_PATH}</output-file>
+<status>completed</status>
+<summary>Dynamic workflow "Review a change through lens finders, then refute the top findings on evidence" completed</summary>
+<result>${escapeHtml(JSON.stringify(REVIEW_RETURN).slice(0, 400))}
+... (truncated 14694 chars, full result in ${REVIEW_OUTPUT_PATH})</result>
+</task-notification>`
+
+/** The task output file: the workflow run's record, its return under `result`. */
+export const REVIEW_OUTPUT_FILE = JSON.stringify({
+  summary: 'x',
+  agentCount: 3,
+  logs: [],
+  result: REVIEW_RETURN,
+  workflowProgress: {},
+  totalTokens: 1,
+  totalToolCalls: 1,
+})
+
 export const REVIEW_LAUNCH_RESULT = `Workflow launched in background.
 Run ID: wf_0123abcd-ef0
 Task ID: a1b2c3d4e

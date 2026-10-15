@@ -288,6 +288,14 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings (paralleliz
   `prompt.submit{origin has {kind=task-notification}}`; a composer prompt with the return
   shape is not captured (tested).
 
+- 2026-10-15 — live check after the 0.4.0 commit: the Review tab stayed empty on this stream's
+  own review run. The engine cuts a long `<result>` inside the task-notification text (8 KB of
+  22 KB) and ends it with `… (truncated N chars, full result in <output-file>)`, so the JSON
+  never parsed and `isReviewReturn` was false (verified by running the session's real
+  notification through `review.ts`). The capture now reads the task's output file (guarded
+  absolute `…/tasks/*.output` path, ≤ 4 MiB) and takes its `result`. The fixtures carried a
+  complete `<result>`, which is why 261 tests did not catch it; a truncated fixture is added.
+
 ## Review round 1 — slice 2 (2026-10-14)
 
 Three-lens review workflow (`wf_6649b8a8-956`, opus finders, high-only refuters): 40 raw → 28

@@ -280,9 +280,11 @@ worklog as fenced blocks that the Markdown element draws as grey code.
 - **FR-030** — A `tool.call` hook on `Workflow` notes a launch of the shipgate review workflow
   (the script text or path names `shipgate-review`, or the tool result names the run id): the
   call's `tool_use_id`, the run id and the time. A `prompt.submit` hook whose origin is
-  `task-notification` reads the notification's `<tool-use-id>`, `<status>` and `<result>`. The
-  return is stored in the `review` atom only when the result parses as the review return
-  shape (`survivors`, `killed`, `belowFloor` arrays and a `counts` object) and the status is
+  `task-notification` reads the notification's `<tool-use-id>`, `<status>`, `<result>` and
+  `<output-file>`. The engine cuts a long result in the prompt text, so when the result does not
+  parse the hook reads the task's output file the notification names (an absolute `…/tasks/*.output`
+  path with no `..`, at most 4 MiB) and takes its `result`. The return is stored in the `review`
+  atom only when it parses as the review return shape (`survivors`, `killed`, `belowFloor` arrays and a `counts` object) and the status is
   neither `failed` nor `killed`. A noted launch never creates a board on its own: when the
   tool-use-id matches one, it supplies the run id and the stream shown at launch, and the
   board is filed under that stream; otherwise under the stream shown when the return arrives.

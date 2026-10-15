@@ -9,7 +9,10 @@ The pane has a new **Review** tab. Hotkey `4` opens it. It is the default tab in
 phase. A `tool.call` hook on `Workflow` notes each launch of the shipgate review workflow. It
 keeps the call's tool-use id, the run id from the result and the stream shown at launch. A
 `prompt.submit` hook reads each task-notification prompt. It takes the notification's
-tool-use id, status and result. Only a result with the return's shape becomes the board. A
+tool-use id, status, result and output file. A long return is cut in the notification text.
+The HUD then reads the task's output file that the notification names. That must be an
+absolute `…/tasks/*.output` path, at most 4 MiB. A failed stat, read or parse stores nothing
+and shows no error. Only a result with the return's shape becomes the board. A
 failed or killed run is not stored. When the tool-use id matches a noted launch, the board
 gets that launch's run id and stream. Otherwise it goes under the current stream. The hook
 never drops the prompt and never changes it. Any other notification passes untouched. A
@@ -47,7 +50,7 @@ draws the chart as box-and-arrow text, one line per layer. Other Mermaid kinds s
 `mermaid` code. The prose around a block stays Markdown. The HUD starts no renderer process
 and makes no network call.
 
-Tests cover the review module (19), the capture hooks and the buttons (16) and the Review tab
+Tests cover the review module (22), the capture hooks and the buttons (23) and the Review tab
 on terminal and desktop (5). They cover the PRD criteria (3), the diagram module (20) and the
 Design tab's diagrams on both surfaces (5).
 

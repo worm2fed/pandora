@@ -39,8 +39,30 @@ export function parseTaskNotification(text: string): TaskNotification | null {
     taskId: tagOf(text, 'task-id'),
     status: tagOf(text, 'status'),
     summary: tagOf(text, 'summary'),
+    outputFile: tagOf(text, 'output-file'),
     result,
   }
+}
+
+/** The most bytes of a task output file the HUD reads. */
+export const TASK_OUTPUT_LIMIT = 4 * 1024 * 1024
+
+/**
+ * May the HUD read this task output file? An absolute path of at most 1024 characters, with a
+ * `/tasks/` segment, ending in `.output`, with no `..` segment and no control character
+ * (a newline included). The engine names it; the check keeps a forged tag from reaching elsewhere.
+ */
+export function isSafeTaskOutput(path: string): boolean {
+  if (path.length === 0 || path.length > 1024 || !path.startsWith('/')) return false
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(path)) return false
+  if (path.split('/').some(segment => segment === '..')) return false
+  return path.includes('/tasks/') && path.endsWith('.output')
+}
+
+/** The review return inside a task output file's JSON: its `result` when that has the shape, else the object itself when it has, else null. */
+export function reviewReturnOfOutput(parsed: unknown): unknown {
+  if (isRecord(parsed) && isReviewReturn(parsed.result)) return parsed.result
+  return isReviewReturn(parsed) ? parsed : null
 }
 
 /** Does a parsed result look like the review workflow's return: arrays `survivors`, `killed`, `belowFloor` and an object `counts`? */

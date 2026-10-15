@@ -9,12 +9,14 @@ import {
   parseCriteria,
   parseTaskNotification,
   runIdOf,
+  isSafeTaskOutput,
+  reviewReturnOfOutput,
   shortLocation,
   shortPath,
   tickKey,
   toReviewBoard,
 } from '../hooks/review'
-import { PRD_WITH_CRITERIA, REVIEW_LAUNCH_RESULT, REVIEW_NOTIFICATION } from './fixtures.review'
+import { PRD_WITH_CRITERIA, REVIEW_LAUNCH_RESULT, REVIEW_NOTIFICATION, REVIEW_NOTIFICATION_TRUNCATED, REVIEW_OUTPUT_FILE, REVIEW_OUTPUT_PATH } from './fixtures.review'
 
 const AT = '2026-10-14T10:00:00Z'
 
@@ -220,6 +222,36 @@ describe('review', () => {
     expect(at('src/a b.ts')).toContain('(LOW, ?:7,')
     // a long path is judged after the cut to three segments
     expect(at(`${'x/'.repeat(150)}a/b/c.ts`)).toContain('(LOW, a/b/c.ts:7,')
+  })
+
+  test('parseTaskNotification reads the output file; a cut result is null', async () => {
+    const note = parseTaskNotification(REVIEW_NOTIFICATION_TRUNCATED)
+    expect(note?.outputFile).toBe(REVIEW_OUTPUT_PATH)
+    expect(note?.status).toBe('completed')
+    expect(note?.result).toBeNull()
+    expect(parseTaskNotification('<task-notification><status>completed</status></task-notification>')?.outputFile).toBeNull()
+  })
+
+  test('isSafeTaskOutput: absolute, a /tasks/ segment, .output, no .., no control character, at most 1024', async () => {
+    expect(isSafeTaskOutput(REVIEW_OUTPUT_PATH)).toBe(true)
+    expect(isSafeTaskOutput('tmp/tasks/a.output')).toBe(false) // relative
+    expect(isSafeTaskOutput('/tmp/tasks/../a.output')).toBe(false) // a .. segment
+    expect(isSafeTaskOutput('/tmp/tasks/..a.output')).toBe(true) // dots inside a name are no segment
+    expect(isSafeTaskOutput('/tmp/task/a.output')).toBe(false) // no /tasks/ segment
+    expect(isSafeTaskOutput('/tmp/tasks/a.txt')).toBe(false) // not .output
+    expect(isSafeTaskOutput('/tmp/tasks/a.output\n/etc/passwd')).toBe(false) // a newline
+    expect(isSafeTaskOutput('/tmp/tasks/a\u0007.output')).toBe(false) // a control character
+    expect(isSafeTaskOutput(`/tmp/tasks/${'a'.repeat(1010)}.output`)).toBe(false) // over 1024
+    expect(isSafeTaskOutput(`/tmp/tasks/${'a'.repeat(1000)}.output`)).toBe(true)
+    expect(isSafeTaskOutput('')).toBe(false)
+  })
+
+  test('reviewReturnOfOutput: the result field, else the object itself, else null', async () => {
+    const parsed = JSON.parse(REVIEW_OUTPUT_FILE) as { result: unknown }
+    expect(reviewReturnOfOutput(parsed)).toBe(parsed.result)
+    expect(reviewReturnOfOutput(parsed.result)).toBe(parsed.result)
+    expect(reviewReturnOfOutput({ result: { ok: true } })).toBeNull()
+    expect(reviewReturnOfOutput(null)).toBeNull()
   })
 
   test('shortLocation and tickKey', async () => {

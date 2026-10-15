@@ -111,6 +111,8 @@ export type TaskNotification = {
   taskId: string | null
   status: string | null
   summary: string | null
+  /** The `<output-file>` the engine names: the task's full output, where a long result is kept whole. */
+  outputFile: string | null
   result: unknown
 }
 

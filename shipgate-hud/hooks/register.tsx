@@ -10,7 +10,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Adr, Decision, Position, ReviewMark, ReviewState, Tab } from '../types'
 import { artifactRefs, matchesHome, parseAdr, streamSlug, toPosition } from './position'
 import { FAIL_CLOSED, denyReason, holdReason, publishCommandOf } from './publish'
-import { findingPrompt, isReviewLaunch, isReviewReturn, parseTaskNotification, runIdOf, tickKey, toReviewBoard } from './review'
+import { TASK_OUTPUT_LIMIT, findingPrompt, isReviewLaunch, isReviewReturn, isSafeTaskOutput, parseTaskNotification, reviewReturnOfOutput, runIdOf, tickKey, toReviewBoard } from './review'
 import { PANE_ID, bandOf, paneOf } from './views'
 import type { Actions, Ui } from './views'
 
@@ -47,6 +47,35 @@ const readText = async ($: Engine, path: string): Promise<string | null> => {
   try {
     const text = await $.fs.read(path)
     return typeof text === 'string' ? text : null
+  } catch {
+    return null
+  }
+}
+
+/** What a path leads to (a link followed); null when it cannot be stat'ed. */
+const statOf = async ($: Engine, path: string): Promise<{ kind: string; size: number } | null> => {
+  try {
+    const stat = await $.fs.stat(path)
+    return { kind: stat.kind, size: stat.size }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The review return of a task whose notification text carries a cut result: read whole from the
+ * task output file the notification names. Only for a prompt the engine stamped
+ * `task-notification`, only an absolute `…/tasks/*.output` path, only a regular file of at most
+ * TASK_OUTPUT_LIMIT bytes. Any failure (stat, read, parse, shape) is null: no board, no error.
+ */
+async function reviewReturnFromOutput($: Engine, path: string | null): Promise<unknown> {
+  if (path === null || !isSafeTaskOutput(path)) return null
+  const stat = await statOf($, path)
+  if (stat === null || stat.kind !== 'file' || stat.size > TASK_OUTPUT_LIMIT) return null
+  const text = await readText($, path)
+  if (text === null) return null
+  try {
+    return reviewReturnOfOutput(JSON.parse(text) as unknown)
   } catch {
     return null
   }
@@ -711,11 +740,14 @@ export const register: Register = (on, options) => {
   on('prompt.submit', { origin: { kind: 'task-notification' } }, async ($, e, next) => {
     if (!hasSurface) return next(e) // nothing to draw (claude -p, the SDK)
     const note = parseTaskNotification(e.text)
-    if (note && note.status !== 'failed' && note.status !== 'killed' && isReviewReturn(note.result)) {
+    if (note === null || note.status === 'failed' || note.status === 'killed') return next(e)
+    // the engine cuts a long result in the notification text: the output file holds it whole
+    const result = isReviewReturn(note.result) ? note.result : await reviewReturnFromOutput($, note.outputFile)
+    if (isReviewReturn(result)) {
       const launch = launchFor(note.toolUseId)
       const stream = launch?.stream ?? (await read($, position))?.stream ?? null
       const at = new Date(await $.clock.now()).toISOString()
-      const board = toReviewBoard(note.result, launch?.runId ?? null, stream, at)
+      const board = toReviewBoard(result, launch?.runId ?? null, stream, at)
       await update($, review, s => ({ board, marks: {}, ticks: s.ticks }))
     }
     return next(e)

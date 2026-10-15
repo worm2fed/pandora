@@ -26,7 +26,9 @@ interface, from the journal shipgate already keeps.
     supported shape. Other Mermaid kinds, and a flowchart with a statement the HUD cannot read,
     stay code. No renderer process, no network.
   - **Review** — the review workflow's last return for this stream. The HUD reads it from the
-    task-notification prompt and never changes that prompt. A counts line comes first. Then
+    task-notification prompt and never changes that prompt. A long return that the engine
+    cuts there is read from the task's output file (`…/tasks/*.output`, at most 4 MiB). A
+    counts line comes first. Then
     the survivors, grouped by severity, each with confidence, verification, quorum, lenses
     and a short `file:line`. **Accept** and **Kill** submit a plain prompt that names the
     finding by its position, never by its text. The killed and below-floor findings follow,
