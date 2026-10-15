@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   artifactRefs,
+  criteriaStatus,
+  dispositions,
   globToRegExp,
   isSafeRef,
   isVetoable,
@@ -208,6 +210,29 @@ describe('position', () => {
     expect(position.criteria[1]).toEqual({ id: 'SC-002', text: 'The pane lists the Build Plan, wrapped onto a second line.' })
     expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [] }).criteria).toEqual([])
     expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [], prd: null }).criteria).toEqual([])
+  })
+
+  test('criteria status: the last review-verdict by seq wins; none is {}', async () => {
+    const verdict = (seq: number, criteria: unknown) => ({ seq, type: 'review-verdict', ts: 't', data: { verdict: 'ready', criteria } })
+    const events = [...LOG.events, verdict(60, { 'SC-001': 'met', 'SC-002': 'met' }), verdict(50, { 'SC-001': 'unmet' })]
+    expect(criteriaStatus(events)).toEqual({ 'SC-001': 'met', 'SC-002': 'met' })
+    // non-string values are dropped; a last verdict without criteria is {}
+    expect(criteriaStatus([verdict(1, { 'SC-001': 'met', 'SC-002': true })])).toEqual({ 'SC-001': 'met' })
+    expect(criteriaStatus([verdict(1, { 'SC-001': 'met' }), { seq: 2, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }])).toEqual({})
+    expect(criteriaStatus(LOG.events)).toEqual({})
+    expect(toPosition({ feature: FEATURE, events, worklog: null, adrs: [] }).criteriaStatus).toEqual({ 'SC-001': 'met', 'SC-002': 'met' })
+    expect(toPosition({ feature: FEATURE, events: [], worklog: null, adrs: [] }).criteriaStatus).toEqual({})
+  })
+
+  test('dispositions: the last review-verdict by seq names each finding\'s fate; none is {}', async () => {
+    const verdict = (seq: number, data: Record<string, unknown>) => ({ seq, type: 'review-verdict', ts: 't', data: { verdict: 'ready', ...data } })
+    const later = verdict(60, { dispositions: { 'src/a.ts:42': 'fixed', 'src/widget.ts:?': 'rejected', 'src/b.ts:1': 7 } })
+    const events = [...LOG.events, later, verdict(50, { dispositions: { 'src/a.ts:42': 'deferred' } })]
+    expect(dispositions(events)).toEqual({ 'src/a.ts:42': 'fixed', 'src/widget.ts:?': 'rejected' })
+    expect(dispositions([...events, verdict(70, {})])).toEqual({})
+    expect(dispositions(LOG.events)).toEqual({})
+    expect(toPosition({ feature: FEATURE, events, worklog: null, adrs: [] }).dispositions).toEqual({ 'src/a.ts:42': 'fixed', 'src/widget.ts:?': 'rejected' })
+    expect(toPosition({ feature: FEATURE, events: [], worklog: null, adrs: [] }).dispositions).toEqual({})
   })
 
   test('toPosition: no worklog and no events still yields a position', async () => {

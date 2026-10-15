@@ -25,20 +25,27 @@ interface, from the journal shipgate already keeps.
     surfaces and as box-and-arrow text in the terminal. Doubled shapes take the nearest
     supported shape. Other Mermaid kinds, and a flowchart with a statement the HUD cannot read,
     stay code. No renderer process, no network.
-  - **Review** — the review workflow's last return for this stream. The HUD reads it from the
-    task-notification prompt and never changes that prompt. A long return that the engine
-    cuts there is read from the task's output file (`…/tasks/*.output`, at most 4 MiB). A
-    counts line comes first. Then
+  - **Review** — up to five rounds of the review workflow's return for this stream. The HUD
+    reads each from the task-notification prompt and never changes that prompt. A long return
+    that the engine cuts there is read from the task's output file (`…/tasks/*.output`, at most
+    4 MiB). A counts line comes first. Then
     the survivors, grouped by severity, each with confidence, verification, quorum, lenses
     and a short `file:line`. **Accept** and **Kill** submit a plain prompt that names the
     finding by its position, never by its text. The killed and below-floor findings follow,
     one line each. The tab ends with the success criteria of the stream's PRD, as ticks you
-    set by hand. The band shows `review N open` while findings wait for a mark. A board for
-    another stream is not drawn.
+    set by hand. The last `review-verdict` gives ticks from the journal:
+    `"criteria":{"SC-001":"met"}` shows `☑`, and `unmet` shows `☒`. A press sets your own tick
+    over the journal's, until a newer verdict. The same verdict's
+    `"dispositions":{"src/a.ts:42":"fixed"}` shows on that card in place of the buttons. The
+    band shows `review N open` while findings have neither a mark nor a disposition. Each
+    return is a new round. The newest round opens first, and its header folds it. Up to four
+    older rounds fold behind a one-line summary, with their marks kept. A board for another
+    stream is not drawn.
 - The pane opens on the tab that matches the phase: Plan in `implement`, Design in `design`,
   Review in `review`, Flow otherwise. The active tab and the current phase are drawn inverted.
-  Hotkeys `1` `2` `3` `4` switch, `r` refreshes, while the pane has focus. Long text is truncated to the pane's width;
-  the artifacts hold the full text.
+  Hotkeys `1` `2` `3` `4` switch, `r` refreshes, while the pane has focus. Long text is
+  truncated to the pane's width, except the success criteria, which wrap. The artifacts hold
+  the full text.
 
 - **Publish gate** — the gate holds `git push`, `gh pr create` (or `gh pr new`) and
   `glab mr create` (or `glab mr new`). It accepts git's, gh's and glab's global options before

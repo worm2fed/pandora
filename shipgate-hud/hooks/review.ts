@@ -2,7 +2,7 @@
 // `<task-notification>` user turn, in; a normalised board, its grouping and the Accept / Kill
 // prompt text out. No `$` here, so the tests run it without a session.
 
-import type { Criterion, ReviewBoard, ReviewFinding, ReviewMark, Severity, TaskNotification } from '../types'
+import type { Criterion, ReviewBoard, ReviewFinding, ReviewMark, ReviewState, Severity, TaskNotification, TickOverride } from '../types'
 import { asRecord, asString, asStringList, isRecord } from './json'
 
 export const SEVERITIES: readonly Severity[] = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW']
@@ -83,7 +83,7 @@ export function isReviewLaunch(parts: readonly (string | undefined)[]): boolean 
 }
 
 /** Control characters (C0, DEL, C1) out of text from the return, so the card, the group header and the prompt agree. */
-const stripControl = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+export const stripControl = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
 
 /** A known severity in capitals (`high` → `HIGH`); any other label as given, control characters out. */
 const toSeverity = (value: unknown): string => {
@@ -120,10 +120,11 @@ const toCounts = (value: unknown): Record<string, number> => {
 }
 
 /** The return normalised into a board: survivors in the return's order, killed entries lifted from `finding` with their `quorum`, below-floor entries as they are; a non-numeric `confidence` → 0; missing arrays → []. */
-export function toReviewBoard(value: unknown, runId: string | null, stream: string | null, at: string): ReviewBoard {
+export function toReviewBoard(value: unknown, runId: string | null, stream: string | null, at: string, round = 1): ReviewBoard {
   const record = asRecord(value)
   return {
     stream,
+    round,
     runId,
     at,
     counts: toCounts(record.counts),
@@ -190,7 +191,7 @@ export function groupBySeverity(findings: readonly ReviewFinding[]): { severity:
 export function findingPrompt(action: ReviewMark, index: number, board: ReviewBoard): string {
   const { severity, location, lenses } = promptFields(board.survivors[index])
   const stream = board.stream === null ? 'the current stream' : `stream ${stripControl(board.stream)}`
-  const head = `The user pressed ${action === 'accepted' ? 'Accept' : 'Kill'} on review finding ${index + 1} of ${board.survivors.length} (${severity}, ${location}, lens ${lenses}) in the shipgate HUD for ${stream}`
+  const head = `The user pressed ${action === 'accepted' ? 'Accept' : 'Kill'} on review finding ${index + 1} of ${board.survivors.length} in review round ${board.round} (${severity}, ${location}, lens ${lenses}) in the shipgate HUD for ${stream}`
   return action === 'accepted'
     ? `${head}: fix it in the implement round and record it under the worklog's review round.`
     : `${head}: treat it as rejected, ask the user for the reason, record it under the worklog's Rejected findings, and do not fix it.`
@@ -199,6 +200,129 @@ export function findingPrompt(action: ReviewMark, index: number, board: ReviewBo
 /** A tick's key in `ReviewState.ticks`: the stream and the criterion id, so a tick holds for one stream only. */
 export function tickKey(stream: string | null, id: string): string {
   return `${stream ?? '?'}:${id}`
+}
+
+/** The most review rounds kept per stream; a newer return drops the stream's oldest. */
+export const ROUNDS_PER_STREAM = 5
+
+/** Does a board belong to the stream shown? A board captured with no stream is drawn for any. */
+const isBoardOf = (board: ReviewBoard, stream: string | null): boolean => board.stream === null || board.stream === stream
+
+const stripDotSlash = (path: string): string => path.replace(/^(\.\/)+/, '')
+
+/**
+ * The orchestrator's disposition of a finding in a verdict's map. Exact keys first: the full
+ * `file:line`, then the short one. Then by path suffix: a key `<path>:<line>` matches when the
+ * line is the finding's and the finding's file is `<path>` or ends with `/<path>` (a workflow
+ * reports absolute paths, an orchestrator writes repo-relative ones). The longest matching path
+ * wins. A leading `./` is dropped on both sides.
+ */
+export function dispositionIn(map: Record<string, string>, finding: ReviewFinding): string | undefined {
+  const file = stripDotSlash(finding.file)
+  const line = finding.line === null ? '?' : String(finding.line)
+  const exact = map[`${file}:${line}`] ?? map[shortLocation(finding)]
+  if (exact !== undefined) return exact
+  let best: { length: number; value: string } | null = null
+  for (const [key, value] of Object.entries(map)) {
+    const cut = key.lastIndexOf(':')
+    if (cut <= 0 || key.slice(cut + 1) !== line) continue
+    const path = stripDotSlash(key.slice(0, cut))
+    if (path === '' || !(file === path || file.endsWith(`/${path}`))) continue
+    if (best === null || path.length > best.length) best = { length: path.length, value }
+  }
+  return best?.value
+}
+
+/** A round's identity across streams: `<stream or ?>:<round>`. Fold keys, `open` and mark keys use it. */
+export function roundId(board: Pick<ReviewBoard, 'stream' | 'round'>): string {
+  return `${board.stream ?? '?'}:${board.round}`
+}
+
+/** The rounds of a stored state, newest first; an older build stored one `board`, read as round 1. */
+export function boardsOf(state: unknown): ReviewBoard[] {
+  const record = asRecord(state)
+  if (Array.isArray(record.boards)) return record.boards.filter(isRecord).map(board => ({ ...(board as ReviewBoard), round: typeof board.round === 'number' ? board.round : 1 }))
+  return isRecord(record.board) ? [{ ...(record.board as ReviewBoard), round: 1 }] : []
+}
+
+/** The rounds of the stream shown, newest first. */
+export function boardsFor(boards: readonly ReviewBoard[], stream: string | null): ReviewBoard[] {
+  return boards.filter(board => isBoardOf(board, stream))
+}
+
+/**
+ * A captured board pushed at the front as its stream's next round (one more than the stream's
+ * highest, so a number is never reused after the oldest is dropped); the stream keeps its
+ * newest ROUNDS_PER_STREAM rounds, other streams' rounds are kept as they are. A return
+ * delivered again (the same stream and the same non-null run id) replaces its round in place,
+ * keeping the round number and so its marks.
+ */
+export function pushBoard(boards: readonly ReviewBoard[], board: Omit<ReviewBoard, 'round'>): ReviewBoard[] {
+  const again = board.runId === null ? -1 : boards.findIndex(b => b.stream === board.stream && b.runId === board.runId)
+  if (again >= 0) return boards.map((b, i) => (i === again ? { ...board, round: b.round } : b))
+  const same = boards.filter(b => b.stream === board.stream)
+  const round = 1 + Math.max(0, ...same.map(b => b.round))
+  const next: ReviewBoard[] = [{ ...board, round }, ...boards]
+  let kept = 0
+  return next.filter(b => b.stream !== board.stream || ++kept <= ROUNDS_PER_STREAM)
+}
+
+/** A mark's key: the board's round identity and the survivor's index, so a mark stays with its round. */
+export function markKey(board: Pick<ReviewBoard, 'stream' | 'round'>, index: number): string {
+  return `${roundId(board)}:${index}`
+}
+
+/** The marks whose round still has a board; a dropped round's marks go with it. */
+export function pruneMarks(marks: Record<string, ReviewMark>, boards: readonly ReviewBoard[]): Record<string, ReviewMark> {
+  const ids = new Set(boards.map(roundId))
+  return Object.fromEntries(Object.entries(marks).filter(([key]) => ids.has(key.slice(0, key.lastIndexOf(':')))))
+}
+
+const isTickOverride = (value: unknown): value is TickOverride =>
+  isRecord(value) && (value.state === 'on' || value.state === 'off') && (typeof value.seq === 'number' || value.seq === null)
+
+/** The tick overrides of a stored state; an older build's list or bare `on` / `off` values read as none. */
+export function ticksOf(state: Pick<ReviewState, 'ticks'> | null | undefined): Record<string, TickOverride> {
+  const ticks: unknown = state?.ticks
+  if (!isRecord(ticks)) return {}
+  return Object.fromEntries(Object.entries(ticks).filter((entry): entry is [string, TickOverride] => isTickOverride(entry[1])))
+}
+
+/**
+ * A stored state in this build's shape. An older build kept one `board` with marks keyed by the
+ * survivor's index alone: that board becomes round 1, and its marks are remapped onto it.
+ */
+export function reviewStateOf(state: unknown): ReviewState {
+  const record = asRecord(state)
+  const boards = boardsOf(state)
+  const stored = isRecord(record.marks) ? (record.marks as Record<string, ReviewMark>) : {}
+  const old = !Array.isArray(record.boards) ? boards[0] : undefined
+  const marks = old
+    ? Object.fromEntries(Object.entries(stored).map(([key, mark]) => [/^\d+$/.test(key) ? markKey(old, Number(key)) : key, mark]))
+    : stored
+  return { boards, marks, ticks: ticksOf(record as Pick<ReviewState, 'ticks'>), open: typeof record.open === 'string' ? record.open : null }
+}
+
+/**
+ * A criterion's glyph: the user's override wins (`on` ☑, `off` ☐) while it was made against the
+ * current verdict (`seq`); else the journal's status (`met` ☑, `unmet` ☒), else ☐.
+ */
+export function criterionGlyph(override: TickOverride | undefined, status: string | undefined, seq: number | null = null): '☑' | '☒' | '☐' {
+  if (override !== undefined && override.seq === seq) return override.state === 'on' ? '☑' : '☐'
+  return status === 'met' ? '☑' : status === 'unmet' ? '☒' : '☐'
+}
+
+/**
+ * The overrides after a press on `key`: a ticked row unticks, any other row ticks, so every press
+ * changes the glyph. An override equal to what the journal shows is dropped (back to the journal);
+ * a kept one records the verdict `seq` it was made against.
+ */
+export function nextTicks(ticks: Record<string, TickOverride>, key: string, status: string | undefined, seq: number | null = null): Record<string, TickOverride> {
+  const rest = { ...ticks }
+  delete rest[key]
+  const isTicked = criterionGlyph(ticks[key], status, seq) === '☑'
+  if (isTicked) return status === 'met' ? { ...rest, [key]: { state: 'off', seq } } : rest
+  return status === 'met' ? rest : { ...rest, [key]: { state: 'on', seq } }
 }
 
 const CRITERION_LINE = /^\s*-\s*\*\*(SC-\d+)\*\*\s*[—–-]+\s*(.*?)\s*$/

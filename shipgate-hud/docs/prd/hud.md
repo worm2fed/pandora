@@ -297,10 +297,10 @@ worklog as fenced blocks that the Markdown element draws as grey code.
   BLOCKER, HIGH, MEDIUM, LOW, each as one card with severity, confidence, verification and
   quorum, the lenses, `file:line` (the path shortened to its last three segments) and the
   summary; then the killed findings (one line each with the quorum) and the below-floor ones
-  (one line each). The user's accept / kill marks are drawn on the card. Under the counts a
-  line shows the run id and the capture time; an aborted run shows a warning line and the
-  band's segment reads `review aborted`.
-- **FR-032** — Each survivor carries **Accept** and **Kill** buttons. A press submits a plain
+  (one line each). The user's accept / kill marks are drawn on the card. The round's header
+  shows the round number, the run id and the capture time; an aborted run shows a warning
+  line and the band's segment reads `review aborted`.
+- **FR-032** — Each survivor carries **Accept** and **Kill** buttons drawn like the Flow tab's Veto (`[ Accept ]` `[ Kill ]`, 0.4.1). A press submits a plain
   prompt (not `asUser`) that names the finding by its position in the board, severity,
   `file:line` and lens, and asks the orchestrator to fix it in the implement round (Accept) or
   to record it under the worklog's Rejected findings with the user's reason (Kill). The prompt
@@ -310,10 +310,17 @@ worklog as fenced blocks that the Markdown element draws as grey code.
   lines of the `## Success criteria` section of the PRD the stream's `clarify-passed` event
   names (relative, in-project, no `..`), each with a toggle the user ticks as the orchestrator
   shows the evidence; the ticks live in the `review` atom for the session, keyed by stream,
-  and a criterion id repeated across sections counts once. No PRD → one line saying so.
+  and a criterion id repeated across sections counts once. The criterion text wraps to the
+  pane width. When the stream's latest `review-verdict` carries a `criteria` map
+  (`{"SC-001": "met", "SC-002": "unmet"}`), a met criterion is drawn ticked and an unmet one
+  crossed; the user's own press overrides what the journal says (0.4.1). No PRD → one line
+  saying so.
 - **FR-034** — With no review stored for the stream, the tab says so and names the phase.
-  `/clear` resets the pane state, the board included (the next review run fills it again). A
-  stored review for another stream is not drawn.
+  `/clear` resets the pane state, the boards included (the next review run fills it again). A
+  stored review for another stream is not drawn. Up to five rounds are kept per stream and
+  drawn as collapsible sections, the newest open first, its header folding it; marks stay with
+  their round; the band reads the newest round and each round's counts line ends with its own
+  `open N` (0.4.1).
 - **FR-035** — In the **Design** tab a fenced block whose info string is `mermaid` or `svg` is
   drawn as a diagram instead of code. On a surface with `Svg` (desktop, mobile, vscode) an
   `svg` block is drawn as `Svg` with its source and the section title as `alt`; a source over

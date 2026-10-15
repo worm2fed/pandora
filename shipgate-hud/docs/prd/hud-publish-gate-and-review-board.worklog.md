@@ -249,6 +249,18 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings (paralleliz
 - [x] T221 — full `/security-review` on the slice 3 hook diff — done when: SC-023
 - [x] T222 — live check SC-024 — done when: observed and noted here
 
+## 0.4.1 — criteria and buttons (user feedback round, 2026-10-15)
+- [x] T230 — Accept / Kill / tick buttons drawn like Veto (no `plain`); criterion text wrapped beside its tick — file(s): `shipgate-hud/hooks/views.tsx`, `shipgate-hud/tests/views.test.tsx` — done when: tests fail first, then pass
+- [x] T231 — `Position.criteriaStatus` from the stream's latest `review-verdict` `criteria` map; `☑` met, `☒` unmet, local press overrides — file(s): `shipgate-hud/hooks/position.ts`, `shipgate-hud/types/index.d.ts`, `shipgate-hud/hooks/views.tsx`, tests — done when: tests fail first, then pass
+- [x] T233 — `Position.dispositions` from the latest `review-verdict` `dispositions` map; a card shows `fixed` / `rejected` instead of the buttons; `review N open` counts neither marked nor disposed — file(s): `shipgate-hud/hooks/position.ts`, `shipgate-hud/hooks/views.tsx`, `shipgate-hud/types/index.d.ts`, tests — done when: tests fail first, then pass
+- [x] T234 — card header as three cells (severity fixed, meta truncating, buttons non-shrinking) so a long lens list never pushes the severity to the next line — file(s): `shipgate-hud/hooks/views.tsx`, `shipgate-hud/tests/views.test.tsx` — done when: a 60-column pane keeps the severity on the first line
+- [x] T235 — review rounds kept (up to 5 per stream), drawn as collapsible sections, newest open; marks per round; band and counts from the newest — file(s): `shipgate-hud/hooks/register.tsx`, `shipgate-hud/hooks/review.ts`, `shipgate-hud/hooks/views.tsx`, `shipgate-hud/types/index.d.ts`, tests — done when: tests fail first, then pass
+- [x] T236 — the open round's header is a button that folds it (all folded, criteria stay); a capture reopens the newest — file(s): `shipgate-hud/hooks/views.tsx`, `shipgate-hud/hooks/register.tsx`, tests — done when: tests fail first, then pass
+- [x] T237 — a refresh aborted by the hook's own cancellation (the user denied or interrupted a Bash call) writes no error and keeps the position — file(s): `shipgate-hud/hooks/register.tsx`, `shipgate-hud/tests/register.test.ts` — done when: tests fail first, then pass
+- [x] T238 — a disposition key matches by path suffix (the workflow reports absolute paths; the orchestrator writes repo-relative keys) — file(s): `shipgate-hud/hooks/views.tsx`, tests — done when: tests fail first, then pass
+- [x] T239 — card body as full-width lines (location, then the wrapped summary); the counts line packed at its separators — file(s): `shipgate-hud/hooks/views.tsx`, tests — done when: a 60-column pane shows the full location and summary
+- [x] T232 — docs + version 0.4.1: CHANGELOG, README, `plugin.json` + marketplace — done when: validate passes on both
+
 ## Traceability
 - FR-020 → T100, T101
 - FR-021, FR-022, FR-023, FR-024, FR-025 → T102, T103
@@ -260,6 +272,7 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings (paralleliz
 - FR-037 → T220
 - SC-010, SC-011 → T103; SC-012 → T105; SC-013 → T106
 - SC-020 → T200–T203; SC-021 → T210, T211; SC-022 → T201; SC-023 → T221; SC-024 → T222
+- FR-031, FR-032, FR-033, FR-034 (0.4.1) → T230, T231, T233, T234, T235, T236, T237, T238, T239, T232
 
 ## Deviations & notes (filled during implementation)
 - 2026-10-14 — T100–T104, T200 (pure part) and T210 built by three parallel Opus workers; the
@@ -468,3 +481,61 @@ but close. Final round:
   Code" — the fallback is the safe direction; outside the subset by design.
 - LOW (70) "`cut` and `fit` do not count terminal cells (CJK two cells)" — `truncate-end` on
   the Text hides the overflow; a cell-width table is not worth its code here.
+
+## Review round — 0.4.1 user-feedback slice (2026-10-15)
+
+Live use of the Review tab on the probe run shaped this slice: buttons like Veto, wrapped
+criteria, ticks and per-finding dispositions from the latest `review-verdict`, a three-cell
+card header (the severity was pushed to the next line, then touched the percentage), and
+rounds kept as collapsible sections. Scoped review, one reviewer (opus): every item in the
+code; suggested ready after three fixes. Fixed in the final round:
+
+- MEDIUM (85) `views.tsx:366` — dispositions matched the short `file:line` only, so a map
+  keyed by a full path missed silently → full path looked up first, keys normalised.
+- MEDIUM (80) `review.ts:249` — a `stream: null` board shared round numbers and `round-N`
+  keys with the stream's own rounds → rounds identified by `<stream>:<round>`.
+- MEDIUM (75) — a verdict's dispositions stamped a later round's finding at the same line →
+  applied only to boards captured before the verdict.
+- MEDIUM (85) docs — "the `open` count reads the newest round" was wrong: each round's counts
+  line shows its own → reworded.
+- LOW — a stale tick override hid a later verdict (overrides carry the verdict seq); marks
+  and ticks of dropped rounds pruned; old single-board marks remapped; disposition text cut
+  and stripped; "1 survivors"; the run line shown once; README truncation sentence and
+  semicolon chains; "ticks from the journal" instead of "pre-ticks".
+
+## Rejected findings — 0.4.1
+- LOW (70) "no shipgate skill writes `criteria` or `dispositions`" — true and known: the
+  ledger holds the shipgate follow-up; the orchestrator writes them by hand until then.
+- LOW (75) "`open` is global across streams" — folded into the `<stream>:<round>` identity.
+- LOW (80) "other streams' boards grow without limit" — five per stream; a session rarely
+  drives more than a few streams; pruning of marks covers the rest.
+
+## Review round 2 — 0.4.1 (2026-10-15)
+
+Three-lens review workflow (`wf_130c2d46-e37`): 36 raw → 30 deduped → 13 above the floor,
+1 HIGH held 0/2, 4 MEDIUM, 8 LOW, 18 below floor. The first return captured live by the
+HUD on this stream (round 2 on the board, the probe folded behind it). Fixed:
+
+- S1 HIGH `register.tsx:573` — an aborted refresh kept the old position with a null error, so
+  the publish gate could pass a push on stale state → the gate learns whether the refresh
+  completed and holds when it was cut.
+- S2/S5 MEDIUM `register.tsx:397` — `isAborted` matched the word anywhere, including a
+  `RunFailed` message carrying a stream name → engine shape only, never a `RunFailed`.
+- S4 MEDIUM `views.tsx:469` — the button cell assumed `[Accept] [Kill]` (15) while non-plain
+  buttons draw `[ Accept ] [ Kill ]` (19) → derived from the labels.
+- S3 MEDIUM docs — PRD FR-031/FR-034 still described the run line under the counts and
+  "counts from the newest" → reworded; FR-032's example fixed.
+- LOW — stale JSDoc blocks, the `open` and `dispositions` docs, one verdict sort per
+  refresh, `Object.hasOwn` on the colour table, a re-delivered return (same run id)
+  replaces its round instead of adding one, CHANGELOG/README sentences.
+
+## Rejected findings — 0.4.1 round 2
+- below-floor (55) "older rounds show the latest verdict's dispositions" — by design for
+  now: the map is keyed by location, and a later board ignores an earlier verdict.
+- below-floor (55) "rounds do not fold like the Design tab (bracketed buttons vs plain)" —
+  the user asked for Veto-style buttons here.
+- below-floor (50) "`?` stream collides with a stream named `?`" — not a real stream name.
+- below-floor (35) "a press after a refresh that brought a new verdict records an old seq" —
+  the next press records the current one; one extra press at worst.
+- below-floor (55) "the abort test proves the heuristic, not the engine's shape" — the
+  engine's exact rejection text is not declared; the live message is the evidence.

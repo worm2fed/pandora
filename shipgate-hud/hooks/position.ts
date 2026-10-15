@@ -236,8 +236,54 @@ export function publishAuthorization(events: readonly unknown[]): PublishAuthori
   return { authorized: true, by: authorizing.type === 'review-verdict' ? 'review-verdict' : 'gate-decision', at: asString(authorizing.ts) }
 }
 
+/** The last `review-verdict` (by `seq`)'s `data.criteria` as SC id → status, string values only; {} when none. */
+export function criteriaStatus(events: readonly unknown[]): Record<string, string> {
+  return verdictMap(lastVerdict(events), 'criteria')
+}
+
+/**
+ * The last `review-verdict` (by `seq`)'s `data.dispositions`: the orchestrator's word per
+ * finding (`fixed`, `rejected`, `deferred`, …), keyed `<path>:<line or ?>`, full or short path,
+ * a leading `./` dropped; {} when none.
+ */
+export function dispositions(events: readonly unknown[]): Record<string, string> {
+  return verdictMap(lastVerdict(events), 'dispositions')
+}
+
+/** The last `review-verdict` by `seq`; undefined when none. */
+function lastVerdict(events: readonly unknown[]): JsonRecord | undefined {
+  return events
+    .map(asRecord)
+    .filter(e => e.type === 'review-verdict')
+    .sort((a, b) => seqOf(a) - seqOf(b))
+    .at(-1)
+}
+
+/** A string-valued map from a verdict's `data[field]`; {} when none. A disposition key loses a leading `./`. */
+function verdictMap(verdict: JsonRecord | undefined, field: 'criteria' | 'dispositions'): Record<string, string> {
+  const map: Record<string, string> = {}
+  for (const [key, value] of Object.entries(asRecord(asRecord(verdict?.data)[field]))) {
+    if (typeof value === 'string') map[field === 'dispositions' ? key.replace(/^(\.\/)+/, '') : key] = value
+  }
+  return map
+}
+
+/** A verdict's `ts` and `seq`: when the dispositions were recorded, and which verdict a tick was made against. */
+function stampOf(verdict: JsonRecord | undefined): { at: string | null; seq: number | null } {
+  if (verdict === undefined) return { at: null, seq: null }
+  return { at: asString(verdict.ts) || null, seq: typeof verdict.seq === 'number' ? verdict.seq : null }
+}
+
+/** The last review-verdict's `ts` and `seq`. */
+export function verdictStamp(events: readonly unknown[]): { at: string | null; seq: number | null } {
+  return stampOf(lastVerdict(events))
+}
+
 export function toPosition({ feature, events, worklog, adrs, prd = null }: PositionInputs): Position {
   const record = asRecord(feature)
+  // the last review-verdict, found once: its criteria, dispositions, time and seq
+  const verdict = lastVerdict(events)
+  const stamp = stampOf(verdict)
   const phase = asString(record.phase, 'workspace')
 
   const entered: string[] = []
@@ -300,6 +346,10 @@ export function toPosition({ feature, events, worklog, adrs, prd = null }: Posit
     worklogPath: worklog?.path ?? null,
     publish: publishAuthorization(events),
     criteria: prd ? parseCriteria(prd.text) : [],
+    criteriaStatus: verdictMap(verdict, 'criteria'),
+    dispositions: verdictMap(verdict, 'dispositions'),
+    dispositionsAt: stamp.at,
+    criteriaSeq: stamp.seq,
   }
 }
 

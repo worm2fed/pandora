@@ -65,6 +65,14 @@ export type Position = {
   publish: PublishAuthorization
   /** The SC-### lines of the PRD the stream's clarify-passed event names; [] when none. */
   criteria: Criterion[]
+  /** The last review-verdict's `data.criteria`: SC id → status (`met`, `unmet`, …); {} when none. */
+  criteriaStatus: Record<string, string>
+  /** The last review-verdict's `data.dispositions`: `<path>:<line or ?>` (full or short, no leading `./`) → `fixed`, `rejected`, …; {} when none. */
+  dispositions: Record<string, string>
+  /** When the verdict holding `dispositions` was recorded (ISO); null when none. A board captured later ignores them. */
+  dispositionsAt: string | null
+  /** The `seq` of the last review-verdict; null when none. A tick override made against another verdict is ignored. */
+  criteriaSeq: number | null
 }
 
 /** One `- **SC-NNN** — text` line of a PRD's Success criteria section. */
@@ -88,6 +96,8 @@ export type ReviewFinding = {
 /** The review workflow's return as the Review tab draws it, stamped with the stream it was captured under. */
 export type ReviewBoard = {
   stream: string | null
+  /** The review round within its stream: 1 for the first return captured for it, then one more each time. */
+  round: number
   runId: string | null
   at: string
   counts: Record<string, number>
@@ -102,8 +112,21 @@ export type ReviewBoard = {
 
 export type ReviewMark = 'accepted' | 'killed'
 
-/** The captured board, the user's marks keyed by survivor index, and the ticked criteria as `<stream>:<SC id>` (`?:` when no stream). */
-export type ReviewState = { board: ReviewBoard | null; marks: Record<string, ReviewMark>; ticks: string[] }
+/** The user's own word on a criterion, over the journal's: ticked (`on`) or unticked (`off`), made against the verdict `seq` (null: no verdict). */
+export type TickOverride = { state: 'on' | 'off'; seq: number | null }
+
+/**
+ * The captured review rounds, newest first, at most five per stream; the user's marks keyed
+ * `<stream>:<round>:<survivor index>` (`?` for no stream); the tick overrides keyed
+ * `<stream>:<SC id>` (a criterion with no entry shows the journal's status); and `open`: the
+ * roundId of the open round, `'none'` when every round is folded, null for the newest.
+ */
+export type ReviewState = {
+  boards: ReviewBoard[]
+  marks: Record<string, ReviewMark>
+  ticks: Record<string, TickOverride>
+  open: string | null
+}
 
 /** The tags of a `<task-notification>` user turn; `result` is the parsed JSON, null when absent or unparsable. */
 export type TaskNotification = {

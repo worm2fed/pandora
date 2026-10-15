@@ -4,10 +4,10 @@
 
 import type { BoxProps, ButtonProps, CodeProps, ElementConstructor, MarkdownProps, SvgProps, TextProps } from 'claude-code'
 
-import type { Decision, Phase, Position, ReviewBoard, ReviewFinding, ReviewState, Tab, Task } from '../types'
+import type { Decision, Phase, Position, ReviewBoard, ReviewFinding, ReviewState, Tab, Task, TickOverride } from '../types'
 import { type Fence, cut, flowchartSvg, flowchartText, parseFlowchart, splitFences } from './diagram'
 import { PHASES, PHASE_SHORT, clock, isVetoable } from './position'
-import { groupBySeverity, shortLocation, tickKey } from './review'
+import { boardsFor, criterionGlyph, dispositionIn, groupBySeverity, markKey, reviewStateOf, roundId, shortLocation, stripControl, tickKey } from './review'
 
 export type Ui = {
   Box: ElementConstructor<BoxProps>
@@ -25,10 +25,11 @@ export type Actions = {
   veto: (decision: Decision) => void
   refresh: () => void
   openPane: () => void
-  /** Accept / Kill on the review survivor at `index`; tick toggles a success criterion by id. */
-  accept: (index: number) => void
-  kill: (index: number) => void
+  /** Accept / Kill on the survivor at `index` of the round `id` (`roundId`); tick toggles a success criterion by id; openRound unfolds a round by id. */
+  accept: (id: string, index: number) => void
+  kill: (id: string, index: number) => void
   tick: (id: string) => void
+  openRound: (id: string) => void
 }
 
 export type PaneState = { tab: Tab | null; designOpen: string | null; lastError: string | null; columns: number; review?: ReviewState }
@@ -53,20 +54,35 @@ export function defaultTab(phase: string): Tab {
   return 'flow'
 }
 
-/** The review board held for this position's stream; null when none, or when it belongs to another stream. */
+/** The newest review round held for this position's stream; null when none (a board of another stream is never drawn). */
 export function boardFor(position: Position, review: ReviewState | undefined): ReviewBoard | null {
-  const board = review?.board ?? null
-  if (board === null || (board.stream !== null && board.stream !== position.stream)) return null
-  return board
+  return boardsFor(reviewStateOf(review).boards, position.stream)[0] ?? null
 }
 
-/** `review N open` (N = survivors the user has not marked) while a board for the stream is held; else null. */
+/** `review N open` (N = survivors of the newest round with neither a mark nor a disposition) while a board for the stream is held; else null. */
 export function reviewSegment(position: Position, review: ReviewState | undefined): string | null {
   const board = boardFor(position, review)
   if (board === null || review === undefined) return null
   if (board.aborted) return 'review aborted'
-  const open = board.survivors.filter((_, index) => review.marks[String(index)] === undefined).length
-  return `review ${open} open`
+  return `review ${openFindings(position, board, reviewStateOf(review).marks)} open`
+}
+
+/**
+ * The orchestrator's disposition of a finding: the last verdict's map looked up by the full
+ * `file:line`, then the short one. A board captured after that verdict ignores the map: the
+ * verdict judged an earlier round.
+ */
+function dispositionOf(position: Position, board: ReviewBoard, finding: ReviewFinding): string | undefined {
+  // a Position stored by an older module build has no dispositions
+  const map = position.dispositions ?? {}
+  const verdictAt = Date.parse(position.dispositionsAt ?? '')
+  if (!Number.isNaN(verdictAt) && Date.parse(board.at) > verdictAt) return undefined
+  return dispositionIn(map, finding)
+}
+
+/** Survivors still open: neither the user's mark nor the orchestrator's disposition. */
+export function openFindings(position: Position, board: ReviewBoard, marks: Record<string, string>): number {
+  return board.survivors.filter((finding, index) => marks[markKey(board, index)] === undefined && dispositionOf(position, board, finding) === undefined).length
 }
 
 /** The summary the band shows, as its ` · `-separated segments: stream, phase, tasks, verify, veto count, open review findings. */
@@ -428,8 +444,14 @@ const SEVERITY_COLOR: Record<string, string> = { BLOCKER: 'error', HIGH: 'error'
 const countText = (value: unknown): string => (typeof value === 'number' && Number.isFinite(value) ? String(value) : '?')
 
 /** The board's counts line: found · deduped · candidates · survivors · killed · below floor · refuters requested/reported · unverified. */
-export function reviewCounts(board: ReviewBoard): string {
+export function reviewCounts(board: ReviewBoard, open?: number): string {
+  return reviewCountSegments(board, open).join(' · ')
+}
+
+/** The counts line's segments, in order; `open N` last when given. */
+export function reviewCountSegments(board: ReviewBoard, open?: number): string[] {
   const { counts, coverage } = board
+  const openSegment = open === undefined ? [] : [`open ${open}`]
   return [
     `found ${countText(counts.found)}`,
     `deduped ${countText(counts.deduped)}`,
@@ -439,43 +461,89 @@ export function reviewCounts(board: ReviewBoard): string {
     `below floor ${countText(counts.belowFloor ?? board.belowFloor.length)}`,
     `refuters ${countText(coverage.refutersRequested)}/${countText(coverage.refutersReported)}`,
     `unverified ${countText(counts.unverified ?? coverage.unverified)}`,
-  ].join(' · ')
+    ...openSegment,
+  ]
 }
 
-/** One survivor: severity, confidence, verification and quorum, lenses, then Accept / Kill or the mark; `file:line` beside the wrapped summary. */
-function findingCardOf(ui: Ui, finding: ReviewFinding, index: number, mark: string | undefined, actions: Actions, width: number): ReturnType<Ui['Box']> {
+/** The severity cell's width: `▎ BLOCKER` (9 cells, the longest label) and a one-cell gap before the meta. */
+const SEVERITY_CELL = 10
+
+/** The chrome a non-plain Button draws around its label in the terminal: `[ ` and ` ]`. */
+const BUTTON_CHROME = 4
+
+/** The terminal width of `[ Accept ] [ Kill ]`, the state cell of a card with no mark and no disposition: both buttons and the gap between them. */
+const BUTTONS_WIDTH = 'Accept'.length + BUTTON_CHROME + 1 + 'Kill'.length + BUTTON_CHROME
+
+const DISPOSITION_COLOR: Record<string, string> = { fixed: 'success', rejected: 'error' }
+
+/**
+ * One survivor. Header, one line, three cells: the severity in a fixed cell, the meta (confidence,
+ * verification and quorum, lenses) truncated to the room left, then the state: the user's mark,
+ * else the orchestrator's disposition, else Accept / Kill. Then `file:line` beside the wrapped summary.
+ */
+function findingCardOf(ui: Ui, finding: ReviewFinding, id: string, index: number, mark: string | undefined, disposition: string | undefined, actions: Actions, width: number): ReturnType<Ui['Box']> {
   const { Box, Text, Button } = ui
   const meta = `${finding.confidence}% · ${finding.verification || '?'} ${finding.quorum || '?'} · ${finding.lenses.join('+') || '?'}`
   const location = shortLocation(finding)
+  const shown = fit(stripControl(disposition ?? ''), 12)
+  const state =
+    mark === 'accepted' ? (
+      <Text color="success">✓ accepted</Text>
+    ) : mark === 'killed' ? (
+      <Text color="error">✗ killed</Text>
+    ) : disposition !== undefined ? (
+      // own keys only: a disposition named `constructor` must not lend an Object method as a colour
+      Object.hasOwn(DISPOSITION_COLOR, disposition) ? <Text color={DISPOSITION_COLOR[disposition]}>{shown}</Text> : <Text dimColor>{shown}</Text>
+    ) : (
+      <Box flexDirection="row" columnGap={1}>
+        <Button key={`accept-${index}`} label="Accept" dimColor onPress={() => actions.accept(id, index)} />
+        <Button key={`kill-${index}`} label="Kill" dimColor onPress={() => actions.kill(id, index)} />
+      </Box>
+    )
+  const stateWidth = mark === 'accepted' ? 10 : mark === 'killed' ? 8 : disposition !== undefined ? shown.length : BUTTONS_WIDTH
+  // the meta gives way: cut to what the row leaves, so the severity and the state stay on one line
+  const metaRoom = Math.max(4, width - SEVERITY_CELL - stateWidth - 2)
   return (
     <Box key={`finding-${index}`} flexDirection="column">
-      <Box flexDirection="row" columnGap={2}>
-        <Text bold color={SEVERITY_COLOR[finding.severity] ?? 'text'}>
-          {`▎ ${finding.severity}`}
-        </Text>
-        <Text dimColor>{meta}</Text>
-        {mark === 'accepted' ? <Text color="success">✓ accepted</Text> : null}
-        {mark === 'killed' ? <Text color="error">✗ killed</Text> : null}
-        {mark === undefined ? <Button key={`accept-${index}`} label="Accept" plain dimColor onPress={() => actions.accept(index)} /> : null}
-        {mark === undefined ? <Button key={`kill-${index}`} label="Kill" plain dimColor onPress={() => actions.kill(index)} /> : null}
-      </Box>
       <Box flexDirection="row">
-        <Box width={Math.min(location.length + 4, Math.max(12, Math.floor(width / 2)))} flexShrink={0}>
-          <Text wrap="truncate-end" dimColor>{`  ${location}`}</Text>
+        <Box width={SEVERITY_CELL} flexShrink={0}>
+          <Text bold wrap="truncate-end" color={SEVERITY_COLOR[finding.severity] ?? 'text'}>
+            {`▎ ${finding.severity}`}
+          </Text>
         </Box>
         <Box flexGrow={1} flexShrink={1}>
-          <Text wrap="wrap">{finding.summary.replace(/\s+/g, ' ').trim()}</Text>
+          <Text wrap="truncate-end" dimColor>
+            {fit(meta, metaRoom)}
+          </Text>
+        </Box>
+        <Box flexShrink={0} paddingLeft={1}>
+          {state}
         </Box>
       </Box>
+      {locationAndSummaryOf(ui, location, finding.summary, width)}
+    </Box>
+  )
+}
+
+/** Two full-width lines under a finding's head: the short `file:line`, dim, cut only when wider than the pane; the summary wrapped, indented 2. */
+function locationAndSummaryOf(ui: Ui, location: string, summary: string, width: number): ReturnType<Ui['Box']> {
+  const { Box, Text } = ui
+  return (
+    <Box flexDirection="column" paddingLeft={2}>
+      <Text wrap="truncate-end" dimColor>
+        {fit(location, width - 2)}
+      </Text>
+      <Text wrap="wrap">{summary.replace(/\s+/g, ' ').trim()}</Text>
     </Box>
   )
 }
 
 /** The PRD's success criteria as toggles; one line saying so when the PRD names none. */
-function criteriaOf(ui: Ui, position: Position, ticks: readonly string[], actions: Actions, width: number): ReturnType<Ui['Box']> {
+function criteriaOf(ui: Ui, position: Position, ticks: Record<string, TickOverride>, actions: Actions): ReturnType<Ui['Box']> {
   const { Box, Text, Button } = ui
-  // a Position stored by an older module build has no criteria
+  // a Position stored by an older module build has no criteria and no criteria status
   const criteria = position.criteria ?? []
+  const status = position.criteriaStatus ?? {}
   return (
     <Box flexDirection="column">
       <Text dimColor>SUCCESS CRITERIA</Text>
@@ -483,76 +551,123 @@ function criteriaOf(ui: Ui, position: Position, ticks: readonly string[], action
         <Text dimColor>No PRD criteria found.</Text>
       ) : (
         criteria.map(criterion => (
-          <Button
-            key={`sc-${criterion.id}`}
-            label={fit(`${ticks.includes(tickKey(position.stream, criterion.id)) ? '☑' : '☐'} ${criterion.id} ${criterion.text}`, width)}
-            plain
-            onPress={() => actions.tick(criterion.id)}
-          />
+          // the tick in a fixed cell, the id and the text wrapping beside it (continuation lines hang under the text)
+          <Box key={`criterion-${criterion.id}`} flexDirection="row" columnGap={1}>
+            <Box width={5} flexShrink={0}>
+              <Button
+                key={`sc-${criterion.id}`}
+                label={criterionGlyph(ticks[tickKey(position.stream, criterion.id)], status[criterion.id], position.criteriaSeq ?? null)}
+                dimColor
+                onPress={() => actions.tick(criterion.id)}
+              />
+            </Box>
+            <Box flexShrink={0}>
+              <Text bold>{criterion.id}</Text>
+            </Box>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="wrap">{criterion.text.replace(/\s+/g, ' ').trim()}</Text>
+            </Box>
+          </Box>
         ))
       )}
     </Box>
   )
 }
 
-/** The Review tab: the review workflow's return for this stream as a board, then the PRD's SC checklist. */
-function reviewTab(ui: Ui, position: Position, review: ReviewState | undefined, actions: Actions, columns: number): ReturnType<Ui['Box']> {
+/** One round's board in full: counts, the aborted line, run and time, cards by severity, killed and below floor. */
+function boardBodyOf(ui: Ui, position: Position, board: ReviewBoard, marks: Record<string, string>, actions: Actions, width: number): ReturnType<Ui['Box']> {
   const { Box, Text } = ui
-  const width = Math.max(MIN_COLUMNS, columns)
-  const board = boardFor(position, review)
-  const ticks = review?.ticks ?? []
-  if (board === null) {
-    return (
-      <Box flexDirection="column" rowGap={1}>
-        <Text dimColor>{`No review captured for ${position.stream} yet (phase ${position.phase}).`}</Text>
-        {criteriaOf(ui, position, ticks, actions, width)}
-      </Box>
-    )
-  }
-  const marks = review?.marks ?? {}
-  const line = (key: string, text: string) => (
-    // a keyed Box per row: Text takes no key
-    <Box key={key}>
+  // a killed or below-floor finding: its head on one dim line, then the location and the summary as on a card
+  const entry = (key: string, head: string, finding: ReviewFinding) => (
+    // a keyed Box per entry: Text takes no key
+    <Box key={key} flexDirection="column">
       <Text wrap="truncate-end" dimColor>
-        {fit(text, width)}
+        {fit(head, width)}
       </Text>
+      {locationAndSummaryOf(ui, shortLocation(finding), finding.summary, width)}
     </Box>
   )
+  // the counts packed into lines at the ` · ` separators, so no line starts with one
+  const countLines = packSegments(reviewCountSegments(board, openFindings(position, board, marks)), width)
   return (
     <Box flexDirection="column" rowGap={1}>
       <Box flexDirection="column">
-        <Text bold wrap="wrap">
-          {reviewCounts(board)}
-        </Text>
+        {countLines.map((text, index) => (
+          <Box key={`counts-${index}`}>
+            <Text bold>{text}</Text>
+          </Box>
+        ))}
         {board.aborted ? <Text color="warning">{fit(`review aborted: ${board.aborted}`, width)}</Text> : null}
-        <Text dimColor>{`run ${board.runId ?? '?'} · ${clock(board.at)}`}</Text>
       </Box>
       {groupBySeverity(board.survivors).map(group => (
         <Box key={`severity-${group.severity}`} flexDirection="column">
           <Text dimColor>{`  ${group.severity} (${group.indexes.length})`}</Text>
           {group.indexes.map(index => {
             const finding = board.survivors[index]
-            return finding ? findingCardOf(ui, finding, index, marks[String(index)], actions, width) : null
+            return finding ? findingCardOf(ui, finding, roundId(board), index, marks[markKey(board, index)], dispositionOf(position, board, finding), actions, width) : null
           })}
         </Box>
       ))}
       {board.killed.length > 0 ? (
         <Box flexDirection="column">
           <Text dimColor>{`KILLED (${board.killed.length})`}</Text>
-          {board.killed.map((finding, index) =>
-            line(`killed-${index}`, `${finding.severity} · ${shortLocation(finding)} · ${finding.summary} · q=${finding.quorum || '?'}`),
-          )}
+          {board.killed.map((finding, index) => entry(`killed-${index}`, `${finding.severity} · q=${finding.quorum || '?'}`, finding))}
         </Box>
       ) : null}
       {board.belowFloor.length > 0 ? (
         <Box flexDirection="column">
           <Text dimColor>{`BELOW FLOOR (${board.belowFloor.length})`}</Text>
-          {board.belowFloor.map((finding, index) =>
-            line(`below-${index}`, `${finding.severity} ${finding.confidence}% ${shortLocation(finding)} ${finding.summary}`),
-          )}
+          {board.belowFloor.map((finding, index) => entry(`below-${index}`, `${finding.severity} · ${finding.confidence}%`, finding))}
         </Box>
       ) : null}
-      {criteriaOf(ui, position, ticks, actions, width)}
+    </Box>
+  )
+}
+
+/** `ReviewState.open` when the person folded the open round: every round folded. */
+const FOLDED = 'none'
+
+/**
+ * The Review tab: each review round of this stream, newest first, folded as the Design tab folds
+ * its sections (one open at a time; the newest unless the user opened another), then the PRD's
+ * SC checklist once.
+ */
+function reviewTab(ui: Ui, position: Position, review: ReviewState | undefined, actions: Actions, columns: number): ReturnType<Ui['Box']> {
+  const { Box, Text, Button } = ui
+  const width = Math.max(MIN_COLUMNS, columns)
+  const state = reviewStateOf(review)
+  const rounds = boardsFor(state.boards, position.stream)
+  const ticks = state.ticks
+  if (rounds.length === 0) {
+    return (
+      <Box flexDirection="column" rowGap={1}>
+        <Text dimColor>{`No review captured for ${position.stream} yet (phase ${position.phase}).`}</Text>
+        {criteriaOf(ui, position, ticks, actions)}
+      </Box>
+    )
+  }
+  const marks = state.marks
+  // `none`: the person folded every round; null: the newest is open
+  const open = state.open === FOLDED ? undefined : (rounds.find(board => roundId(board) === state.open) ?? rounds[0])
+  const title = (board: ReviewBoard) => `round ${board.round} · run ${board.runId ?? '?'} · ${clock(board.at)}`
+  return (
+    <Box flexDirection="column" rowGap={1}>
+      {rounds.map(board =>
+        board === open ? (
+          <Box key={`round-open-${roundId(board)}`} flexDirection="column">
+            <Button key={`round-${roundId(board)}`} label={fit(`▾ ${title(board)}`, width - BUTTON_CHROME)} dimColor onPress={() => actions.openRound(FOLDED)} />
+            {boardBodyOf(ui, position, board, marks, actions, width)}
+          </Box>
+        ) : (
+          <Button
+            key={`round-${roundId(board)}`}
+            label={fit(`▸ ${title(board)} · ${board.survivors.length} ${board.survivors.length === 1 ? 'survivor' : 'survivors'}`, width - BUTTON_CHROME)}
+            dimColor
+            onPress={() => actions.openRound(roundId(board))}
+          />
+        ),
+      )}
+      {criteriaOf(ui, position, ticks, actions)}
     </Box>
   )
 }

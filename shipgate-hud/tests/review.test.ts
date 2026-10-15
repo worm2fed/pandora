@@ -11,6 +11,16 @@ import {
   runIdOf,
   isSafeTaskOutput,
   reviewReturnOfOutput,
+  criterionGlyph,
+  nextTicks,
+  ticksOf,
+  boardsOf,
+  dispositionIn,
+  markKey,
+  pruneMarks,
+  pushBoard,
+  reviewStateOf,
+  roundId,
   shortLocation,
   shortPath,
   tickKey,
@@ -161,11 +171,11 @@ describe('review', () => {
     const board = fixtureBoard()
     const accept = findingPrompt('accepted', 0, board)
     expect(accept).toBe(
-      'The user pressed Accept on review finding 1 of 3 (BLOCKER, src/api/handler.ts:42, lens correctness) in the shipgate HUD for stream feature/x: fix it in the implement round and record it under the worklog\'s review round.',
+      'The user pressed Accept on review finding 1 of 3 in review round 1 (BLOCKER, src/api/handler.ts:42, lens correctness) in the shipgate HUD for stream feature/x: fix it in the implement round and record it under the worklog\'s review round.',
     )
     const kill = findingPrompt('killed', 2, board)
     expect(kill).toBe(
-      'The user pressed Kill on review finding 3 of 3 (LOW, src/util/format.ts:?, lens simplicity+security+conventions+design) in the shipgate HUD for stream feature/x: treat it as rejected, ask the user for the reason, record it under the worklog\'s Rejected findings, and do not fix it.',
+      'The user pressed Kill on review finding 3 of 3 in review round 1 (LOW, src/util/format.ts:?, lens simplicity+security+conventions+design) in the shipgate HUD for stream feature/x: treat it as rejected, ask the user for the reason, record it under the worklog\'s Rejected findings, and do not fix it.',
     )
     for (const finding of board.survivors) {
       expect(accept.includes(finding.summary)).toBe(false)
@@ -252,6 +262,109 @@ describe('review', () => {
     expect(reviewReturnOfOutput(parsed.result)).toBe(parsed.result)
     expect(reviewReturnOfOutput({ result: { ok: true } })).toBeNull()
     expect(reviewReturnOfOutput(null)).toBeNull()
+  })
+
+  test('criterionGlyph: an override made against the current verdict wins, else met ☑, unmet ☒, else ☐', async () => {
+    expect(criterionGlyph({ state: 'on', seq: 7 }, 'unmet', 7)).toBe('☑')
+    expect(criterionGlyph({ state: 'off', seq: 7 }, 'met', 7)).toBe('☐')
+    expect(criterionGlyph({ state: 'on', seq: null }, undefined, null)).toBe('☑')
+    // made against an older verdict: the journal's newer word shows
+    expect(criterionGlyph({ state: 'on', seq: 7 }, 'unmet', 9)).toBe('☒')
+    expect(criterionGlyph(undefined, 'met')).toBe('☑')
+    expect(criterionGlyph(undefined, 'unmet')).toBe('☒')
+    expect(criterionGlyph(undefined, 'partial')).toBe('☐')
+    expect(criterionGlyph(undefined, undefined)).toBe('☐')
+  })
+
+  test('nextTicks: every press changes the glyph; an override equal to the journal is dropped; a kept one records the verdict seq', async () => {
+    type Ticks = Parameters<typeof nextTicks>[0]
+    const press = (ticks: Ticks, status?: string, seq: number | null = 7) => nextTicks(ticks, 's:SC-001', status, seq)
+    expect(press({})).toEqual({ 's:SC-001': { state: 'on', seq: 7 } })
+    expect(press({ 's:SC-001': { state: 'on', seq: 7 } })).toEqual({})
+    expect(press({}, 'unmet')).toEqual({ 's:SC-001': { state: 'on', seq: 7 } })
+    expect(press({ 's:SC-001': { state: 'on', seq: 7 } }, 'unmet')).toEqual({})
+    expect(press({}, 'met')).toEqual({ 's:SC-001': { state: 'off', seq: 7 } })
+    expect(press({ 's:SC-001': { state: 'off', seq: 7 } }, 'met')).toEqual({})
+    // a stale override (another verdict) is replaced by a press against the current one
+    expect(press({ 's:SC-001': { state: 'on', seq: 3 } }, 'unmet')).toEqual({ 's:SC-001': { state: 'on', seq: 7 } })
+    // other keys are kept
+    expect(nextTicks({ 'other:SC-001': { state: 'on', seq: null } }, 's:SC-001', undefined, null)).toEqual({
+      'other:SC-001': { state: 'on', seq: null },
+      's:SC-001': { state: 'on', seq: null },
+    })
+  })
+
+  test('ticksOf: a stored list or bare on/off values from an older build read as no overrides', async () => {
+    expect(ticksOf({ ticks: ['s:SC-001'] as never })).toEqual({})
+    expect(ticksOf({ ticks: { 's:SC-001': 'on' } as never })).toEqual({})
+    expect(ticksOf({ ticks: { 's:SC-001': { state: 'on', seq: 2 } } })).toEqual({ 's:SC-001': { state: 'on', seq: 2 } })
+    expect(ticksOf(null)).toEqual({})
+  })
+
+  test('pushBoard: a return delivered again (same stream, same run id) replaces its round in place', async () => {
+    const board = (runId: string | null) => toReviewBoard(fixtureResult(), runId, 's', AT)
+    let boards = pushBoard([], board('wf_a'))
+    boards = pushBoard(boards, board('wf_b'))
+    const again = pushBoard(boards, { ...board('wf_a'), at: 'later' })
+    expect(again.map(b => `${b.runId}:${b.round}`)).toEqual(['wf_b:2', 'wf_a:1'])
+    expect(again[1]?.at).toBe('later')
+    // no run id: always a new round
+    expect(pushBoard(pushBoard([], board(null)), board(null)).map(b => b.round)).toEqual([2, 1])
+  })
+
+  test('dispositionIn: exact keys, then a repo-relative path that ends the absolute file on the same line', async () => {
+    const finding = toReviewBoard({ survivors: [{ severity: 'HIGH', file: '/abs/root/shipgate-hud/hooks/register.tsx', line: 573 }], killed: [], belowFloor: [], counts: {} }, null, null, AT).survivors[0]!
+    expect(dispositionIn({ 'hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
+    expect(dispositionIn({ './hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
+    expect(dispositionIn({ 'register.tsx:573': 'rejected' }, finding)).toBe('rejected')
+    expect(dispositionIn({ 'other/register.tsx:573': 'fixed' }, finding)).toBeUndefined()
+    expect(dispositionIn({ 'hooks/register.tsx:574': 'fixed' }, finding)).toBeUndefined()
+    expect(dispositionIn({ 'gister.tsx:573': 'fixed' }, finding)).toBeUndefined() // a suffix must start at a segment
+    // exact keys first; among suffixes the longest path wins
+    expect(dispositionIn({ '/abs/root/shipgate-hud/hooks/register.tsx:573': 'exact', 'register.tsx:573': 'suffix' }, finding)).toBe('exact')
+    expect(dispositionIn({ 'register.tsx:573': 'short', 'shipgate-hud/hooks/register.tsx:573': 'exact-short' }, finding)).toBe('exact-short')
+    expect(dispositionIn({ 'register.tsx:573': 'short', 'root/shipgate-hud/hooks/register.tsx:573': 'long' }, finding)).toBe('long')
+    // a finding with no line matches `:?`
+    const lineless = { ...finding, line: null }
+    expect(dispositionIn({ 'hooks/register.tsx:?': 'deferred' }, lineless)).toBe('deferred')
+  })
+
+  test('roundId, pruneMarks and the old-shape migration', async () => {
+    const one = toReviewBoard(fixtureResult(), null, 's', AT)
+    expect(roundId({ stream: 's', round: 2 })).toBe('s:2')
+    expect(roundId({ stream: null, round: 1 })).toBe('?:1')
+    const boards = [{ ...one, round: 2 }]
+    expect(pruneMarks({ 's:1:0': 'accepted', 's:2:0': 'killed', '?:2:1': 'accepted' }, boards)).toEqual({ 's:2:0': 'killed' })
+    // an older build: one `board`, marks keyed by index alone
+    const migrated = reviewStateOf({ board: one, marks: { '0': 'accepted', '2': 'killed' }, ticks: [] })
+    expect(migrated.boards.map(b => roundId(b))).toEqual(['s:1'])
+    expect(migrated.marks).toEqual({ 's:1:0': 'accepted', 's:1:2': 'killed' })
+    expect(migrated.ticks).toEqual({})
+    expect(migrated.open).toBeNull()
+    // this build's shape is kept as it is
+    expect(reviewStateOf({ boards, marks: { 's:2:0': 'killed' }, ticks: {}, open: 's:2' })).toEqual({ boards, marks: { 's:2:0': 'killed' }, ticks: {}, open: 's:2' })
+  })
+
+  test('pushBoard: newest first, the next round per stream, at most five per stream, a dropped number never reused', async () => {
+    const board = (stream: string | null) => toReviewBoard(fixtureResult(), null, stream, AT)
+    let boards = pushBoard([], board('a'))
+    boards = pushBoard(boards, board('b'))
+    boards = pushBoard(boards, board('a'))
+    expect(boards.map(b => `${b.stream}:${b.round}`)).toEqual(['a:2', 'b:1', 'a:1'])
+    for (let i = 0; i < 5; i += 1) boards = pushBoard(boards, board('a'))
+    expect(boards.filter(b => b.stream === 'a').map(b => b.round)).toEqual([7, 6, 5, 4, 3])
+    expect(boards.filter(b => b.stream === 'b').map(b => b.round)).toEqual([1])
+    expect(pushBoard(boards, board('a'))[0]?.round).toBe(8)
+  })
+
+  test('boardsOf: the stored rounds; an older build\'s single board reads as round 1', async () => {
+    const one = toReviewBoard(fixtureResult(), null, 's', AT)
+    expect(boardsOf({ boards: [{ ...one, round: 3 }] }).map(b => b.round)).toEqual([3])
+    expect(boardsOf({ board: one, marks: {}, ticks: [] }).map(b => b.round)).toEqual([1])
+    expect(boardsOf({ board: null })).toEqual([])
+    expect(boardsOf(undefined)).toEqual([])
+    expect(markKey({ stream: 's', round: 2 }, 0)).toBe('s:2:0')
+    expect(markKey({ stream: null, round: 1 }, 3)).toBe('?:1:3')
   })
 
   test('shortLocation and tickKey', async () => {

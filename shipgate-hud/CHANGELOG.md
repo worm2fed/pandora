@@ -2,6 +2,61 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.4.1 — the Review board reads the verdict. **Accept** and **Kill** are now dim bracketed
+buttons, like **Veto**. The card header is one line of three cells. The severity sits in a
+fixed cell, one cell wider than `▎ BLOCKER`, so a gap always follows it. The meta text is cut
+to the room left. The state comes last: the user's mark, the orchestrator's disposition, or
+the two buttons. Under the header, the card has two full-width lines. The short `file:line`
+comes first, dim, cut only when wider than the pane. The summary follows, wrapped. Killed and
+below-floor findings use the same two lines under a dim head. The counts line packs at its
+` · ` separators, so no line starts with one.
+
+The tab keeps review rounds. Each captured return is a new round of its stream, numbered from
+1. A stream keeps its five newest rounds. The rounds fold like the Design tab's sections. The
+newest is open: a `▾ round N · run … · HH:MM` header over the full board. An older round is
+one line, `▸ round N · run … · HH:MM · N survivors`. A press opens it and folds the other.
+The open round's header is a button too. A press on it folds every round, and the criteria
+stay. The next captured return opens the newest round again.
+A round is known by its stream and its number, so a round with no stream never shares a key
+with a stream's round. A mark stays with its round. A dropped round takes its marks with it.
+The Accept and Kill prompt names the round. The band reads the newest round. Each round's
+counts line ends with its own `open N`. The criteria follow once, after the rounds. Marks
+stored by 0.4.0 are remapped onto the round that held them. Ticks set by 0.4.0 are not kept.
+A return delivered again, with the same stream and run id, replaces its round in place and
+keeps its marks.
+
+Each success criterion is now a row. A tick button sits in a fixed cell. The bold id and the
+whole text follow, and the text wraps to the pane width. Nothing cuts it.
+
+The last `review-verdict` of the stream may record the criteria and the findings. The
+orchestrator writes them as
+`journal.py append --type review-verdict --data '{"verdict":"ready","criteria":{"SC-001":"met"},"dispositions":{"src/a.ts:42":"fixed"}}'`.
+A `met` criterion shows `☑`. An `unmet` one shows `☒`. Any other status shows `☐`. A press
+toggles the user's own tick over the journal's status. Each press changes the glyph. A press
+that lands on the journal's status drops the override. A tick holds against the verdict it
+was made on. A newer verdict shows its own status again. A disposition is keyed by the
+finding's full or short `file:line`; a leading `./` is dropped. A key also matches by path
+suffix on the same line: `hooks/register.tsx:573` matches a finding the workflow reports at
+`/abs/root/shipgate-hud/hooks/register.tsx:573`. The card shows `fixed` in
+green, `rejected` in red and any other value dim, in place of the buttons. The value is drawn
+at most 12 cells wide. A board captured after the verdict ignores its dispositions. A finding
+with a mark or a disposition is not open.
+
+Tests cover the criteria status and the dispositions from the last verdict, the tick
+overrides, the glyphs and the press on each status. They cover the wrapped text, the button
+style, a disposed card and the cut header on a narrow pane. They cover the rounds: the fold,
+a mark per round, the cap of five, the band and the round in the prompt. They cover the
+round keys, the pruned marks, the remapped old marks, a stale tick and a late board. They
+cover the folded header and a cut refresh.
+
+A refresh that the person cut is no error now. A denied or interrupted Bash call can cut the
+journal run that the HUD makes inside it. The pane showed `$.process.run(python3) aborted`
+until the next refresh. Now the HUD keeps the position and shows nothing. Only the engine's
+own rejection counts as cut: an `AbortError`, or a message that ends in `) aborted`. A
+journal.py run that exits non-zero is always an error, whatever its message says. The publish
+gate never passes on a position that a cut refresh left behind. It asks, and the dialog says
+the refresh was cut. Any other failure still shows.
+
 v0.4.0 — the Review board and the Design diagrams. The review workflow's return arrived once
 in the transcript and then scrolled away. The worklog's diagrams showed as grey code.
 

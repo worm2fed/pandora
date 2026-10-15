@@ -246,7 +246,7 @@ describe('review tab', () => {
       expect(cards.map(c => c.text)).toEqual(['▎ BLOCKER', '▎ HIGH', '▎ LOW'])
       expect((await ui.find({ type: 'Text', text: '▎ BLOCKER' }))?.props.color).toBe('error')
       expect(await ui.find({ type: 'Text', text: '70% · not-targeted 0/0 · simplicity+security+conventions+design' })).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: '  src/util/format.ts:?' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'src/util/format.ts:?' })).toBeDefined()
       expect(await ui.find({ key: 'accept-2' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: 'KILLED (1)' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: 'BELOW FLOOR (2)' })).toBeDefined()
@@ -262,7 +262,7 @@ describe('review tab', () => {
     await $.session.start(START)
     const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
     expect(await ui.find({ type: 'Text', text: 'No review captured for feat/example-stream yet (phase review).' })).toBeDefined()
-    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐ SC-001 The widget draws the input.')
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐')
     await ui.unmount()
   })
 
@@ -277,5 +277,192 @@ describe('review tab', () => {
     const after = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
     expect(await after.find({ type: 'Text', text: /review 3 open/ })).toBeDefined()
     await after.unmount()
+  })
+
+  /** The stream's events with a last review-verdict that records `criteria`. */
+  const verdictLog = (criteria: Record<string, string>) => ({
+    events: [
+      ...LOG.events,
+      { seq: 50, type: 'review-verdict', ts: '2026-10-01T10:00:00+00:00', data: { verdict: 'not-ready', criteria: { 'SC-001': 'unmet' } } },
+      { seq: 51, type: 'review-verdict', ts: '2026-10-01T10:30:00+00:00', data: { verdict: 'ready', criteria } },
+    ],
+  })
+
+  test('criteria pre-ticked from the last verdict: met ☑, unmet ☒; the text wraps beside the id', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW, verdictLog({ 'SC-001': 'met', 'SC-002': 'unmet' }))
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☑')
+    expect((await ui.find({ key: 'sc-SC-002' }))?.props.label).toBe('☒')
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.plain).toBeFalsy()
+    expect((await ui.find({ type: 'Text', text: 'SC-002' }))?.props.bold).toBe(true)
+    // the whole text, never cut, in a Text that wraps to the pane
+    const text = await ui.find({ type: 'Text', text: 'The parser keeps an empty field.' })
+    expect(text?.text).toBe('The parser keeps an empty field.')
+    expect(text?.props.wrap).toBe('wrap')
+    await ui.unmount()
+  })
+
+  test('a status other than met or unmet is ☐; a press on an unmet row ticks it, a second press goes back', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW, verdictLog({ 'SC-001': 'partial', 'SC-002': 'unmet' }))
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐')
+    await ui.press({ key: 'sc-SC-002' })
+    expect((await ui.find({ key: 'sc-SC-002' }))?.props.label).toBe('☑')
+    await ui.press({ key: 'sc-SC-002' })
+    expect((await ui.find({ key: 'sc-SC-002' }))?.props.label).toBe('☒')
+    await ui.unmount()
+  })
+
+  test('a press on a journal-met row unticks it locally; a second press shows the journal again', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW, verdictLog({ 'SC-001': 'met' }))
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☑')
+    await ui.press({ key: 'sc-SC-001' })
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐')
+    await ui.press({ key: 'sc-SC-001' })
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☑')
+    await ui.unmount()
+  })
+
+  test('a disposition keyed by the full path (with ./) matches a five-segment file', async ($, on) => {
+    engineWorld(on)
+    const at = '2999-01-01T00:00:00+00:00' // a verdict after the capture
+    const log = { events: [...LOG.events, { seq: 50, type: 'review-verdict', ts: at, data: { verdict: 'ready', dispositions: { './pkg/core/src/api/handler.ts:42': 'deferred-to-a-later-slice' } } }] }
+    journaledWorld(on, IN_REVIEW, log)
+    await $.session.start(START)
+    await $.prompt.submit({ text: REVIEW_NOTIFICATION.replace('src/api/handler.ts', 'pkg/core/src/api/handler.ts'), origin: { kind: 'task-notification' } } as never)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    // drawn at most 12 cells
+    expect((await ui.find({ type: 'Text', text: 'deferred-to…' }))?.props.dimColor).toBe(true)
+    expect(await ui.find({ key: 'accept-0' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a board captured after the verdict ignores its dispositions', async ($, on) => {
+    engineWorld(on)
+    // the test clock starts at the epoch: a verdict the day before is older than the capture
+    const log = { events: [...LOG.events, { seq: 50, type: 'review-verdict', ts: '1969-12-31T00:00:00+00:00', data: { verdict: 'ready', dispositions: { 'src/api/handler.ts:42': 'fixed' } } }] }
+    journaledWorld(on, IN_REVIEW, log)
+    await $.session.start(START)
+    await $.prompt.submit(notification)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await ui.find({ type: 'Text', text: 'fixed' })).toBeUndefined()
+    expect(await ui.find({ key: 'accept-0' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a finding the last verdict disposed of shows the disposition, not the buttons, and is not open', async ($, on) => {
+    engineWorld(on)
+    const log = {
+      events: [
+        ...LOG.events,
+        { seq: 50, type: 'review-verdict', ts: 't', data: { verdict: 'ready', dispositions: { 'src/api/handler.ts:42': 'fixed', 'src/util/format.ts:?': 'deferred' } } },
+      ],
+    }
+    journaledWorld(on, IN_REVIEW, log)
+    await $.session.start(START)
+    await $.prompt.submit(notification)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect((await ui.find({ type: 'Text', text: 'fixed' }))?.props.color).toBe('success')
+    expect((await ui.find({ type: 'Text', text: 'deferred' }))?.props.dimColor).toBe(true)
+    expect(await ui.find({ key: 'accept-0' })).toBeUndefined()
+    expect(await ui.find({ key: 'kill-2' })).toBeUndefined()
+    // the HIGH finding has neither a mark nor a disposition: its buttons stay
+    expect(await ui.find({ key: 'accept-1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^unverified 1 · open 1$/ })).toBeDefined()
+    await ui.unmount()
+    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect(await band.find({ type: 'Text', text: /review 1 open/ })).toBeDefined()
+    await band.unmount()
+  })
+
+  test('at 60 columns a card body is two full-width lines, and the counts pack at their separators', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW)
+    await $.session.start(START)
+    await $.prompt.submit(notification)
+    const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 60 } }
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...narrow })
+    expect((await ui.find({ type: 'Text', text: 'src/api/handler.ts:42' }))?.text).toBe('src/api/handler.ts:42')
+    const summary = await ui.find({ type: 'Text', text: /^The handler writes/ })
+    expect(summary?.text).toBe('The handler writes the record before the permission check runs.')
+    expect(summary?.props.wrap).toBe('wrap')
+    // the counts: two or more lines, none starting with the separator
+    expect(await ui.find({ key: 'counts-0' })).toBeDefined()
+    expect(await ui.find({ key: 'counts-1' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^found 9 · deduped 8/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^\s*·/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('at 40 columns the header row holds the severity and both bracketed buttons', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW)
+    await $.session.start(START)
+    await $.prompt.submit(notification)
+    const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 40 } }
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...narrow })
+    expect(await ui.find({ type: 'Text', text: '▎ BLOCKER' })).toBeDefined()
+    expect(await ui.find({ key: 'accept-0' })).toBeDefined()
+    expect(await ui.find({ key: 'kill-0' })).toBeDefined()
+    // 40 − severity 10 − `[ Accept ] [ Kill ]` 19 − 2 leaves 9 cells for the meta
+    const meta = await ui.find({ type: 'Text', text: /^95% / })
+    expect(meta?.text.length).toBeLessThanOrEqual(9)
+    expect(meta?.text.endsWith('…')).toBe(true)
+    await ui.unmount()
+  })
+
+  test('a disposition named like an Object method is drawn dim, not coloured', async ($, on) => {
+    engineWorld(on)
+    const log = { events: [...LOG.events, { seq: 50, type: 'review-verdict', ts: 't', data: { verdict: 'ready', dispositions: { 'src/api/handler.ts:42': 'constructor' } } }] }
+    journaledWorld(on, IN_REVIEW, log)
+    await $.session.start(START)
+    await $.prompt.submit(notification)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    const text = await ui.find({ type: 'Text', text: 'constructor' })
+    expect(text?.props.dimColor).toBe(true)
+    expect(text?.props.color).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a narrow pane: the card header keeps the severity and cuts the meta', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW)
+    await $.session.start(START)
+    await $.prompt.submit(notification)
+    const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 60 } }
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...narrow })
+    // the LOW finding has the longest lens list
+    expect(await ui.find({ type: 'Text', text: '▎ LOW' })).toBeDefined()
+    const meta = await ui.find({ type: 'Text', text: /^70% · not-targeted/ })
+    expect(meta?.text.endsWith('…')).toBe(true)
+    expect(meta?.props.wrap).toBe('truncate-end')
+    expect(await ui.find({ key: 'accept-2' })).toBeDefined()
+    // the severity cell is wider than its longest label, so `▎ BLOCKER` keeps a gap before its percentage
+    const cells = (await ui.findAll({ type: 'Box', text: /^▎ BLOCKER$/ })).filter(box => typeof box.props.width === 'number')
+    expect(cells.length).toBe(1)
+    expect(cells[0]?.props.width).toBeGreaterThan('▎ BLOCKER'.length)
+    await ui.unmount()
+  })
+
+  test('Accept and Kill are drawn like Veto: dim buttons, not plain', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW)
+    await $.session.start(START)
+    await $.prompt.submit(notification)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    for (const key of ['accept-0', 'kill-0']) {
+      const button = await ui.find({ key })
+      expect(button).toBeDefined()
+      expect(button?.props.plain).toBeFalsy()
+      expect(button?.props.dimColor).toBe(true)
+    }
+    await ui.unmount()
   })
 })

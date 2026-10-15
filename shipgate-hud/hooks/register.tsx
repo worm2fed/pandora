@@ -10,7 +10,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Adr, Decision, Position, ReviewMark, ReviewState, Tab } from '../types'
 import { artifactRefs, matchesHome, parseAdr, streamSlug, toPosition } from './position'
 import { FAIL_CLOSED, denyReason, holdReason, publishCommandOf } from './publish'
-import { TASK_OUTPUT_LIMIT, findingPrompt, isReviewLaunch, isReviewReturn, isSafeTaskOutput, parseTaskNotification, reviewReturnOfOutput, runIdOf, tickKey, toReviewBoard } from './review'
+import { TASK_OUTPUT_LIMIT, findingPrompt, isReviewLaunch, isReviewReturn, isSafeTaskOutput, parseTaskNotification, reviewReturnOfOutput, runIdOf, nextTicks, boardsFor, boardsOf, markKey, pruneMarks, pushBoard, reviewStateOf, roundId, tickKey, toReviewBoard } from './review'
 import { PANE_ID, bandOf, paneOf } from './views'
 import type { Actions, Ui } from './views'
 
@@ -263,7 +263,8 @@ const branchIn = async ($: Engine, dir?: string): Promise<string | null> => {
     const ran = await $.process.run(argv, { timeoutMs: 5_000, cwd: await sessionRoot($) })
     const name = ran.stdout.trim()
     return ran.exitCode === 0 && name && name !== 'HEAD' ? name : null
-  } catch {
+  } catch (error) {
+    if (isAborted(error)) throw error // a cut refresh, not a checkout without a branch
     return null
   }
 }
@@ -384,7 +385,18 @@ export async function worklogForStream($: Engine, stream: string, homes: Homes):
   return best?.path ?? null
 }
 
-export type Refreshed = { position: Position | null; error: string | null }
+/** A refresh, or `aborted` when the person cut the call it ran inside (a denied or interrupted tool call): nothing to show then. */
+export type Refreshed = { position: Position | null; error: string | null; aborted?: true }
+
+/**
+ * Was a `$` call cut because the person denied or interrupted the call the hook runs in? Only
+ * the engine's own rejection counts: an Error named `AbortError`, or one whose message ends in
+ * `) aborted` (`$.process.run(python3) aborted`) and that is no RunFailed. A RunFailed is a
+ * journal.py run that exited non-zero; its message carries argv and stderr, which may hold the
+ * word, and it is a failure to show.
+ */
+const isAborted = (error: unknown): boolean =>
+  error instanceof Error && (error.name === 'AbortError' || (!(error instanceof RunFailed) && /\) aborted$/.test(error.message)))
 
 const lastEventAt = (feature: Feature): string => {
   const last = (feature as { last_event?: { ts?: unknown } }).last_event
@@ -432,7 +444,8 @@ async function streamOfCheckout($: Engine, script: string): Promise<Feature | nu
     let feature: Feature | null
     try {
       feature = await probe(branch)
-    } catch {
+    } catch (error) {
+      if (isAborted(error)) throw error
       continue // one nested repo's failed probe must not discard another's match
     }
     if (feature && (best === null || lastEventAt(feature) > lastEventAt(best))) best = feature
@@ -466,6 +479,7 @@ export async function refreshPosition($: Engine, script: string, homes: Homes): 
     })
     return { position, error: null }
   } catch (error) {
+    if (isAborted(error)) return { position: null, error: null, aborted: true }
     return { position: null, error: `shipgate-hud: ${error instanceof Error ? error.message : String(error)}` }
   }
 }
@@ -475,9 +489,15 @@ const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null as Tab | 
 const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null as string | null)
 const lastError = atom({ plugin: 'shipgate-hud', key: 'lastError' } as const, null as string | null)
 const isJournaled = atom({ plugin: 'shipgate-hud', key: 'isJournaled' } as const, false)
-const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, { board: null, marks: {}, ticks: [] } as ReviewState)
+const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, { boards: [], marks: {}, ticks: {}, open: null } as ReviewState)
 
 const JOURNAL_APPEND = /journal\.py\b[\s\S]*\bappend\b/
+
+/** The gate's error when its refresh was cut by the person: the stored position may be stale. */
+const CUT_REFRESH = 'shipgate-hud: the refresh was cut before the journal answered, so the stored position may be stale'
+
+/** What the dialog and the deny reason add when the refresh was cut: the stream's stored state was not checked. */
+const CUT_NOTE = ' The refresh was cut before the journal answered, so the stored position may be stale.'
 
 /** The publish hold's two choices; any other answer refuses. */
 const REFUSE = 'Refuse'
@@ -529,7 +549,7 @@ let journalScript = ''
 let script: string | null = null
 let homes: Homes | null = null
 let projectRoot: string | null = null
-let inFlight: Promise<void> | null = null
+let inFlight: Promise<boolean> | null = null
 let isPending = false
 let hasSurface = false
 
@@ -541,52 +561,58 @@ async function detect($: EngineInterface): Promise<boolean> {
   return present
 }
 
-async function refreshOnce($: EngineInterface): Promise<void> {
+/** One refresh; false when the person cut it (nothing written), true when it completed, an error included. */
+async function refreshOnce($: EngineInterface): Promise<boolean> {
   // Module state is empty after a plugin reload, until session.start refills it, while $.state
   // (the position, the last error) survives it: locate the project again rather than show what
   // an older module left behind.
   if (projectRoot === null && !(await detect($))) {
     await update($, position, () => null)
     await update($, lastError, () => null)
-    return
+    return true
   }
   if (script === null) script = await locateJournal($, journalScript)
   if (script === null) {
     await update($, lastError, () => 'shipgate-hud: cannot find shipgate/scripts/journal.py — set the journalScript option.')
     await update($, position, () => null)
-    return
+    return true
   }
   homes = await readHomes($)
   const refreshed = await refreshPosition($, script, homes)
+  if (refreshed.aborted) return false // cut by the person: keep the position and the error as they were
   await update($, position, () => refreshed.position)
   await update($, lastError, () => refreshed.error)
+  return true
 }
 
 /**
  * Coalescing refresh: a request during a run marks one trailing run, every caller awaits the run
- * that covers it, and a failure lands in `lastError` instead of rejecting a caller.
+ * that covers it, and a failure lands in `lastError` instead of rejecting a caller. Resolves
+ * false when the last run was cut by the person (the stored position is then stale), else true.
  */
-async function refresh($: EngineInterface): Promise<void> {
+async function refresh($: EngineInterface): Promise<boolean> {
   if (inFlight) {
     isPending = true
-    await inFlight
-    return
+    return await inFlight
   }
   inFlight = (async () => {
+    let completed = true
     try {
       do {
         isPending = false
         try {
-          await refreshOnce($)
+          completed = await refreshOnce($)
         } catch (error) {
-          await update($, lastError, () => `shipgate-hud: refresh failed — ${error instanceof Error ? error.message : String(error)}`)
+          completed = !isAborted(error)
+          if (completed) await update($, lastError, () => `shipgate-hud: refresh failed — ${error instanceof Error ? error.message : String(error)}`)
         }
       } while (isPending)
     } finally {
       inFlight = null
     }
+    return completed
   })()
-  await inFlight
+  return await inFlight
 }
 
 /** Does a written path land in a configured artifact home? shipgate's defaults apply before the first refresh. */
@@ -608,25 +634,37 @@ function vetoText(stream: string, total: number, decision: Decision): string {
   )
 }
 
-/** Accept or Kill on survivor `index` of the board drawn: the plain prompt names it (never `asUser`), and the mark is kept. */
-function markFinding($: EngineInterface, drawn: ReviewState | null, action: ReviewMark, index: number): void {
-  const board = drawn?.board ?? null
+/** Accept or Kill on survivor `index` of the round `id` names, as drawn: the plain prompt names it (never `asUser`), and the mark is kept with its round. */
+function markFinding($: EngineInterface, current: Position | null, drawn: ReviewState | null, action: ReviewMark, id: string, index: number): void {
+  const board = boardsFor(boardsOf(drawn), current?.stream ?? null).find(b => roundId(b) === id) ?? null
   if (board === null || board.survivors[index] === undefined) return
-  void update($, review, s => ({ ...s, marks: { ...s.marks, [String(index)]: action } }))
+  const key = markKey(board, index)
+  void update($, review, s => {
+    const state = reviewStateOf(s)
+    return { ...state, marks: { ...state.marks, [key]: action } }
+  })
   void $.prompt.submit({ text: findingPrompt(action, index, board) })
 }
 
 function actionsOf($: EngineInterface, current: Position | null, drawn: ReviewState | null = null): Actions {
   return {
-    accept: (index: number) => {
-      markFinding($, drawn, 'accepted', index)
+    accept: (id: string, index: number) => {
+      markFinding($, current, drawn, 'accepted', id, index)
     },
-    kill: (index: number) => {
-      markFinding($, drawn, 'killed', index)
+    kill: (id: string, index: number) => {
+      markFinding($, current, drawn, 'killed', id, index)
+    },
+    openRound: (id: string) => {
+      void update($, review, s => ({ ...reviewStateOf(s), open: id }))
     },
     tick: (id: string) => {
       const key = tickKey(current?.stream ?? null, id)
-      void update($, review, s => ({ ...s, ticks: s.ticks.includes(key) ? s.ticks.filter(t => t !== key) : [...s.ticks, key] }))
+      const status = current?.criteriaStatus?.[id]
+      const seq = current?.criteriaSeq ?? null
+      void update($, review, s => {
+        const state = reviewStateOf(s)
+        return { ...state, ticks: nextTicks(state.ticks, key, status, seq) }
+      })
     },
     setTab: (next: Tab) => {
       void update($, tab, () => next)
@@ -706,10 +744,11 @@ export const register: Register = (on, options) => {
     const head = publishCommandOf(commandOf(e.input))
     if (head === null || !hasSurface) return next(e)
     if (!(await detect($))) return next(e)
-    await refresh($)
+    const fresh = await refresh($)
     if (script === null) return next(e) // no journal.py found: nothing to check against (FR-022)
     const current = await read($, position)
-    const error = await read($, lastError)
+    // A cut refresh leaves the old position behind with no error: treat it as one, so it asks.
+    const error = fresh ? await read($, lastError) : CUT_REFRESH
     // A failed refresh leaves the old position behind, and an older module build may have
     // stored one without `publish`: neither may pass.
     const authorized = error === null && current?.publish?.authorized === true
@@ -717,11 +756,11 @@ export const register: Register = (on, options) => {
     if (current === null && error === null) return next(e) // no stream for this session
     let answer: string = REFUSE
     try {
-      answer = await $.ui.ask(`${holdReason(head, current, error)} Let it through?`, { options: [REFUSE, ONCE], header: 'publish' })
+      answer = await $.ui.ask(`${holdReason(head, current, error)}${fresh ? '' : CUT_NOTE} Let it through?`, { options: [REFUSE, ONCE], header: 'publish' })
     } catch {
       answer = REFUSE // dismissed, a -p run, or no dialog on this engine
     }
-    return answer === ONCE ? next(e) : { decision: 'deny' as const, reason: denyReason(head, current, error) }
+    return answer === ONCE ? next(e) : { decision: 'deny' as const, reason: `${denyReason(head, current, error)}${fresh ? '' : CUT_NOTE}` }
   }).catch(($, e, next) => (publishCommandOf(commandOf(e.input)) !== null ? { decision: 'deny' as const, reason: FAIL_CLOSED } : next(e)))
 
   // The review workflow launched: note its call id and run id, so its notification is known by id.
@@ -748,7 +787,12 @@ export const register: Register = (on, options) => {
       const stream = launch?.stream ?? (await read($, position))?.stream ?? null
       const at = new Date(await $.clock.now()).toISOString()
       const board = toReviewBoard(result, launch?.runId ?? null, stream, at)
-      await update($, review, s => ({ board, marks: {}, ticks: s.ticks }))
+      // the newest round opens; older rounds, their marks and the ticks stay
+      await update($, review, s => {
+        const state = reviewStateOf(s)
+        const boards = pushBoard(state.boards, board)
+        return { boards, marks: pruneMarks(state.marks, boards), ticks: state.ticks, open: null }
+      })
     }
     return next(e)
   }).catch(($, e, next) => next(e))
