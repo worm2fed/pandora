@@ -601,4 +601,169 @@ describe('register', () => {
     expect(await band.find({ key: 'open-hud' })).toBeUndefined()
     await band.unmount()
   })
+
+  describe('publish gate', () => {
+    const BENEATH = { decision: 'allow' as const, reason: 'beneath' }
+    const REFUSE = 'Refuse'
+    const ONCE = 'Let it through once'
+    const questionOf = (e: unknown): string => (e as { questions?: { question?: string }[] }).questions?.[0]?.question ?? ''
+    type Answer = { label: string } | 'dismiss'
+
+    /** The engine's verdict beneath the plugin, and the dialog answered with `answer`; the questions asked are recorded. */
+    const gateWorld = (on: Parameters<typeof engineWorld>[0], answer: Answer = { label: REFUSE }): { asked: string[] } => {
+      const asked: string[] = []
+      on('tool.check', { tool: 'Bash' }, async () => BENEATH)
+      on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
+        const question = questionOf(e)
+        asked.push(question)
+        return (answer === 'dismiss' ? { deny: 'dismissed' } : { result: { answers: { [question]: answer.label } } }) as never
+      })
+      return { asked }
+    }
+
+    const check = ($: { tool: { check: (input: { tool: string; input: unknown }) => Promise<unknown> } }, command: string) =>
+      $.tool.check({ tool: 'Bash', input: { command } }) as Promise<{ decision: string; reason?: string }>
+
+    test('no sidecar: a push passes to the verdict beneath, no process runs, nobody is asked', async ($, on) => {
+      engineWorld(on)
+      const { runs } = bareWorld(on)
+      const { asked } = gateWorld(on)
+      await $.session.start(START)
+      expect(await check($, 'git push')).toMatchObject(BENEATH)
+      expect(runs).toEqual([])
+      expect(asked).toEqual([])
+    })
+
+    test('an unreviewed stream: the push is held and the dialog names the stream and the command', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on)
+      const { asked } = gateWorld(on)
+      await $.session.start(START)
+      const before = runs.filter(argv => argv.includes('status')).length
+      const verdict = await check($, 'cd x && git push -u origin feature/x')
+      expect(runs.filter(argv => argv.includes('status')).length).toBe(before + 1) // refreshed before deciding
+      expect(asked.length).toBe(1)
+      expect(asked[0]).toContain('feat/example-stream')
+      expect(asked[0]).toContain('git push')
+      expect(verdict.decision).toBe('deny')
+      expect(verdict.reason).toContain('feat/example-stream')
+      expect(verdict.reason).toContain('journal.py append --type review-verdict')
+    })
+
+    for (const [name, answer, decision] of [
+      ['Refuse', { label: REFUSE }, 'deny'],
+      ['free text', { label: 'Other text' }, 'deny'],
+      ['a dismissed dialog', 'dismiss', 'deny'],
+      ['Let it through once', { label: ONCE }, 'allow'],
+    ] as const) {
+      test(`an unreviewed stream, answered with ${name}: ${decision}`, async ($, on) => {
+        engineWorld(on)
+        journaledWorld(on)
+        const { asked } = gateWorld(on, answer)
+        await $.session.start(START)
+        const verdict = await check($, 'gh pr create --fill')
+        expect(asked.length).toBe(1)
+        if (decision === 'allow') expect(verdict).toMatchObject(BENEATH)
+        else expect(verdict.decision).toBe('deny')
+      })
+    }
+
+    test('let through once is not remembered: the next push asks again', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const { asked } = gateWorld(on, { label: ONCE })
+      await $.session.start(START)
+      await check($, 'git push')
+      await check($, 'git push')
+      expect(asked.length).toBe(2)
+    })
+
+    test('a reviewed stream: the push passes to the verdict beneath without a dialog', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, STATUS, { events: [...LOG.events, { seq: 50, type: 'review-verdict', ts: '2026-10-01T10:00:00+00:00', data: { verdict: 'ready' } }] })
+      const { asked } = gateWorld(on)
+      await $.session.start(START)
+      expect(await check($, 'git push')).toMatchObject(BENEATH)
+      expect(asked).toEqual([])
+    })
+
+    test('a command that publishes nothing: no refresh, no dialog', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on)
+      const { asked } = gateWorld(on)
+      await $.session.start(START)
+      const before = runs.length
+      expect(await check($, 'git pull')).toMatchObject(BENEATH)
+      expect(await check($, 'gh pr list')).toMatchObject(BENEATH)
+      expect(runs.length).toBe(before)
+      expect(asked).toEqual([])
+    })
+
+    test('a journal that cannot be read: the push is held, the reason carries the error', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, () => ({
+        value: { exitCode: 1, stdout: '', stderr: 'journal database not found', isStdoutTruncated: false, isStderrTruncated: false },
+      }))
+      const { asked } = gateWorld(on)
+      await $.session.start(START)
+      const verdict = await check($, 'git push')
+      expect(asked.length).toBe(1)
+      expect(asked[0]).toContain('journal database not found')
+      expect(verdict.decision).toBe('deny')
+      expect(verdict.reason).toContain('journal database not found')
+    })
+
+    test('no journal.py found: the push passes to the verdict beneath without a dialog', async ($, on) => {
+      engineWorld(on)
+      const runs: string[][] = []
+      on('fs.exists', async (_$, e) => ({ value: e.path.endsWith('.claude/shipgate.json') }))
+      on('fs.stat', async () => ({ deny: 'ENOENT' }))
+      mock.env(on, {})
+      on('fs.list', async () => ({ deny: 'no such directory' }))
+      on('process.run', async (_$, e) => {
+        runs.push([...e.argv])
+        return ok('')
+      })
+      const { asked } = gateWorld(on)
+      await $.session.start(START)
+      expect(await check($, 'git push')).toMatchObject(BENEATH)
+      expect(asked).toEqual([])
+      expect(runs).toEqual([])
+    })
+
+    test('a session with no surface: the push passes, no process runs, nobody is asked', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on)
+      const { asked } = gateWorld(on)
+      await $.session.start({ ...START, surface: null } as never)
+      expect(await check($, 'git push')).toMatchObject(BENEATH)
+      expect(runs).toEqual([])
+      expect(asked).toEqual([])
+    })
+
+    test('a worker subagent\'s push is held like the main loop\'s (FR-025)', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const agents: unknown[] = []
+      on('tool.check', { tool: 'Bash' }, async (_$, e) => {
+        agents.push((e as { agentId?: unknown }).agentId)
+        return BENEATH
+      })
+      const { asked } = gateWorld(on, { label: ONCE })
+      await $.session.start(START)
+      const verdict = await $.tool.check({ tool: 'Bash', input: { command: 'git push' }, agentId: 'worker-1' } as never)
+      expect(asked.length).toBe(1) // the person is asked in the main dialog
+      expect(verdict).toMatchObject(BENEATH) // let through once
+      expect(agents).toEqual(['worker-1']) // the call carried the worker's loop to the end
+    })
+
+    test('no stream for this session: the push passes to the verdict beneath without a dialog', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, { ...STATUS, features: [{ ...FEATURE_PREFIXED, branch_match: false }] })
+      const { asked } = gateWorld(on)
+      await $.session.start(START)
+      expect(await check($, 'git push')).toMatchObject(BENEATH)
+      expect(asked).toEqual([])
+    })
+  })
 })

@@ -2,6 +2,50 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.3.0 — the publish gate. shipgate lets an MR/PR go up only after a `review-verdict` of
+`ready`, or after the user's own publish `gate-decision`. That record must come after the last
+`task-done`. journal.py checks this rule on the `mr-opened` event. That event is written after
+the command ran, so nothing stopped `git push` itself.
+
+A new `tool.check` hook on `Bash` now holds `git push`, `git subtree push`, `gh pr create`,
+`gh pr new`, `glab mr create` and `glab mr new`. It accepts git's, gh's and glab's global
+options before the subcommand. It accepts a program named by its path (`/usr/bin/git`). The
+hook reads the line in one quote-aware pass. Outside quotes, a command starts after `&&`, `||`,
+`;`, `|`, `&`, a newline, `(` or `)`. An unquoted `$(…)` or backtick run is read as a
+command line too. A redirection ends a word, so `git push>/dev/null` is held. A command may
+sit behind a `VAR=value` or a redirection. It may sit behind the shell words `if`, `then`,
+`do`, `while`, `{`, `!`, `coproc`, `function <name>` and their kin. It may sit behind wrappers such as `env`, `sudo`, `timeout`, `nice`,
+`xargs` or `eval`. Quoted text is one word and never a command. So a `grep` for the verb, or a
+commit message that names it, is not held. A heredoc body counts only when it is fed to a
+shell such as `bash` or `sh`. `command -v` only looks a name up and is not held.
+
+The hook refreshes the position once. Then it applies journal.py's rule to the stream's
+events. A reviewed stream passes. These cases pass too: a project without the sidecar, no
+`journal.py` found, a session with no stream, and a session with no surface. An unreviewed
+stream opens the engine's dialog with two choices: **Refuse** and **Let it through once**. A
+journal that cannot be read opens the same dialog. A stored position does not pass while the
+last refresh failed. Any other answer refuses the call. A dismissed dialog or a failed ask also
+refuses it. The deny reason tells the model to record the review verdict, or to stop and ask
+the user. It never tells the model to record the user's decision itself. The user decides at
+the dialog. "Let it through once" covers that one call only. A worker subagent's publish
+command is held in the same way. The hook writes nothing to the journal or the transcript. A
+failure in the hook refuses a publish command through `.catch`. A failure passes any other
+command.
+
+The gate trusts the journal. journal.py has no actor authentication. So a verdict or a user
+decision that the model appends itself still authorizes a publish. The gate is a net for a
+forgetful model. It is not a boundary against a deliberate one.
+
+Known limits: the gate does not hold `"$(…)"` inside double quotes, `sh -c '…'`, `eval "…"`,
+`… | bash`, `ssh host git push` or `find -exec`.
+
+Tests cover the command matcher on each spelling that must match. They also cover spellings
+that must not match: `git pull`, `git pushd`, `gh pr list`, `gh pr view`, `glab mr list`,
+`git stash push`, `command -v`, quoted text and a heredoc fed to `cat`. They cover the
+authorization rule in the order journal.py applies it. They cover the hook with each answer, a
+reviewed stream, no sidecar, no `journal.py`, no surface, a worker's call, no stream and a
+failing journal.
+
 v0.2.5 — a context ref is not the stream's worklog. A `flow-started` (or `phase-entered`,
 `deviation`) event often cites an older slice's PRD and worklog as context; the HUD took any
 `.worklog.md` ref from any event as this stream's worklog, so a new stream showed the previous

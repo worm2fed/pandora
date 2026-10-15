@@ -9,6 +9,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Adr, Decision, Position, Tab } from '../types'
 import { artifactRefs, matchesHome, parseAdr, streamSlug, toPosition } from './position'
+import { FAIL_CLOSED, denyReason, holdReason, publishCommandOf } from './publish'
 import { PANE_ID, bandOf, paneOf } from './views'
 import type { Actions, Ui } from './views'
 
@@ -445,6 +446,16 @@ const isJournaled = atom({ plugin: 'shipgate-hud', key: 'isJournaled' } as const
 
 const JOURNAL_APPEND = /journal\.py\b[\s\S]*\bappend\b/
 
+/** The publish hold's two choices; any other answer refuses. */
+const REFUSE = 'Refuse'
+const ONCE = 'Let it through once'
+
+/** A Bash call's command line as `tool.check` carries it; '' when the input has none. */
+const commandOf = (input: unknown): string => {
+  const command = typeof input === 'object' && input !== null ? (input as { command?: unknown }).command : undefined
+  return typeof command === 'string' ? command : ''
+}
+
 // Module state: lost on a reload, which is fine — session.start runs again and refills it.
 let journalScript = ''
 let script: string | null = null
@@ -599,6 +610,32 @@ export const register: Register = (on, options) => {
     if (ran.deny === undefined && (await read($, isJournaled)) && (await isArtifactPath($, path))) await refresh($)
     return ran
   }).catch(($, e, next) => next(e))
+
+  // The publish gate: `git push`, `gh pr create` and `glab mr create` wait for the stream's
+  // review verdict or the user's publish decision, the evidence journal.py demands before
+  // mr-opened. Held means asked; any answer but "Let it through once" refuses. Nothing is
+  // written and nothing remembered. A failure refuses a publish command (`.catch`, pure only).
+  on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
+    const head = publishCommandOf(commandOf(e.input))
+    if (head === null || !hasSurface) return next(e)
+    if (!(await detect($))) return next(e)
+    await refresh($)
+    if (script === null) return next(e) // no journal.py found: nothing to check against (FR-022)
+    const current = await read($, position)
+    const error = await read($, lastError)
+    // A failed refresh leaves the old position behind, and an older module build may have
+    // stored one without `publish`: neither may pass.
+    const authorized = error === null && current?.publish?.authorized === true
+    if (authorized) return next(e)
+    if (current === null && error === null) return next(e) // no stream for this session
+    let answer: string = REFUSE
+    try {
+      answer = await $.ui.ask(`${holdReason(head, current, error)} Let it through?`, { options: [REFUSE, ONCE], header: 'publish' })
+    } catch {
+      answer = REFUSE // dismissed, a -p run, or no dialog on this engine
+    }
+    return answer === ONCE ? next(e) : { decision: 'deny' as const, reason: denyReason(head, current, error) }
+  }).catch(($, e, next) => (publishCommandOf(commandOf(e.input)) !== null ? { decision: 'deny' as const, reason: FAIL_CLOSED } : next(e)))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, position)

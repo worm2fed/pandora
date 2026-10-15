@@ -77,9 +77,9 @@ type Ran = ReturnType<typeof ok>
 /**
  * A journaled project: the sidecar and journal.py exist, status and log answer the fixtures.
  * `status` is the status JSON, or a function of the argv returning it (or a whole process
- * result, for a run that fails).
+ * result, for a run that fails). `log` is the `log --json` answer.
  */
-export function journaledWorld(on: On, status: unknown = STATUS): { runs: string[][]; reads: string[] } {
+export function journaledWorld(on: On, status: unknown = STATUS, log: unknown = LOG): { runs: string[][]; reads: string[] } {
   const runs: string[][] = []
   const reads: string[] = []
   on('fs.exists', async (_$, e) => ({
@@ -100,7 +100,7 @@ export function journaledWorld(on: On, status: unknown = STATUS): { runs: string
       const answer = typeof status === 'function' ? (status as (argv: string[]) => unknown)(argv) : status
       return answer && typeof answer === 'object' && 'value' in answer ? (answer as Ran) : ok(JSON.stringify(answer))
     }
-    if (argv.includes('log')) return ok(JSON.stringify(LOG))
+    if (argv.includes('log')) return ok(JSON.stringify(log))
     return ok('')
   })
   return { runs, reads }

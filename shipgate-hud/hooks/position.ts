@@ -2,7 +2,7 @@
 // events, a worklog's Build Plan and Design section, an ADR's frontmatter) in, a Position
 // out. No `$` here, so the tests run it without a process or a file system.
 
-import type { Adr, Decision, DesignSection, Phase, PhaseMark, Position, Task, TaskVerify, Verify } from '../types'
+import type { Adr, Decision, DesignSection, Phase, PhaseMark, Position, PublishAuthorization, Task, TaskVerify, Verify } from '../types'
 
 export const PHASES: readonly Phase[] = [
   'workspace',
@@ -207,6 +207,32 @@ export function artifactRefs(events: readonly unknown[]): { worklog: string | nu
   return { worklog, adrs }
 }
 
+/** An event's journal sequence number; -1 when it has none. */
+const seqOf = (event: JsonRecord): number => (typeof event.seq === 'number' ? event.seq : -1)
+
+/**
+ * May the stream publish? The rule `journal.py` applies to `mr-opened` (`_validate_mr_opened`):
+ * after the last `task-done` (seq 0 when none), a `review-verdict` with `verdict: ready`, or a
+ * `gate-decision` with `gate: publish`, `raised_by: user` and `decision: publish` (trimmed,
+ * any case). Ordered by `seq`, not by position in the list; the first such event in seq order
+ * is the one named.
+ */
+export function publishAuthorization(events: readonly unknown[]): PublishAuthorization {
+  const records = events.map(asRecord)
+  const lastTaskDone = Math.max(0, ...records.filter(e => e.type === 'task-done').map(seqOf))
+  const authorizing = records
+    .filter(e => seqOf(e) > lastTaskDone)
+    .sort((a, b) => seqOf(a) - seqOf(b))
+    .find(e => {
+      const data = asRecord(e.data)
+      if (e.type === 'review-verdict') return data.verdict === 'ready'
+      if (e.type !== 'gate-decision') return false
+      return data.gate === 'publish' && data.raised_by === 'user' && String(data.decision).trim().toLowerCase() === 'publish'
+    })
+  if (authorizing === undefined) return { authorized: false, by: null, at: '' }
+  return { authorized: true, by: authorizing.type === 'review-verdict' ? 'review-verdict' : 'gate-decision', at: asString(authorizing.ts) }
+}
+
 export function toPosition({ feature, events, worklog, adrs }: PositionInputs): Position {
   const record = asRecord(feature)
   const phase = asString(record.phase, 'workspace')
@@ -269,6 +295,7 @@ export function toPosition({ feature, events, worklog, adrs }: PositionInputs): 
     lastVerify,
     design: { adrs: [...adrs], sections: worklog ? parseDesignSections(worklog.text) : [] },
     worklogPath: worklog?.path ?? null,
+    publish: publishAuthorization(events),
   }
 }
 

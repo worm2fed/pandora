@@ -2,7 +2,7 @@
 type: prd
 title: "PRD: shipgate-hud — the flow position drawn in the interface"
 created: 2026-10-06
-updated: 2026-10-06
+updated: 2026-10-14
 tags:
   - prd
   - shipgate-hud
@@ -50,12 +50,12 @@ That is the right place to draw the position.
 - Safe everywhere: in a project without a shipgate journal the mod draws nothing and runs
   nothing beyond one existence check.
 
-**Non-goals** (explicitly out of scope for this slice)
-- The Review findings board, the publish-gate hold on `gh pr create` / `git push`, the
-  Explore essential-files tracker, the Route & Map heat grid, the compaction-safe prompt
-  attachment. Each is a later slice with its own PRD section.
-- Desktop-only drawing (SVG diagrams). Slice 1 is terminal-first with text that also
-  renders on desktop.
+**Non-goals** (explicitly out of scope for slice 1)
+- The Review findings board and the publish-gate hold on `gh pr create` / `git push`
+  (slices 2 and 3 below). The Explore essential-files tracker, the Route & Map heat grid,
+  the compaction-safe prompt attachment: later slices, each its own PRD section.
+- Desktop-only drawing (SVG diagrams): slice 3 below. Slice 1 is terminal-first with text
+  that also renders on desktop.
 - Writing to the journal. The mod never appends events; vetoes go through the prompt.
 
 ## Users & stories
@@ -150,6 +150,221 @@ That is the right place to draw the position.
 - Terminal or desktop first? → terminal; every drawing is Box/Text/Button/Markdown so it
   renders on desktop unchanged. SVG waits for a later slice.
 - Version? → `shipgate-hud` 0.1.0, new marketplace entry; shipgate stays at 0.14.1.
+
+
+---
+
+# Slice 2 — the publish gate on the real command
+
+> A `tool.check` hook holds the commands that publish a branch until the stream's journal
+> holds the same evidence `journal.py` demands before `mr-opened`.
+
+## Problem
+
+shipgate's rule is that an MR/PR goes up only after a `review-verdict` of `ready`, or the
+user's own publish `gate-decision`, recorded after the last `task-done`. The journal enforces
+it on the `mr-opened` event, which is written *after* the command ran. Nothing stands between
+the model and `git push` or `gh pr create` itself: a session that forgets the rule, or a worker
+that never read it, publishes first and is refused only when it records the fact. The hold
+belongs on the command.
+
+## Users & stories
+
+- As the developer driving a flow, I want `git push` / `gh pr create` / `glab mr create` held
+  until the stream is reviewed, so that an unreviewed branch never reaches the forge by mistake.
+- As the developer, I want the hold to ask me in the engine's own dialog, defaulting to refuse,
+  so that I can let one call through on purpose without touching the journal.
+
+## Functional requirements
+
+- **FR-020** — A `tool.check` hook on `Bash` recognises a **publish command** anywhere in the
+  shell line. The publish commands are `git push`, `git subtree push`, `gh pr create`,
+  `gh pr new`, `glab mr create` and `glab mr new`. `git push` is recognised with git's global
+  options before `push` (`git -C <dir> push`, `git --no-pager push`) and with any option after
+  it (`-f`, `--force-with-lease`, `-u origin x`, `--dry-run`). `gh pr create` is recognised
+  with `gh`'s `-R`/`--repo` before `pr`. `glab mr create` is recognised with `glab`'s
+  `-R`/`--repo` before `mr`. A program named by its path or escaped (`/usr/bin/git`, `\git`)
+  is recognised.
+  - A command starts after `&&`, `;`, `||`, `|`, `&`, a newline, `(` or `)`.
+  - A command may sit behind a `VAR=value` or a redirection (`2>/dev/null git push`).
+  - A command may sit behind the shell words `if`, `then`, `else`, `elif`, `do`, `while`,
+    `until`, `{`, `}`, `!`, `coproc`, or `function <name>`.
+  - A command may sit behind the wrappers `env`, `command`, `sudo`, `doas`, `nohup`, `time`,
+    `timeout`, `nice`, `ionice`, `stdbuf`, `caffeinate`, `chronic`, `xargs`, `exec`,
+    `builtin` and `eval`, with their options.
+  - An unquoted `$(…)` or backtick run stays part of its word (`git -C $(pwd) push`). Its
+    text is also read as a command line of its own (`echo $(git push)` is held).
+  - A redirection ends a word (`git push>/dev/null` is held).
+  - A backslash before a newline continues the line. A `#` that starts a word comments out
+    the rest of the line.
+  - Quoted text is one word and never a command. `grep "git push" f` and
+    `git commit -m "git push"` are not held.
+  - A heredoc body is a command line only when the command it is fed to is a shell (`bash`,
+    `sh`, `zsh`, `dash`, `ksh`, `fish`, `eval`, `source`). `bash <<EOF` with `git push` in
+    the body is held. `cat <<EOF` with the same body is not.
+  - `git stash push` and `command -v git push` are not publish commands.
+- **FR-021** — Before deciding, the hook refreshes the position (one journal round trip, inside
+  the hook's budget) and takes the HUD's current stream (session match first, then branch). The
+  stream is **publish-authorized** when, after its last `task-done` event, the journal holds a
+  `review-verdict` with `verdict: ready` or a `gate-decision` with `gate: publish`,
+  `raised_by: user` and `decision: publish` — the rule `journal.py` applies to `mr-opened`,
+  computed from the stream's `log --json` events.
+- **FR-022** — An authorized stream, no stream for this session, no sidecar, no `journal.py`
+  found, or a session with no surface → the hook passes the call on (`next(e)`); the engine's
+  own verdict stands. No process runs in a project without the sidecar beyond the existing
+  guard.
+- **FR-023** — An unauthorized stream, or a refresh that failed (the journal unreadable, the
+  stream unknown because of an error) → the hook asks through `$.ui.ask` with the reason (the
+  stream, the command head, what is missing) and two choices, **Refuse** and **Let it through
+  once**. Any answer other than the exact "Let it through once" label, a dismissed dialog, or a
+  rejected ask → `{ decision: 'deny', reason }`. The reason tells the model what the stream
+  needs: record the review verdict, or stop and ask the user. It never tells the model to
+  record a user decision itself; the user decides at the gate's dialog. "Let it through once"
+  → `next(e)` for this call only; nothing is remembered.
+- **FR-024** — The hook writes nothing to the journal and nothing to the transcript; the
+  dialog is the record. It fails closed: a throw or a budget overrun inside the hook refuses
+  the call through `.catch` when the command is a publish command, and passes a non-publish
+  command on.
+- **FR-025** — The hold applies to every loop: a worker subagent's `git push` is held and the
+  question reaches the person in the main dialog.
+- **FR-026** — Version 0.3.0: `shipgate-hud/.claude-plugin/plugin.json` and the marketplace
+  entry in lockstep; the release note in `CHANGELOG.md` only.
+
+## Success criteria
+
+- **SC-010** — `claude plugin validate shipgate-hud` lists `tool.check{tool=Bash}` as a
+  gating hook with `.catch` and no new process or network call outside the guarded paths.
+- **SC-011** — `claude plugin test shipgate-hud`: each publish spelling above is recognised and
+  each of `ls`, `git pull`, `git pushd`, `gh pr list`, `gh pr view`, `glab mr list` is not; an
+  authorized stream passes through; an unauthorized one asks and denies on "Refuse", on free
+  text and on a dismissed dialog, and passes on "Let it through once"; no sidecar → no ask, no
+  process run; a failing refresh asks.
+- **SC-012** — The built-in `/security-review` on the diff reports no finding at or above its
+  own medium confidence that is left unaddressed.
+- **SC-013** — Live: in this repository, on this stream before its review verdict, `git push`
+  is held and "Refuse" denies it with a reason the model repeats.
+
+## Assumptions (executive)
+
+- `--dry-run` is held like any push → "any spelling" wins over a convenience exemption; one
+  press lets it through.
+- A refresh error holds rather than passes → the gate cannot be shown passed, and a silent
+  pass on a broken journal is the failure the hook exists to stop.
+- A session with no surface passes through → the HUD runs nothing without a surface (slice 1);
+  headless publish policy belongs to shipgate's own hooks, not to a drawn surface. Flagged
+  for veto.
+- The hold is not remembered → "once" means this call; the next publish command asks again
+  unless the journal moved.
+- The gate trusts the journal. journal.py has no actor authentication, so a
+  `review-verdict` of `ready` or a user publish `gate-decision` that the model appends itself
+  authorizes a publish. The gate is a net for a forgetful model. It is not a boundary against
+  a deliberate one (security review 2026-10-14).
+
+---
+
+# Slice 3 — the Review board and Design diagrams
+
+> The review workflow's return drawn as a board with accept / kill, the PRD's success
+> criteria as a checklist, and the worklog's diagrams drawn as pictures on desktop and as text
+> in the terminal.
+
+## Problem
+
+The review phase produces its best evidence as a workflow return (`survivors`, `killed`,
+`belowFloor`, counts, coverage) that lands in the transcript once and scrolls away; the
+orchestrator's accept / reject calls are typed, not pressed. The design's diagrams live in the
+worklog as fenced blocks that the Markdown element draws as grey code.
+
+## Functional requirements
+
+- **FR-030** — A `tool.call` hook on `Workflow` notes a launch of the shipgate review workflow
+  (the script text or path names `shipgate-review`, or the tool result names the run id): the
+  call's `tool_use_id`, the run id and the time. A `prompt.submit` hook whose origin is
+  `task-notification` reads the notification's `<tool-use-id>`, `<status>` and `<result>`; when
+  the tool-use-id matches a noted launch, or the result parses as the review return shape
+  (`survivors`, `killed`, `belowFloor` arrays and a `counts` object), the return is stored in
+  the `review` atom under the current stream, with the run id and the time. The hook never
+  changes or drops the prompt. A notification that is not one of these passes untouched.
+- **FR-031** — A **Review** tab (hotkey `4`, the default tab in the `review` phase) draws the
+  board: the counts line (found, deduped, candidates, survivors, killed, below floor, refuters
+  requested / reported, unverified), then the survivors grouped by severity in the order
+  BLOCKER, HIGH, MEDIUM, LOW, each as one card with severity, confidence, verification and
+  quorum, the lenses, `file:line` (the path shortened to its last three segments) and the
+  summary; then the killed findings (one line each with the quorum) and the below-floor ones
+  (one line each). The user's accept / kill marks are drawn on the card.
+- **FR-032** — Each survivor carries **Accept** and **Kill** buttons. A press submits a plain
+  prompt (not `asUser`) that names the finding by its position in the board, severity,
+  `file:line` and lens, and asks the orchestrator to fix it in the implement round (Accept) or
+  to record it under the worklog's Rejected findings with the user's reason (Kill). The prompt
+  carries no summary, `why` or `fix` text from the return. The mark is kept in the `review`
+  atom for the session.
+- **FR-033** — The Review tab ends with the PRD's **SC-### checklist**: the `- **SC-NNN** —`
+  lines of the `## Success criteria` section of the PRD the stream's `clarify-passed` event
+  names (relative, in-project, no `..`), each with a toggle the user ticks as the orchestrator
+  shows the evidence; the ticks live in the `review` atom for the session. No PRD → one line
+  saying so.
+- **FR-034** — With no review stored for the stream, the tab says so and names the phase.
+  `/clear` and `/resume` keep a stored review only when its stream is the one the HUD then
+  shows; a stored review for another stream is not drawn.
+- **FR-035** — In the **Design** tab a fenced block whose info string is `mermaid` or `svg` is
+  drawn as a diagram instead of code. On a surface with `Svg` (desktop, mobile, vscode) an
+  `svg` block is drawn as `Svg` with its source (capped at the element's limit) and the section
+  title as `alt`; a `mermaid` flowchart (`flowchart` / `graph` with a direction, node shapes
+  `[ ]`, `( )`, `{ }`, `(( ))`, edges `-->`, `---`, `-.->`, `==>`, edge labels `|text|` and
+  `-- text -->`, `subgraph` flattened, `%%` comments) is laid out by the HUD into an SVG and
+  drawn as `Svg`. In the terminal a flowchart is drawn as its text form: a layered box-and-arrow
+  (`[A] ──► [B]`, edge labels in the arrow), and an `svg` block as `Code`. A mermaid block of
+  another kind (sequence, class, state…) is drawn as `Code` with language `mermaid` on every
+  surface. The prose around a block keeps rendering as Markdown.
+- **FR-036** — The diagram parser and layout are pure (no `$`), live in their own module and are
+  tested on the flowchart subset and on the fallbacks.
+- **FR-037** — Version 0.4.0: `plugin.json` and the marketplace entry in lockstep; the release
+  note in `CHANGELOG.md` only; README features updated, no release notes copied.
+
+## Success criteria
+
+- **SC-020** — `claude plugin test shipgate-hud`: a recorded task-notification of a review run
+  (fixture in the public shape, generic paths) fills the board; the Review tab groups survivors
+  by severity with lens, confidence, verification and `file:line`; Accept and Kill submit the
+  named prompt without `asUser`; the SC checklist lists the PRD's criteria; the tab is the
+  default in `review`.
+- **SC-021** — `claude plugin test shipgate-hud`: a `mermaid` flowchart in a worklog Design
+  section is drawn as `Svg` on desktop and as the box-and-arrow text in the terminal; an `svg`
+  block as `Svg` on desktop and `Code` in the terminal; a `sequenceDiagram` block as `Code`
+  on both.
+- **SC-022** — `claude plugin validate shipgate-hud` lists `tool.call{tool=Workflow}` and
+  `prompt.submit` beside the slice 2 hooks, all with `.catch`, and the new `review` state key.
+- **SC-023** — The built-in `/security-review` on the slice 3 hook changes reports no
+  unaddressed finding at or above its medium confidence.
+- **SC-024** — Live: the Design tab of this stream draws this worklog's `mermaid` data-flow
+  block as text in the terminal.
+
+## Constraints & assumptions
+
+- The `Workflow` tool returns immediately ("launched in background", a task id and a run id);
+  the return object arrives later as a user-turn `<task-notification>` whose `<result>` holds
+  the JSON with `<`, `>` and `&` HTML-escaped (observed in this repository's own review runs
+  on Claude Code 2.1.29x–2.1.300). The HUD unescapes before parsing. A change in that envelope
+  breaks the capture, not the pane: the hook passes the prompt on untouched.
+- The hooks module has no DOM and no Node, so the Mermaid library cannot run in it. The HUD
+  therefore lays out the flowchart subset itself (ADR 0002). No renderer process and no network
+  call: a diagram never leaves the machine.
+- `Svg` exists on desktop, mobile and vscode, not in the terminal; the drawing branches on the
+  element table the engine resolves, as the views already do for width.
+
+## Assumptions (executive)
+
+- Review return captured at `prompt.submit` (task-notification), launch noted at `tool.call` →
+  the tool result is a launch receipt, not the return; the notification is where the return is.
+- Shape match accepted without a noted launch → module state is lost on a plugin reload while
+  the review may still be running; the shape is specific enough (three arrays and `counts`).
+- SC ticks are local (atom, per session) → the review-verdict event carries no per-criterion
+  field; the orchestrator's evidence stays in the transcript, the tick is the user's own note.
+- Accept / Kill prompts name, never quote → the same rule as Veto: journal and workflow text
+  is read by the model from its own context, not re-submitted through the prompt.
+- Band gains one segment, `review N open`, only while a board is held for the stream.
+- Mermaid subset is flowcharts only → the worklog template's diagrams are data flows; other
+  kinds fall back to `Code` and remain readable.
 
 ## Open questions
 

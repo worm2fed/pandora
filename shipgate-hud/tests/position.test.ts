@@ -11,6 +11,7 @@ import {
   parseDesignSection,
   parseDesignSections,
   phaseMarks,
+  publishAuthorization,
   reflowMarkdown,
   streamSlug,
   toPosition,
@@ -142,6 +143,43 @@ describe('position', () => {
     expect(matchesHome('plugin/docs/prd/x.md', 'docs/prd/*.md')).toBe(true)
     expect(matchesHome('docs/prd/x.md', '*/docs/prd/*.md')).toBe(false)
     expect(matchesHome('plugin/docs/prd/x.md', '*/docs/prd/*.md')).toBe(true)
+  })
+
+  test('publish: a ready verdict after the last task-done authorizes, as journal.py checks mr-opened', async () => {
+    const ready = { seq: 50, type: 'review-verdict', ts: '2026-10-01T10:00:00+00:00', data: { verdict: 'ready' } }
+    expect(publishAuthorization([...LOG.events, ready])).toEqual({ authorized: true, by: 'review-verdict', at: '2026-10-01T10:00:00+00:00' })
+    // order by seq, not by array position
+    expect(publishAuthorization([ready, ...LOG.events]).authorized).toBe(true)
+  })
+
+  test('publish: a ready verdict before a later task-done does not authorize', async () => {
+    const early = { seq: 39, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }
+    expect(publishAuthorization([...LOG.events, early])).toEqual({ authorized: false, by: null, at: '' })
+    const later = [{ seq: 1, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }, { seq: 2, type: 'task-done', ts: 't', data: { task_id: 'T1' } }]
+    expect(publishAuthorization([...later].reverse()).authorized).toBe(false)
+  })
+
+  test('publish: a not-ready verdict does not authorize', async () => {
+    expect(publishAuthorization([...LOG.events, { seq: 50, type: 'review-verdict', ts: 't', data: { verdict: 'not-ready' } }]).authorized).toBe(false)
+  })
+
+  test('publish: only the user\'s own decision to publish authorizes', async () => {
+    const decision = (data: Record<string, unknown>) => [...LOG.events, { seq: 50, type: 'gate-decision', ts: 'at-50', data }]
+    expect(publishAuthorization(decision({ gate: 'publish', raised_by: 'user', decision: ' Publish ' }))).toEqual({ authorized: true, by: 'gate-decision', at: 'at-50' })
+    expect(publishAuthorization(decision({ gate: 'publish', raised_by: 'orchestrator', decision: 'publish' })).authorized).toBe(false)
+    expect(publishAuthorization(decision({ gate: 'publish', raised_by: 'user', decision: 'no' })).authorized).toBe(false)
+    expect(publishAuthorization(decision({ gate: 'clarify', raised_by: 'user', decision: 'publish' })).authorized).toBe(false)
+  })
+
+  test('publish: no events, no task-done — nothing authorizes until a verdict is recorded', async () => {
+    expect(publishAuthorization([])).toEqual({ authorized: false, by: null, at: '' })
+    expect(publishAuthorization([{ seq: 3, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }]).authorized).toBe(true)
+  })
+
+  test('toPosition sets publish from the events', async () => {
+    expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [] }).publish.authorized).toBe(false)
+    const ready = { seq: 50, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }
+    expect(toPosition({ feature: FEATURE, events: [...LOG.events, ready], worklog: null, adrs: [] }).publish).toEqual({ authorized: true, by: 'review-verdict', at: 't' })
   })
 
   test('toPosition: no worklog and no events still yields a position', async () => {

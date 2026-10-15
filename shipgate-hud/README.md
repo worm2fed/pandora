@@ -24,6 +24,33 @@ interface, from the journal shipgate already keeps.
   switch, `r` refreshes, while the pane has focus. Long text is truncated to the pane's width;
   the artifacts hold the full text.
 
+- **Publish gate** — the gate holds `git push`, `gh pr create` (or `gh pr new`) and
+  `glab mr create` (or `glab mr new`). It accepts git's, gh's and glab's global options before
+  the subcommand. The command waits until the stream may publish. The stream may publish when
+  the journal holds a `review-verdict` of `ready` after its last `task-done`. The user's own
+  publish `gate-decision` after the last `task-done` also lets it publish. This is the rule
+  journal.py applies to `mr-opened`.
+
+  The gate finds the command anywhere in the shell line. It looks after `&&`, `;` or a
+  newline. It looks behind shell words such as `if`, `do` or `{`. It looks behind wrappers
+  such as `env`, `sudo` or `timeout`. Quoted text is one word and never a command. So a `grep`
+  for the verb is not held. A heredoc body counts only when it is fed to a shell such as
+  `bash`.
+
+  Before it decides, the gate refreshes the position once. A stream that is not reviewed
+  opens the engine's dialog with **Refuse** and **Let it through once**. A journal that cannot
+  be read opens the same dialog. Any other answer refuses. The model then reads what the
+  stream still needs: a review verdict to record, or a question for the user. It is never
+  told to record the user's decision itself.
+
+  The gate passes the command in these cases: the stream is reviewed, the session has no
+  stream, the project has no sidecar, no `journal.py` is found, or the session has no surface
+  (`claude -p`). It writes nothing and remembers nothing. The next publish command asks
+  again. The gate trusts the journal. So it is a net for a forgetful model, not a boundary
+  against a deliberate one.
+  Known limits: the gate does not hold `"$(…)"` inside double quotes, `sh -c '…'`,
+  `eval "…"`, `… | bash`, `ssh host git push` or `find -exec`.
+
 The position refreshes when the orchestrator appends to the journal, when a file in one of
 the sidecar's artifact homes is written, after `/clear` or `/resume`, and once a minute
 otherwise. A request that arrives during a refresh queues one trailing refresh.
@@ -92,6 +119,7 @@ shipgate-hud/
   hooks/hooks.json             { "modules": ["./register.tsx"] }
   hooks/register.tsx           the hooks and the side effects (locate, run, read)
   hooks/position.ts            pure: status / log / worklog / ADR → Position
+  hooks/publish.ts             pure: which shell lines publish, and the hold's text
   hooks/views.tsx              pure: Position → band and pane trees
   types/index.d.ts             the $.state contract
   tests/                       claude plugin test — the world beneath the plugin mocked
@@ -104,6 +132,5 @@ Nothing under `shipgate/` changes for this plugin to work.
 ## Roadmap
 
 Later slices, each its own PRD section: a Review findings board fed from the review
-workflow's return; holding `gh pr create` / `git push` until the stream holds a
-`review-verdict: ready`; the Explore essential-files tracker; a Route & Map risk heat grid;
+workflow's return; the Explore essential-files tracker; a Route & Map risk heat grid;
 a compaction-safe one-line position attached to every prompt; SVG diagrams on desktop.
