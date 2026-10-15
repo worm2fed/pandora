@@ -22,7 +22,15 @@ interface, from the journal shipgate already keeps.
     **Diagrams:** a fenced `svg` block is drawn as a picture on desktop, mobile and vscode, and
     as `xml` code in the terminal. The HUD lays out a fenced `mermaid` flowchart itself (the
     `flowchart` / `graph` subset of ADR 0002). It draws the chart as a picture on those
-    surfaces and as box-and-arrow text in the terminal. Doubled shapes take the nearest
+    surfaces. In the terminal it draws the chart as a grid of box-drawing characters (ADR
+    0003): each node a box with its label inside, each edge a line with an arrowhead, the edge
+    label on the line, dotted and thick edges with their own glyphs. A back edge that closes a
+    cycle is listed under the picture as `[b] ──► [a]`. A picture wider than the pane is drawn
+    top to bottom instead; when that is wider too, or the chart has more than 60 nodes, the
+    HUD draws the one-line-per-edge text form under a note. The HUD also draws the text form
+    when the picture is taller than 200 rows, has more than 200 edge legs, or has more than
+    40,000 cells; the note names the reason. Labels are measured in code points, so a wide glyph
+    (an emoji, a CJK character) can misalign a box by a cell. Doubled shapes take the nearest
     supported shape. Other Mermaid kinds, and a flowchart with a statement the HUD cannot read,
     stay code. No renderer process, no network.
   - **Review** — up to five rounds of the review workflow's return for this stream. The HUD
@@ -144,7 +152,7 @@ shipgate-hud/
   hooks/position.ts            pure: status / log / worklog / ADR → Position
   hooks/publish.ts             pure: which shell lines publish, and the hold's text
   hooks/review.ts              pure: task-notification → review board, Accept / Kill prompts, SC criteria
-  hooks/diagram.ts             pure: mermaid flowchart subset → layout, SVG and text form
+  hooks/diagram.ts             pure: mermaid flowchart subset → layout, SVG, terminal grid and text form
   hooks/views.tsx              pure: Position → band and pane trees
   types/index.d.ts             the $.state contract
   tests/                       claude plugin test — the world beneath the plugin mocked

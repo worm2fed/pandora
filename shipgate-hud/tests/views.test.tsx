@@ -140,7 +140,7 @@ describe('views', () => {
 const SVG_SOURCE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 
 describe('design diagrams', () => {
-  test('terminal: a flowchart is box-and-arrow text, an svg block is xml Code, no Svg', async ($, on) => {
+  test('terminal: a flowchart is a box-drawing picture, an svg block is xml Code, no Svg', async ($, on) => {
     engineWorld(on)
     journaledWorld(on, STATUS, LOG, WORKLOG_WITH_DIAGRAMS)
     await $.session.start(START)
@@ -149,13 +149,115 @@ describe('design diagrams', () => {
     // the prose around the blocks stays Markdown
     expect((await ui.find({ key: 'design-md-data-flow' }))?.text).toContain('through a queue')
     expect(await ui.find({ type: 'Markdown', text: /only writer of record/ })).toBeDefined()
-    const arrow = await ui.find({ type: 'Text', text: /\[api\] ──enqueue──► \[queue\]/ })
-    expect(arrow).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /\[worker\] ──write──► \[store\]/ })).toBeDefined()
+    // every label inside a box, every edge a line with a head, all on one row of a picture
+    const middle = await ui.find({ type: 'Text', text: /│ api │/ })
+    expect(middle?.text).toMatch(/^│ api │───enqueue──►│ queue │───drain──►│ worker │───write──►│ store │\s*$/)
+    expect(await ui.find({ type: 'Text', text: /^┌─────┐ / })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\[api\] ──enqueue──► \[queue\]/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^diagram / })).toBeUndefined()
     expect(await ui.find({ type: 'Svg' })).toBeUndefined()
     const code = await ui.find({ type: 'Code' })
     expect(code?.props.language).toBe('xml')
     expect(code?.props.source).toBe(SVG_SOURCE)
+    await ui.unmount()
+  })
+
+  test('terminal: an LR picture wider than the pane is drawn top to bottom', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, WORKLOG_WITH_DIAGRAMS)
+    await $.session.start(START)
+    const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 40 } }
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...narrow })
+    await ui.press({ key: 'tab-design' })
+    expect(await ui.find({ type: 'Text', text: /^ │ api │/ })).toBeDefined()
+    expect((await ui.findAll({ type: 'Text', text: /^\s*▼\s*$/ })).length).toBe(3)
+    expect(await ui.find({ type: 'Text', text: /enqueue/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /►/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^diagram / })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('terminal: a chart too wide either way is the text form under a note', async ($, on) => {
+    // a chain is wide left to right; a fan of eight is wide top to bottom
+    const chain = Array.from({ length: 6 }, (_, i) => `  n${i} --> n${i + 1}`).join('\n')
+    const fan = '  n0 --> m1 & m2 & m3 & m4 & m5 & m6 & m7 & m8'
+    const worklog = WORKLOG_WITH_DIAGRAMS.replace(/flowchart LR\n[^`]*/, `flowchart LR\n${chain}\n${fan}\n`)
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, worklog)
+    await $.session.start(START)
+    const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 40 } }
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...narrow })
+    await ui.press({ key: 'tab-design' })
+    const note = await ui.find({ type: 'Text', text: /^diagram is \d+ columns wide; the pane has 40$/ })
+    expect(note?.props.dimColor).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /^\[n0\] ──► \[n1\]/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /│ n0 │/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('terminal: a chart over 60 nodes is the text form under a note', async ($, on) => {
+    const chain = Array.from({ length: 60 }, (_, i) => `  n${i} --> n${i + 1}`).join('\n')
+    const worklog = WORKLOG_WITH_DIAGRAMS.replace(/flowchart LR\n[^`]*/, `flowchart LR\n${chain}\n`)
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, worklog)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    await ui.press({ key: 'tab-design' })
+    expect(await ui.find({ type: 'Text', text: 'diagram has 61 nodes; the pane draws up to 60' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^\[n0\] ──► \[n1\]/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('terminal: an LR chart whose TD retry is over 200 rows is the text form under a rows note', async ($, on) => {
+    // 46 boxes in a row: 447 columns left to right, 274 rows top to bottom
+    const chain = Array.from({ length: 45 }, (_, i) => `  n${i} --> n${i + 1}`).join('\n')
+    const worklog = WORKLOG_WITH_DIAGRAMS.replace(/flowchart LR\n[^`]*/, `flowchart LR\n${chain}\n`)
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, worklog)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    await ui.press({ key: 'tab-design' })
+    const note = await ui.find({ type: 'Text', text: 'diagram is 274 rows tall; the pane draws up to 200' })
+    expect(note?.props.dimColor).toBe(true)
+    expect(await ui.find({ type: 'Text', text: /^\[n0\] ──► \[n1\]/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /│ n0 │/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('terminal: the grid fits the room under the indent, not the 40-column floor', async ($, on) => {
+    // 39 columns left to right, 55 top to bottom; the section is indented by 2
+    const chart = '  n0 --> m1 & m2 & m3 & m4 & m5 & m6 & m7 & m8\n  m1 --> z[zzzzzzzzzzzzzzz]'
+    const worklog = WORKLOG_WITH_DIAGRAMS.replace(/flowchart LR\n[^`]*/, `flowchart LR\n${chart}\n`)
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, worklog)
+    await $.session.start(START)
+    // 40 columns leave a room of 38: the 39-column picture does not fit
+    const narrow = { ...PANE, props: { ...PANE.props, bodyColumns: 40 } }
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...narrow })
+    await ui.press({ key: 'tab-design' })
+    expect(await ui.find({ type: 'Text', text: 'diagram is 39 columns wide; the pane has 40' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^\[n0\] ──► \[m1\]/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /│ n0 │/ })).toBeUndefined()
+    await ui.unmount()
+    // 41 columns leave a room of 39: the picture is drawn
+    const wider = { ...PANE, props: { ...PANE.props, bodyColumns: 41 } }
+    // the pane keeps the Design tab open across mounts
+    const ui2 = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...wider })
+    expect(await ui2.find({ type: 'Text', text: /│ n0 │/ })).toBeDefined()
+    expect(await ui2.find({ type: 'Text', text: /^diagram / })).toBeUndefined()
+    await ui2.unmount()
+  })
+
+  test('terminal: a back edge is listed under the picture in the one-line form', async ($, on) => {
+    const worklog = WORKLOG_WITH_DIAGRAMS.replace(/flowchart LR\n[^`]*/, 'flowchart LR\n  a --> b --> a\n')
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, worklog)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    await ui.press({ key: 'tab-design' })
+    expect(await ui.find({ type: 'Text', text: /^│ a │──►│ b │/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '[b] ──► [a]' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '[a] ──► [b]' })).toBeUndefined()
     await ui.unmount()
   })
 

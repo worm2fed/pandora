@@ -5,7 +5,24 @@
 import type { BoxProps, ButtonProps, CodeProps, ElementConstructor, MarkdownProps, SvgProps, TextProps } from 'claude-code'
 
 import type { Decision, Phase, Position, ReviewBoard, ReviewFinding, ReviewState, Tab, Task, TickOverride } from '../types'
-import { type Fence, cut, flowchartSvg, flowchartText, parseFlowchart, splitFences } from './diagram'
+import {
+  type Direction,
+  type Fence,
+  type FlowGrid,
+  type Flowchart,
+  GRID_CELL_LIMIT,
+  GRID_LEG_LIMIT,
+  GRID_NODE_LIMIT,
+  GRID_ROW_LIMIT,
+  type GridSkip,
+  cut,
+  edgeLine,
+  flowchartGrid,
+  flowchartSvg,
+  flowchartText,
+  parseFlowchart,
+  splitFences,
+} from './diagram'
 import { PHASES, PHASE_SHORT, clock, isVetoable } from './position'
 import { boardsFor, criterionGlyph, dispositionIn, groupBySeverity, markKey, reviewStateOf, roundId, shortLocation, stripControl, tickKey } from './review'
 
@@ -344,9 +361,10 @@ const drawsSvg = (ui: Ui): boolean => ui.Svg !== undefined && ui.Svg({ source: '
 
 /**
  * A `mermaid` or `svg` fence drawn for the surface (ADR 0002): `Svg` where the table has it,
- * else an svg block as xml `Code` and a flowchart as its box-and-arrow text; a mermaid block
+ * else an svg block as xml `Code` and a flowchart as its box-drawing picture; a mermaid block
  * that is no flowchart is mermaid `Code` everywhere. A drawing over the Svg limit is never cut
- * (a cut SVG is broken markup): it takes the non-Svg form under a dim note.
+ * (a cut SVG is broken markup): an svg block takes the xml `Code` form and a flowchart takes the
+ * one-line-per-edge text form under a dim note.
  */
 export function diagramOf(ui: Ui, fence: Extract<Fence, { kind: 'fence' }>, title: string, columns: number, key: string): ReturnType<Ui['Box']> {
   const { Box, Text, Code } = ui
@@ -364,21 +382,91 @@ export function diagramOf(ui: Ui, fence: Extract<Fence, { kind: 'fence' }>, titl
   }
   const chart = parseFlowchart(fence.source)
   if (chart === null) return <Code key={key} source={fence.source} language="mermaid" />
+  const width = Math.max(MIN_COLUMNS, columns)
+  const rowsOf = (rowKey: string, lines: string[]): ReturnType<Ui['Box']>[] =>
+    lines.map((line, i) => (
+      // a keyed Box per row: Text takes no key
+      <Box key={`${rowKey}-line-${i}`}>
+        <Text wrap="truncate-end">{cut(line, width)}</Text>
+      </Box>
+    ))
   const textForm = (rowKey: string): ReturnType<Ui['Box']> => (
     <Box key={rowKey} flexDirection="column">
-      {flowchartText(chart)
-        .split('\n')
-        .map((line, i) => (
-          // a keyed Box per row: Text takes no key
-          <Box key={`${rowKey}-line-${i}`}>
-            <Text wrap="truncate-end">{cut(line, Math.max(MIN_COLUMNS, columns))}</Text>
-          </Box>
-        ))}
+      {rowsOf(rowKey, flowchartText(chart).split('\n'))}
     </Box>
   )
-  if (!Svg) return textForm(key)
+  // the grid must fit the real room; the 40-column floor only sets the cut and the note
+  if (!Svg) return terminalDiagram(ui, chart, Math.max(1, columns), width, key, rowsOf, textForm)
   const svg = flowchartSvg(chart)
   return svg.length > SVG_LIMIT ? tooLarge(svg, textForm(`${key}-text`)) : <Svg key={key} source={svg} alt={title} />
+}
+
+/**
+ * A flowchart in the terminal (ADR 0003): the box-drawing grid in the chart's direction; an
+ * LR / RL chart whose grid does not fit (too wide, too tall, skipped past a leg or cell limit,
+ * or a broken invariant) retried top to bottom; back edges listed under the picture one per
+ * row. A grid fits when it is at most `room` columns wide and `GRID_ROW_LIMIT` rows tall. No
+ * grid that fits: the text form under a dim note that names the reason.
+ */
+function terminalDiagram(
+  ui: Ui,
+  chart: Flowchart,
+  room: number,
+  width: number,
+  key: string,
+  rowsOf: (rowKey: string, lines: string[]) => ReturnType<Ui['Box']>[],
+  textForm: (rowKey: string) => ReturnType<Ui['Box']>,
+): ReturnType<Ui['Box']> {
+  const { Box, Text } = ui
+  type Attempt = FlowGrid | GridSkip | { skip: 'failed' }
+  const gridIn = (direction: Direction): Attempt => {
+    try {
+      return flowchartGrid(chart, direction)
+    } catch {
+      // a broken invariant in the router draws the text form, never a broken pane
+      return { skip: 'failed' }
+    }
+  }
+  const isGrid = (a: Attempt): a is FlowGrid => !('skip' in a)
+  const fits = (a: Attempt): a is FlowGrid => isGrid(a) && a.width <= room && a.rows.length <= GRID_ROW_LIMIT
+  const first = gridIn(chart.direction)
+  const sideways = chart.direction === 'LR' || chart.direction === 'RL'
+  // a node count over the limit skips every direction alike
+  const retry = !fits(first) && sideways && !('skip' in first && first.skip === 'nodes') ? gridIn('TD') : null
+  const attempts = retry ? [first, retry] : [first]
+  const grid = attempts.find(fits)
+  const noteOf = (): string => {
+    const grids = attempts.filter(isGrid)
+    if (grids.length > 0 && grids.every(g => g.width > room))
+      return `diagram is ${Math.min(...grids.map(g => g.width))} columns wide; the pane has ${width}`
+    const tall = grids.filter(g => g.rows.length > GRID_ROW_LIMIT).map(g => g.rows.length)
+    if (tall.length > 0) return `diagram is ${Math.min(...tall)} rows tall; the pane draws up to ${GRID_ROW_LIMIT}`
+    const skip = attempts.find((a): a is Exclude<Attempt, FlowGrid> => !isGrid(a))
+    switch (skip?.skip) {
+      case 'nodes':
+        return `diagram has ${skip.nodes} nodes; the pane draws up to ${GRID_NODE_LIMIT}`
+      case 'legs':
+        return `diagram has ${skip.legs} edge legs; the pane draws up to ${GRID_LEG_LIMIT}`
+      case 'size':
+        return `diagram is ${skip.width} by ${skip.height} cells; the pane draws up to ${GRID_CELL_LIMIT}`
+      default:
+        return 'diagram could not be drawn as a picture'
+    }
+  }
+  if (!grid) {
+    const note = noteOf()
+    return (
+      <Box key={key} flexDirection="column">
+        <Text dimColor>{note}</Text>
+        {textForm(`${key}-text`)}
+      </Box>
+    )
+  }
+  return (
+    <Box key={key} flexDirection="column">
+      {rowsOf(key, [...grid.rows, ...grid.backEdges.map(e => edgeLine(chart, e))])}
+    </Box>
+  )
 }
 
 /** An open Design section: prose as Markdown, its `mermaid` / `svg` fences as diagrams, in order. */

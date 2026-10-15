@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { cut, flowchartSvg, flowchartText, layoutFlowchart, parseFlowchart, splitFences } from '../hooks/diagram'
+import { GRID_CELL_LIMIT, GRID_LEG_LIMIT, GRID_NODE_LIMIT, cut, flowchartGrid, flowchartSvg, flowchartText, layoutFlowchart, parseFlowchart, splitFences } from '../hooks/diagram'
+import type { FlowGrid, Flowchart } from '../hooks/diagram'
 
 const count = (text: string, needle: string): number => text.split(needle).length - 1
 
@@ -233,5 +234,199 @@ describe('diagram', () => {
     expect(cut('[a]   [b]', 20)).toBe('[a]   [b]')
     expect(cut('[a]   [bcdef]', 8)).toBe('[a]   […')
     expect(cut('──►──►', 3)).toBe('──…')
+  })
+})
+
+/** The chart parsed, or a thrown error: every grid test starts from a chart that parses. */
+const chartOf = (source: string): Flowchart => {
+  const chart = parseFlowchart(source)
+  if (!chart) throw new Error(`no chart: ${source}`)
+  return chart
+}
+
+/** The grid for a source, or a thrown error when the grid is skipped. */
+const gridFor = (source: string, direction?: Flowchart['direction']): FlowGrid => {
+  const grid = flowchartGrid(chartOf(source), direction)
+  if ('skip' in grid) throw new Error(`no grid (${grid.skip}): ${source}`)
+  return grid
+}
+
+/** The grid's rows for a source, or a thrown error when the grid is skipped. */
+const gridOf = (source: string, direction?: Flowchart['direction']): string[] => gridFor(source, direction).rows
+
+/** Expected rows as drawn, each padded to the widest one: the grid's rows all have its width. */
+const padded = (rows: string[]): string[] => {
+  const width = Math.max(...rows.map(r => [...r].length))
+  return rows.map(r => r + ' '.repeat(width - [...r].length))
+}
+
+describe('flowchartGrid', () => {
+  test('pinned: a fan-out bends through one channel column', async () => {
+    const grid = gridFor('flowchart LR\n a --> b\n a --> c')
+    expect(grid?.rows).toEqual(
+      padded(['         ┌───┐', '      ┌─►│ b │', '┌───┐ │  └───┘', '│ a │─┤', '└───┘ │  ┌───┐', '      └─►│ c │', '         └───┘']),
+    )
+    expect(grid?.width).toBe(14)
+    expect(grid?.backEdges).toEqual([])
+  })
+
+  test('pinned: a chain draws straight, the label on its line', async () => {
+    expect(gridOf('flowchart LR\n api --> queue -->|push| store')).toEqual([
+      '┌─────┐   ┌───────┐          ┌───────┐',
+      '│ api │──►│ queue │───push──►│ store │',
+      '└─────┘   └───────┘          └───────┘',
+    ])
+  })
+
+  test('every row is exactly the grid width', async () => {
+    const grid = gridFor('flowchart LR\n a --> b[a longer label]\n a --> c')
+    for (const row of grid?.rows ?? []) expect([...row].length).toBe(grid?.width)
+  })
+
+  test('directions: LR left to right, RL mirrored, TD and TB top to bottom, BT mirrored', async () => {
+    const lr = ['┌───┐   ┌───┐', '│ a │──►│ b │', '└───┘   └───┘']
+    const rl = ['┌───┐   ┌───┐', '│ b │◄──│ a │', '└───┘   └───┘']
+    const td = ['┌───┐', '│ a │', '└───┘', '  │  ', '  │  ', '  ▼  ', '┌───┐', '│ b │', '└───┘']
+    const bt = ['┌───┐', '│ b │', '└───┘', '  ▲  ', '  │  ', '  │  ', '┌───┐', '│ a │', '└───┘']
+    expect(gridOf('flowchart LR\n a --> b')).toEqual(lr)
+    expect(gridOf('flowchart RL\n a --> b')).toEqual(rl)
+    expect(gridOf('flowchart TD\n a --> b')).toEqual(td)
+    expect(gridOf('flowchart TB\n a --> b')).toEqual(td)
+    expect(gridOf('flowchart BT\n a --> b')).toEqual(bt)
+    // the direction argument overrides the chart's
+    expect(gridOf('flowchart LR\n a --> b', 'TD')).toEqual(td)
+  })
+
+  test('RL mirrors a bend: the channel sits left of the source, heads point left', async () => {
+    expect(gridOf('flowchart RL\n a --> b\n a --> c')).toEqual(
+      padded(['┌───┐', '│ b │◄─┐', '└───┘  │ ┌───┐', '       ├─│ a │', '┌───┐  │ └───┘', '│ c │◄─┘', '└───┘']),
+    )
+  })
+
+  test('edge styles: solid, dotted, thick, open without a head', async () => {
+    expect(gridOf('flowchart LR\n a -.-> b')[1]).toBe('│ a │┄┄►│ b │')
+    expect(gridOf('flowchart LR\n a ==> b')[1]).toBe('│ a │══►│ b │')
+    expect(gridOf('flowchart LR\n a --- b')[1]).toBe('│ a │───│ b │')
+    expect(gridOf('flowchart TD\n a -.-> b').slice(3, 6)).toEqual(['  ┆  ', '  ┆  ', '  ▼  '])
+    expect(gridOf('flowchart TD\n a ==> b').slice(3, 6)).toEqual(['  ║  ', '  ║  ', '  ▼  '])
+    // a thick bend takes the double corners
+    const thick = gridOf('flowchart LR\n a ==> b\n a ==> c')
+    expect(thick.join('\n')).toContain('╔')
+    expect(thick.join('\n')).toContain('╚')
+    expect(thick.join('\n')).toContain('╣')
+  })
+
+  test('shapes: rect square corners, round and circle rounded, diamond slanted', async () => {
+    expect(gridOf('flowchart LR\n a[x]')).toEqual(['┌───┐', '│ x │', '└───┘'])
+    expect(gridOf('flowchart LR\n a(x)')).toEqual(['╭───╮', '│ x │', '╰───╯'])
+    expect(gridOf('flowchart LR\n a((x))')).toEqual(['╭───╮', '│ x │', '╰───╯'])
+    expect(gridOf('flowchart LR\n a{x}')).toEqual(['╱───╲', '│ x │', '╲───╱'])
+  })
+
+  test('a multi-layer edge passes through a slot under the middle layer, never through its box', async () => {
+    const rows = gridOf('flowchart LR\n a --> b --> c\n a --> c')
+    expect(rows).toEqual(
+      padded([
+        '         ┌───┐',
+        '┌───┐ ┌─►│ b │─┐   ┌───┐',
+        '│ a │─┤  └───┘ └┬─►│ c │',
+        '└───┘ │         │  └───┘',
+        '      └─────────┘',
+      ]),
+    )
+  })
+
+  test('a crossing draws ┼ where one line crosses another; a source whose line stops at its channel takes the earlier channel', async () => {
+    // a's channel crosses b's stub; a's run to d crosses b's channel
+    expect(gridOf('flowchart LR\n c\n d\n e\n a --> d\n a --> e\n b --> c')).toEqual(
+      padded([
+        '          ┌───┐',
+        '       ┌─►│ c │',
+        '┌───┐  │  └───┘',
+        '│ a │─┐│',
+        '└───┘ ││  ┌───┐',
+        '      ├┼─►│ d │',
+        '┌───┐ ││  └───┘',
+        '│ b │─┼┘',
+        '└───┘ │   ┌───┐',
+        '      └──►│ e │',
+        '          └───┘',
+      ]),
+    )
+    // d's line stops at its channel on row 5, where a's line to c ends: d goes first, so the two never share a cell
+    expect(gridOf('flowchart LR\n a --> b\n a --> c\n d --> b')).toEqual([
+      '┌───┐     ┌───┐',
+      '│ a │─┬┬─►│ b │',
+      '└───┘ ││  └───┘',
+      '      ││       ',
+      '┌───┐ ││  ┌───┐',
+      '│ d │─┘└─►│ c │',
+      '└───┘     └───┘',
+    ])
+  })
+
+  test('labels of edges that meet at one target share the run, joined', async () => {
+    expect(gridOf('flowchart LR\n a -->|x| c\n b -->|y| c')[3]).toBe('      └┬──x / y──►│ c │')
+  })
+
+  test('TD: a straight chain of mixed widths stays straight; labels on their own rows', async () => {
+    const rows = gridOf('flowchart TD\n a[api] -->|enqueue| b[queue]\n b --> c[worker]')
+    expect(rows.slice(0, 8)).toEqual([' ┌─────┐  ', ' │ api │  ', ' └─────┘  ', '    │     ', '    │     ', ' enqueue  ', '    │     ', '    ▼     '])
+    expect(rows.slice(11, 14)).toEqual(['    │     ', '    │     ', '    ▼     '])
+  })
+
+  test('a back edge is not routed: it is returned in backEdges', async () => {
+    const grid = gridFor('flowchart LR\n a --> b --> a')
+    expect(grid?.rows).toEqual(['┌───┐   ┌───┐', '│ a │──►│ b │', '└───┘   └───┘'])
+    expect(grid?.backEdges).toEqual([{ from: 'b', to: 'a', label: '', style: 'solid' }])
+  })
+
+  test('an edge label sits on the line: centred in LR, on its own row in TD', async () => {
+    expect(gridOf('flowchart LR\n a -->|go| b')[1]).toBe('│ a │───go──►│ b │')
+    expect(gridOf('flowchart TD\n a -->|go| b').slice(3, 8)).toEqual(['  │  ', '  │  ', ' go  ', '  │  ', '  ▼  '])
+  })
+
+  test('labels are cut to 24 cells with an ellipsis', async () => {
+    const rows = gridOf('flowchart LR\n a[abcdefghijklmnopqrstuvwxyz0123] -->|abcdefghijklmnopqrstuvwxyz0123| b')
+    expect(rows[1]).toContain('│ abcdefghijklmnopqrstuvw… │')
+    expect(rows[1]).toContain('──abcdefghijklmnopqrstuvw…──►')
+  })
+
+  test('more than 60 nodes is the nodes skip; 60 draws', async () => {
+    const chain = (n: number) => `flowchart LR\n${Array.from({ length: n - 1 }, (_, i) => `  n${i} --> n${i + 1}`).join('\n')}`
+    expect(GRID_NODE_LIMIT).toBe(60)
+    expect(flowchartGrid(chartOf(chain(61)))).toEqual({ skip: 'nodes', nodes: 61 })
+    expect(gridFor(chain(60)).rows.length).toBe(3)
+  })
+
+  test('more than 200 forward legs is the legs skip', async () => {
+    // 25 nodes, an edge from each node to every later one: a layer each, 2600 legs
+    const edges = Array.from({ length: 24 }, (_, i) => Array.from({ length: 24 - i }, (_, j) => `  n${i} --> n${i + j + 1}`)).flat()
+    expect(GRID_LEG_LIMIT).toBe(200)
+    expect(flowchartGrid(chartOf(`flowchart LR\n${edges.join('\n')}`))).toEqual({ skip: 'legs', legs: 2600 })
+  })
+
+  test('a grid over 40,000 cells is the size skip', async () => {
+    // a TD fan of 59 labelled edges: 59 wide boxes side by side, a label row per edge
+    const pad = (i: number) => String(i).padStart(4, '0')
+    const fan = Array.from({ length: 59 }, (_, i) => `  a -->|label number ${pad(i)} xx| b${i}[node label ${pad(i)} xxxxxx]`)
+    expect(GRID_CELL_LIMIT).toBe(40000)
+    expect(flowchartGrid(chartOf(`flowchart TD\n${fan.join('\n')}`))).toEqual({ skip: 'size', width: 1592, height: 70 })
+  })
+
+  test('an identical edge twice draws one line and counts its legs once', async () => {
+    expect(gridOf('flowchart LR\n a -->|go| b\n a -->|go| b')).toEqual(gridOf('flowchart LR\n a -->|go| b'))
+    // 150 copies of a two-layer edge are 300 legs; once deduplicated they are 2
+    const copies = Array.from({ length: 150 }, () => '  a --> c').join('\n')
+    expect(gridOf(`flowchart LR\n a --> b --> c\n${copies}`)).toEqual(gridOf('flowchart LR\n a --> b --> c\n a --> c'))
+  })
+
+  test('control characters in labels are dropped from the grid and the text form', async () => {
+    const chart = chartOf('flowchart LR\n a["x\u001b[2Jy"] -->|p\u0007q| b')
+    expect(chart.nodes[0]?.label).toBe('xy')
+    expect(chart.edges[0]?.label).toBe('pq')
+    expect(gridFor('flowchart LR\n a["x\u001b[2Jy"] -->|p\u0007q| b').rows[1]).toBe('│ xy │───pq──►│ b │')
+    expect(flowchartText(chart)).toContain('[xy] ──pq──► [b]')
+    for (const line of flowchartText(chart).split('\n')) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/)
   })
 })

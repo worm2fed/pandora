@@ -1,6 +1,7 @@
 // The diagram core (ADR 0002): a section's markdown split at its `mermaid` / `svg` fences, the
-// Mermaid flowchart subset parsed into nodes and edges, a layered layout, and two drawings of
-// it: an SVG document for surfaces with `Svg` and a box-and-arrow text form for the terminal.
+// Mermaid flowchart subset parsed into nodes and edges, a layered layout, and three drawings
+// of it: an SVG document for surfaces with `Svg`, a box-drawing grid for the terminal (ADR
+// 0003), and a one-line-per-edge text form, the terminal's fallback.
 // No `$` here, so the tests run it without a process or a file system.
 
 export type Fence = { kind: 'markdown'; text: string } | { kind: 'fence'; lang: 'mermaid' | 'svg'; source: string }
@@ -53,9 +54,14 @@ const DIRECTIONS: readonly Direction[] = ['LR', 'TD', 'TB', 'RL', 'BT']
 // a keyword alone, not the start of an id such as `end-user` or `style-guide`
 const SKIPPED = /^(subgraph|end|classDef|class|style|click|linkStyle|direction)(?=\s|;|$)/
 
-/** Inner label text: trimmed, `<br/>` as a space, surrounding quotes removed. */
+// a whole CSI escape sequence (ESC [ or C1 CSI, parameters, final byte), then any other C0, DEL
+// or C1 character: the class `stripControl` in review.ts removes; kept here so this file stays pure
+const CSI = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
+
+/** Inner label text: trimmed, `<br/>` as a space, escape sequences and control characters out, surrounding quotes removed. */
 export function cleanLabel(raw: string): string {
-  const text = raw.replace(/<br\s*\/?>/gi, ' ').trim()
+  const text = raw.replace(/<br\s*\/?>/gi, ' ').replace(CSI, '').replace(CONTROL, '').trim()
   const unquoted = /^"(.*)"$/.exec(text)?.[1] ?? text
   return unquoted.replace(/\s+/g, ' ').trim()
 }
@@ -369,6 +375,12 @@ const arrowOf = (e: FlowEdge): string => {
   return e.label === '' ? `${line}${head}` : `${line}${cutLabel(e.label)}${line}${head === '─' ? '' : head}`
 }
 
+/** One edge in the terminal's one-line form: `[A] ──► [B]`, `[A] ──label──► [B]`, `┄┄►` dotted, `══►` thick, `───` open; labels cut to 24 cells. */
+export function edgeLine(chart: Flowchart, e: FlowEdge): string {
+  const label = (id: string): string => `[${cutLabel(chart.nodes.find(n => n.id === id)?.label ?? id)}]`
+  return `${label(e.from)} ${arrowOf(e)} ${label(e.to)}`
+}
+
 /** The terminal form: one line per layer with its nodes as `[label]` joined by three spaces; after each layer, one line per outgoing edge `[A] ──► [B]` or `[A] ──label──► [B]` (`┄┄►` for dotted, `══►` for thick, `───` without a head for open). Labels cut to 24 cells with an ellipsis. */
 export function flowchartText(chart: Flowchart, layout: Layout = layoutFlowchart(chart)): string {
   const labels = new Map(chart.nodes.map(n => [n.id, n.label]))
@@ -376,8 +388,281 @@ export function flowchartText(chart: Flowchart, layout: Layout = layoutFlowchart
   const lines: string[] = []
   for (const ids of layout.layers) {
     lines.push(ids.map(box).join('   '))
-    for (const id of ids)
-      for (const e of chart.edges) if (e.from === id) lines.push(`${box(e.from)} ${arrowOf(e)} ${box(e.to)}`)
+    for (const id of ids) for (const e of chart.edges) if (e.from === id) lines.push(edgeLine(chart, e))
   }
   return lines.join('\n')
+}
+
+// ── The terminal grid (ADR 0003) ─────────────────────────────────────────────────────────
+
+/** Past this many nodes a terminal picture is unreadable; the caller draws the text form. */
+export const GRID_NODE_LIMIT = 60
+/** Past this many forward legs (each forward edge counts the layers it spans) the grid is skipped. */
+export const GRID_LEG_LIMIT = 200
+/** Past this many cells (width × height, projected before any cell is allocated) the grid is skipped. */
+export const GRID_CELL_LIMIT = 40000
+/** Past this many rows a terminal picture is too tall to read; the caller draws the text form. */
+export const GRID_ROW_LIMIT = 200
+
+export type FlowGrid = { rows: string[]; backEdges: FlowEdge[]; width: number }
+/** Why `flowchartGrid` drew no picture: too many nodes, too many forward legs, or too many cells. */
+export type GridSkip = { skip: 'nodes'; nodes: number } | { skip: 'legs'; legs: number } | { skip: 'size'; width: number; height: number }
+
+// a line cell's connections, in screen directions
+const N = 1
+const E = 2
+const S = 4
+const W = 8
+
+type Glyphs = Record<number, string>
+const SOLID: Glyphs = {
+  [N]: '│', [S]: '│', [N | S]: '│', [E]: '─', [W]: '─', [E | W]: '─',
+  [S | E]: '┌', [S | W]: '┐', [N | E]: '└', [N | W]: '┘',
+  [N | S | E]: '├', [N | S | W]: '┤', [E | W | S]: '┬', [E | W | N]: '┴', [N | E | S | W]: '┼',
+}
+const THICK: Glyphs = {
+  [N]: '║', [S]: '║', [N | S]: '║', [E]: '═', [W]: '═', [E | W]: '═',
+  [S | E]: '╔', [S | W]: '╗', [N | E]: '╚', [N | W]: '╝',
+  [N | S | E]: '╠', [N | S | W]: '╣', [E | W | S]: '╦', [E | W | N]: '╩', [N | E | S | W]: '╬',
+}
+// dotted has straight glyphs only; its corners and junctions take the solid ones
+const DOTTED: Glyphs = { ...SOLID, [N]: '┆', [S]: '┆', [N | S]: '┆', [E]: '┄', [W]: '┄', [E | W]: '┄' }
+
+const STYLE_BIT: Record<EdgeStyle, number> = { solid: 1, open: 1, dotted: 2, thick: 4 }
+const STYLE_GLYPHS: Record<number, Glyphs> = { 1: SOLID, 2: DOTTED, 4: THICK }
+
+const CORNERS: Record<NodeShape, [string, string, string, string]> = {
+  rect: ['┌', '┐', '└', '┘'],
+  round: ['╭', '╮', '╰', '╯'],
+  circle: ['╭', '╮', '╰', '╯'],
+  diamond: ['╱', '╲', '╲', '╱'],
+}
+
+const HEAD: Record<Direction, string> = { LR: '►', RL: '◄', TD: '▼', TB: '▼', BT: '▲' }
+
+/** One leg of a forward edge across one gap: from a box or a slot in layer g to a box or a slot in layer g + 1. */
+type Leg = { edge: FlowEdge; src: string; sc: number; tc: number; toBox: boolean; label: string }
+
+/** A gap's channel owners in order: by cross position, except that a source whose line stops at its channel goes before any source whose line ends on that row, so the two never share cells. */
+const channelOrder = (owners: { key: string; sc: number; legs: Leg[] }[]): string[] => {
+  const left = [...owners].sort((a, b) => a.sc - b.sc)
+  const stops = (b: { sc: number; legs: Leg[] }): boolean => !b.legs.some(l => l.tc === b.sc)
+  const mustPrecede = (b: (typeof left)[number], a: (typeof left)[number]): boolean => a !== b && stops(b) && a.legs.some(l => l.tc === b.sc)
+  const out: string[] = []
+  while (left.length > 0) {
+    // the first owner with nothing left that must precede it; on a cycle, the first by position
+    const i = Math.max(0, left.findIndex(a => !left.some(b => mustPrecede(b, a))))
+    out.push((left.splice(i, 1)[0] as (typeof left)[number]).key)
+  }
+  return out
+}
+
+/**
+ * The terminal picture (ADR 0003): rows of box-drawing cells, each exactly `width` wide. Boxes
+ * `│ label │` three rows high (square, rounded or slanted corners by shape); layers left to
+ * right (LR, RL mirrored) or top to bottom (TD, TB, BT mirrored); each forward edge a line
+ * from a stub through its source's channel to a head `►` `◄` `▼` `▲` (none when open), `─`
+ * solid, `┄` dotted, `═` thick, junctions and crossings composed; edge labels on the line;
+ * an edge that spans layers runs through a slot under each layer between. Back edges are not
+ * drawn but returned. Labels cut to 24 cells. Identical edges are drawn once. A skip, before
+ * any cell is allocated, past `GRID_NODE_LIMIT` nodes (`nodes`), past `GRID_LEG_LIMIT` forward
+ * legs (`legs`) or past `GRID_CELL_LIMIT` cells (`size`). Throws when a box or label would land
+ * on a line or another box; callers catch it and fall back.
+ */
+export function flowchartGrid(chart: Flowchart, direction: Direction = chart.direction): FlowGrid | GridSkip {
+  if (chart.nodes.length > GRID_NODE_LIMIT) return { skip: 'nodes', nodes: chart.nodes.length }
+  const { layers } = layoutFlowchart(chart)
+  const flat = horizontal(direction)
+  const mirror = direction === 'RL' || direction === 'BT'
+  const nodes = new Map(chart.nodes.map(n => [n.id, n]))
+  const text = (id: string): string => cutLabel(nodes.get(id)?.label ?? id)
+  const len = (s: string): number => [...s].length
+  const along = (id: string): number => (flat ? len(text(id)) + 4 : 3)
+  const across = (id: string): number => (flat ? 3 : len(text(id)) + 4)
+
+  const layerOf = new Map<string, number>()
+  layers.forEach((ids, l) => ids.forEach(id => layerOf.set(id, l)))
+  const backEdges: FlowEdge[] = []
+  const forward: { edge: FlowEdge; index: number; lf: number; lt: number }[] = []
+  // an identical edge twice is one line: a duplicate would double its legs and slots
+  const seen = new Set<string>()
+  const edges = chart.edges.filter(e => {
+    const k = JSON.stringify([e.from, e.to, e.label, e.style])
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+  edges.forEach((edge, index) => {
+    const lf = layerOf.get(edge.from) ?? 0
+    const lt = layerOf.get(edge.to) ?? 0
+    if (lt <= lf) backEdges.push(edge)
+    else forward.push({ edge, index, lf, lt })
+  })
+  const legCount = forward.reduce((sum, f) => sum + (f.lt - f.lf), 0)
+  if (legCount > GRID_LEG_LIMIT) return { skip: 'legs', legs: legCount }
+
+  // Cross axis: boxes stacked one cell apart, then a blank and a slot per edge passing through.
+  const slots: string[][] = layers.map(() => [])
+  for (const f of forward) for (let l = f.lf + 1; l < f.lt; l++) slots[l]?.push(`${l}:${f.index}`)
+  const extent = layers.map((ids, l) => ids.reduce((sum, id) => sum + across(id), 0) + ids.length - 1 + 2 * (slots[l]?.length ?? 0))
+  const crossTotal = Math.max(0, ...extent)
+  const start = new Map<string, number>()
+  const mid = new Map<string, number>()
+  layers.forEach((ids, l) => {
+    let c = Math.floor((crossTotal - (extent[l] ?? 0)) / 2)
+    for (const id of ids) {
+      start.set(id, c)
+      mid.set(id, c + Math.floor((across(id) - 1) / 2))
+      c += across(id) + 1
+    }
+    slots[l]?.forEach((key, k) => mid.set(key, c + 2 * k))
+  })
+
+  // Main axis: each gap holds a stub, its channels, the label run and the head cell.
+  const thickness = layers.map(ids => Math.max(...ids.map(along)))
+  const legs: Leg[][] = layers.slice(1).map(() => [])
+  for (const f of forward)
+    for (let g = f.lf; g < f.lt; g++) {
+      const src = g === f.lf ? f.edge.from : `${g}:${f.index}`
+      const toBox = g + 1 === f.lt
+      const tgt = toBox ? f.edge.to : `${g + 1}:${f.index}`
+      legs[g]?.push({ edge: f.edge, src, sc: mid.get(src) ?? 0, tc: mid.get(tgt) ?? 0, toBox, label: toBox ? f.edge.label : '' })
+    }
+  const gaps = legs.map(gapLegs => {
+    const bySource = new Map<string, Leg[]>()
+    for (const leg of gapLegs) bySource.set(leg.src, [...(bySource.get(leg.src) ?? []), leg])
+    const owners = [...bySource].filter(([, ls]) => ls.some(l => l.tc !== l.sc)).map(([key, ls]) => ({ key, sc: ls[0]?.sc ?? 0, legs: ls }))
+    const channels = channelOrder(owners)
+    const labels = new Map<number, string>()
+    for (const tc of [...new Set(gapLegs.map(l => l.tc))].sort((a, b) => a - b)) {
+      const texts = [...new Set(gapLegs.filter(l => l.tc === tc && l.label !== '').map(l => l.label))]
+      if (texts.length > 0) labels.set(tc, cutLabel(texts.join(' / ')))
+    }
+    const longest = Math.max(0, ...[...labels.values()].map(len))
+    const run = labels.size === 0 ? 1 : flat ? longest + 4 : labels.size + 2
+    return { legs: gapLegs, bySource, channels, labels, longest, run, size: 1 + channels.length + run + 1 }
+  })
+  const layerStart: number[] = []
+  const gapStart: number[] = []
+  let m = 0
+  layers.forEach((_, l) => {
+    layerStart.push(m)
+    m += thickness[l] ?? 0
+    gapStart.push(m)
+    m += gaps[l]?.size ?? 0
+  })
+  const mainTotal = m
+  const crossSize = flat ? crossTotal : Math.max(crossTotal, ...gaps.map(g => g.longest))
+  const width = flat ? mainTotal : crossSize
+  const height = flat ? crossSize : mainTotal
+  if (width * height > GRID_CELL_LIMIT) return { skip: 'size', width, height }
+
+  // Cells: line connections and styles, heads, and fixed text (boxes, labels) drawn over all.
+  const mask = Array.from({ length: height }, () => new Array<number>(width).fill(0))
+  const style = Array.from({ length: height }, () => new Array<number>(width).fill(0))
+  const head = Array.from({ length: height }, () => new Array<string | null>(width).fill(null))
+  const fixed = Array.from({ length: height }, () => new Array<string | null>(width).fill(null))
+  const at = (mm: number, c: number): [number, number] => {
+    const mainPos = mirror ? mainTotal - 1 - mm : mm
+    return flat ? [mainPos, c] : [c, mainPos]
+  }
+  const toward = (dm: number, dc: number): number => {
+    if (dm !== 0) return flat ? (dm > 0) !== mirror ? E : W : (dm > 0) !== mirror ? S : N
+    return flat ? (dc > 0 ? S : N) : dc > 0 ? E : W
+  }
+  const mark = (mm: number, c: number, bits: number, s: EdgeStyle): void => {
+    const [x, y] = at(mm, c)
+    const row = mask[y]
+    const st = style[y]
+    if (!row || !st || x < 0 || x >= width) return
+    row[x] = (row[x] ?? 0) | bits
+    st[x] = (st[x] ?? 0) | STYLE_BIT[s]
+  }
+  /** A straight run along one axis from (m1, c1) to (m2, c2), each cell linked to the next. */
+  const line = (m1: number, c1: number, m2: number, c2: number, s: EdgeStyle): void => {
+    const dm = Math.sign(m2 - m1)
+    const dc = Math.sign(c2 - c1)
+    for (let mm = m1, c = c1; mm !== m2 || c !== c2; mm += dm, c += dc) {
+      mark(mm, c, toward(dm, dc), s)
+      mark(mm + dm, c + dc, toward(-dm, -dc), s)
+    }
+  }
+
+  gaps.forEach((gap, g) => {
+    const gs = gapStart[g] ?? 0
+    const headAt = gs + gap.size - 1
+    const zone = gs + 1 + gap.channels.length
+    for (const [src, srcLegs] of gap.bySource) {
+      const sc = srcLegs[0]?.sc ?? 0
+      // from the box's wall (or the slot's start) across the layer's spare room to the stub
+      const from = nodes.has(src) ? (layerStart[g] ?? 0) + along(src) : (layerStart[g] ?? 0)
+      for (const leg of srcLegs) {
+        const s = leg.edge.style
+        if (from < gs) line(from, sc, gs, sc, s)
+        const ch = gs + 1 + gap.channels.indexOf(src)
+        if (leg.tc === sc) line(gs, sc, headAt, sc, s)
+        else {
+          line(gs, sc, ch, sc, s)
+          line(ch, sc, ch, leg.tc, s)
+          line(ch, leg.tc, headAt, leg.tc, s)
+        }
+        if (!leg.toBox) line(headAt, leg.tc, (layerStart[g + 1] ?? 0) + (thickness[g + 1] ?? 0) - 1, leg.tc, s)
+        else if (s !== 'open') {
+          const [x, y] = at(headAt, leg.tc)
+          const row = head[y]
+          if (row) row[x] = HEAD[direction]
+        }
+      }
+    }
+    // labels: centred on the run in LR / RL; in TD / BT each on its own row of the run, centred on its line
+    ;[...gap.labels].forEach(([tc, label], k) => {
+      const n = len(label)
+      if (flat) {
+        const xs = [at(zone, tc)[0], at(zone + gap.run - 1, tc)[0]]
+        put(Math.min(...xs) + Math.floor((gap.run - n) / 2), tc, label, 'label')
+      } else {
+        const y = at(zone + 1 + k, 0)[1]
+        put(Math.max(0, Math.min(width - n, tc - Math.floor(n / 2))), y, label, 'label')
+      }
+    })
+  })
+
+  /** Fixed text at screen (x, y): a box never lands on a line, and nothing lands on fixed text. */
+  function put(x: number, y: number, chars: string, what: 'box' | 'label'): void {
+    ;[...chars].forEach((ch, i) => {
+      const fx = fixed[y]
+      if (!fx || x + i < 0 || x + i >= width) throw new Error(`flowchartGrid: ${what} outside the grid at ${x + i},${y}`)
+      if (fx[x + i] !== null) throw new Error(`flowchartGrid: ${what} over fixed text at ${x + i},${y}`)
+      if (what === 'box' && ((mask[y]?.[x + i] ?? 0) !== 0 || head[y]?.[x + i] != null))
+        throw new Error(`flowchartGrid: a line over a box at ${x + i},${y}`)
+      fx[x + i] = ch
+    })
+  }
+
+  layers.forEach((ids, l) => {
+    for (const id of ids) {
+      const node = nodes.get(id)
+      const label = text(id)
+      const [x1, y1] = at(layerStart[l] ?? 0, start.get(id) ?? 0)
+      const [x2, y2] = at((layerStart[l] ?? 0) + along(id) - 1, (start.get(id) ?? 0) + across(id) - 1)
+      const x = Math.min(x1, x2)
+      const y = Math.min(y1, y2)
+      const [tl, tr, bl, br] = CORNERS[node?.shape ?? 'rect']
+      const bar = '─'.repeat(len(label) + 2)
+      put(x, y, `${tl}${bar}${tr}`, 'box')
+      put(x, y + 1, `│ ${label} │`, 'box')
+      put(x, y + 2, `${bl}${bar}${br}`, 'box')
+    }
+  })
+
+  const glyph = (x: number, y: number): string => {
+    const bits = mask[y]?.[x] ?? 0
+    if (bits === 0) return ' '
+    const glyphs = STYLE_GLYPHS[style[y]?.[x] ?? 1] ?? SOLID
+    return glyphs[bits] ?? SOLID[bits] ?? ' '
+  }
+  const rows = Array.from({ length: height }, (_, y) =>
+    Array.from({ length: width }, (_, x) => fixed[y]?.[x] ?? head[y]?.[x] ?? glyph(x, y)).join(''),
+  )
+  return { rows, backEdges, width }
 }

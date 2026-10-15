@@ -2,6 +2,21 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.5.0 — diagrams drawn in the terminal. The Design tab drew a flowchart in the terminal as a
+list: one line per layer, one line per edge. It now draws the chart as a picture made of
+box-drawing characters (ADR 0003). Each node is a box with its label inside: square corners
+for a rectangle, rounded for a round node or a circle, slanted for a diamond. Each edge is a
+line from its source box to its target box with an arrowhead at the target: `─` for a solid
+edge, `┄` for a dotted one, `═` for a thick one, no head for an open one. The edge label sits
+on the line. The layers run left to right for `LR` (`RL` mirrored) and top to bottom for `TD`
+(`BT` mirrored). An edge that spans more than one layer passes between the boxes of the layers
+in between. Two lines that cross draw `┼`. A back edge that closes a cycle is not routed; it is
+listed under the picture as `[b] ──► [a]`. A picture wider than the pane is drawn top to bottom
+instead. When that is wider too, or the chart has more than 60 nodes, the old text form is
+drawn under a dim note. The HUD also draws the text form when the picture is taller than 200
+rows, has more than 200 edge legs, or has more than 40,000 cells; the note names the reason.
+Desktop, mobile and vscode still get the SVG.
+
 v0.4.1 — the Review board reads the verdict. **Accept** and **Kill** are now dim bracketed
 buttons, like **Veto**. The card header is one line of three cells. The severity sits in a
 fixed cell, one cell wider than `▎ BLOCKER`, so a gap always follows it. The meta text is cut

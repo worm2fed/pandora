@@ -2,16 +2,17 @@
 type: adr
 title: "0002. Diagrams drawn by the HUD from a Mermaid flowchart subset"
 created: 2026-10-14
-updated: 2026-10-14
+updated: 2026-10-15
 tags:
   - adr
   - shipgate-hud
-status: accepted
+status: accepted (terminal form amended by 0003)
 date: 2026-10-14
 issue: none / ad-hoc
 related:
   - "../prd/hud.md"
   - "./0001-sibling-plugin-fed-by-the-journal-cli.md"
+  - "./0003-terminal-diagrams-as-a-box-drawing-grid.md"
 ---
 
 # 0002. Diagrams drawn by the HUD from a Mermaid flowchart subset
@@ -19,6 +20,9 @@ related:
 > The HUD parses a worklog's fenced `mermaid` flowchart itself and lays it out as an SVG on
 > desktop and as box-and-arrow text in the terminal. No push tool, no renderer process, no
 > network.
+>
+> **Amended by ADR 0003 (2026-10-15):** the terminal form is now a box-drawing grid; the
+> one-line-per-edge text form is its fallback.
 
 ## Context
 
