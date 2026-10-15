@@ -63,9 +63,58 @@ export type Position = {
   design: { adrs: Adr[]; sections: DesignSection[] }
   worklogPath: string | null
   publish: PublishAuthorization
+  /** The SC-### lines of the PRD the stream's clarify-passed event names; [] when none. */
+  criteria: Criterion[]
 }
 
-export type Tab = 'flow' | 'plan' | 'design'
+/** One `- **SC-NNN** — text` line of a PRD's Success criteria section. */
+export type Criterion = { id: string; text: string }
+
+export type Severity = 'BLOCKER' | 'HIGH' | 'MEDIUM' | 'LOW'
+
+/** One finding of the review workflow's return, normalised. */
+export type ReviewFinding = {
+  severity: Severity | string
+  confidence: number
+  file: string
+  line: number | null
+  summary: string
+  lenses: string[]
+  verification: string
+  quorum: string
+  risk: string | null
+}
+
+/** The review workflow's return as the Review tab draws it, stamped with the stream it was captured under. */
+export type ReviewBoard = {
+  stream: string | null
+  runId: string | null
+  at: string
+  counts: Record<string, number>
+  coverage: Record<string, unknown>
+  survivors: ReviewFinding[]
+  killed: ReviewFinding[]
+  belowFloor: ReviewFinding[]
+  lensesRun: string[]
+  /** The return's `aborted` reason when the run stopped early; null otherwise. */
+  aborted: string | null
+}
+
+export type ReviewMark = 'accepted' | 'killed'
+
+/** The captured board, the user's marks keyed by survivor index, and the ticked criteria as `<stream>:<SC id>` (`?:` when no stream). */
+export type ReviewState = { board: ReviewBoard | null; marks: Record<string, ReviewMark>; ticks: string[] }
+
+/** The tags of a `<task-notification>` user turn; `result` is the parsed JSON, null when absent or unparsable. */
+export type TaskNotification = {
+  toolUseId: string | null
+  taskId: string | null
+  status: string | null
+  summary: string | null
+  result: unknown
+}
+
+export type Tab = 'flow' | 'plan' | 'design' | 'review'
 
 declare module 'claude-code' {
   interface PluginState {
@@ -76,6 +125,8 @@ declare module 'claude-code' {
       designOpen: string | null
       lastError: string | null
       isJournaled: boolean
+      /** The last review workflow return captured this session, with the user's marks and ticks. */
+      review: ReviewState
     }
   }
 }

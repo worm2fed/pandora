@@ -7,7 +7,7 @@ interface, from the journal shipgate already keeps.
   and a `hud` button that opens the pane. A band narrower than the summary wraps it onto more
   rows at the ` · ` separators rather than cutting it.
 - **Pane** (`/hud`, or opened at session start in a wide terminal) with the phase timeline
-  `WS ✓ MAP ✓ EXP ✓ CLR ✓ DSN ✓ IMP ● REV · CAP ·` and three tabs:
+  `WS ✓ MAP ✓ EXP ✓ CLR ✓ DSN ✓ IMP ● REV · CAP ·` and four tabs:
   - **Flow** — the stream's gate decisions, newest first, with who raised each one. A
     decision the orchestrator took on its own (`raised_by: orchestrator`, `mode: executive`)
     carries a **Veto** button; pressing it submits a prompt that names that decision (stream,
@@ -19,9 +19,23 @@ interface, from the journal shipgate already keeps.
     recorded (what the Stop hook will block on), `○` to do.
   - **Design** — the ADRs the design committed to, one line each, and the worklog's Design
     section as collapsible `##` sections, one open at a time (prose reflowed to the pane's width).
+    **Diagrams:** a fenced `svg` block is drawn as a picture on desktop, mobile and vscode, and
+    as `xml` code in the terminal. The HUD lays out a fenced `mermaid` flowchart itself (the
+    `flowchart` / `graph` subset of ADR 0002). It draws the chart as a picture on those
+    surfaces and as box-and-arrow text in the terminal. Doubled shapes take the nearest
+    supported shape. Other Mermaid kinds, and a flowchart with a statement the HUD cannot read,
+    stay code. No renderer process, no network.
+  - **Review** — the review workflow's last return for this stream. The HUD reads it from the
+    task-notification prompt and never changes that prompt. A counts line comes first. Then
+    the survivors, grouped by severity, each with confidence, verification, quorum, lenses
+    and a short `file:line`. **Accept** and **Kill** submit a plain prompt that names the
+    finding by its position, never by its text. The killed and below-floor findings follow,
+    one line each. The tab ends with the success criteria of the stream's PRD, as ticks you
+    set by hand. The band shows `review N open` while findings wait for a mark. A board for
+    another stream is not drawn.
 - The pane opens on the tab that matches the phase: Plan in `implement`, Design in `design`,
-  Flow otherwise. The active tab and the current phase are drawn inverted. Hotkeys `1` `2` `3`
-  switch, `r` refreshes, while the pane has focus. Long text is truncated to the pane's width;
+  Review in `review`, Flow otherwise. The active tab and the current phase are drawn inverted.
+  Hotkeys `1` `2` `3` `4` switch, `r` refreshes, while the pane has focus. Long text is truncated to the pane's width;
   the artifacts hold the full text.
 
 - **Publish gate** — the gate holds `git push`, `gh pr create` (or `gh pr new`) and
@@ -120,6 +134,8 @@ shipgate-hud/
   hooks/register.tsx           the hooks and the side effects (locate, run, read)
   hooks/position.ts            pure: status / log / worklog / ADR → Position
   hooks/publish.ts             pure: which shell lines publish, and the hold's text
+  hooks/review.ts              pure: task-notification → review board, Accept / Kill prompts, SC criteria
+  hooks/diagram.ts             pure: mermaid flowchart subset → layout, SVG and text form
   hooks/views.tsx              pure: Position → band and pane trees
   types/index.d.ts             the $.state contract
   tests/                       claude plugin test — the world beneath the plugin mocked
@@ -131,6 +147,7 @@ Nothing under `shipgate/` changes for this plugin to work.
 
 ## Roadmap
 
-Later slices, each its own PRD section: a Review findings board fed from the review
-workflow's return; the Explore essential-files tracker; a Route & Map risk heat grid;
-a compaction-safe one-line position attached to every prompt; SVG diagrams on desktop.
+Later slices, each its own PRD section: the Explore essential-files tracker; a Route & Map
+risk heat grid; a compaction-safe one-line position attached to every prompt.
+
+Release notes: [CHANGELOG.md](./CHANGELOG.md).

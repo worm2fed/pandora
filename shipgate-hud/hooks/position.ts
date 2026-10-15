@@ -3,6 +3,8 @@
 // out. No `$` here, so the tests run it without a process or a file system.
 
 import type { Adr, Decision, DesignSection, Phase, PhaseMark, Position, PublishAuthorization, Task, TaskVerify, Verify } from '../types'
+import { asRecord, asString, asStringList, type JsonRecord } from './json'
+import { parseCriteria } from './review'
 
 export const PHASES: readonly Phase[] = [
   'workspace',
@@ -25,16 +27,6 @@ export const PHASE_SHORT: Record<Phase, string> = {
   review: 'REV',
   capture: 'CAP',
 }
-
-type JsonRecord = Record<string, unknown>
-
-const asRecord = (value: unknown): JsonRecord =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as JsonRecord) : {}
-
-const asString = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback)
-
-const asStringList = (value: unknown): string[] =>
-  Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
 
 const isPhase = (value: unknown): value is Phase => typeof value === 'string' && (PHASES as readonly string[]).includes(value)
 
@@ -172,6 +164,8 @@ export type PositionInputs = {
   events: readonly unknown[]
   worklog: { path: string; text: string } | null
   adrs: readonly Adr[]
+  /** The PRD the stream's clarify-passed event names, read; null or absent when none. */
+  prd?: { path: string; text: string } | null
 }
 
 /** A ref the HUD will read: relative, inside the project, no `..` segment, no drive or scheme. */
@@ -188,12 +182,21 @@ export function isSafeRef(path: string): boolean {
  */
 const ARTIFACT_EVENTS = new Set(['design-committed', 'design-queued', 'task-done', 'verify-run', 'review-verdict', 'gate-decision'])
 
-/** The paths the stream's events point at: the worklog and the ADRs the design committed to. */
-export function artifactRefs(events: readonly unknown[]): { worklog: string | null; adrs: string[] } {
+/**
+ * The paths the stream's events point at: the worklog and the ADRs the design committed to, and
+ * the PRD the last `clarify-passed` event names (a safe `.md` ref, else none).
+ */
+export function artifactRefs(events: readonly unknown[]): { worklog: string | null; adrs: string[]; prd: string | null } {
   let worklog: string | null = null
+  let prd: string | null = null
   const adrs: string[] = []
   for (const raw of events) {
     const event = asRecord(raw)
+    if (asString(event.type) === 'clarify-passed') {
+      const path = asString(asRecord(event.data).prd).split('#')[0] ?? ''
+      if (path.endsWith('.md') && isSafeRef(path)) prd = path
+      continue
+    }
     if (!ARTIFACT_EVENTS.has(asString(event.type))) continue
     const data = asRecord(event.data)
     const candidates = [asString(data.worklog), ...asStringList(data.refs), ...asStringList(data.adrs)]
@@ -204,7 +207,7 @@ export function artifactRefs(events: readonly unknown[]): { worklog: string | nu
       else if (/\/adr\/.+\.md$/.test(path) && !adrs.includes(path)) adrs.push(path)
     }
   }
-  return { worklog, adrs }
+  return { worklog, adrs, prd }
 }
 
 /** An event's journal sequence number; -1 when it has none. */
@@ -233,7 +236,7 @@ export function publishAuthorization(events: readonly unknown[]): PublishAuthori
   return { authorized: true, by: authorizing.type === 'review-verdict' ? 'review-verdict' : 'gate-decision', at: asString(authorizing.ts) }
 }
 
-export function toPosition({ feature, events, worklog, adrs }: PositionInputs): Position {
+export function toPosition({ feature, events, worklog, adrs, prd = null }: PositionInputs): Position {
   const record = asRecord(feature)
   const phase = asString(record.phase, 'workspace')
 
@@ -296,6 +299,7 @@ export function toPosition({ feature, events, worklog, adrs }: PositionInputs): 
     design: { adrs: [...adrs], sections: worklog ? parseDesignSections(worklog.text) : [] },
     worklogPath: worklog?.path ?? null,
     publish: publishAuthorization(events),
+    criteria: prd ? parseCriteria(prd.text) : [],
   }
 }
 

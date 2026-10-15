@@ -3,6 +3,9 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import { ADR, FEATURE_PREFIXED, LOG, SIDECAR, STATUS } from './fixtures'
 import { BAND, PANE, SESSION_ID, START, bareWorld, engineWorld, journaledWorld, ok } from './world'
 import { WORKLOG } from './fixtures'
+import { REVIEW_LAUNCH_RESULT, REVIEW_NOTIFICATION } from './fixtures.review'
+import { findingPrompt, parseTaskNotification, toReviewBoard } from '../hooks/review'
+import type { ReviewState } from '../types'
 
 describe('register', () => {
   test('without the sidecar: no process runs, no pane, the band passes through, /hud explains', async ($, on) => {
@@ -764,6 +767,312 @@ describe('register', () => {
       await $.session.start(START)
       expect(await check($, 'git push')).toMatchObject(BENEATH)
       expect(asked).toEqual([])
+    })
+  })
+
+  describe('review board', () => {
+    const LAUNCH_ID = 'toolu_01AAAAAAAAAAAAAAAAAAAAAA'
+    const COUNTS = 'found 9 · deduped 8 · candidates 5 · survivors 3 · killed 1 · below floor 2 · refuters 4/4 · unverified 1'
+    const OTHER_NOTIFICATION = '<task-notification>\n<task-id>b2</task-id>\n<tool-use-id>toolu_other</tool-use-id>\n<status>completed</status>\n<result>{"ok":true}</result>\n</task-notification>'
+    const notify = (text: string) => ({ text, origin: { kind: 'task-notification' } }) as never
+
+    /** The Bash tool beneath the plugin, so a journal append can run and refresh the position. */
+    const appendWorld = (on: Parameters<typeof engineWorld>[0]): void => {
+      on('tool.call', { tool: 'Bash' }, async () => ({ result: { stdout: 'appended', stderr: '' } }))
+    }
+
+    /** The orchestrator appends to the journal: the HUD refreshes, and the shown stream may move. */
+    const refreshByAppend = ($: { tool: { call: (input: never) => Promise<unknown> } }) =>
+      $.tool.call({ tool: 'Bash', tool_use_id: 'append-1', command: 'python3 shipgate/scripts/journal.py append --stream s --type deviation' } as never)
+
+    /** The Workflow tool beneath the plugin: it launches in the background and names the run. */
+    const workflowWorld = (on: Parameters<typeof engineWorld>[0]): void => {
+      on('tool.call', { tool: 'Workflow' }, async () => ({ result: REVIEW_LAUNCH_RESULT }) as never)
+    }
+
+    /**
+     * Every value the plugin writes to its `review` atom, recorded beneath it (the test `$` has no
+     * state reader); `rewrite` changes what is stored. `last()` is the atom as it now stands.
+     */
+    const reviewWatch = (on: Parameters<typeof engineWorld>[0], rewrite: (value: ReviewState) => ReviewState = v => v) => {
+      const values: ReviewState[] = []
+      on('state.set', async (_$, e, next) => {
+        if (e.plugin !== 'shipgate-hud' || e.key !== 'review') return next(e)
+        const value = rewrite(e.value as ReviewState)
+        values.push(value)
+        return next({ ...e, value } as never)
+      })
+      return { last: (): ReviewState | undefined => values.at(-1) }
+    }
+
+    const launchReview = ($: { tool: { call: (input: never) => Promise<unknown> } }, id: string = LAUNCH_ID) =>
+      $.tool.call({ tool: 'Workflow', tool_use_id: id, script: "export const meta = { name: 'shipgate-review' }" } as never)
+
+    test('a review launch and its notification fill the board, under the stream and the run', async ($, on) => {
+      const { submitted } = engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      workflowWorld(on)
+      await $.session.start(START)
+      await launchReview($)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(submitted).toEqual([REVIEW_NOTIFICATION]) // passed on unchanged
+      const state = watch.last()
+      expect(state?.board?.stream).toBe('feat/example-stream')
+      expect(state?.board?.runId).toBe('wf_0123abcd-ef0')
+      expect(state?.board?.survivors.length).toBe(3)
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect((await pane.find({ type: 'Text', text: ' 4 Review ' }))?.props.inverse).toBe(true)
+      expect(await pane.find({ type: 'Text', text: COUNTS })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: '▎ BLOCKER' })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: '95% · held 0/2 · correctness' })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: '  src/api/handler.ts:42' })).toBeDefined()
+      expect(await pane.find({ key: 'accept-0' })).toBeDefined()
+      expect(await pane.find({ key: 'kill-2' })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: /^MEDIUM · src\/parse\.ts:10 · .* · q=2\/2$/ })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: /^HIGH 40% src\/cache\/store\.ts:77 / })).toBeDefined()
+      await pane.unmount()
+      const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+      expect(await band.find({ type: 'Text', text: /review 3 open/ })).toBeDefined()
+      await band.unmount()
+    })
+
+    test('an id match alone never makes or replaces a board: the result must be the return', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      workflowWorld(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      const held = watch.last()
+      expect(held?.board?.survivors.length).toBe(3)
+      await launchReview($, 'toolu_other')
+      await $.prompt.submit(notify(OTHER_NOTIFICATION))
+      expect(watch.last()).toBe(held) // no write: the old board stands unchanged
+    })
+
+    test('a killed review run is not captured', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION.replace('<status>completed</status>', '<status>killed</status>')))
+      expect(watch.last()?.board ?? null).toBeNull()
+    })
+
+    test('a session with no surface captures nothing and passes the prompt on', async ($, on) => {
+      const { submitted } = engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start({ ...START, surface: null } as never)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(submitted).toEqual([REVIEW_NOTIFICATION])
+      expect(watch.last()?.board ?? null).toBeNull()
+    })
+
+    test('an aborted run: a warning under the counts, and the band says review aborted', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION.replace('"lensesRun"', '"aborted":"the refuter budget ran out","lensesRun"')))
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect((await pane.find({ type: 'Text', text: 'review aborted: the refuter budget ran out' }))?.props.color).toBe('warning')
+      await pane.unmount()
+      const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+      expect(await band.find({ type: 'Text', text: /review aborted/ })).toBeDefined()
+      expect(await band.find({ type: 'Text', text: /review \d+ open/ })).toBeUndefined()
+      await band.unmount()
+    })
+
+    test('the board draws its run id and capture time; run ? without a noted launch', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      workflowWorld(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect(await pane.find({ type: 'Text', text: /^run \? · \d\d:\d\d$/ })).toBeDefined()
+      await pane.unmount()
+      await launchReview($)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      const again = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      // the tab chosen stays chosen
+      expect(await again.find({ type: 'Text', text: /^run wf_0123abcd-ef0 · \d\d:\d\d$/ })).toBeDefined()
+      await again.unmount()
+    })
+
+    test('a return lands under the stream its launch ran on, not the one shown when it arrives', async ($, on) => {
+      engineWorld(on)
+      appendWorld(on)
+      let shown: unknown = STATUS.features[0]
+      journaledWorld(on, () => ({ ...STATUS, features: [shown] }))
+      const watch = reviewWatch(on)
+      workflowWorld(on)
+      await $.session.start(START)
+      await launchReview($) // on feat/example-stream
+      shown = FEATURE_PREFIXED // the session moves to feature/example-stream
+      await refreshByAppend($) // a journal append refreshes the position; $.state is kept
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(watch.last()?.board?.stream).toBe('feat/example-stream')
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect(await pane.find({ type: 'Text', text: 'No review captured for feature/example-stream yet (phase implement).' })).toBeDefined()
+      await pane.unmount()
+    })
+
+    test('a launch that is not the review workflow is not noted', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      workflowWorld(on)
+      await $.session.start(START)
+      await $.tool.call({ tool: 'Workflow', tool_use_id: 'toolu_other', script: "export const meta = { name: 'something-else' }" } as never)
+      await $.prompt.submit(notify(OTHER_NOTIFICATION))
+      expect(watch.last()?.board ?? null).toBeNull()
+    })
+
+    test('the review return with no noted launch is captured by its shape', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      const state = watch.last()
+      expect(state?.board?.runId).toBeNull()
+      expect(state?.board?.survivors.map(f => f.severity)).toEqual(['BLOCKER', 'HIGH', 'LOW'])
+    })
+
+    test('a failed review run is not captured', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION.replace('<status>completed</status>', '<status>failed</status>')))
+      expect(watch.last()?.board ?? null).toBeNull()
+    })
+
+    test('a notification that is no review return passes untouched and leaves the board empty', async ($, on) => {
+      const { submitted, prompts } = engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(OTHER_NOTIFICATION))
+      expect(submitted).toEqual([OTHER_NOTIFICATION])
+      expect((prompts[0]?.origin as { kind?: string } | undefined)?.kind).toBe('task-notification')
+      expect(watch.last()?.board ?? null).toBeNull()
+      // the review shape typed by the person is not a notification: not captured either
+      await $.prompt.submit({ text: REVIEW_NOTIFICATION, origin: { kind: 'composer' } } as never)
+      expect(watch.last()?.board ?? null).toBeNull()
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect(await pane.find({ type: 'Text', text: 'No review captured for feat/example-stream yet (phase implement).' })).toBeDefined()
+      await pane.unmount()
+    })
+
+    test('Accept and Kill submit the named plain prompt, without asUser, and mark the card', async ($, on) => {
+      const { prompts } = engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      const board = toReviewBoard(parseTaskNotification(REVIEW_NOTIFICATION)?.result, null, 'feat/example-stream', 'now')
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      const before = prompts.length
+      await pane.press({ key: 'accept-0' })
+      expect(prompts.length).toBe(before + 1)
+      const accepted = prompts[before]
+      expect(accepted?.text).toBe(findingPrompt('accepted', 0, board))
+      expect(accepted?.asUser).toBeUndefined()
+      expect(accepted?.text).toContain('finding 1 of 3 (BLOCKER, src/api/handler.ts:42, lens correctness)')
+      expect(accepted?.text).not.toContain('permission check')
+      expect(await pane.find({ type: 'Text', text: '✓ accepted' })).toBeDefined()
+      expect(await pane.find({ key: 'accept-0' })).toBeUndefined()
+      await pane.press({ key: 'kill-1' })
+      const killed = prompts[before + 1]
+      expect(killed?.text).toBe(findingPrompt('killed', 1, board))
+      expect(killed?.asUser).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: '✗ killed' })).toBeDefined()
+      expect(watch.last()?.marks).toEqual({ '0': 'accepted', '1': 'killed' })
+      await pane.unmount()
+      const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+      expect(await band.find({ type: 'Text', text: /review 1 open/ })).toBeDefined()
+      await band.unmount()
+    })
+
+    test('the PRD criteria list as toggles; a press ticks and unticks', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect((await pane.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐ SC-001 The widget draws the input.')
+      expect((await pane.find({ key: 'sc-SC-002' }))?.props.label).toBe('☐ SC-002 The parser keeps an empty field.')
+      await pane.press({ key: 'sc-SC-001' })
+      expect((await pane.find({ key: 'sc-SC-001' }))?.props.label).toBe('☑ SC-001 The widget draws the input.')
+      expect(watch.last()?.ticks).toEqual(['feat/example-stream:SC-001'])
+      await pane.press({ key: 'sc-SC-001' })
+      expect((await pane.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐ SC-001 The widget draws the input.')
+      await pane.unmount()
+    })
+
+    test('a tick holds for its stream only', async ($, on) => {
+      engineWorld(on)
+      appendWorld(on)
+      let shown: unknown = STATUS.features[0]
+      journaledWorld(on, () => ({ ...STATUS, features: [shown] }))
+      await $.session.start(START)
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      await pane.press({ key: 'sc-SC-001' })
+      expect((await pane.find({ key: 'sc-SC-001' }))?.props.label).toBe('☑ SC-001 The widget draws the input.')
+      await pane.unmount()
+      shown = FEATURE_PREFIXED // another stream, the same PRD
+      await refreshByAppend($) // a journal append refreshes the position; $.state is kept
+      const other = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect((await other.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐ SC-001 The widget draws the input.')
+      await other.unmount()
+    })
+
+    test('a board captured before any stream was known is drawn for the stream shown', async ($, on) => {
+      engineWorld(on)
+      appendWorld(on)
+      let shown: unknown = { ...STATUS.features[0], branch_match: false } // no stream for this session yet
+      journaledWorld(on, () => ({ ...STATUS, features: [shown] }))
+      const watch = reviewWatch(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(watch.last()?.board?.stream).toBeNull()
+      shown = STATUS.features[0]
+      await refreshByAppend($) // a journal append refreshes the position; $.state is kept
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect(await pane.find({ type: 'Text', text: COUNTS })).toBeDefined()
+      await pane.unmount()
+    })
+
+    test('a board held for another stream is not drawn, and the band counts nothing', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      // the board lands as if another stream had been current when it was captured
+      reviewWatch(on, value => (value.board ? { ...value, board: { ...value.board, stream: 'feat/other-stream' } } : value))
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      expect(await pane.find({ type: 'Text', text: COUNTS })).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: 'No review captured for feat/example-stream yet (phase implement).' })).toBeDefined()
+      // the PRD's criteria still list beneath the line
+      expect(await pane.find({ key: 'sc-SC-001' })).toBeDefined()
+      await pane.unmount()
+      const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+      expect(await band.find({ type: 'Text', text: /review \d+ open/ })).toBeUndefined()
+      await band.unmount()
     })
   })
 })

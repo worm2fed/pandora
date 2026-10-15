@@ -175,8 +175,9 @@ flowchart LR
   implement round and record it under the worklog's review round.` Kill → `… pressed Kill
   … : treat it as rejected, ask the user for the reason, record it under the worklog's
   Rejected findings, and do not fix it.` Never the summary, why or fix text.
-- `/clear` keeps the atom (state survives); the view's stream check hides a board that
-  belongs elsewhere.
+- `/clear` resets `$.state`, the `review` atom included (slice 1's `classic.SessionStart{clear}`
+  hook exists for that); the next review run fills the board again. The view's stream check
+  hides a board that belongs to another stream (round 2 correction).
 
 ### Slice 3 — Design diagrams (ADR 0002)
 
@@ -236,17 +237,17 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings (paralleliz
 - [x] T106 — live check SC-013 in this repository — done when: observed and noted here
 
 ## Slice 3 — Review board (0.4.0)
-- [x] T200 — `review.ts` + types: `parseTaskNotification`, `isReviewReturn`, `toReviewBoard`, `shortPath`; fixture notification; tests — file(s): `shipgate-hud/hooks/review.ts`, `shipgate-hud/types/index.d.ts`, `shipgate-hud/tests/review.test.ts`, `shipgate-hud/tests/fixtures.ts` — done when: tests fail first, then pass
-- [ ] T201 — `register.tsx`: `tool.call{Workflow}` launch note, `prompt.submit` capture, `review` atom, Accept / Kill / tick actions; register tests (capture by id, by shape, a non-review notification untouched, the prompt text and no `asUser`) — file(s): `shipgate-hud/hooks/register.tsx`, `shipgate-hud/tests/register.test.ts` — done when: validate lists both hooks with `.catch`; tests fail first, then pass
-- [ ] T202 — `position.ts`: `prd` ref from `clarify-passed`, `parseCriteria`, `Position.criteria`; tests — file(s): `shipgate-hud/hooks/position.ts`, `shipgate-hud/tests/position.test.ts` — done when: tests fail first, then pass
-- [ ] T203 — `views.tsx`: Review tab (groups, cards, buttons, killed, below floor, SC checklist), tab 4, default in `review`, band segment; views tests on terminal + desktop — file(s): `shipgate-hud/hooks/views.tsx`, `shipgate-hud/tests/views.test.tsx` — done when: tests fail first, then pass
+- [x] T200 — `review.ts` + types: `parseTaskNotification`, `isReviewReturn`, `toReviewBoard`, `shortPath`; fixture notification; tests — file(s): `shipgate-hud/hooks/review.ts`, `shipgate-hud/types/index.d.ts`, `shipgate-hud/tests/review.test.ts`, `shipgate-hud/tests/fixtures.review.ts` — done when: tests fail first, then pass
+- [x] T201 — `register.tsx`: `tool.call{Workflow}` launch note, `prompt.submit` capture, `review` atom, Accept / Kill / tick actions; register tests (capture by id, by shape, a non-review notification untouched, the prompt text and no `asUser`) — file(s): `shipgate-hud/hooks/register.tsx`, `shipgate-hud/tests/register.test.ts` — done when: validate lists both hooks with `.catch`; tests fail first, then pass
+- [x] T202 — `position.ts`: `prd` ref from `clarify-passed`, `parseCriteria`, `Position.criteria`; tests — file(s): `shipgate-hud/hooks/position.ts`, `shipgate-hud/tests/position.test.ts` — done when: tests fail first, then pass
+- [x] T203 — `views.tsx`: Review tab (groups, cards, buttons, killed, below floor, SC checklist), tab 4, default in `review`, band segment; views tests on terminal + desktop — file(s): `shipgate-hud/hooks/views.tsx`, `shipgate-hud/tests/views.test.tsx` — done when: tests fail first, then pass
 
 ## Slice 3 — Design diagrams (0.4.0)
 - [x] T210 [P] — `diagram.ts`: `splitFences`, `parseFlowchart`, `layoutFlowchart`, `flowchartSvg`, `flowchartText`; tests (subset, labels, shapes, subgraph, comments, a sequenceDiagram → null, a cycle) — file(s): `shipgate-hud/hooks/diagram.ts`, `shipgate-hud/tests/diagram.test.ts` — done when: tests fail first, then pass
-- [ ] T211 — `views.tsx` Design tab: fences as Svg / Code / text per surface; views tests (SC-021) — file(s): `shipgate-hud/hooks/views.tsx`, `shipgate-hud/tests/views.test.tsx`, `shipgate-hud/tests/fixtures.ts` — done when: tests fail first, then pass
-- [ ] T220 — docs + version 0.4.0: CHANGELOG, README (Review tab, diagrams; no release notes), `plugin.json` + marketplace — file(s): `shipgate-hud/CHANGELOG.md`, `shipgate-hud/README.md`, `shipgate-hud/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — done when: validate passes on both
-- [ ] T221 — full `/security-review` on the slice 3 hook diff — done when: SC-023
-- [ ] T222 — live check SC-024 — done when: observed and noted here
+- [x] T211 — `views.tsx` Design tab: fences as Svg / Code / text per surface; views tests (SC-021) — file(s): `shipgate-hud/hooks/views.tsx`, `shipgate-hud/tests/views.test.tsx`, `shipgate-hud/tests/fixtures.ts` — done when: tests fail first, then pass
+- [x] T220 — docs + version 0.4.0: CHANGELOG, README (Review tab, diagrams; no release notes), `plugin.json` + marketplace — file(s): `shipgate-hud/CHANGELOG.md`, `shipgate-hud/README.md`, `shipgate-hud/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — done when: validate passes on both
+- [x] T221 — full `/security-review` on the slice 3 hook diff — done when: SC-023
+- [x] T222 — live check SC-024 — done when: observed and noted here
 
 ## Traceability
 - FR-020 → T100, T101
@@ -274,6 +275,18 @@ Tasks are ordered by dependency. `[P]` = independent of its siblings (paralleliz
 - 2026-10-14 — no test of the `.catch` fail-closed path: `detect` and `refresh` swallow their
   own errors, so the hook cannot be made to throw from the test world. The handler runs only
   the pure matcher.
+
+- 2026-10-15 — T201–T203 and T211 built by two parallel Opus workers on the shared working
+  tree (targeted edits only on `views.tsx`, `views.test.tsx`, `fixtures.ts`); verify gate run by
+  the orchestrator: 241 tests, validate, tsc, empty `shipgate/` diff.
+- 2026-10-15 — `$.ui.resolve` completes the element table: the terminal hands out an `Svg`
+  constructor that draws an empty fragment, so "when `ui.Svg` exists" is always true. The
+  Design tab detects support by building one element and checking its `type` (`drawsSvg`).
+- 2026-10-15 — T201–T203 tests were written after the code (the shared tree could not be
+  stashed to show them fail); T211's four tests failed first.
+- 2026-10-15 — `prompt.submit` takes a matcher on `origin.kind`, so the capture hook is
+  `prompt.submit{origin has {kind=task-notification}}`; a composer prompt with the return
+  shape is not captured (tested).
 
 ## Review round 1 — slice 2 (2026-10-14)
 
@@ -367,3 +380,83 @@ close first. Final round, same worker:
 - LOW (85) no test of a throw inside the hook (`FAIL_CLOSED`) and of the stale-position hold
   — the test world cannot make `detect`/`refresh` throw; `refreshPosition` never returns a
   position with an error; the guard is one boolean. Kept as a gap.
+
+## Review round 1 — slice 3 (2026-10-15)
+
+Three-lens review workflow (`wf_bec47d4a-89d`, opus finders): 44 raw → 33 deduped → 22 above
+the floor, no BLOCKER or HIGH, 6 MEDIUM, 16 LOW, 11 below floor; no refuters spent. Full
+`/security-review` on the two new hooks: nothing at or above its threshold; two optional
+hardenings adopted. One fix round, split between the two slice 3 workers:
+
+- S1/S5 MEDIUM `register.tsx:708` — an id-matched launch with no parsable return replaced
+  the board with an empty one → a board is stored only when the result has the return shape
+  and the status is not failed or killed; the launch only stamps the run id and the stream.
+- S2/S21 MEDIUM `views.tsx:352` — an SVG over the element's limit was cut mid-markup → over
+  the limit the non-picture form is drawn with a "too large" line; never sliced.
+- S3 MEDIUM `review.ts:101` — an aborted run (`aborted` on the return) drew as a clean zero
+  board → `aborted` carried, drawn as a warning, band says `review aborted`.
+- S4/S20 MEDIUM `register.tsx:711` — ticks keyed by bare SC id carried across streams, and
+  duplicate ids across PRD sections collided → ticks keyed `<stream>:<id>`, criteria deduped.
+- S6 MEDIUM + security hardening `review.ts:151` — severity, file and lenses went into the
+  Accept/Kill prompt as free text → severity bound to the four labels, file and lens
+  whitelisted by pattern, control characters stripped.
+- S18/S19 LOW — the board was filed under the stream current at return time and stamped with
+  `Date` → the launch records the stream; `at` from `$.clock.now()`.
+- S8/S9/S13 LOW — `shortLocation`, the JSON helpers and the cut helper each lived twice →
+  one each (`review.ts`, new `hooks/json.ts`, `diagram.ts`).
+- S12/S14/S17/S22 LOW `diagram.ts` — doubled shapes half-parsed, leftovers dropped edges,
+  `end-user` skipped as the `end` keyword, a one-line `graph TD; A-->B` parsed to null →
+  doubled shapes mapped, leftovers make the block fall back to Code, keyword needs a
+  boundary, header-line statements parsed.
+- S15, S16, S11, BF guards — criteria section always drawn; keyed rows for the text form;
+  `launches` comment; `criteria ?? []` for an older stored Position; the capture hook passes
+  through without a surface.
+- S7 LOW — duplicate imports and a copied world in `views.test.tsx` → merged;
+  `journaledWorld` takes the worklog text.
+- Visible run id and time under the counts line (so the stamped data earns its place).
+
+## Rejected findings — slice 3 round 1
+- S10 LOW (85) "review fixtures in `fixtures.review.ts`, the plan named `fixtures.ts`" — kept:
+  the file split let two workers write fixtures in parallel without conflicts; the T200 file
+  list is corrected below.
+- below-floor `register.tsx:580` (55) "Accept/Kill use the drawn board but mark the current
+  atom" — the drawn board is the atom's board at render time; a new board resets marks.
+- below-floor `views.tsx:58` (45) "a board captured with stream null is drawn under every
+  stream" — by design until the next board; the launch now records the stream, so null is
+  rare.
+- below-floor `review.ts:166` (45) "`#` lines in a fenced block read as headings" — a PRD
+  fence holding `## Success criteria` is not a real case.
+- below-floor `diagram.ts:204` (40) "recursive layout on a very large chart" — the worklog's
+  charts are tens of nodes; a cap is not worth its code.
+- below-floor `diagram.ts:8` (30) "inline ```mermaid``` on one line opens a fence" — a fence
+  opener is the whole line by the CommonMark rule the splitter follows.
+- below-floor worklog prose (45) — the log entries were tightened in this round's notes.
+
+## Review round 2 — slice 3 (2026-10-15)
+
+Scoped re-review of the fix round, one reviewer (opus, all lenses): every F1–F12 and D1–D8
+fix CONFIRMED with file:line; nothing throws before a `.catch`. Suggested verdict: not-ready
+but close. Final round:
+
+- MEDIUM (85) `diagram.ts:178` — a statement whose start the parser cannot read was still
+  dropped with `continue` (the D2 hole) → null, so the block falls back to Code; test.
+- MEDIUM (85) PRD FR-030 / FR-034 / FR-035 described the pre-fix capture rule, the SVG cap and
+  `/clear` → amended (shape-only capture, launch stream, aborted, per-stream ticks, no cut).
+- MEDIUM (50) "/clear keeps the board" vs register.tsx's "/clear resets $.state" → the code is
+  right: slice 1 re-detects on `classic.SessionStart{clear}` because the state is reset. The
+  CHANGELOG, README, PRD and this worklog now say the board is lost on `/clear`; the three
+  tests that switched streams through `/clear` switch through a refresh instead.
+- LOW — CHANGELOG review-module count 18 → 17; `toFinding` strips control characters and
+  uppercases the severity; `SAFE_FILE` tested on the short path and widened to brackets,
+  parentheses and Unicode letters; the stray module-state comment moved and made consistent
+  with the slice 1 note; `fit` cuts through `cut` (no split surrogate); the "never cut" test
+  asserts what it proves; CHANGELOG says "a `%%` comment line" and names the Code fallback.
+
+## Rejected findings — slice 3 round 2
+- LOW (55) "a hot reload resets `hasSurface` and turns the capture off" — a hot reload raises
+  `session.start` again: the publish gate held commands in this session after its own hot
+  reloads, which needs `hasSurface` true.
+- LOW (80) "labels containing `;` and the `--o` / `--x` / `A@{…}` edge forms fall back to
+  Code" — the fallback is the safe direction; outside the subset by design.
+- LOW (70) "`cut` and `fit` do not count terminal cells (CJK two cells)" — `truncate-end` on
+  the Text hides the overflow; a cell-width table is not worth its code here.

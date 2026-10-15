@@ -5,7 +5,7 @@
 import { mock } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import { ADR, LOG, SIDECAR, STATUS, WORKLOG } from './fixtures'
+import { ADR, LOG, PRD, SIDECAR, STATUS, WORKLOG } from './fixtures'
 
 export const BAND = {
   component: 'AbovePrompt' as const,
@@ -32,10 +32,17 @@ export const ok = (stdout: string) => ({
  * root; `shell` is where the shell's `cd` has taken the session (the root unless given);
  * `sessionId` is what `$.session.id()` answers.
  */
-export function engineWorld(on: On, cwd: string = START.cwd, shell: string = cwd, sessionId: string = SESSION_ID): { commands: string[]; opened: string[]; submitted: string[] } {
+export function engineWorld(
+  on: On,
+  cwd: string = START.cwd,
+  shell: string = cwd,
+  sessionId: string = SESSION_ID,
+): { commands: string[]; opened: string[]; submitted: string[]; prompts: Record<string, unknown>[] } {
   const commands: string[] = []
   const opened: string[] = []
   const submitted: string[] = []
+  // every prompt.submit event that reached the engine, whole (origin, asUser, …)
+  const prompts: Record<string, unknown>[] = []
   mock.clock(on)
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: shell }))
@@ -56,9 +63,10 @@ export function engineWorld(on: On, cwd: string = START.cwd, shell: string = cwd
   })
   on('prompt.submit', async (_$, e) => {
     submitted.push(e.text)
+    prompts.push({ ...e })
     return { text: e.text }
   })
-  return { commands, opened, submitted }
+  return { commands, opened, submitted, prompts }
 }
 
 /** A project with no sidecar: every path is missing, every process run is recorded. */
@@ -77,9 +85,10 @@ type Ran = ReturnType<typeof ok>
 /**
  * A journaled project: the sidecar and journal.py exist, status and log answer the fixtures.
  * `status` is the status JSON, or a function of the argv returning it (or a whole process
- * result, for a run that fails). `log` is the `log --json` answer.
+ * result, for a run that fails). `log` is the `log --json` answer. `worklog` is the text the
+ * stream's worklog reads as.
  */
-export function journaledWorld(on: On, status: unknown = STATUS, log: unknown = LOG): { runs: string[][]; reads: string[] } {
+export function journaledWorld(on: On, status: unknown = STATUS, log: unknown = LOG, worklog: string = WORKLOG): { runs: string[][]; reads: string[] } {
   const runs: string[][] = []
   const reads: string[] = []
   on('fs.exists', async (_$, e) => ({
@@ -88,8 +97,9 @@ export function journaledWorld(on: On, status: unknown = STATUS, log: unknown = 
   on('fs.read', async (_$, e) => {
     reads.push(e.path)
     if (e.path.endsWith('.claude/shipgate.json')) return { value: JSON.stringify(SIDECAR) }
-    if (e.path.endsWith('example.worklog.md')) return { value: WORKLOG }
+    if (e.path.endsWith('example.worklog.md')) return { value: worklog }
     if (e.path.endsWith('0007-example-decision.md')) return { value: ADR }
+    if (e.path.endsWith('/docs/prd/example.md')) return { value: PRD }
     return { deny: `no such fixture: ${e.path}` }
   })
   on('process.run', async (_$, e) => {

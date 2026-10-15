@@ -2,6 +2,55 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.4.0 — the Review board and the Design diagrams. The review workflow's return arrived once
+in the transcript and then scrolled away. The worklog's diagrams showed as grey code.
+
+The pane has a new **Review** tab. Hotkey `4` opens it. It is the default tab in the `review`
+phase. A `tool.call` hook on `Workflow` notes each launch of the shipgate review workflow. It
+keeps the call's tool-use id, the run id from the result and the stream shown at launch. A
+`prompt.submit` hook reads each task-notification prompt. It takes the notification's
+tool-use id, status and result. Only a result with the return's shape becomes the board. A
+failed or killed run is not stored. When the tool-use id matches a noted launch, the board
+gets that launch's run id and stream. Otherwise it goes under the current stream. The hook
+never drops the prompt and never changes it. Any other notification passes untouched. A
+session with no surface stores nothing.
+
+The board starts with a counts line: found, deduped, candidates, survivors, killed, below
+floor, refuters requested and reported, and unverified. The survivors follow, grouped by
+severity: BLOCKER, HIGH, MEDIUM, LOW. Each survivor is one card. The card shows the severity,
+the confidence, the verification and quorum, and the lenses. It shows `file:line`, with the
+path cut to its last three segments, beside the summary. Each card has **Accept** and
+**Kill** buttons. A press submits a plain prompt, not as the user. The prompt names the
+finding by its position, severity, `file:line` and lens. It never carries the finding's text.
+Accept asks the orchestrator to fix the finding. Kill asks it to record the finding as
+rejected, with the user's reason. The card then shows the mark. Killed findings and findings
+below the confidence floor follow, one line each. A dim line under the counts shows the run
+id and the capture time. A return that names an `aborted` reason shows it as a warning there.
+
+The tab ends with the PRD's success criteria as a checklist. The PRD is the one the stream's
+`clarify-passed` event names. The ref must be relative and inside the project, with no `..`.
+A press ticks or unticks a criterion. A tick holds for its stream only. The ticks and the
+marks stay in the session only. `/clear` resets the pane state, the board included; the next
+review run fills it again. A board stored for another stream is not drawn. The band adds
+`review N open` while a board for the stream is held. N counts the survivors with no mark.
+For an aborted run the band says `review aborted`.
+
+The Design tab now draws diagrams (ADR 0002). A fenced `svg` block is drawn as `Svg` where
+the surface draws one: desktop, mobile and vscode. The terminal shows it as `xml` code. The
+HUD parses a fenced `mermaid` flowchart itself. The subset is `flowchart` or `graph` with a
+direction and the node shapes `[ ]`, `( )`, `{ }` and `(( ))`. Edges are `-->`, `---`,
+`-.->` and `==>`, with `|label|` or `-- label -->`. A `subgraph` is flattened. A `%%` comment
+line is skipped. A doubled shape such as `[[ ]]` or `{{ }}` maps to the nearest supported
+shape. A statement the HUD cannot read makes the whole block fall back to `mermaid` code. On
+those surfaces the HUD lays the chart out into an SVG. In the terminal it
+draws the chart as box-and-arrow text, one line per layer. Other Mermaid kinds show as
+`mermaid` code. The prose around a block stays Markdown. The HUD starts no renderer process
+and makes no network call.
+
+Tests cover the review module (19), the capture hooks and the buttons (16) and the Review tab
+on terminal and desktop (5). They cover the PRD criteria (3), the diagram module (20) and the
+Design tab's diagrams on both surfaces (5).
+
 v0.3.0 — the publish gate. shipgate lets an MR/PR go up only after a `review-verdict` of
 `ready`, or after the user's own publish `gate-decision`. That record must come after the last
 `task-done`. journal.py checks this rule on the `mr-opened` event. That event is written after

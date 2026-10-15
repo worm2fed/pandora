@@ -280,18 +280,24 @@ worklog as fenced blocks that the Markdown element draws as grey code.
 - **FR-030** — A `tool.call` hook on `Workflow` notes a launch of the shipgate review workflow
   (the script text or path names `shipgate-review`, or the tool result names the run id): the
   call's `tool_use_id`, the run id and the time. A `prompt.submit` hook whose origin is
-  `task-notification` reads the notification's `<tool-use-id>`, `<status>` and `<result>`; when
-  the tool-use-id matches a noted launch, or the result parses as the review return shape
-  (`survivors`, `killed`, `belowFloor` arrays and a `counts` object), the return is stored in
-  the `review` atom under the current stream, with the run id and the time. The hook never
-  changes or drops the prompt. A notification that is not one of these passes untouched.
+  `task-notification` reads the notification's `<tool-use-id>`, `<status>` and `<result>`. The
+  return is stored in the `review` atom only when the result parses as the review return
+  shape (`survivors`, `killed`, `belowFloor` arrays and a `counts` object) and the status is
+  neither `failed` nor `killed`. A noted launch never creates a board on its own: when the
+  tool-use-id matches one, it supplies the run id and the stream shown at launch, and the
+  board is filed under that stream; otherwise under the stream shown when the return arrives.
+  The board carries the return's `aborted` reason when present. The hook never changes or
+  drops the prompt, and stores nothing in a session with no surface. A notification that is
+  not a review return passes untouched.
 - **FR-031** — A **Review** tab (hotkey `4`, the default tab in the `review` phase) draws the
   board: the counts line (found, deduped, candidates, survivors, killed, below floor, refuters
   requested / reported, unverified), then the survivors grouped by severity in the order
   BLOCKER, HIGH, MEDIUM, LOW, each as one card with severity, confidence, verification and
   quorum, the lenses, `file:line` (the path shortened to its last three segments) and the
   summary; then the killed findings (one line each with the quorum) and the below-floor ones
-  (one line each). The user's accept / kill marks are drawn on the card.
+  (one line each). The user's accept / kill marks are drawn on the card. Under the counts a
+  line shows the run id and the capture time; an aborted run shows a warning line and the
+  band's segment reads `review aborted`.
 - **FR-032** — Each survivor carries **Accept** and **Kill** buttons. A press submits a plain
   prompt (not `asUser`) that names the finding by its position in the board, severity,
   `file:line` and lens, and asks the orchestrator to fix it in the implement round (Accept) or
@@ -301,18 +307,20 @@ worklog as fenced blocks that the Markdown element draws as grey code.
 - **FR-033** — The Review tab ends with the PRD's **SC-### checklist**: the `- **SC-NNN** —`
   lines of the `## Success criteria` section of the PRD the stream's `clarify-passed` event
   names (relative, in-project, no `..`), each with a toggle the user ticks as the orchestrator
-  shows the evidence; the ticks live in the `review` atom for the session. No PRD → one line
-  saying so.
+  shows the evidence; the ticks live in the `review` atom for the session, keyed by stream,
+  and a criterion id repeated across sections counts once. No PRD → one line saying so.
 - **FR-034** — With no review stored for the stream, the tab says so and names the phase.
-  `/clear` and `/resume` keep a stored review only when its stream is the one the HUD then
-  shows; a stored review for another stream is not drawn.
+  `/clear` resets the pane state, the board included (the next review run fills it again). A
+  stored review for another stream is not drawn.
 - **FR-035** — In the **Design** tab a fenced block whose info string is `mermaid` or `svg` is
   drawn as a diagram instead of code. On a surface with `Svg` (desktop, mobile, vscode) an
-  `svg` block is drawn as `Svg` with its source (capped at the element's limit) and the section
-  title as `alt`; a `mermaid` flowchart (`flowchart` / `graph` with a direction, node shapes
+  `svg` block is drawn as `Svg` with its source and the section title as `alt`; a source over
+  the element's limit (131072 characters) is never cut: the non-picture form is drawn under a
+  "too large" line; a `mermaid` flowchart (`flowchart` / `graph` with a direction, node shapes
   `[ ]`, `( )`, `{ }`, `(( ))`, edges `-->`, `---`, `-.->`, `==>`, edge labels `|text|` and
-  `-- text -->`, `subgraph` flattened, `%%` comments) is laid out by the HUD into an SVG and
-  drawn as `Svg`. In the terminal a flowchart is drawn as its text form: a layered box-and-arrow
+  `-- text -->`, doubled shapes mapped to the nearest of those, `subgraph` flattened, `%%`
+  comment lines skipped) is laid out by the HUD into an SVG and drawn as `Svg`; a statement
+  the HUD cannot read makes the whole block fall back to `Code`. In the terminal a flowchart is drawn as its text form: a layered box-and-arrow
   (`[A] ──► [B]`, edge labels in the arrow), and an `svg` block as `Code`. A mermaid block of
   another kind (sequence, class, state…) is drawn as `Code` with language `mermaid` on every
   surface. The prose around a block keeps rendering as Markdown.

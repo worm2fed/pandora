@@ -146,3 +146,54 @@ status: accepted
 
 > One line.
 `
+
+/** A worklog whose Design draws: a mermaid flowchart and an svg block in one section, a sequence diagram in another. */
+export const WORKLOG_WITH_DIAGRAMS = `---
+type: worklog
+title: "Worklog: Example"
+status: implementing
+---
+
+# Worklog: Example
+
+# Design
+
+## Data flow
+
+Requests go through a queue before they reach the store.
+
+\`\`\`mermaid
+flowchart LR
+  A[api] -->|enqueue| B[queue]
+  B -->|drain| C[worker]
+  C -->|write| D[store]
+\`\`\`
+
+The store is the only writer of record.
+
+\`\`\`svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>
+\`\`\`
+
+## Sequence
+
+\`\`\`mermaid
+sequenceDiagram
+  api->>queue: enqueue
+  queue->>store: write
+\`\`\`
+
+# Build Plan
+
+## Feature
+- [ ] T001 — draw the diagrams — file(s): \`src/draw.ts\` — done when: tested
+`
+
+/** The PRD the LOG's clarify-passed event names (`docs/prd/example.md`): two success criteria. */
+export const PRD = `# PRD: Example
+
+## Success criteria
+
+- **SC-001** — The widget draws the input.
+- **SC-002** — The parser keeps an empty field.
+`

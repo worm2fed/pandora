@@ -17,6 +17,7 @@ import {
   toPosition,
 } from '../hooks/position'
 import { ADR, FEATURE, LOG, WORKLOG } from './fixtures'
+import { PRD_WITH_CRITERIA } from './fixtures.review'
 
 describe('position', () => {
   test('phase marks: phases before the current are done, the current is current', async () => {
@@ -109,9 +110,9 @@ describe('position', () => {
       { seq: 2, type: 'phase-entered', ts: 't', data: { phase: 'workspace', refs: ['docs/adr/0001-older.md'] } },
       { seq: 3, type: 'deviation', ts: 't', data: { refs: ['docs/prd/older.worklog.md#deviations'] } },
     ]
-    expect(artifactRefs(context)).toEqual({ worklog: null, adrs: [] })
+    expect(artifactRefs(context)).toEqual({ worklog: null, adrs: [], prd: null })
     const committed = [...context, { seq: 4, type: 'design-committed', ts: 't', data: { worklog: 'docs/prd/new.worklog.md', adrs: ['docs/adr/0002-new.md'] } }]
-    expect(artifactRefs(committed)).toEqual({ worklog: 'docs/prd/new.worklog.md', adrs: ['docs/adr/0002-new.md'] })
+    expect(artifactRefs(committed)).toEqual({ worklog: 'docs/prd/new.worklog.md', adrs: ['docs/adr/0002-new.md'], prd: null })
   })
 
   test('artifact refs: only safe relative paths are kept', async () => {
@@ -180,6 +181,33 @@ describe('position', () => {
     expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [] }).publish.authorized).toBe(false)
     const ready = { seq: 50, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }
     expect(toPosition({ feature: FEATURE, events: [...LOG.events, ready], worklog: null, adrs: [] }).publish).toEqual({ authorized: true, by: 'review-verdict', at: 't' })
+  })
+
+  test('criteria: the clarify-passed event names the PRD, the last one wins', async () => {
+    expect(artifactRefs(LOG.events).prd).toBe('docs/prd/example.md')
+    const later = { seq: 50, type: 'clarify-passed', ts: 't', data: { prd: 'docs/prd/second.md#success-criteria' } }
+    expect(artifactRefs([...LOG.events, later]).prd).toBe('docs/prd/second.md')
+    // a PRD ref on another event type is context, never the stream's PRD
+    expect(artifactRefs([{ seq: 1, type: 'flow-started', ts: 't', data: { prd: 'docs/prd/older.md' } }]).prd).toBeNull()
+  })
+
+  test('criteria: an absolute, a parent-traversal or a non-Markdown PRD ref is not read', async () => {
+    const passed = (prd: unknown) => [{ seq: 1, type: 'clarify-passed', ts: 't', data: { prd } }]
+    expect(artifactRefs(passed('/etc/prd.md')).prd).toBeNull()
+    expect(artifactRefs(passed('../outside/prd.md')).prd).toBeNull()
+    expect(artifactRefs(passed('docs/../../prd.md')).prd).toBeNull()
+    expect(artifactRefs(passed('docs/prd/example.txt')).prd).toBeNull()
+    expect(artifactRefs(passed(42)).prd).toBeNull()
+    // a later unsafe ref does not erase an earlier safe one
+    expect(artifactRefs([...passed('docs/prd/a.md'), ...passed('/etc/b.md')]).prd).toBe('docs/prd/a.md')
+  })
+
+  test('criteria: toPosition parses the PRD\'s success criteria; none without a PRD', async () => {
+    const position = toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [], prd: { path: 'docs/prd/example.md', text: PRD_WITH_CRITERIA } })
+    expect(position.criteria.map(c => c.id)).toEqual(['SC-001', 'SC-002', 'SC-003', 'SC-004', 'SC-010'])
+    expect(position.criteria[1]).toEqual({ id: 'SC-002', text: 'The pane lists the Build Plan, wrapped onto a second line.' })
+    expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [] }).criteria).toEqual([])
+    expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [], prd: null }).criteria).toEqual([])
   })
 
   test('toPosition: no worklog and no events still yields a position', async () => {

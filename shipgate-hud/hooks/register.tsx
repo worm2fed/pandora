@@ -7,9 +7,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Adr, Decision, Position, Tab } from '../types'
+import type { Adr, Decision, Position, ReviewMark, ReviewState, Tab } from '../types'
 import { artifactRefs, matchesHome, parseAdr, streamSlug, toPosition } from './position'
 import { FAIL_CLOSED, denyReason, holdReason, publishCommandOf } from './publish'
+import { findingPrompt, isReviewLaunch, isReviewReturn, parseTaskNotification, runIdOf, tickKey, toReviewBoard } from './review'
 import { PANE_ID, bandOf, paneOf } from './views'
 import type { Actions, Ui } from './views'
 
@@ -426,11 +427,13 @@ export async function refreshPosition($: Engine, script: string, homes: Homes): 
       const text = await readText($, inProject(path))
       if (text !== null) adrs.push(parseAdr(path, text))
     }
+    const prdText = refs.prd ? await readText($, inProject(refs.prd)) : null
     const position = toPosition({
       feature,
       events,
       worklog: worklogPath && worklogText !== null ? { path: worklogPath, text: worklogText } : null,
       adrs,
+      prd: refs.prd && prdText !== null ? { path: refs.prd, text: prdText } : null,
     })
     return { position, error: null }
   } catch (error) {
@@ -443,6 +446,7 @@ const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null as Tab | 
 const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null as string | null)
 const lastError = atom({ plugin: 'shipgate-hud', key: 'lastError' } as const, null as string | null)
 const isJournaled = atom({ plugin: 'shipgate-hud', key: 'isJournaled' } as const, false)
+const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, { board: null, marks: {}, ticks: [] } as ReviewState)
 
 const JOURNAL_APPEND = /journal\.py\b[\s\S]*\bappend\b/
 
@@ -455,6 +459,41 @@ const commandOf = (input: unknown): string => {
   const command = typeof input === 'object' && input !== null ? (input as { command?: unknown }).command : undefined
   return typeof command === 'string' ? command : ''
 }
+
+/** A Workflow argument read off the call as a string; undefined when absent or another type. */
+const stringArg = (e: unknown, key: string): string | undefined => {
+  const value = typeof e === 'object' && e !== null ? (e as Record<string, unknown>)[key] : undefined
+  return typeof value === 'string' ? value : undefined
+}
+
+/** A tool result's text: core's `text`, else the result itself when a string, else its JSON. */
+const textOf = (ran: { result?: unknown; text?: unknown }): string => {
+  if (typeof ran.text === 'string') return ran.text
+  if (typeof ran.result === 'string') return ran.result
+  try {
+    return JSON.stringify(ran.result) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** A review workflow launch this session noted: the Workflow call's id, the run id its result named, and the stream shown when it launched. */
+type Launch = { toolUseId: string; runId: string | null; stream: string | null }
+
+/** The most launches remembered; an older one's notification is still captured by its shape. */
+const LAUNCH_LIMIT = 8
+
+// The review launches noted this session. Lost on a plugin reload and never refilled: a lost
+// launch's return is still captured by its shape, only without its run id and launch stream.
+const launches: Launch[] = []
+
+const noteLaunch = (launch: Launch): void => {
+  launches.push(launch)
+  if (launches.length > LAUNCH_LIMIT) launches.splice(0, launches.length - LAUNCH_LIMIT)
+}
+
+const launchFor = (toolUseId: string | null): Launch | undefined =>
+  toolUseId === null ? undefined : launches.find(launch => launch.toolUseId === toolUseId)
 
 // Module state: lost on a reload, which is fine — session.start runs again and refills it.
 let journalScript = ''
@@ -474,8 +513,9 @@ async function detect($: EngineInterface): Promise<boolean> {
 }
 
 async function refreshOnce($: EngineInterface): Promise<void> {
-  // Module state is empty after a plugin reload while $.state (the position, the last error)
-  // survives it: locate the project again rather than show what an older module left behind.
+  // Module state is empty after a plugin reload, until session.start refills it, while $.state
+  // (the position, the last error) survives it: locate the project again rather than show what
+  // an older module left behind.
   if (projectRoot === null && !(await detect($))) {
     await update($, position, () => null)
     await update($, lastError, () => null)
@@ -539,8 +579,26 @@ function vetoText(stream: string, total: number, decision: Decision): string {
   )
 }
 
-function actionsOf($: EngineInterface, current: Position | null): Actions {
+/** Accept or Kill on survivor `index` of the board drawn: the plain prompt names it (never `asUser`), and the mark is kept. */
+function markFinding($: EngineInterface, drawn: ReviewState | null, action: ReviewMark, index: number): void {
+  const board = drawn?.board ?? null
+  if (board === null || board.survivors[index] === undefined) return
+  void update($, review, s => ({ ...s, marks: { ...s.marks, [String(index)]: action } }))
+  void $.prompt.submit({ text: findingPrompt(action, index, board) })
+}
+
+function actionsOf($: EngineInterface, current: Position | null, drawn: ReviewState | null = null): Actions {
   return {
+    accept: (index: number) => {
+      markFinding($, drawn, 'accepted', index)
+    },
+    kill: (index: number) => {
+      markFinding($, drawn, 'killed', index)
+    },
+    tick: (id: string) => {
+      const key = tickKey(current?.stream ?? null, id)
+      void update($, review, s => ({ ...s, ticks: s.ticks.includes(key) ? s.ticks.filter(t => t !== key) : [...s.ticks, key] }))
+    },
     setTab: (next: Tab) => {
       void update($, tab, () => next)
     },
@@ -637,11 +695,38 @@ export const register: Register = (on, options) => {
     return answer === ONCE ? next(e) : { decision: 'deny' as const, reason: denyReason(head, current, error) }
   }).catch(($, e, next) => (publishCommandOf(commandOf(e.input)) !== null ? { decision: 'deny' as const, reason: FAIL_CLOSED } : next(e)))
 
+  // The review workflow launched: note its call id and run id, so its notification is known by id.
+  on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (ran.deny === undefined && isReviewLaunch([stringArg(e, 'script'), stringArg(e, 'scriptPath'), stringArg(e, 'name')])) {
+      const current = await read($, position)
+      noteLaunch({ toolUseId: e.tool_use_id, runId: runIdOf(textOf(ran)), stream: current?.stream ?? null })
+    }
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // A background task finished: when its result is the review workflow's return, it becomes the
+  // Review board. A noted launch only stamps the run id and the stream it launched on; an id
+  // match alone never makes a board. The prompt always passes on unchanged; never dropped.
+  on('prompt.submit', { origin: { kind: 'task-notification' } }, async ($, e, next) => {
+    if (!hasSurface) return next(e) // nothing to draw (claude -p, the SDK)
+    const note = parseTaskNotification(e.text)
+    if (note && note.status !== 'failed' && note.status !== 'killed' && isReviewReturn(note.result)) {
+      const launch = launchFor(note.toolUseId)
+      const stream = launch?.stream ?? (await read($, position))?.stream ?? null
+      const at = new Date(await $.clock.now()).toISOString()
+      const board = toReviewBoard(note.result, launch?.runId ?? null, stream, at)
+      await update($, review, s => ({ board, marks: {}, ticks: s.ticks }))
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, position)
     if (e.props.hasSurvey || current === null || !(await read($, isJournaled))) return next(e)
     const ui = $.ui.resolve(e) as unknown as Ui
-    return bandOf(ui, current, actionsOf($, current), e.props.bodyColumns)
+    const drawn = await read($, review)
+    return bandOf(ui, current, actionsOf($, current, drawn), e.props.bodyColumns, drawn)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
@@ -652,7 +737,8 @@ export const register: Register = (on, options) => {
       designOpen: await read($, designOpen),
       lastError: await read($, lastError),
       columns: e.props.bodyColumns,
+      review: await read($, review),
     }
-    return paneOf(ui, current, state, actionsOf($, current))
+    return paneOf(ui, current, state, actionsOf($, current, state.review))
   })
 }

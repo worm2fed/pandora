@@ -2,8 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { clock, parseAdr, toPosition } from '../hooks/position'
 import { defaultTab, packSegments, summaryOf } from '../hooks/views'
-import { ADR, FEATURE, LOG, WORKLOG } from './fixtures'
+import { ADR, FEATURE, LOG, STATUS, WORKLOG, WORKLOG_WITH_DIAGRAMS } from './fixtures'
 import { BAND, PANE, START, engineWorld, journaledWorld } from './world'
+import { REVIEW_NOTIFICATION } from './fixtures.review'
 
 const POSITION = toPosition({
   feature: FEATURE,
@@ -133,5 +134,148 @@ describe('views', () => {
     const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
     expect(await ui.find({ type: 'Text', text: /No shipgate stream/ })).toBeDefined()
     await ui.unmount()
+  })
+})
+
+const SVG_SOURCE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
+
+describe('design diagrams', () => {
+  test('terminal: a flowchart is box-and-arrow text, an svg block is xml Code, no Svg', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, WORKLOG_WITH_DIAGRAMS)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    await ui.press({ key: 'tab-design' })
+    // the prose around the blocks stays Markdown
+    expect((await ui.find({ key: 'design-md-data-flow' }))?.text).toContain('through a queue')
+    expect(await ui.find({ type: 'Markdown', text: /only writer of record/ })).toBeDefined()
+    const arrow = await ui.find({ type: 'Text', text: /\[api\] ──enqueue──► \[queue\]/ })
+    expect(arrow).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /\[worker\] ──write──► \[store\]/ })).toBeDefined()
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    const code = await ui.find({ type: 'Code' })
+    expect(code?.props.language).toBe('xml')
+    expect(code?.props.source).toBe(SVG_SOURCE)
+    await ui.unmount()
+  })
+
+  test('desktop: a flowchart and an svg block are Svg with the section title as alt', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, WORKLOG_WITH_DIAGRAMS)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'desktop', ...PANE })
+    await ui.press({ key: 'tab-design' })
+    const drawings = await ui.findAll({ type: 'Svg' })
+    expect(drawings.length).toBe(2)
+    const [chart, block] = drawings
+    expect(String(chart?.props.source).startsWith('<svg')).toBe(true)
+    expect(chart?.props.source).toContain('queue')
+    expect(chart?.props.alt).toBe('Data flow')
+    expect(block?.props.source).toBe(SVG_SOURCE)
+    expect(block?.props.alt).toBe('Data flow')
+    expect(await ui.find({ type: 'Code' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /──►/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`${surface}: a sequenceDiagram is mermaid Code`, async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, STATUS, LOG, WORKLOG_WITH_DIAGRAMS)
+      await $.session.start(START)
+      const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface, ...PANE })
+      await ui.press({ key: 'tab-design' })
+      await ui.press({ key: 'design-sequence' })
+      const code = await ui.find({ type: 'Code' })
+      expect(code?.props.language).toBe('mermaid')
+      expect(code?.props.source).toContain('sequenceDiagram')
+      expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
+  test('desktop: a drawing over the Svg limit is the text form or xml Code with a note; Code is passed whole, the engine cuts Code at 100000', async ($, on) => {
+    // a 450-node chain lays out far past 131072 characters of SVG; the svg block is padded past it
+    const chain = Array.from({ length: 450 }, (_, i) => `  n${i}[node ${i}] --> n${i + 1}`).join('\n')
+    const bigSvg = SVG_SOURCE.replace('<rect width="10" height="10"/>', '<rect width="10" height="10"/>'.repeat(5000))
+    const worklog = WORKLOG_WITH_DIAGRAMS.replace(/flowchart LR\n[^`]*/, `flowchart LR\n${chain}\n`).replace(SVG_SOURCE, bigSvg)
+    engineWorld(on)
+    journaledWorld(on, STATUS, LOG, worklog)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'desktop', ...PANE })
+    await ui.press({ key: 'tab-design' })
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    const notes = await ui.findAll({ type: 'Text', text: /^diagram too large to draw as a picture \(\d+ characters\)$/ })
+    expect(notes.length).toBe(2)
+    expect(notes[1]?.text).toBe(`diagram too large to draw as a picture (${bigSvg.length} characters)`)
+    expect(await ui.find({ type: 'Text', text: /\[node 0\] ──► \[node 1\]/ })).toBeDefined()
+    const code = await ui.find({ type: 'Code' })
+    expect(code?.props.language).toBe('xml')
+    const drawn = String(code?.props.source)
+    const tail = /\n… (\d+) more characters, not drawn$/.exec(drawn)
+    const kept = drawn.slice(0, tail?.index ?? drawn.length)
+    // the engine cuts what one drawing shows at 100000 characters and reports the rest it got
+    expect(tail).not.toBeNull()
+    expect(bigSvg.startsWith(kept)).toBe(true)
+    expect(kept.length + Number(tail?.[1])).toBe(bigSvg.length)
+    await ui.unmount()
+  })
+})
+
+describe('review tab', () => {
+  const IN_REVIEW = { ...STATUS, features: [{ ...FEATURE, phase: 'review', phase_entered_at: '2026-10-01T10:00:00+00:00' }] }
+  const notification = { text: REVIEW_NOTIFICATION, origin: { kind: 'task-notification' } } as never
+
+  test('the Review tab opens by default in the review phase', async () => {
+    expect(defaultTab('review')).toBe('review')
+  })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    test(`${surface}: in review the pane opens on the board, survivors grouped by severity`, async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, IN_REVIEW)
+      await $.session.start(START)
+      await $.prompt.submit(notification)
+      const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface, ...PANE })
+      expect((await ui.find({ type: 'Text', text: ' 4 Review ' }))?.props.inverse).toBe(true)
+      expect(await ui.find({ key: 'tab-review' })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /^found 9 · deduped 8 · candidates 5 · survivors 3/ })).toBeDefined()
+      const headers = await ui.findAll({ type: 'Text', text: /^ {2}(BLOCKER|HIGH|MEDIUM|LOW) \(\d+\)$/ })
+      expect(headers.map(h => h.text)).toEqual(['  BLOCKER (1)', '  HIGH (1)', '  LOW (1)'])
+      const cards = await ui.findAll({ type: 'Text', text: /^▎ / })
+      expect(cards.map(c => c.text)).toEqual(['▎ BLOCKER', '▎ HIGH', '▎ LOW'])
+      expect((await ui.find({ type: 'Text', text: '▎ BLOCKER' }))?.props.color).toBe('error')
+      expect(await ui.find({ type: 'Text', text: '70% · not-targeted 0/0 · simplicity+security+conventions+design' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '  src/util/format.ts:?' })).toBeDefined()
+      expect(await ui.find({ key: 'accept-2' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'KILLED (1)' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'BELOW FLOOR (2)' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'SUCCESS CRITERIA' })).toBeDefined()
+      expect(await ui.find({ key: 'sc-SC-002' })).toBeDefined()
+      await ui.unmount()
+    })
+  }
+
+  test('no board yet: the tab names the stream and the phase, then the criteria', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW)
+    await $.session.start(START)
+    const ui = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await ui.find({ type: 'Text', text: 'No review captured for feat/example-stream yet (phase review).' })).toBeDefined()
+    expect((await ui.find({ key: 'sc-SC-001' }))?.props.label).toBe('☐ SC-001 The widget draws the input.')
+    await ui.unmount()
+  })
+
+  test('the band counts the open findings while a board for the stream is held', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, IN_REVIEW)
+    await $.session.start(START)
+    const before = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect(await before.find({ type: 'Text', text: /review \d+ open/ })).toBeUndefined()
+    await before.unmount()
+    await $.prompt.submit(notification)
+    const after = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect(await after.find({ type: 'Text', text: /review 3 open/ })).toBeDefined()
+    await after.unmount()
   })
 })
