@@ -128,8 +128,11 @@ probes each distinct branch once, and shows the most recently active stream amon
 matches (several nested repos may sit on branches with streams, one live, the rest dormant).
 Dot-directories and `node_modules` are not looked into. When the events name no worklog yet,
 the HUD looks in the sidecar's worklog home for a `*.worklog.md` whose name carries the
-stream's slug (`feat/x-y` → `x-y`) and otherwise shows no plan. It writes nothing: a veto
-goes through the prompt, and the orchestrator records the outcome.
+stream's slug (`feat/x-y` → `x-y`) and otherwise shows no plan. A worklog that another live
+stream's events name belongs to that stream, so the HUD leaves it alone (`epic/x` next to a
+child whose worklog is `x.worklog.md`); that check reads each sibling stream's log, and only
+once a slug-named worklog was found. It writes nothing: a veto goes through the prompt, and
+the orchestrator records the outcome.
 
 `journal.py` is looked for, in order: the `journalScript` option; beside this plugin in a
 marketplace checkout (`../shipgate/scripts/journal.py`, the plugin folder resolved through a

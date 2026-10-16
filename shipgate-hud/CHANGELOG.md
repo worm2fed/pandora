@@ -2,6 +2,16 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.5.1 — the worklog fallback leaves another stream's worklog alone. When a stream's events
+name no worklog, the HUD scans the worklog home for one named for the stream's slug. Two
+streams can share a slug: an epic stream `epic/x` beside a child whose worklog is
+`x.worklog.md`. The epic's HUD then drew the child's Build Plan with none of its tasks done
+(`0/12 done`), because the child's `task-done` events sit on the child's stream. The fallback
+now skips a worklog that another live stream's events name. It reads each sibling stream's
+log for that, and only after a slug-named worklog was found; a sibling whose log cannot be
+read claims nothing. A completed stream is not in the status brief, so its worklog is not
+protected.
+
 v0.5.0 — diagrams drawn in the terminal. The Design tab drew a flowchart in the terminal as a
 list: one line per layer, one line per edge. It now draws the chart as a picture made of
 box-drawing characters (ADR 0003). Each node is a box with its label inside: square corners

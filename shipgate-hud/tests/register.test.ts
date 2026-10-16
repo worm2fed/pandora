@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 import { ADR, FEATURE_PREFIXED, LOG, SIDECAR, STATUS } from './fixtures'
 import { BAND, PANE, SESSION_ID, START, bareWorld, engineWorld, journaledWorld, ok } from './world'
@@ -456,6 +457,156 @@ describe('register', () => {
     const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
     // the Plan tab shows the worklog named for the slug, not the newer `other-feature` one
     expect(await pane.find({ type: 'Text', text: '2/4 done · 1 unrecorded · 1 failing' })).toBeDefined()
+    await pane.unmount()
+  })
+
+  // Two streams may share a slug by accident: an epic stream `epic/x` and the worklog `x.worklog.md`
+  // that one of its children named in its events. The fallback is for a stream whose events name
+  // no worklog yet, so a worklog another live stream's events name is that stream's, not a match.
+  const OTHER_STREAM = {
+    ...FEATURE_PREFIXED,
+    feature: 'feat/other-stream',
+    stream: 'feat/other-stream',
+    branch_match: false,
+    session_match: false,
+    last_event: { seq: 50, ts: '2026-10-01T10:00:00+00:00', type: 'task-done' },
+  }
+  const CLAIMING_LOG = {
+    events: [
+      { seq: 45, type: 'design-committed', ts: '2026-10-01T09:00:00+00:00', data: { worklog: 'plugin/docs/prd/example-stream.worklog.md' } },
+      { seq: 50, type: 'task-done', ts: '2026-10-01T10:00:00+00:00', data: { task_ids: ['T001'] } },
+    ],
+  }
+
+  /** The own stream's events with the worklog ref gone: what makes the HUD fall back to the slug scan. */
+  const NO_REFS = { events: LOG.events.filter(e => e.type !== 'design-committed') }
+
+  /**
+   * The fallback world: a worklog home listing `files` (a slug-named worklog by default), the own
+   * stream's events naming none. A `logs` entry is the `log --json` answer for that stream, or a
+   * whole process result (`{ value }`, a run that fails) or a refusal (`{ deny }`, a cut run).
+   */
+  function fallbackWorld(on: On, status: unknown, logs: Record<string, unknown>, files: string[] = ['example-stream.worklog.md']): string[][] {
+    const runs: string[][] = []
+    on('fs.exists', async (_$, e) => ({
+      value: e.path.endsWith('.claude/shipgate.json') || e.path.endsWith('/shipgate/scripts/journal.py'),
+    }))
+    on('fs.read', async (_$, e) => {
+      if (e.path.endsWith('.claude/shipgate.json')) return { value: JSON.stringify({ artifact_homes: { worklog: '*/docs/prd/*.worklog.md' } }) }
+      if (e.path.endsWith('example-stream.worklog.md')) return { value: WORKLOG }
+      return { deny: `no such fixture: ${e.path}` }
+    })
+    on('fs.list', async (_$, e) => {
+      if (e.path?.endsWith('plugin/docs/prd')) {
+        return { value: files.map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 1_000, isLink: false })) }
+      }
+      return { value: [{ name: 'plugin', kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false }] }
+    })
+    on('process.run', async (_$, e) => {
+      const argv = [...e.argv]
+      runs.push(argv)
+      if (argv[0] === 'git') return ok('feat/example-stream\n')
+      if (argv.includes('status')) return ok(JSON.stringify(status))
+      if (argv.includes('log')) {
+        const stream = argv[argv.indexOf('--stream') + 1] ?? ''
+        const answer = logs[stream] ?? NO_REFS
+        if (answer && typeof answer === 'object' && ('value' in answer || 'deny' in answer)) return answer as never
+        return ok(JSON.stringify(answer))
+      }
+      return ok('')
+    })
+    return runs
+  }
+
+  const logFor = (runs: string[][], stream: string) => runs.filter(argv => argv.includes('log') && argv.includes(stream))
+
+  test('worklog fallback: a slug-named worklog another live stream\'s events name is left alone', async ($, on) => {
+    engineWorld(on)
+    const runs = fallbackWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] }, { 'feat/other-stream': CLAIMING_LOG })
+    await $.session.start(START)
+    // the other stream's log was read to learn what it claims
+    expect(logFor(runs, 'feat/other-stream').length).toBe(1)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: '2/4 done · 1 unrecorded · 1 failing' })).toBeUndefined()
+    await pane.unmount()
+    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect((await band.find({ type: 'Text', text: /feat\/example-stream/ }))?.text).toContain('no plan')
+    await band.unmount()
+  })
+
+  test('worklog fallback: a sibling stream naming a different worklog does not block the slug match', async ($, on) => {
+    engineWorld(on)
+    const elsewhere = { events: [{ seq: 45, type: 'design-committed', ts: '2026-10-01T09:00:00+00:00', data: { worklog: 'plugin/docs/prd/other.worklog.md' } }] }
+    fallbackWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] }, { 'feat/other-stream': elsewhere })
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: '2/4 done · 1 unrecorded · 1 failing' })).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('worklog fallback: the sibling logs are read only when a slug-named worklog was found', async ($, on) => {
+    engineWorld(on)
+    // the own stream's events name the worklog: no fallback, so no sibling log
+    const { runs } = journaledWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] })
+    await $.session.start(START)
+    expect(logFor(runs, 'feat/other-stream')).toEqual([])
+    expect(logFor(runs, 'feat/example-stream').length).toBe(1)
+  })
+
+  test('worklog fallback: no slug-named worklog in the home: no sibling log is read, no plan', async ($, on) => {
+    engineWorld(on)
+    const runs = fallbackWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] }, { 'feat/other-stream': CLAIMING_LOG }, ['unrelated.worklog.md'])
+    await $.session.start(START)
+    expect(logFor(runs, 'feat/other-stream')).toEqual([])
+    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect((await band.find({ type: 'Text', text: /feat\/example-stream/ }))?.text).toContain('no plan')
+    await band.unmount()
+  })
+
+  test('worklog fallback: a sibling in a nested repo names its worklog relative to that repo, and still claims it', async ($, on) => {
+    engineWorld(on)
+    const nestedRef = { events: [{ seq: 45, type: 'design-committed', ts: '2026-10-01T09:00:00+00:00', data: { worklog: 'docs/prd/example-stream.worklog.md' } }] }
+    fallbackWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] }, { 'feat/other-stream': nestedRef })
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: '2/4 done · 1 unrecorded · 1 failing' })).toBeUndefined()
+    await pane.unmount()
+  })
+
+  test('worklog fallback: a sibling ref that only shares a tail of the name claims nothing', async ($, on) => {
+    engineWorld(on)
+    // `prd/xexample-stream.worklog.md` is no path suffix of `plugin/docs/prd/example-stream.worklog.md`
+    const nearMiss = { events: [{ seq: 45, type: 'design-committed', ts: '2026-10-01T09:00:00+00:00', data: { worklog: 'prd/xexample-stream.worklog.md' } }] }
+    fallbackWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] }, { 'feat/other-stream': nearMiss })
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: '2/4 done · 1 unrecorded · 1 failing' })).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('worklog fallback: a sibling log that fails is skipped, not shown as the HUD\'s error', async ($, on) => {
+    engineWorld(on)
+    const failed = { value: { exitCode: 1, stdout: '', stderr: 'database locked', isStdoutTruncated: false, isStderrTruncated: false } }
+    const runs = fallbackWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] }, { 'feat/other-stream': failed })
+    await $.session.start(START)
+    // the sibling log ran and failed; the failure was swallowed
+    expect(logFor(runs, 'feat/other-stream').length).toBe(1)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    // the unclaimable sibling is treated as claiming nothing: the slug match stands, no error
+    expect(await pane.find({ type: 'Text', text: '2/4 done · 1 unrecorded · 1 failing' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /database locked/ })).toBeUndefined()
+    await pane.unmount()
+  })
+
+  test('worklog fallback: a sibling log the person cut is a cut refresh, not a sibling that claims nothing', async ($, on) => {
+    engineWorld(on)
+    const cut = { deny: '$.process.run(python3) aborted' }
+    fallbackWorld(on, { ...STATUS, features: [STATUS.features[0], OTHER_STREAM] }, { 'feat/other-stream': cut })
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    // no position was stored and no error shown: the refresh was cut before it could answer
+    expect(await pane.find({ type: 'Text', text: '2/4 done · 1 unrecorded · 1 failing' })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /shipgate-hud:/ })).toBeUndefined()
     await pane.unmount()
   })
 

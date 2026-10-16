@@ -333,6 +333,25 @@ const pickFeature = (status: unknown, flag: 'session_match' | 'branch_match'): F
   return features.find((f: Feature) => f?.[flag] === true) ?? null
 }
 
+/** The stream name a status entry carries: `stream`, else the folded `feature`. */
+const streamOf = (feature: Feature | null): string | null =>
+  typeof feature?.stream === 'string' ? feature.stream : typeof feature?.feature === 'string' ? feature.feature : null
+
+/** The stream the checkout is on, with the other live streams the same status brief listed (its siblings). */
+type Checkout = { feature: Feature; siblings: string[] }
+
+/** The `flag`-marked stream of a status brief and its siblings, or null when none is marked. */
+const checkoutOf = (status: unknown, flag: 'session_match' | 'branch_match'): Checkout | null => {
+  const feature = pickFeature(status, flag)
+  if (feature === null) return null
+  const stream = streamOf(feature)
+  const features = (status as { features?: unknown })?.features
+  const siblings = (Array.isArray(features) ? features : [])
+    .map((f: Feature) => streamOf(f))
+    .filter((name): name is string => name !== null && name !== stream)
+  return { feature, siblings: [...new Set(siblings)] }
+}
+
 /** This session's id, the label journal.py gives the events it appends; null when the engine cannot say. */
 const sessionIdOf = async ($: Engine): Promise<string | null> => {
   try {
@@ -363,26 +382,62 @@ async function worklogDirs($: Engine, glob: string): Promise<{ dir: string; file
 }
 
 /**
+ * Does a worklog another stream's events name (`claimed`, project-relative) stand for this
+ * candidate? The same path, or the candidate ending in it: a nested repo's stream names its
+ * worklog relative to that repo, the scan names it relative to the umbrella root.
+ */
+const claims = (claimed: string, candidate: string): boolean => {
+  const own = normalizePath(claimed)
+  const path = normalizePath(candidate)
+  return own !== '' && own !== '..' && (path === own || path.endsWith(`/${own}`))
+}
+
+/**
  * The newest worklog in the configured worklog home named for the stream's slug — `<slug>.worklog.md`,
  * or a name that starts with `<slug>-` or `<slug>.` — else null. A substring match would let a short
- * slug claim another feature's worklog.
+ * slug claim another feature's worklog. Two streams may share a slug outright (`epic/x` and a
+ * child whose worklog is `x.worklog.md`), so a worklog that `claimed()` names — the worklogs other
+ * live streams' events point at — is left to that stream. `claimed` is asked only once a
+ * slug-named worklog was found: it costs a journal run per sibling stream.
  */
-export async function worklogForStream($: Engine, stream: string, homes: Homes): Promise<string | null> {
+export async function worklogForStream($: Engine, stream: string, homes: Homes, claimed?: () => Promise<readonly string[]>): Promise<string | null> {
   const slug = streamSlug(stream)
   if (!slug) return null
   const named = (name: string) => name === `${slug}.worklog.md` || name.startsWith(`${slug}-`) || name.startsWith(`${slug}.`)
-  let best: { path: string; mtimeMs: number } | null = null
+  const found: { path: string; mtimeMs: number }[] = []
   for (const { dir, file } of await worklogDirs($, homes.worklogGlob)) {
     try {
       for (const entry of await $.fs.list(inProject(dir))) {
         if (entry.kind !== 'file' || !matchesHome(entry.name, file) || !named(entry.name)) continue
-        if (!best || entry.mtimeMs > best.mtimeMs) best = { path: `${dir}/${entry.name}`, mtimeMs: entry.mtimeMs }
+        found.push({ path: `${dir}/${entry.name}`, mtimeMs: entry.mtimeMs })
       }
     } catch {
       // no such home
     }
   }
-  return best?.path ?? null
+  if (found.length === 0) return null
+  const taken = claimed ? await claimed() : []
+  const free = found.filter(candidate => !taken.some(path => claims(path, candidate.path)))
+  return free.reduce<{ path: string; mtimeMs: number } | null>((best, entry) => (!best || entry.mtimeMs > best.mtimeMs ? entry : best), null)?.path ?? null
+}
+
+/**
+ * The worklogs the events of `streams` name, one `log` run each. A stream whose log cannot be
+ * read claims nothing: a sibling's broken log is no reason to show no plan here. A cut refresh
+ * still propagates.
+ */
+async function claimedWorklogs($: Engine, script: string, streams: readonly string[]): Promise<string[]> {
+  const claimed: string[] = []
+  for (const stream of streams) {
+    try {
+      const log = (await runJson($, ['python3', script, 'log', '--stream', stream, '--json'])) as { events?: unknown[] }
+      const worklog = artifactRefs(Array.isArray(log?.events) ? log.events : []).worklog
+      if (worklog !== null) claimed.push(worklog)
+    } catch (error) {
+      if (isAborted(error)) throw error
+    }
+  }
+  return claimed
 }
 
 /** A refresh, or `aborted` when the person cut the call it ran inside (a denied or interrupted tool call): nothing to show then. */
@@ -415,10 +470,10 @@ const lastEventAt = (feature: Feature): string => {
  * recently active stream wins, not the first directory. The session and the own branch share
  * one status call.
  */
-async function streamOfCheckout($: Engine, script: string): Promise<Feature | null> {
+async function streamOfCheckout($: Engine, script: string): Promise<Checkout | null> {
   const status = (branch: string | null, session: string | null) =>
     runJson($, ['python3', script, 'status', '--json', ...(session ? [`--session=${session}`] : []), ...(branch ? [`--branch=${branch}`] : [])])
-  const probe = async (branch: string) => pickFeature(await status(branch, null), 'branch_match')
+  const probe = async (branch: string) => checkoutOf(await status(branch, null), 'branch_match')
   const own = await branchIn($)
   const session = await sessionIdOf($)
   let first: unknown = null
@@ -433,22 +488,22 @@ async function streamOfCheckout($: Engine, script: string): Promise<Feature | nu
     }
   }
   if (first === null && own !== null) first = await status(own, null)
-  const found = pickFeature(first, 'session_match') ?? pickFeature(first, 'branch_match')
+  const found = checkoutOf(first, 'session_match') ?? checkoutOf(first, 'branch_match')
   if (found) return found
   const tried = new Set(own === null ? [] : [own])
-  let best: Feature | null = null
+  let best: Checkout | null = null
   for (const dir of await nestedRepos($)) {
     const branch = await branchIn($, dir)
     if (branch === null || tried.has(branch)) continue
     tried.add(branch)
-    let feature: Feature | null
+    let checkout: Checkout | null
     try {
-      feature = await probe(branch)
+      checkout = await probe(branch)
     } catch (error) {
       if (isAborted(error)) throw error
       continue // one nested repo's failed probe must not discard another's match
     }
-    if (feature && (best === null || lastEventAt(feature) > lastEventAt(best))) best = feature
+    if (checkout && (best === null || lastEventAt(checkout.feature) > lastEventAt(best.feature))) best = checkout
   }
   return best
 }
@@ -456,13 +511,14 @@ async function streamOfCheckout($: Engine, script: string): Promise<Feature | nu
 /** One refresh: git branch, status, the stream's log, then the artifacts those events point at. */
 export async function refreshPosition($: Engine, script: string, homes: Homes): Promise<Refreshed> {
   try {
-    const feature = await streamOfCheckout($, script)
-    const stream = typeof feature?.stream === 'string' ? feature.stream : typeof feature?.feature === 'string' ? feature.feature : null
+    const checkout = await streamOfCheckout($, script)
+    const feature = checkout?.feature ?? null
+    const stream = streamOf(feature)
     if (!feature || stream === null) return { position: null, error: null }
     const log = (await runJson($, ['python3', script, 'log', '--stream', stream, '--json'])) as { events?: unknown[] }
     const events = Array.isArray(log?.events) ? log.events : []
     const refs = artifactRefs(events)
-    const worklogPath = refs.worklog ?? (await worklogForStream($, stream, homes))
+    const worklogPath = refs.worklog ?? (await worklogForStream($, stream, homes, () => claimedWorklogs($, script, checkout?.siblings ?? [])))
     const worklogText = worklogPath ? await readText($, inProject(worklogPath)) : null
     const adrs: Adr[] = []
     for (const path of refs.adrs) {
