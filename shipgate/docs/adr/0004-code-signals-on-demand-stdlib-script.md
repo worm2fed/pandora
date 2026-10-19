@@ -5,7 +5,7 @@ created: 2026-09-25
 updated: 2026-09-25
 tags:
   - adr
-status: accepted
+status: accepted (sections 1 and 5 amended by 0007)
 date: 2026-09-25
 issue: "none / ad-hoc"
 related: ["../prd/code-signals.md", "../research/2026-09-25-tearags-vs-shipgate.md", "./0001-sqlite-flow-journal.md"]
@@ -18,6 +18,9 @@ related: ["../prd/code-signals.md", "../research/2026-09-25-tearags-vs-shipgate.
 > section of `.claude/shipgate.md`, labels every number by quartile within the whole
 > repository, and writes nothing. Consumers are skill prose plus one optional, inert-when-
 > absent argument to the review workflow. No index, daemon, cache or external provider.
+> *Amended by ADR 0007:* when the `codegraph` CLI is on `PATH`, the structure comes from
+> codegraph's index, an external provider that shipgate detects and never requires. The
+> script then causes three bounded writes outside tracked files (see decision 5).
 
 ## Context
 
@@ -36,7 +39,9 @@ the review workflow consumes risk. Decided in executive mode from two architect 
 1. **One script, `scripts/signals.py`, stdlib only**, in the mould of `scripts/journal.py`
    (argparse subcommands, `--json`, typed exit codes 0/1/2). Subcommands `hotspots`,
    `blast`, `suspects`. Language support is a small adapter table (extensions, extract,
-   resolve) — TS/JS, Python, Go in v1 — not a class hierarchy.
+   resolve) — TS/JS, Python, Go in v1 — not a class hierarchy. *Amended by ADR 0007:* a
+   provider sits above the language adapters. When codegraph is on `PATH`, the file edges
+   come from its index, and the language adapters become the regex scanner fallback.
 2. **The script reads its own config.** It parses only the `## Code signals` section of
    `.claude/shipgate.md` (three backticked bullets: window, fix pattern, extra excludes;
    `<placeholder>` counts as absent; flags override) and echoes the effective values and
@@ -53,7 +58,12 @@ the review workflow consumes risk. Decided in executive mode from two architect 
 5. **No persistence.** Recomputation is a single streamed `git log --name-status -M` pass
    plus one import scan; a cache would be a write outside the plugin directory and a
    freshness problem. If a repository misses the SC-001 bound, the escape hatch is dropping
-   rename following, not adding a cache.
+   rename following, not adding a cache. *Amended by ADR 0007:* "writes nothing" now holds
+   only with `--graph off`. With codegraph present the script causes three kinds of write,
+   all outside tracked files: `.codegraph/` (by codegraph, on shipgate's own build), one
+   `/.codegraph/` line in `info/exclude`, and the build lock and advisory markers under
+   `<git-common-dir>/shipgate/`. With codegraph absent only the install advisory marker is
+   written, once.
 6. **Review consumes risk through one optional argument.** `review-workflow.js` gains
    `args.fileRisk` (`{path: low|mid|high|top}`); the finding comparator tie-breaks on risk
    after severity and confidence, and the refuter budget is spent severity → risk →

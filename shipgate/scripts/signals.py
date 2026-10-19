@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """shipgate code signals — per-file risk from git history and import structure.
 
-Python 3 standard library only, no dependencies. Recomputes on demand and writes
-nothing. See ``shipgate/docs/prd/code-signals.md``, its worklog, and ADR 0004.
+Python 3 standard library only, no dependencies. Recomputes on demand. See
+``shipgate/docs/prd/code-signals.md``, its worklog, and ADR 0004.
+
+Import structure comes from the codegraph index when codegraph is installed, and
+from a regex scanner when it is not (``shipgate/docs/prd/code-graph.md``, ADR 0007).
+The script writes no tracked file. With codegraph, it builds the index in
+``.codegraph/``, adds one line to ``info/exclude``, and keeps a lock and the advisory
+markers in ``<git-common-dir>/shipgate/``. Without codegraph, it writes only the
+advisory marker. ``--graph off`` writes nothing.
+
+The ``graph`` subcommand runs one codegraph query (impact, callers, callees,
+affected, query, node or explore) on the same index.
 
 Exit codes (also printed by ``--help``):
 
@@ -38,6 +48,9 @@ OUTPUT_VERSION = 1
 
 CONFIG_RELPATH = os.path.join(".claude", "shipgate.md")
 CONFIG_SECTION = "code signals"
+TOOLING_SECTION = "code tooling"  # holds the one `Code graph` bullet
+GRAPH_MODES = ("auto", "off", "root")
+DEFAULT_GRAPH_MODE = "auto"
 
 
 def _load_hooks_common():
@@ -63,6 +76,26 @@ def _load_hooks_common():
 # The hooks' sidecar walk, the only one: hooks and scripts must name the same project.
 _hooks_common = _load_hooks_common()
 journaled_root = _hooks_common.journaled_root
+
+
+def _load_codegraph():
+    """`_codegraph.py`, the private module that holds every codegraph call, loaded by
+    path beside this script (`scripts/` is not a package). It ships with the plugin;
+    without it the install is incomplete (exit 1), as with `hooks/_common.py`."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_codegraph.py"
+    try:
+        spec = importlib.util.spec_from_file_location("shipgate_codegraph", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    except (OSError, ImportError) as exc:
+        sys.exit(f"error: cannot load {path} (shipgate install incomplete): {exc}")
+    return module
+
+
+_codegraph = _load_codegraph()
 
 DEFAULT_WINDOW_MONTHS = 12
 MAX_WINDOW_MONTHS = 1200  # 100 years; beyond it date arithmetic overflows
@@ -153,11 +186,11 @@ def _is_placeholder(value: str) -> bool:
     return not value or (value.startswith("<") and value.endswith(">"))
 
 
-def parse_code_signals(text: str) -> Dict[str, Any]:
-    """Parse the `## Code signals` section; only backticked values count.
+def section_bullets(text: str, section: str) -> List[Tuple[str, str]]:
+    """The `- Key: value` bullets of one `## <section>` (lower-case name), in order.
 
-    Returns only the keys that carry a usable value — a `<placeholder>`, a
-    non-backticked value, a non-integer window or an invalid regex is absent.
+    Keys come back lower-cased; a wrapped continuation line joins its bullet. HTML
+    comments and fenced code are inert. The one walk every config reader uses.
     """
     text = _COMMENT_RE.sub("", text)
     in_section = False
@@ -182,7 +215,7 @@ def parse_code_signals(text: str) -> Dict[str, Any]:
             level = len(heading.group(1))
             if in_section and level <= section_level:
                 break
-            if heading.group(2).strip().lower() == CONFIG_SECTION:
+            if heading.group(2).strip().lower() == section:
                 in_section = True
                 section_level = level
             continue
@@ -194,6 +227,16 @@ def parse_code_signals(text: str) -> Dict[str, Any]:
         elif bullets and raw[:1].isspace() and raw.strip():
             key, value = bullets[-1]
             bullets[-1] = (key, value + " " + raw.strip())  # wrapped continuation
+    return bullets
+
+
+def parse_code_signals(text: str) -> Dict[str, Any]:
+    """Parse the `## Code signals` section; only backticked values count.
+
+    Returns only the keys that carry a usable value — a `<placeholder>`, a
+    non-backticked value, a non-integer window or an invalid regex is absent.
+    """
+    bullets = section_bullets(text, CONFIG_SECTION)
     out: Dict[str, Any] = {}
     for key, value in bullets:
         name = _CONFIG_KEYS.get(key)
@@ -221,6 +264,26 @@ def parse_code_signals(text: str) -> Dict[str, Any]:
             globs = [g.strip() for span in spans for g in span.split(",")]
             out[name] = [g for g in globs if g]
     return out
+
+
+def parse_code_graph(text: str) -> Dict[str, str]:
+    """The `Code graph` bullet of `## Code tooling`, lower-cased and not yet checked.
+
+    A backticked value wins over the bare text; a `<placeholder>` or an empty value
+    is absent. `load_config` rejects a value outside GRAPH_MODES.
+    """
+    for key, value in section_bullets(text, TOOLING_SECTION):
+        if key != "code graph":
+            continue
+        value = value.strip()
+        if _is_placeholder(value):
+            return {}
+        spans = _BACKTICK_RE.findall(value)
+        value = spans[0].strip() if spans else value
+        if _is_placeholder(value):
+            return {}
+        return {"code_graph": value.lower()}
+    return {}
 
 
 def _umbrella_roots(repo: Path) -> List[Path]:
@@ -273,7 +336,8 @@ def _config_candidates(repo: Path, start: Optional[Path]) -> List[Path]:
 def load_config(repo: Path, start: Optional[Path] = None
                 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """Read the file-level config. Returns (values, source) — values holds only the
-    keys some shipgate.md set; the nearest file wins per key (repo before umbrella)."""
+    keys some shipgate.md set; the nearest file wins per key (repo before umbrella).
+    A `Code graph` value outside GRAPH_MODES is a UsageError."""
     cfg: Dict[str, Any] = {}
     source: Dict[str, str] = {}
     for path in _config_candidates(Path(repo), start):
@@ -287,6 +351,13 @@ def load_config(repo: Path, start: Optional[Path] = None
             if key not in cfg:
                 cfg[key] = value
                 source[key] = "shipgate.md"
+        mode = parse_code_graph(text).get("code_graph")
+        if mode is not None and "code_graph" not in cfg:
+            if mode not in GRAPH_MODES:
+                raise UsageError(f"{path}: the Code graph value must be auto, off or "
+                                 f"root, not `{mode}`")
+            cfg["code_graph"] = mode
+            source["code_graph"] = "shipgate.md"
     return cfg, source
 
 
@@ -295,6 +366,7 @@ class Config(NamedTuple):
     fix_pattern: str
     fix_regex: "re.Pattern[str]"
     exclude: List[str]
+    code_graph: str  # auto | off | root
     source: Dict[str, str]
 
     def to_json(self) -> Dict[str, Any]:
@@ -302,6 +374,7 @@ class Config(NamedTuple):
             "window_months": self.window_months,
             "fix_pattern": self.fix_pattern,
             "exclude": list(self.exclude),
+            "code_graph": self.code_graph,
             "source": dict(self.source),
         }
 
@@ -311,7 +384,7 @@ def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
     """Flags override the file, the file overrides the defaults. Excludes are
     additive: defaults + file + flags."""
     source = {"window_months": "default", "fix_pattern": "default",
-              "exclude": "default"}
+              "exclude": "default", "code_graph": "default"}
     window = DEFAULT_WINDOW_MONTHS
     if "window_months" in file_cfg:
         window = file_cfg["window_months"]
@@ -339,7 +412,14 @@ def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
     if args.exclude:
         exclude += args.exclude
         source["exclude"] = "flag"
-    return Config(window, pattern, regex, exclude, source)
+
+    code_graph = DEFAULT_GRAPH_MODE
+    if "code_graph" in file_cfg:
+        code_graph = file_cfg["code_graph"]
+        source["code_graph"] = file_source.get("code_graph", "shipgate.md")
+    if getattr(args, "graph", None) is not None:
+        code_graph, source["code_graph"] = args.graph, "flag"
+    return Config(window, pattern, regex, exclude, code_graph, source)
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
@@ -422,6 +502,14 @@ def _git_toplevel(directory: Path) -> Optional[Path]:
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
     return Path(proc.stdout.strip()).resolve()
+
+
+def graph_select(root: Path, mode: str, tracked_count: Optional[int] = None):
+    """The code graph preflight for the repository at ROOT (`_codegraph.select`,
+    bound to this script's git runner and umbrella walk). Returns a Selection."""
+    return _codegraph.select(root, mode, run_git=run_git,
+                             umbrella_roots=_umbrella_roots(Path(root)),
+                             tracked_count=tracked_count)
 
 
 def _unquote(path: str) -> str:
@@ -1022,10 +1110,13 @@ class Graph(NamedTuple):
     inn: Dict[str, set]
     status: Dict[str, str]  # ok | partial (files with no entry: unknown)
     unresolved: Dict[str, int]
+    source: str = "regex"  # graph | regex: who built the edges (FR-007)
+    graph: Optional[Dict[str, Any]] = None  # the `structure.graph` block
 
     def summary(self) -> Dict[str, Any]:
         return {"available": self.available, "reason": self.reason,
-                "languages": self.languages, "files_scanned": self.files_scanned}
+                "languages": self.languages, "files_scanned": self.files_scanned,
+                "source": self.source, "graph": self.graph}
 
 
 def scan_structure(root: Path, tracked: List[str], graph_files: List[str]) -> Graph:
@@ -1069,12 +1160,38 @@ def scan_structure(root: Path, tracked: List[str], graph_files: List[str]) -> Gr
     return Graph(True, None, sorted(languages), scanned, out, inn, status, unresolved)
 
 
+def graph_structure(root: Path, tracked: List[str], graph_files: List[str],
+                    selection: Any) -> Tuple[Graph, Any]:
+    """The provider swap: the codegraph index when SELECTION is available, else
+    the regex scan. Returns the Graph and the Selection, marked `failed` when the
+    database cannot be read, or holds none of GRAPH_FILES (`graph-empty`). Every
+    row, label and blast runs on either."""
+    if selection.available:
+        try:
+            found = _codegraph.read_file_graph(selection.index_root, root, graph_files)
+            if not found.files:
+                raise _codegraph.GraphUnavailable("graph-empty")
+        except _codegraph.GraphUnavailable as exc:
+            selection = selection._replace(available=False, source="regex",
+                                           state="failed", reason=exc.reason)
+        else:
+            block = dict(selection.to_json(), outside_repo=found.outside_repo)
+            return Graph(True, None, found.languages, len(found.files), found.out,
+                         found.inn, {p: "ok" for p in found.files},
+                         {p: 0 for p in found.files}, "graph", block), selection
+    block = dict(selection.to_json(), outside_repo=None)
+    return scan_structure(root, tracked, graph_files)._replace(graph=block), selection
+
+
 def structure_unavailable(reason: str) -> Dict[str, Any]:
-    return {"available": False, "reason": reason, "languages": [], "files_scanned": 0}
+    return {"available": False, "reason": reason, "languages": [], "files_scanned": 0,
+            "source": None, "graph": None}
 
 
-def blast_radius(graph: Graph, seeds: Sequence[str], limit: int) -> Dict[str, Any]:
-    """Reverse-adjacency BFS from the seeds; cycle-safe; seeds excluded."""
+def blast_radius(graph: Graph, seeds: Sequence[str], limit: int,
+                 extra: Iterable[str] = ()) -> Dict[str, Any]:
+    """Reverse-adjacency BFS from the seeds; cycle-safe; seeds excluded. EXTRA
+    (the tests the graph reaches) joins the reached files."""
     import posixpath
     from collections import deque
 
@@ -1088,6 +1205,7 @@ def blast_radius(graph: Graph, seeds: Sequence[str], limit: int) -> Dict[str, An
                 seen.add(importer)
                 reached.add(importer)
                 queue.append(importer)
+    reached |= set(extra) - set(seeds)
     files = sorted(reached)
     by_dir = Counter(posixpath.dirname(f) or "." for f in files)
     return {
@@ -1096,6 +1214,8 @@ def blast_radius(graph: Graph, seeds: Sequence[str], limit: int) -> Dict[str, An
         "truncated": len(files) > limit,
         "by_dir": dict(sorted(by_dir.items())),
         "unknown_seeds": sorted(s for s in set(seeds) if s not in graph.status),
+        "tests": None,  # graph only: the test files the seeds reach
+        "tests_reason": None,  # graph only: why `tests` is missing
     }
 
 
@@ -1315,6 +1435,11 @@ def render_blast(blast: Optional[Dict[str, Any]]) -> List[str]:
     if unknown:
         more = f" (+{len(unknown) - 10} more)" if len(unknown) > 10 else ""
         lines.append(f"unknown seeds: {', '.join(unknown[:10])}{more}")
+    if blast.get("tests") is not None:
+        lines.append(f"tests reached: {len(blast['tests'])} files")
+        lines += [f"  {path}" for path in blast["tests"]]
+    elif blast.get("tests_reason"):
+        lines.append(f"tests reached: unavailable ({blast['tests_reason']})")
     return lines
 
 
@@ -1330,7 +1455,8 @@ def emit(payload: Dict[str, Any], as_json: bool, lines: Sequence[str] = ()) -> N
     if as_json:
         sys.stdout.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
     elif not payload["available"]:
-        sys.stdout.write(f"signals unavailable: {payload['reason']}\n")
+        advisory = f"{payload['advisory']}\n" if payload.get("advisory") else ""
+        sys.stdout.write(f"{advisory}signals unavailable: {payload['reason']}\n")
     else:
         sys.stdout.write("\n".join(lines) + "\n")
 
@@ -1357,16 +1483,39 @@ configuration:
   the umbrella's — a parent that holds the setup sidecar .claude/shipgate.json
   or is itself a git work tree; a plain parent is not read) — backticked
   values on the `Window`, `Fix pattern` and `Exclude` bullets. Flags override
-  the file; --exclude adds to the defaults.
+  the file; --exclude adds to the defaults. The `Code graph` bullet of
+  `## Code tooling` takes auto, off or root, backticked or bare (default auto).
+  --graph overrides it. Any other value is a usage error.
   Labels are quartiles over the whole repository (or --scope); zero is always
   `low` and the quartiles run over the non-zero values (fewer than four, or no
   spread: `mid`). Positional paths and --diff only filter the rows shown;
   --diff shows every changed file unless --top is given. "Now" is HEAD's commit time.
 
 structure:
-  TS/JS, Python and Go imports, by regex. Other files report structure
-  `unknown` with null fan-in/out; an unresolved relative import marks a file
-  `partial`. Files over 1 MB, symlinks and special files are not scanned.
+  When codegraph is installed, the import graph comes from its index in
+  .codegraph/, and `structure.source` is `graph`. The first run builds the
+  index. A repository with more than 10,000 tracked files is not indexed
+  automatically. Without codegraph, or with --graph off, a regex scanner reads
+  TS/JS, Python and Go imports, and `structure.source` is `regex`. Under the
+  regex scanner, other files report structure `unknown` with null fan-in/out.
+  An unresolved relative import marks a file `partial`. Files over 1 MB,
+  symlinks and special files are not scanned. Under the graph, `blast` also
+  lists the test files the seeds reach (`blast.tests`).
+  Table mode adds at most these lines at the top. The first run without
+  codegraph prints one advisory line, once per project. A graph that fails
+  prints `structure: regex (<reason>)`, and the regex result follows. A run
+  that builds the index prints `code graph: indexed N files in S s, M MB`.
+
+graph:
+  `graph ACTION ARGS...` runs one codegraph query on the repository's index.
+  ACTION is impact, callers, callees, affected, query, node or explore. Put
+  the shipgate flags (--repo, --graph, --json) before ACTION. Everything after
+  ACTION goes to codegraph unchanged. shipgate adds `-p <index root>`, and
+  `-j` for every action except node and explore. node and explore print text.
+  --json wraps the answer with the command, its arguments, the graph state and
+  the result. When the graph is unavailable, no query runs. Table mode then
+  prints `graph unavailable: <reason>`, --json reports available:false, and
+  the exit code is 0.
 """
 
 
@@ -1387,12 +1536,21 @@ def _common_flags() -> argparse.ArgumentParser:
     common.add_argument("--exclude", metavar="GLOB", action="append", default=None,
                         help="extra path glob to skip (repeatable; adds to the "
                              "defaults; a trailing / names a directory)")
+    common.add_argument("--graph", choices=GRAPH_MODES, default=None,
+                        help="code graph mode. auto uses codegraph when it is "
+                             "installed. off uses the regex scanner. root uses the "
+                             "umbrella's index (default: the Code graph bullet, "
+                             "else auto)")
     common.add_argument("--json", action="store_true",
                         help="machine-readable output")
     return common
 
 
 DEFAULT_TOP = 20
+# The `graph` actions, and the ones that take `-j`: codegraph knowledge, so they
+# live in `_codegraph`.
+GRAPH_ACTIONS = _codegraph.GRAPH_ACTIONS
+GRAPH_JSON_ACTIONS = _codegraph.GRAPH_JSON_ACTIONS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1442,6 +1600,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="the symptom's files (repo-relative)")
     p_sus.add_argument("--top", metavar="N", type=int, default=10,
                        help="show at most N suspects (default 10)")
+
+    p_graph = subparsers.add_parser(
+        "graph", parents=[common], allow_abbrev=False,
+        help="one codegraph query (impact, callers, callees, affected, query, "
+             "node, explore) on the repository's index")
+    p_graph.add_argument("action", choices=GRAPH_ACTIONS, metavar="ACTION",
+                         help=f"one of {', '.join(GRAPH_ACTIONS)}")
+    p_graph.add_argument("args", nargs=argparse.REMAINDER, metavar="ARGS",
+                         help="passed to codegraph unchanged; put shipgate flags "
+                              "before ACTION")
     return parser
 
 
@@ -1489,6 +1657,7 @@ class Analysis(NamedTuple):
     traj: Optional[Trajectory]
     traj_info: Dict[str, Any]
     graph: Optional[Graph]
+    selection: Any = None  # the code graph preflight (`_codegraph.Selection`)
 
 
 def analyse(args: argparse.Namespace, want_traj: bool, want_struct: bool) -> Analysis:
@@ -1512,8 +1681,11 @@ def analyse(args: argparse.Namespace, want_traj: bool, want_struct: bool) -> Ana
         traj = scan_trajectory(repo, cfg)
         traj_info = {"available": True, "reason": None,
                      "commits_scanned": traj.commits_scanned}
-    graph = scan_structure(repo.root, tracked, graph_files) if want_struct else None
-    return Analysis(repo, cfg, reason, population, traj, traj_info, graph)
+    graph = selection = None
+    if want_struct:
+        selection = graph_select(repo.root, cfg.code_graph, len(tracked))
+        graph, selection = graph_structure(repo.root, tracked, graph_files, selection)
+    return Analysis(repo, cfg, reason, population, traj, traj_info, graph, selection)
 
 
 def _envelope(a: Analysis, reason: Optional[str]) -> Dict[str, Any]:
@@ -1528,6 +1700,8 @@ def _envelope(a: Analysis, reason: Optional[str]) -> Dict[str, Any]:
         payload["structure"] = a.graph.summary()
     else:
         payload["structure"] = structure_unavailable(a.reason or "not-requested")
+    if a.selection is not None and a.selection.advisory:
+        payload["advisory"] = a.selection.advisory
     return payload
 
 
@@ -1547,6 +1721,44 @@ def _half_notes(trajectory: Dict[str, Any], structure: Dict[str, Any]) -> List[s
     if not structure["available"]:
         lines.append(f"structure unavailable: {structure['reason']}")
     return lines
+
+
+def _megabytes(size: Any) -> str:
+    return f"{size / 1_000_000:.1f}" if isinstance(size, (int, float)) else "-"
+
+
+def _graph_notes(payload: Dict[str, Any]) -> List[str]:
+    """Table mode: the advisory (once), a failed graph's reason, a fresh build."""
+    lines = []
+    if payload.get("advisory"):
+        lines.append(payload["advisory"])
+    structure = payload["structure"]
+    graph = structure.get("graph") or {}
+    if graph.get("state") == "failed":
+        lines.append(f"structure: regex ({graph['reason']})")
+    built = graph.get("built")
+    if built and structure.get("source") == "graph":
+        lines.append(f"code graph: indexed {_cell(built.get('files'))} files in "
+                     f"{_cell(built.get('seconds'))} s, "
+                     f"{_megabytes(built.get('bytes'))} MB")
+    return lines
+
+
+def _blast(a: Analysis, graph: Graph, seeds: Sequence[str], limit: int
+           ) -> Dict[str, Any]:
+    """The blast radius; under the graph, plus the tests `affected` finds. A failed
+    `affected` call leaves `tests` null with its reason, never an exit."""
+    tests: Optional[List[str]] = None
+    reason = None
+    if graph.source == "graph" and a.selection is not None and a.repo is not None:
+        try:
+            tests = _codegraph.tests_reached(a.selection.index_root, a.repo.root,
+                                             seeds, graph.status)
+        except _codegraph.GraphUnavailable as exc:
+            reason = exc.reason
+    blast = blast_radius(graph, seeds, limit, extra=tests or ())
+    blast["tests"], blast["tests_reason"] = tests, reason
+    return blast
 
 
 def cmd_hotspots(args: argparse.Namespace) -> int:
@@ -1577,7 +1789,7 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
     if changed is not None:
         selected = [r for r in selected if r["path"] in changed]
 
-    lines: List[str] = _half_notes(a.traj_info, payload["structure"])
+    lines = _graph_notes(payload) + _half_notes(a.traj_info, payload["structure"])
     if args.by_dir is not None:
         wanted = {dir_of(r["path"], args.by_dir) for r in selected}
         dirs = [d for d in aggregate_dirs(rows, args.by_dir, a.traj, graph)
@@ -1592,7 +1804,7 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
         lines += render_files(shown)
     if args.blast:
         seeds = [r["path"] for r in selected]
-        payload["blast"] = blast_radius(graph, seeds, 50) if graph else None
+        payload["blast"] = _blast(a, graph, seeds, 50) if graph else None
         lines += [""] + render_blast(payload["blast"])
     emit(payload, args.json, lines)
     return EXIT_OK
@@ -1620,8 +1832,8 @@ def cmd_blast(args: argparse.Namespace) -> int:
         seeds += sorted(diff_files(a.repo, args.diff))
     if not seeds:
         raise UsageError("blast needs FILE arguments or --diff")
-    payload["blast"] = blast_radius(graph, sorted(set(seeds)), args.limit)
-    emit(payload, args.json, render_blast(payload["blast"]))
+    payload["blast"] = _blast(a, graph, sorted(set(seeds)), args.limit)
+    emit(payload, args.json, _graph_notes(payload) + render_blast(payload["blast"]))
     return EXIT_OK
 
 
@@ -1642,7 +1854,70 @@ def cmd_suspects(args: argparse.Namespace) -> int:
     suspects = rank_suspects(rows, a.traj, graph, symptoms)[: args.top]
     payload["suspects"] = suspects
     emit(payload, args.json,
-         _half_notes(a.traj_info, payload["structure"]) + render_suspects(suspects))
+         _graph_notes(payload) + _half_notes(a.traj_info, payload["structure"])
+         + render_suspects(suspects))
+    return EXIT_OK
+
+
+def _graph_unavailable(args: argparse.Namespace, reason: str,
+                       advisory: Optional[str] = None) -> int:
+    payload: Dict[str, Any] = {"version": OUTPUT_VERSION, "available": False,
+                               "reason": reason, "source": "regex"}
+    if advisory:
+        payload["advisory"] = advisory
+    if args.json:
+        sys.stdout.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+    else:
+        sys.stdout.write(f"graph unavailable: {reason}\n"
+                         + (f"{advisory}\n" if advisory else ""))
+    return EXIT_OK
+
+
+def cmd_graph(args: argparse.Namespace) -> int:
+    """`codegraph ACTION ARGS... -p <index root> [-j]` behind the same preflight as
+    the structure. Unavailable: a reason, no query, exit 0 (FR-004)."""
+    start = _start_dir(args)
+    try:
+        repo = probe(start)
+    except Unavailable as exc:
+        return _graph_unavailable(args, exc.reason)
+    cfg = effective_config(*load_config(repo.root, start), args)
+    selection = graph_select(repo.root, cfg.code_graph)
+    if not selection.available:
+        return _graph_unavailable(args, selection.reason, selection.advisory)
+    wants_json = args.action in GRAPH_JSON_ACTIONS
+    argv = [args.action, *args.args, "-p", str(selection.index_root)]
+    try:
+        out = _codegraph.run(argv + (["-j"] if wants_json else []),
+                             selection.index_root, f"graph-{args.action}")
+    except _codegraph.GraphUnavailable as exc:
+        return _graph_unavailable(args, exc.reason)
+    # Exit 0 is an answer. codegraph prints text, not JSON, for a symbol it does
+    # not know, even with -j: that text goes to `result_text`.
+    result: Any = out
+    text: Optional[str] = None
+    if wants_json:
+        try:
+            result = json.loads(out)
+        except ValueError:
+            result, text = None, out
+    payload = {"version": OUTPUT_VERSION, "available": True, "source": "graph",
+               "command": args.action, "args": list(args.args),
+               "graph": selection.to_json(), "result": result, "result_text": text,
+               "not_found": _codegraph.not_found(text if text is not None else
+                                                 result if isinstance(result, str)
+                                                 else "")}
+    if args.json:
+        sys.stdout.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        return EXIT_OK
+    notes = _graph_notes({"structure": {"source": "graph",
+                                        "graph": payload["graph"]}})
+    sys.stdout.write("".join(f"{line}\n" for line in notes))
+    if text is not None:
+        sys.stdout.write(text)
+    else:
+        sys.stdout.write(result if not wants_json
+                         else json.dumps(result, indent=2) + "\n")
     return EXIT_OK
 
 
@@ -1650,6 +1925,7 @@ COMMANDS = {
     "hotspots": cmd_hotspots,
     "blast": cmd_blast,
     "suspects": cmd_suspects,
+    "graph": cmd_graph,
 }
 
 

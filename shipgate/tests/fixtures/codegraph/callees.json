@@ -1,0 +1,42 @@
+{
+  "symbol": "blast_radius",
+  "targets": [
+    {
+      "name": "blast_radius",
+      "kind": "function",
+      "filePath": "shipgate/scripts/signals.py",
+      "startLine": 1076,
+      "id": "function:9157b3107c9c9b8cd2c591bef8b828af",
+      "qualifiedName": "blast_radius",
+      "language": "python"
+    }
+  ],
+  "ambiguous": false,
+  "aggregation": "definition",
+  "filteredOut": false,
+  "definitions": [
+    {
+      "definition": {
+        "name": "blast_radius",
+        "kind": "function",
+        "filePath": "shipgate/scripts/signals.py",
+        "startLine": 1076,
+        "id": "function:9157b3107c9c9b8cd2c591bef8b828af",
+        "qualifiedName": "blast_radius",
+        "language": "python"
+      },
+      "roots": [
+        "function:9157b3107c9c9b8cd2c591bef8b828af"
+      ],
+      "callees": [],
+      "edges": [],
+      "total": 0,
+      "limit": 20,
+      "truncated": false
+    }
+  ],
+  "callees": [],
+  "total": 0,
+  "limit": 20,
+  "truncated": false
+}

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1107,6 +1108,54 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0)
                     self.assertEqual(result.stderr, "")
+
+
+# SC-008: hooks run on every user's machine in every project, so the code graph stays out of
+# them. A hook never names codegraph and never loads the signals script (which can call it).
+_HOOK_FORBIDDEN = (
+    ("names codegraph", re.compile(r"codegraph", re.I)),
+    ("loads signals.py", re.compile(r"signals\.py|\bimport\s+signals\b|\bfrom\s+signals\b"
+                                    r"|[\"']signals[\"']")),
+)
+
+
+def hook_violations(hooks_dir: Path) -> list[str]:
+    """`<file>: <rule>` for every hook source file that breaks an SC-008 rule."""
+    found = []
+    for path in sorted(hooks_dir.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for rule, pattern in _HOOK_FORBIDDEN:
+            if pattern.search(text):
+                found.append(f"{path.relative_to(hooks_dir).as_posix()}: {rule}")
+    return found
+
+
+class TestHooksStayOffTheCodeGraph(unittest.TestCase):
+    def test_no_hook_names_codegraph_or_loads_signals(self):
+        self.assertEqual(hook_violations(HOOKS), [])
+
+    def test_the_guard_catches_each_rule(self):
+        planted = {
+            "a.py": "import subprocess\nsubprocess.run(['CodeGraph', 'sync'])\n",
+            "b.py": "spec = importlib.util.spec_from_file_location('s', 'scripts/signals.py')\n",
+            "c.py": "import signals\n",
+            "d.py": "from signals import analyse\n",
+            "e.json": '{"command": "python3 x/codegraph_probe.py"}\n',
+            "ok.py": "import json  # signal handling, no graph\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, text in planted.items():
+                (root / name).write_text(text, encoding="utf-8")
+            self.assertEqual(hook_violations(root), [
+                "a.py: names codegraph",
+                "b.py: loads signals.py",
+                "c.py: loads signals.py",
+                "d.py: loads signals.py",
+                "e.json: names codegraph",
+            ])
 
 
 if __name__ == "__main__":

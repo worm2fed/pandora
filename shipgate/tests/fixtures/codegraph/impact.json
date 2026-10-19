@@ -1,0 +1,283 @@
+{
+  "symbol": "_load_hooks_common",
+  "depth": 2,
+  "targets": [
+    {
+      "name": "_load_hooks_common",
+      "kind": "function",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 47,
+      "id": "function:b5ed59c94ec24d82e829a04b8762bef6",
+      "qualifiedName": "_load_hooks_common",
+      "language": "python"
+    },
+    {
+      "name": "_load_hooks_common",
+      "kind": "function",
+      "filePath": "shipgate/scripts/signals.py",
+      "startLine": 43,
+      "id": "function:2ea676d01706cc53fb691f1f9f8fb16c",
+      "qualifiedName": "_load_hooks_common",
+      "language": "python"
+    }
+  ],
+  "ambiguous": true,
+  "aggregation": "union",
+  "filteredOut": false,
+  "definitions": [
+    {
+      "definition": {
+        "name": "_load_hooks_common",
+        "kind": "function",
+        "filePath": "shipgate/scripts/journal.py",
+        "startLine": 47,
+        "id": "function:b5ed59c94ec24d82e829a04b8762bef6",
+        "qualifiedName": "_load_hooks_common",
+        "language": "python"
+      },
+      "roots": [
+        "function:b5ed59c94ec24d82e829a04b8762bef6"
+      ],
+      "nodeCount": 7,
+      "edgeCount": 6,
+      "affected": [
+        {
+          "id": "function:b5ed59c94ec24d82e829a04b8762bef6",
+          "name": "_load_hooks_common",
+          "kind": "function",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 47
+        },
+        {
+          "id": "variable:482dd8a4377abc6d4d36e1870cf07bb5",
+          "name": "_hooks_common",
+          "kind": "variable",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 68
+        },
+        {
+          "id": "function:364c5d5d63816b41323433994ed21228",
+          "name": "resolve_db",
+          "kind": "function",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 352
+        },
+        {
+          "id": "function:78c98964f058d969b18d7c18071dba61",
+          "name": "sidecar_db_path",
+          "kind": "function",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 397
+        },
+        {
+          "id": "variable:4e639926cf7045b9f4bbe04b8fd21a2d",
+          "name": "journaled_root",
+          "kind": "variable",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 69
+        },
+        {
+          "id": "variable:5d7d8327705c95bd0f47784e9d7f5836",
+          "name": "SIDECAR_RELPATH",
+          "kind": "variable",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 70
+        },
+        {
+          "id": "variable:dc937e0af3ebb55a12ee322e2a85af0e",
+          "name": "DEFAULT_DB_RELPATH",
+          "kind": "variable",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 71
+        }
+      ],
+      "edges": [
+        {
+          "source": "variable:482dd8a4377abc6d4d36e1870cf07bb5",
+          "target": "function:b5ed59c94ec24d82e829a04b8762bef6",
+          "kind": "calls",
+          "metadata": {
+            "confidence": 0.7,
+            "resolvedBy": "exact-match",
+            "refName": "_load_hooks_common"
+          },
+          "line": 68,
+          "column": 16,
+          "provenance": null
+        },
+        {
+          "source": "function:364c5d5d63816b41323433994ed21228",
+          "target": "variable:482dd8a4377abc6d4d36e1870cf07bb5",
+          "kind": "references",
+          "metadata": {
+            "valueRef": true
+          },
+          "provenance": null
+        },
+        {
+          "source": "function:78c98964f058d969b18d7c18071dba61",
+          "target": "variable:482dd8a4377abc6d4d36e1870cf07bb5",
+          "kind": "references",
+          "metadata": {
+            "valueRef": true
+          },
+          "provenance": null
+        },
+        {
+          "source": "variable:4e639926cf7045b9f4bbe04b8fd21a2d",
+          "target": "variable:482dd8a4377abc6d4d36e1870cf07bb5",
+          "kind": "references",
+          "metadata": {
+            "valueRef": true
+          },
+          "provenance": null
+        },
+        {
+          "source": "variable:5d7d8327705c95bd0f47784e9d7f5836",
+          "target": "variable:482dd8a4377abc6d4d36e1870cf07bb5",
+          "kind": "references",
+          "metadata": {
+            "valueRef": true
+          },
+          "provenance": null
+        },
+        {
+          "source": "variable:dc937e0af3ebb55a12ee322e2a85af0e",
+          "target": "variable:482dd8a4377abc6d4d36e1870cf07bb5",
+          "kind": "references",
+          "metadata": {
+            "valueRef": true
+          },
+          "provenance": null
+        }
+      ]
+    },
+    {
+      "definition": {
+        "name": "_load_hooks_common",
+        "kind": "function",
+        "filePath": "shipgate/scripts/signals.py",
+        "startLine": 43,
+        "id": "function:2ea676d01706cc53fb691f1f9f8fb16c",
+        "qualifiedName": "_load_hooks_common",
+        "language": "python"
+      },
+      "roots": [
+        "function:2ea676d01706cc53fb691f1f9f8fb16c"
+      ],
+      "nodeCount": 3,
+      "edgeCount": 2,
+      "affected": [
+        {
+          "id": "function:2ea676d01706cc53fb691f1f9f8fb16c",
+          "name": "_load_hooks_common",
+          "kind": "function",
+          "filePath": "shipgate/scripts/signals.py",
+          "startLine": 43
+        },
+        {
+          "id": "variable:c407b178b9b4405f7256137df1e2c5bc",
+          "name": "_hooks_common",
+          "kind": "variable",
+          "filePath": "shipgate/scripts/signals.py",
+          "startLine": 64
+        },
+        {
+          "id": "variable:a6daeed5540cf37120371a3ba178d461",
+          "name": "journaled_root",
+          "kind": "variable",
+          "filePath": "shipgate/scripts/signals.py",
+          "startLine": 65
+        }
+      ],
+      "edges": [
+        {
+          "source": "variable:c407b178b9b4405f7256137df1e2c5bc",
+          "target": "function:2ea676d01706cc53fb691f1f9f8fb16c",
+          "kind": "calls",
+          "metadata": {
+            "confidence": 0.7,
+            "resolvedBy": "exact-match",
+            "refName": "_load_hooks_common"
+          },
+          "line": 64,
+          "column": 16,
+          "provenance": null
+        },
+        {
+          "source": "variable:a6daeed5540cf37120371a3ba178d461",
+          "target": "variable:c407b178b9b4405f7256137df1e2c5bc",
+          "kind": "references",
+          "metadata": {
+            "valueRef": true
+          },
+          "provenance": null
+        }
+      ]
+    }
+  ],
+  "nodeCount": 10,
+  "edgeCount": 8,
+  "affected": [
+    {
+      "name": "_load_hooks_common",
+      "kind": "function",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 47
+    },
+    {
+      "name": "_hooks_common",
+      "kind": "variable",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 68
+    },
+    {
+      "name": "resolve_db",
+      "kind": "function",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 352
+    },
+    {
+      "name": "sidecar_db_path",
+      "kind": "function",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 397
+    },
+    {
+      "name": "journaled_root",
+      "kind": "variable",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 69
+    },
+    {
+      "name": "SIDECAR_RELPATH",
+      "kind": "variable",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 70
+    },
+    {
+      "name": "DEFAULT_DB_RELPATH",
+      "kind": "variable",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 71
+    },
+    {
+      "name": "_load_hooks_common",
+      "kind": "function",
+      "filePath": "shipgate/scripts/signals.py",
+      "startLine": 43
+    },
+    {
+      "name": "_hooks_common",
+      "kind": "variable",
+      "filePath": "shipgate/scripts/signals.py",
+      "startLine": 64
+    },
+    {
+      "name": "journaled_root",
+      "kind": "variable",
+      "filePath": "shipgate/scripts/signals.py",
+      "startLine": 65
+    }
+  ]
+}

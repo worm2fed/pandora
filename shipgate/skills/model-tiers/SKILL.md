@@ -123,7 +123,19 @@ A worker starts with zero context, so the worker brief must be self-contained:
    runtime, include a **baseline**: run the affected suite once before changes, and compare
    after. The bar is zero *new* failures. Also name the config's **Code tooling**
    integrations, so workers use them instead of grep-and-memory: the library-docs tool for
-   dependency APIs, the LSP tool for symbol navigation.
+   dependency APIs, the LSP tool for symbol navigation. The code graph is available when a
+   signals call in this flow returned `structure.source` `graph`. A `Code graph: off` bullet
+   in the config means it is absent. When it is available, name three graph commands as the
+   worker's first move, before grep:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> explore <words>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> node <symbol|file>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json callers <symbol>
+   ```
+
+   Say that an `explore` or `node` result counts as a Read of the files it prints, so the
+   worker does not Read them again. When the code graph is absent, say nothing about codegraph.
 5. **No commit, no staging** — the worker leaves changes in the working tree for orchestrator
    review.
 6. **Report-back format** — evidence (real command output, not "tests pass"), deviations from

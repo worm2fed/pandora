@@ -94,6 +94,22 @@ config and no nested repos, the working dir is the repo, and this section doesn'
    else is invisible to them. The status brief and the pane then show no position for the live
    work. A session opened in the worktree is "already on the branch" (step 2). From the main
    checkout, go to the worktree rather than check the branch out a second time.
+   **Seed the code graph index.** When the source checkout holds `.codegraph/codegraph.db`
+   and the new worktree has no `.codegraph/` yet, copy the contents of the source's
+   `.codegraph/` into a fresh directory in the worktree. Then delete the daemon files the
+   copy brought along, because they belong to the source checkout's process:
+
+   ```bash
+   mkdir -p "<worktree>/.codegraph" && cp -R "<source>/.codegraph/." "<worktree>/.codegraph/"
+   rm -f "<worktree>/.codegraph/daemon.pid" "<worktree>/.codegraph/daemon.sock" "<worktree>/.codegraph/daemon.log" "<worktree>/.codegraph/writer.pid"
+   ```
+
+   Do not sync the index yourself. `signals.py` syncs it before its first query. The copy and
+   that sync took 1.2 s on a 104-file repository, less than a fresh build. The copy keeps
+   codegraph's own `.codegraph/.gitignore`. The `/.codegraph/` exclude line lives in the git
+   common dir, which the worktree shares. So `git status` in the new worktree stays clean.
+   Without `codegraph` on `PATH`, with no index in the source checkout, or with a
+   `.codegraph/` already in the worktree, skip this step.
 
 7. **Never move started work silently.** A branch that carries changes can move into a
    worktree, out of one, or to another checkout. It moves only with the same proposal and

@@ -1,0 +1,2 @@
+1|1792404336000|Initial schema
+11|1792404336463|Initial schema includes all migrations

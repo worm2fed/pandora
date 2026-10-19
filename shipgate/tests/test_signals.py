@@ -46,14 +46,50 @@ def load_signals_module():
     return module
 
 
+def _holds_codegraph(directory: str) -> bool:
+    candidate = os.path.join(directory or ".", "codegraph")
+    return os.path.isfile(candidate) and os.access(candidate, os.X_OK)
+
+
+def hermetic_env(base=None):
+    """The environment with no `codegraph` in reach: a real binary on the
+    maintainer's PATH must not change what these tests see."""
+    env = dict(os.environ if base is None else base)
+    env.pop("SHIPGATE_CODEGRAPH_BIN", None)
+    entries = env.get("PATH", "").split(os.pathsep)
+    env["PATH"] = os.pathsep.join(e for e in entries if not _holds_codegraph(e))
+    return env
+
+
 def run_signals(args, cwd=None, env=None):
     return subprocess.run(
         [sys.executable, str(SIGNALS)] + [str(a) for a in args],
         cwd=str(cwd) if cwd else None,
-        env=env,
+        env=hermetic_env() if env is None else env,
         capture_output=True,
         text=True,
     )
+
+
+CODEGRAPH_SHIM = TESTS_DIR / "fixtures" / "codegraph_shim.py"
+
+
+def make_codegraph_shim(bin_dir, mode="ok"):
+    """Write `bin_dir/codegraph`, which runs the shim in MODE; returns its path.
+    Writing it again with another mode switches the mode."""
+    import shlex
+
+    bin_dir = Path(bin_dir)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    target = bin_dir / "codegraph"
+    target.write_text(
+        "#!/bin/sh\n"
+        f"SHIM_MODE={shlex.quote(mode)}\n"
+        "export SHIM_MODE\n"
+        f'exec {shlex.quote(sys.executable)} {shlex.quote(str(CODEGRAPH_SHIM))} "$@"\n',
+        encoding="utf-8")
+    target.chmod(0o755)
+    return target
 
 
 def ts(year, month, day, hour=0, minute=0, second=0):
@@ -82,6 +118,10 @@ class FixtureRepo:
             "-c", f"user.email={author[1]}",
             "-c", "commit.gpgsign=false",
             "-c", "core.hooksPath=/dev/null",
+            # No detached auto-maintenance: it writes under .git after the commit
+            # returns and races the no-write snapshots.
+            "-c", "maintenance.auto=false",
+            "-c", "gc.auto=0",
             *args,
         ]
         try:
@@ -308,7 +348,8 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["exclude"], list(mod.DEFAULT_EXCLUDES))
         self.assertEqual(cfg["source"], {"window_months": "default",
                                          "fix_pattern": "default",
-                                         "exclude": "default"})
+                                         "exclude": "default",
+                                         "code_graph": "default"})
 
     def test_file_values_are_read_from_the_code_signals_section(self):
         self.write_config(self.repo.path, (
@@ -322,7 +363,8 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["exclude"][-2:], ["generated/", "*.snap"])
         self.assertEqual(cfg["source"], {"window_months": "shipgate.md",
                                          "fix_pattern": "shipgate.md",
-                                         "exclude": "shipgate.md"})
+                                         "exclude": "shipgate.md",
+                                         "code_graph": "default"})
         paths = [f["path"] for f in self.signals_json(
             "hotspots", "--repo", self.repo.path)["files"]]
         self.assertEqual(paths, ["a.py"])
@@ -349,7 +391,8 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["window_months"], 12)
         self.assertEqual(cfg["source"], {"window_months": "default",
                                          "fix_pattern": "default",
-                                         "exclude": "default"})
+                                         "exclude": "default",
+                                         "code_graph": "default"})
 
     def test_an_umbrella_config_applies_when_the_repo_has_none(self):
         self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n")
@@ -372,7 +415,8 @@ class TestConfig(SignalsCase):
         self.assertIn("gen/", cfg["exclude"])  # the file's excludes add to the defaults
         self.assertEqual(cfg["source"], {"window_months": "shipgate.md",
                                          "fix_pattern": "default",
-                                         "exclude": "shipgate.md"})
+                                         "exclude": "shipgate.md",
+                                         "code_graph": "default"})
 
     def test_a_sidecar_below_a_git_umbrella_adds_a_config_without_dropping_the_umbrellas(self):
         """A sidecar between the repo and the umbrella's git toplevel: both configs
@@ -628,7 +672,10 @@ class TestTrajectory(StandardRepoCase):
                          {"available": True, "reason": None, "commits_scanned": 11})
         self.assertEqual(payload["structure"], {
             "available": True, "reason": None, "languages": ["python"],
-            "files_scanned": 4})
+            "files_scanned": 4, "source": "regex", "graph": {
+                "state": "absent", "reason": "graph-not-installed", "version": None,
+                "index_root": None, "built": None, "sync": "none",
+                "outside_repo": None}})
         self.assertEqual(set(payload["files"][0]), {
             "path", "commits", "fixes", "fix_rate", "age_days", "stale_days",
             "authors", "top_share", "fan_in", "fan_out", "unresolved", "structure",
@@ -833,7 +880,8 @@ class TestStructure(SignalsCase):
         blast = self.blast("chain/a.py")["blast"]
         self.assertEqual(blast, {"size": 2, "files": ["chain/b.py", "chain/c.py"],
                                  "truncated": False, "by_dir": {"chain": 2},
-                                 "unknown_seeds": []})
+                                 "unknown_seeds": [], "tests": None,
+                                 "tests_reason": None})
 
     def test_blast_terminates_on_a_cycle(self):
         blast = self.blast("cyc/x.ts")["blast"]
@@ -1080,10 +1128,21 @@ class TestProseDrift(unittest.TestCase):
 
     def test_every_skill_invocation_parses(self):
         invocations = prose_invocations()
-        self.assertGreaterEqual(len(invocations), 5, invocations)
+        # The count the skills quote today: a dropped invocation fails here, not silently.
+        self.assertGreaterEqual(len(invocations), 21, invocations)
         for where, argv in invocations:
             with self.subTest(where=where, argv=argv):
                 self.assertTrue(self.parses(argv), f"{where}: {argv}")
+
+    def test_graph_invocations_put_shipgate_flags_before_the_action(self):
+        # Everything after ACTION goes to codegraph, so a shipgate flag there is lost.
+        graph = [(w, a) for w, a in prose_invocations() if a[:1] == ["graph"]]
+        self.assertGreaterEqual(len(graph), 12, graph)
+        for where, argv in graph:
+            with self.subTest(where=where, argv=argv):
+                parsed = self.mod.build_parser().parse_args(argv)
+                self.assertIn(parsed.action, self.mod.GRAPH_ACTIONS, where)
+                self.assertFalse({"--repo", "--graph", "--json"} & set(parsed.args), where)
 
 
 # ---------------------------------------------------------------------------
@@ -1119,20 +1178,75 @@ class TestCrossCutting(StandardRepoCase):
         third = self.signals("hotspots", "--repo", self.root, "--json").stdout
         self.assertEqual(first, third)
 
-    def test_writes_nothing(self):
-        def snapshot():
-            state = {}
-            for dirpath, dirnames, filenames in os.walk(self.root):
-                for name in dirnames + filenames:
-                    full = os.path.join(dirpath, name)
-                    state[full] = os.lstat(full).st_mtime_ns
-            return state
 
-        before = snapshot()
-        self.assertIn(str(self.root / ".claude" / "shipgate.md"), before)
-        self.all_outputs()
-        self.signals("hotspots", "--repo", self.root, "--diff", "HEAD~1", "--json")
-        self.assertEqual(snapshot(), before)
+
+class TestWrites(SignalsCase):
+    """FR-017 / SC-003: `--graph off` writes nothing; without codegraph the one
+    write is the advisory marker; with codegraph, the index, the exclude line and
+    the files under `<git-common-dir>/shipgate/`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name).resolve()
+        self.root = self.tmp / "repo"
+        self.repo = build_standard(self.root)
+
+    def snapshot(self):
+        state = {}
+        for dirpath, dirnames, filenames in os.walk(self.root):
+            for name in dirnames + filenames:
+                full = os.path.join(dirpath, name)
+                state[os.path.relpath(full, self.root)] = os.lstat(full).st_mtime_ns
+        return state
+
+    def run_all(self, *extra, env=None):
+        for argv in (["hotspots"], ["blast", "src/hot.py"], ["suspects", "src/hot.py"],
+                     ["hotspots", "--diff", "HEAD~1"]):
+            for mode in ([], ["--json"]):
+                self.signals(*argv, "--repo", self.root, *extra, *mode, env=env)
+
+    def changes(self, before, after):
+        added = set(after) - set(before)
+        changed = {p for p in set(before) & set(after) if before[p] != after[p]}
+        self.assertEqual(set(before) - set(after), set())
+        return added, changed
+
+    def test_graph_off_writes_nothing(self):
+        before = self.snapshot()
+        self.assertIn(os.path.join(".claude", "shipgate.md"), before)
+        self.run_all("--graph", "off")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_absent_writes_only_the_advisory_marker_once(self):
+        before = self.snapshot()
+        self.run_all()
+        after = self.snapshot()
+        added, changed = self.changes(before, after)
+        state = os.path.join(".git", "shipgate")
+        self.assertEqual(added, {state, os.path.join(state, "codegraph-advised")})
+        self.assertEqual(changed, {".git"})  # the new directory's parent
+        self.run_all()
+        self.assertEqual(self.snapshot(), after)
+
+    def test_present_writes_only_the_index_the_exclude_line_and_the_lock(self):
+        shim = make_codegraph_shim(self.tmp / "bin", "ok")
+        env = dict(hermetic_env(), SHIPGATE_CODEGRAPH_BIN=str(shim))
+        exclude = self.root / ".git" / "info" / "exclude"
+        exclude_before = exclude.read_text(encoding="utf-8")
+        porcelain = self.repo.git("status", "--porcelain", "--untracked-files=all")
+        before = self.snapshot()
+        self.run_all(env=env)
+        added, changed = self.changes(before, self.snapshot())
+        state = os.path.join(".git", "shipgate")
+        self.assertEqual({p for p in added if not p.startswith(".codegraph")},
+                         {state, os.path.join(state, "codegraph.lock")})
+        self.assertIn(os.path.join(".codegraph", "codegraph.db"), added)
+        self.assertEqual(changed, {".git", os.path.join(".git", "info", "exclude")})
+        self.assertEqual(exclude.read_text(encoding="utf-8"),
+                         exclude_before + "/.codegraph/\n")
+        self.assertEqual(self.repo.git("status", "--porcelain",
+                                       "--untracked-files=all"), porcelain)
 
 
 # ---------------------------------------------------------------------------
@@ -1321,12 +1435,15 @@ class TestReviewRound1(SignalsCase):
         source.commit("one", ts(2020, 1, 1), writes={"a.py": "A = 1\n"})
         source.commit("two", ts(2020, 2, 1), writes={"a.py": "A = 2\n"})
         dst = shallow_clone(source.path, self.tmp / "shallow")
-        lines = self.signals("hotspots", "--repo", dst).stdout.splitlines()
+        # --graph off: a first run in auto mode adds the one-time advisory line.
+        lines = self.signals("hotspots", "--repo", dst, "--graph", "off"
+                             ).stdout.splitlines()
         self.assertEqual(lines[0], "trajectory unavailable: shallow")
         self.assertEqual(lines[1].split()[0], "path")
         docs = FixtureRepo(self.tmp / "docs")
         docs.commit("one", ts(2020, 1, 1), writes={"a.md": "a\n"})
-        lines = self.signals("hotspots", "--repo", docs.path).stdout.splitlines()
+        lines = self.signals("hotspots", "--repo", docs.path, "--graph", "off"
+                             ).stdout.splitlines()
         self.assertEqual(lines[0], "structure unavailable: no-adapter")
         self.assertEqual(lines[1].split()[0], "path")
 

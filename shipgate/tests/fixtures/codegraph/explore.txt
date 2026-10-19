@@ -1,0 +1,30 @@
+**Exploration: blast radius**
+
+Found 37 symbols across 1 file.
+
+**Blast radius — what depends on these (update/verify before editing)**
+
+- `blast_radius` (shipgate/scripts/signals.py:1076) — 2 callers in `shipgate/scripts/signals.py`; no tests found within 3 caller hops
+- `RADIUS` (shipgate-hud/hooks/diagram.ts:314) — 1 caller in `shipgate-hud/hooks/diagram.ts`; tested via callers: `shipgate-hud/tests/diagram.test.ts`
+- `cmd_blast` (shipgate/scripts/signals.py:1601) — 2 callers in `shipgate/scripts/signals.py`; no tests found within 3 caller hops
+- `render_blast` (shipgate/scripts/signals.py:1305) — 2 callers in `shipgate/scripts/signals.py`; no tests found within 3 caller hops
+
+**Source Code**
+
+> The code below is the **verbatim, current on-disk source** of these files — re-read from disk on this call and line-numbered, byte-for-byte identical to what the Read tool returns. It is NOT a summary, outline, or stale cache. Treat each block as a Read you have already performed: do not Read a file shown here.
+
+**`shipgate/scripts/signals.py`** — calls(calls), instantiates(instantiates), _norm_rel(calls), _check_counts(calls), diff_files(calls), +64 more
+
+```python
+1032	    """Import graph over `graph_files` (tracked minus excludes)."""
+1033	    all_files = frozenset(tracked)
+1034	    nodes = set(graph_files)
+1035	    go_modules, go_packages = _go_context(root, tracked)
+1036	    ctx = GraphContext(all_files, _ts_aliases(root, all_files), _py_index(tracked),
+1037	                       go_modules, go_packages)
+1038	    out: Dict[str, set] = {}
+
+... (gap) ...
+
+1073	    return {"available": False, "reason": reason, "languages": [], "files_scanned": 0}
+1074	

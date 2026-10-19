@@ -29,6 +29,9 @@ pattern and its paths; treat a hit as a blocker, not a nit.
 
 ## Working here
 
+- shipgate's tests run with `python3 -m unittest discover -s shipgate/tests` from the repo
+  root (never `-t .`: `shipgate/tests` has no `__init__.py`; test modules import each other
+  by plain name). Its scripts stay Python 3.9 compatible (no `match`, no runtime `X | Y`).
 - Plugins are independent: read the plugin's own `README.md` / `CHANGELOG.md` before
   editing it; do not assume one plugin's conventions apply to another.
 - shipgate's flow config for this repo is `.claude/shipgate.md`; the journal is

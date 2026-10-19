@@ -16,8 +16,12 @@ depend on this?" or "what should I check before I open the PR?". For these, the 
 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" blast --diff <base> --json`. Use
 `HEAD~1` for the commit at HEAD, and `blast <paths>` for named files. Report its `by_dir`
 grouping. The `files` list is the full transitive set. So mark the direct importers by
-grepping for imports of the changed files. Name any `unknown_seeds` as unmapped. The answer
-is the affected set and nothing else. Do not name files you ruled out. Add routing notes
+grepping for imports of the changed files. Name any `unknown_seeds` as unmapped. The JSON
+names its source in `structure.source`. When it is `graph`, `blast.tests` lists the tests the
+diff reaches. Report them as their own group. Then run step 3's impact query for each exported
+symbol whose body the diff changes. Relay a top-level `advisory` as one line. When the code
+graph is absent, the answer is as before, plus that one advisory line. The answer is the
+affected set and nothing else. Do not name files you ruled out. Add routing notes
 (CLAUDE.md rules, cross-cutting risks) only when the user asked for them. Do not branch or
 explore afterwards unless asked. Record nothing, because a blast-radius answer starts no flow.
 The routing ask for *new* work is the opposite case: "where does this go and what does it
@@ -72,6 +76,24 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
    result shows in `trajectory.reason` / `structure.reason`; `no-adapter` usually arrives
    there. Then keep whichever half is available. There is no error, and nothing to install.
 
+   The JSON names its source in `structure.source`. It is `graph` when the code graph
+   answered, and `regex` when the regex scanner ran. Under `graph`, `blast.tests` lists the
+   tests the diff reaches. Keep that list. When `structure.source` is `graph`, name each exported
+   symbol whose body the change touches. For a diff, read the names from `git diff -U0 <base>`
+   in that repo. For planned work, name the exported symbols you expect to change. Run one
+   impact query per symbol, with the shipgate flags before `impact`:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json impact <symbol> -f <path>
+   ```
+
+   For each definition in `result.definitions`, keep the count of `affected` symbols. Also keep
+   the `ambiguous` flag. `ambiguous: true` means the name has more than one definition, so name
+   each one. In an umbrella, the `--repo` rule above applies to this call too. When the JSON
+   has a top-level `advisory`, relay it as one line in the map. When the code graph is absent,
+   `structure.source` is `regex`, `blast.tests` is `null`, and the map is as before, plus that
+   one advisory line.
+
 4. **Classify the change** using the rules that `CLAUDE.md` actually defines. The list below
    holds typical multi-service patterns to look for. They are not universal rules, and they
    are not rules to import from elsewhere:
@@ -114,7 +136,10 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
 
 ### Risk signals
 - <module> — churn <label> · fix-rate <label> · fan-in <label> → risk <label>
-- Blast radius of the touched set: <size> files (<top importing dirs>)
+- Blast radius of the touched set: <size> files (<top importing dirs>) · source <graph|regex>
+- Tests the diff reaches: <n> files — <paths>                    (graph only)
+- Symbol impact: <symbol> (<path>) — <n> affected · ambiguous <yes|no>   (graph only)
+- <advisory, one line, when the JSON carries one>
   (unavailable → replace this block with one line: `Risk signals: unavailable (<reason>)`)
 
 ### Cross-cutting risks
@@ -134,7 +159,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type phase-entered \
   --data '{"phase":"route-and-map","primary_home":"api",
            "touched":["api","web"],"schema":false,"flag":"export-filters",
-           "signals":{"modules":{"api":{"churn":"top","fix":"high","fan_in":"mid"}},"blast":37},
+           "signals":{"source":"graph","modules":{"api":{"churn":"top","fix":"high","fan_in":"mid"}},"blast":37},
            "skipped":["workspace"]}'
 ```
 
@@ -153,9 +178,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream feat/<slug> -
 EOF
 ```
 
-`signals` carries labels and sizes only, never the table. When the signals could not be
-computed, it carries `{"unavailable":"shallow"}` instead. So the entry stays well under the
-1 KB cap.
+`signals` carries labels, sizes and the `source` only, never the table. When the signals
+could not be computed, it carries `{"unavailable":"shallow"}` instead. So the entry stays
+well under the 1 KB cap.
 
 Record essentials only. The map itself stays in the conversation and in the artifacts that
 follow it. The journal points at position; it doesn't copy documents. A missing or unreadable

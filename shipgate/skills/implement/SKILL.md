@@ -41,7 +41,24 @@ a placeholder, or `plain`, write them as before.
    template to match. Consult the library-docs integration that the config's **Code
    tooling** section names (if any), rather than trusting memory of the API. For symbol
    navigation in typed code (who calls this, where is it defined), prefer the LSP tool the
-   config names over grep-and-read. When several existing candidates match, compare them
+   config names over grep-and-read.
+
+   Search the code graph before you grep. Query the name you would give the new code, then
+   two domain synonyms of it, one call each:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json query <name>
+   ```
+
+   Read the best candidate with its callers in one call. A `node` result counts as a Read of
+   the code it prints, so do not Read that code again:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> node <symbol>
+   ```
+
+   When the query returns `available: false`, grep as before and relay a top-level
+   `advisory` as one line. When several existing candidates match, compare them
    with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <candidate-files> --json`.
    Prefer the proven one: lower `fix_rate`, higher `age_days`, higher `fan_in`. Say so in
    the choice. If the signals are unavailable (see the JSON's `reason`, `trajectory.reason`,

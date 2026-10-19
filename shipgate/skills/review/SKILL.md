@@ -13,11 +13,15 @@ repo-rule violations. Quality of findings over quantity.
 look hardest?", "not a code review, just the ranking". Here the risk table *is* the
 deliverable. Do these steps:
 
-- Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --diff <base> --json`
+- Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --diff <base> --blast --json`
   (`HEAD~1` for the commit at HEAD).
 - Keep the JSON's order (risk, then fixes, then commits).
 - Answer with a numbered list of the changed files and one line of evidence each (fix%,
   commits, fan-in, staleness).
+- When `blast.tests` is a list, add one line under the list: the tests the diff reaches.
+  `blast.tests` is a list only when `structure.source` is `graph`.
+- Relay a top-level `advisory` as one line. When the code graph is absent, the answer is as
+  before, plus that one advisory line.
 
 Dispatch no reviewers. Do not review the diff's contents unless asked.
 
@@ -92,11 +96,17 @@ the files most likely to regress. Include every changed file, since `--diff` mod
 truncate:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --diff <base> --json
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --diff <base> --blast --json
 ```
 
 Keep that JSON's `files[].path → risk` for the `workflow` path's `fileRisk`. Take it from the
 rows whose `risk` is non-null only.
+
+Under the table, add a **Tests the diff reaches** line with the paths from `blast.tests`.
+`blast.tests` is a list when `structure.source` is `graph`, and `null` under the regex
+scanner. When it is `null`, leave the line out. Step 6 runs these test files. Relay a
+top-level `advisory` to the user as one line. When the code graph is absent, the brief is
+as before, plus that one advisory line.
 
 The top-level `available` or `trajectory.available` may be false (`no-git`, `shallow`,
 `empty-history`; the reason is `trajectory.reason`, or the top level's). Then the brief says
@@ -298,7 +308,8 @@ Not a port → skip this step silently.
 ## Step 6 — Verify, then verdict
 
 Run the `verify` gate on the suite/build/lint for the touched code: fresh output, exit codes,
-real pass counts. Then give a clear verdict:
+real pass counts. When the Step 1 brief listed tests the diff reaches, the gate also runs
+those test files by name, as well as the suite. Then give a clear verdict:
 
 - **Ready**: no blockers, rules satisfied, evidence attached. Safe to MR/PR/push.
 - **Not ready**: list blockers. Route back to `implement` (code wrong) or `design` (approach

@@ -89,6 +89,7 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | Term | Definition | Not to be confused with |
 |---|---|---|
 | **code signals** | The per-file numbers `scripts/signals.py` computes from git history and the import graph; the `## Code signals` config section. | — |
+| **code graph** | The structure `scripts/signals.py` reads from codegraph's index when the `codegraph` CLI is on `PATH` (ADR 0007): file edges, the tests a diff reaches, and symbol queries through `signals.py graph`. Without it, the regex scanner gives the file edges. Config `Code graph: auto \| off \| root`. | *codegraph*, the third-party tool that builds the index; the *regex scanner*, the fallback. |
 | **risk signals** | Those numbers as presented in an impact map, a brief or a suspect list (the "Risk signals" block). | — |
 | **fix-rate** | Share of a file's commits that are fixes. Contract spellings: `fix%` (table), `fix_rate` (JSON). | — |
 

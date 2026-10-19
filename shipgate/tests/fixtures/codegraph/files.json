@@ -1,0 +1,44 @@
+[
+  {
+    "path": "shipgate-hud/hooks/diagram.ts",
+    "language": "typescript",
+    "nodeCount": 119,
+    "size": 31208
+  },
+  {
+    "path": "shipgate-hud/hooks/json.ts",
+    "language": "typescript",
+    "nodeCount": 6,
+    "size": 915
+  },
+  {
+    "path": "shipgate-hud/hooks/position.ts",
+    "language": "typescript",
+    "nodeCount": 41,
+    "size": 16053
+  },
+  {
+    "path": "shipgate-hud/hooks/publish.ts",
+    "language": "typescript",
+    "nodeCount": 33,
+    "size": 13254
+  },
+  {
+    "path": "shipgate-hud/hooks/register.tsx",
+    "language": "tsx",
+    "nodeCount": 111,
+    "size": 40669
+  },
+  {
+    "path": "shipgate-hud/hooks/review.ts",
+    "language": "typescript",
+    "nodeCount": 48,
+    "size": 18372
+  },
+  {
+    "path": "shipgate-hud/hooks/views.tsx",
+    "language": "tsx",
+    "nodeCount": 81,
+    "size": 34351
+  }
+]

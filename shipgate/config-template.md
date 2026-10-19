@@ -204,7 +204,7 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 ## Code tooling
 
 <!-- Default when absent: no library-docs integration (training knowledge / WebFetch);
-     no LSP preference (grep/read). -->
+     no LSP preference (grep/read); code graph `auto`. -->
 
 - Library docs: <the docs tool/MCP to consult for a dependency's current API before
   hand-rolling around it or answering from memory — e.g. a context7-style MCP
@@ -212,6 +212,9 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 - Code navigation: <the LSP tool, if one is configured for the language — prefer
   goToDefinition / findReferences / hover over grep-and-read for symbol work in typed
   code; note any workspace quirks (root, server version) here>
+- Code graph: <auto, off or root. Leave it out for auto: scripts/signals.py uses
+  codegraph when it is installed and builds the index once. off always uses the regex
+  scanner. root uses the index at the umbrella root and never builds it.>
 
 ## Code signals
 

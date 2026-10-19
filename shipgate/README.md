@@ -176,7 +176,7 @@ skipped for want of a branch. The Stop hook enforces the build-side gates only (
 ## Code signals
 
 Per-file risk computed from the code and its history, on demand, by
-`scripts/signals.py` — no index, no cache, nothing written. One `git log` pass gives each
+`scripts/signals.py` — no index of its own, no cache. One `git log` pass gives each
 file's **trajectory** over the window: commits, fix-rate (share of commits whose subject
 matches the fix pattern), age, staleness, author count and top-author share. One import scan
 gives **structure** for TS/JS, Python and Go: fan-in, fan-out and the blast radius
@@ -189,15 +189,116 @@ repository (or `--scope`), so `top` means top here; paths and `--diff` only filt
 | `hotspots [PATH…] [--diff REV] [--by-dir DEPTH] [--blast] [--top N]` | ranked per-file signals, optionally rolled up to modules and with the selection's blast radius |
 | `blast FILE… [--diff REV] [--limit N]` | transitive importers of a file set — structure only, no log pass |
 | `suspects FILE… [--top N]` | files near a symptom ranked by fix-rate × recency × proximity, for debugging |
+| `graph ACTION ARGS…` | one codegraph query: `impact`, `callers`, `callees`, `affected`, `query`, `node` or `explore` (see **Code graph**) |
 
 Common flags: `--repo`, `--scope`, `--window`, `--fix-pattern`, `--exclude`, `--json`; they
-override the `## Code signals` config section. Consumers: `route-and-map` (a **Risk signals**
+override the `## Code signals` config section. `--graph auto|off|root` overrides the
+`Code graph` bullet under `## Code tooling`. Consumers: `route-and-map` (a **Risk signals**
 block in the impact map, essentials in the journal), `review` (a per-file risk table in the
 brief, and `fileRisk` for the workflow's refuter ordering), `structured-debug` (a suspect
 list cited as `[signals]` evidence), `implement` and `design` (prefer the proven precedent),
 and optionally explorer and worker briefs. No git, a shallow clone, an empty history or no
 adapter → one line saying why, exit 0, the phase runs as before. Output carries counts and
 shares, never author names.
+
+### Code graph
+
+When the [codegraph](https://github.com/colbymchenry/codegraph) CLI is on `PATH`, the
+structure half comes from its index instead of the regex scanner. Nothing needs to be
+configured. The first call on a repository with no index builds one. A repository with more
+than 10,000 tracked files is not indexed automatically; one advisory line names the command.
+Before each query, shipgate syncs the index, unless a codegraph MCP server already watches
+the repository. shipgate finds that server through the `socketPath` in
+`.codegraph/daemon.pid`, because codegraph puts the socket in the temp directory when the
+project path is long. The JSON says which source ran: `structure.source` is `graph` or
+`regex`, and `structure.graph` carries the state and the reason.
+`structure.graph.index_root` is relative to the repository: `.`, or `..` in root mode. A
+codegraph call that fails gives the regex result, one reason line and exit 0. With codegraph
+absent, every phase runs as before, plus one advisory line, once per project.
+
+shipgate uses only a codegraph binary you installed. It skips a `PATH` entry that sits
+inside the repository. It skips an entry inside an umbrella root only when the umbrella tracks the `codegraph` file in it, or holds it in its `.git`. It also skips an empty or relative `PATH` entry. After a skipped entry,
+shipgate continues along `PATH` and uses the next acceptable install.
+
+shipgate refuses an index that the repository itself supplies, with the reason
+`graph-index-untrusted`. That happens in these cases:
+
+- `.codegraph`, `.codegraph/codegraph.db` or `.codegraph/.gitignore` is a symlink, or git tracks it as one.
+- `.codegraph` resolves outside the repository.
+- git tracks a file under `.codegraph/` other than codegraph's own `.codegraph/.gitignore`.
+- A directory spelled like `.codegraph` in another case, such as `.CodeGraph`, exists,
+  tracked or not.
+
+To use the code graph again, remove the symlink, untrack those files, or rename or remove
+the `.CodeGraph`-style directory. The reason `graph-empty` means the index holds none of the
+files this call asks about, after `--scope` and `--exclude`. Both reasons give the regex
+result.
+
+What it does not add: a higher eval score. In shipgate's own evals the two arms score the
+same, because the model compensates for a weak regex number by writing its own resolver. The
+gain is in the signals themselves (56 of 59 true importers from the graph, 2 of 59 from the
+regex scanner on a 500-file workspace fixture), in the tests a diff reaches, and in the symbol
+queries. The measurement is in `docs/research/2026-10-19-codegraph-vs-signals.md`.
+
+What the code graph adds, per phase:
+
+- `route-and-map`: the tests the diff reaches (`blast.tests`), and `graph impact` for each
+  changed exported symbol.
+- `review`: the tests the diff reaches, under the risk table. The verify gate runs them.
+- `structured-debug`: `graph callers` and `graph callees` from the symptom symbol, cited as
+  `[graph]` evidence. `suspects` still ranks by history.
+- `implement`: `graph query` for the name and two synonyms, then `graph node` to read the
+  best candidate with its callers.
+- `design`: `graph callers` shows who already uses each precedent.
+- Explorer and worker briefs: `graph explore`, `graph node` and `graph callers` before grep.
+  An `explore` or `node` result counts as a Read of the files it prints.
+- `workspace`: a new worktree gets a copy of the source checkout's index, and the next
+  query syncs it. That took 1.2 s on this repository, less than a fresh build.
+
+Put the shipgate flags before the action, because everything after it goes to codegraph:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json impact <symbol> -f <path>
+```
+
+With `--json`, the answer is `{version, available, source, command, args, graph, result,
+result_text, not_found}`. For `impact`, `callers`, `callees`, `affected` and `query`,
+codegraph prints text, not JSON, when it does not know a symbol. That answer is still
+`available: true`: `result` is null, the text is in `result_text`, and `not_found` is `true`.
+For `node` and `explore`, the answer is always text, so the text is in `result`. Then
+`not_found` says whether that text reports a symbol or code that was not found. When the graph is unavailable, the answer is `available: false` with a
+reason, and no codegraph call runs.
+
+Measured costs, one machine, one run each:
+
+| Index | Files | Build | Size |
+| --- | --- | --- | --- |
+| this plugin repository | 104 | 5 s | 8 MB |
+| one backend service | 1,469 | 7 s | 125 MB |
+| an umbrella root of 28 child repos, nested clones excluded | — | 87 s | 680 MB |
+
+A `sync` takes 0.7–2.4 s per child repository. In an umbrella, each child repository owns its
+own index, and every call names the child with `--repo`.
+
+The only configuration is one optional bullet under `## Code tooling`:
+`Code graph: auto | off | root`. `auto` is the default. `off` always uses the regex scanner.
+`root` uses an index at the umbrella root, which you build yourself with your own
+`codegraph.json` and its exclude list for nested clones. shipgate never builds a root index.
+**Root mode needs the codegraph MCP server running.** Without it, a `sync` on the root takes
+55–66 s, the 30 s call timeout stops it, and the regex scanner runs. In `root` mode, the
+`graph` passthrough returns codegraph's own output, so its paths are relative to the umbrella
+root, not to the child repository. The `--graph` flag overrides the bullet for one call.
+
+What shipgate writes, and only when codegraph is involved:
+
+- `.codegraph/`, written by codegraph itself when shipgate builds the index.
+- One `/.codegraph/` line in `.git/info/exclude`, only for an index shipgate built.
+- Small files under `.git/shipgate/`: the build lock and two advisory markers, so each
+  advisory shows once. With codegraph absent, only one advisory marker is written, once.
+
+shipgate never installs codegraph, never writes MCP configuration and never edits
+`CLAUDE.md`. Every codegraph call shipgate makes runs with telemetry off
+(`CODEGRAPH_TELEMETRY=0`). No hook calls codegraph. ADR 0007 records the design.
 
 ## Install
 
@@ -234,6 +335,7 @@ are Python 3 standard library only, and the signals skip themselves where there 
 | `/security-review`, `/simplify`                                        | Claude Code built-ins | deep security audit / standalone cleanup                                                                                                                           | ship with Claude Code already                      |
 | the `Workflow` tool (Claude Code built-in; config `## Orchestration`)  | Claude Code built-in  | Review and Explore fans run as bundled scripts: schema-typed findings, in-script dedupe, evidence-required refuters on review's top findings                       | the `Agent` fan, as before                         |
 | an MR/PR-watcher skill (named in config)                               | skill                 | `review` registers blockers/follow-ups on the watch list; watcher events resume the flow at the phase they unlock                                                  | flow ends at "MR/PR opened"; resume manually       |
+| `codegraph`                                                            | CLI on `PATH`         | symbol-level impact, callers, the tests a diff reaches, `explore` (see **Code graph**)                                                                              | the regex import graph; one advisory line, once    |
 
 The plugin also expects the repo to carry **`CLAUDE.md`** files (root + nested where relevant) —
 that's how `route-and-map` decides where code belongs. Repos without them still work; routing is

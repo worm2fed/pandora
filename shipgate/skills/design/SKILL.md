@@ -64,7 +64,11 @@ honest. Present to the user:
   Prefer the proven one: lower `fix_rate`, higher `age_days`, higher `fan_in`. State that
   choice in the worklog's **Reference implementation** rationale. The signals can be
   unavailable; the JSON's `reason`, `trajectory.reason` and `structure.reason` say why. Then
-  choose on reading alone, and say so.
+  choose on reading alone, and say so. When that JSON says `structure.source` is `graph`, you
+  may also see who already uses each candidate, one call per candidate symbol:
+  `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json callers <symbol>`.
+  Relay a top-level `advisory` as one line. When the code graph is absent, compare as before,
+  plus that one advisory line.
 - Then ask which approach the user wants. Make a real recommendation. "Here are three
   options, you decide" wastes the analysis you just did.
 

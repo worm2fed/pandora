@@ -1,0 +1,25 @@
+[
+  {
+    "node": {
+      "id": "function:9157b3107c9c9b8cd2c591bef8b828af",
+      "kind": "function",
+      "name": "blast_radius",
+      "qualifiedName": "blast_radius",
+      "filePath": "shipgate/scripts/signals.py",
+      "language": "python",
+      "startLine": 1076,
+      "endLine": 1099,
+      "startColumn": 0,
+      "endColumn": 5,
+      "docstring": "Reverse-adjacency BFS from the seeds; cycle-safe; seeds excluded.",
+      "signature": "(graph: Graph, seeds: Sequence[str], limit: int) -> Dict[str, Any]",
+      "visibility": null,
+      "isExported": false,
+      "isAsync": false,
+      "isStatic": false,
+      "isAbstract": false,
+      "updatedAt": 1792407036767
+    },
+    "score": 104.969279338361
+  }
+]

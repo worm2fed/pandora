@@ -2,6 +2,48 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.17.0 — the code graph. When the codegraph CLI is on `PATH`, `signals.py` takes the
+structure half from codegraph's index instead of the regex scanner. Nothing needs to be
+configured. The first call on a repository with no index builds it, up to 10,000 tracked
+files. Before a query, shipgate syncs the index, unless a codegraph MCP server already watches
+it. File edges come from a read-only read of `.codegraph/codegraph.db`. The tests a diff
+reaches come from `codegraph affected`. A module loaded by path, which the regex scanner
+cannot see, now shows its 2 test files in `blast`. A new `graph` subcommand runs one
+codegraph query through the same checks: `impact`, `callers`, `callees`, `affected`, `query`,
+`node` or `explore`. The shipgate flags go before the action, and shipgate adds `-p` and `-j`
+itself. Its JSON wraps the answer as `{version, available, source, command, args, graph,
+result, result_text, not_found}`. For `impact`, `callers`, `callees`, `affected` and
+`query`, an exit-0 answer that is not JSON, such as a symbol that is not found, is
+`available: true` with `result` null, the text in `result_text`, and `not_found: true`. For
+`node` and `explore`, the text is always in `result`, and `not_found` says whether it reports
+a miss. When the graph is unavailable, the answer is `available: false` with a
+reason, exit 0, and no codegraph call. The JSON gains only new keys, and `OUTPUT_VERSION`
+stays 1: `structure.source` (`graph` or `regex`), `structure.graph` (state, reason, version,
+index root, build, sync), `blast.tests` with `blast.tests_reason` (`graph-affected-seeds` there means every seed path holds a line break), a top-level `advisory`, and
+`config.code_graph`. `structure.graph.index_root` is relative to the repository: `.`, or `..`
+in root mode. Two new reasons send a call to the regex scanner. `graph-index-untrusted` means
+shipgate refused an index that the repository itself supplies. `.codegraph`,
+`.codegraph/codegraph.db` or `.codegraph/.gitignore` is a symlink, `.codegraph` resolves
+outside the repository, git tracks a file under it other than codegraph's own
+`.codegraph/.gitignore`, or a directory spelled like `.codegraph` in another case exists,
+tracked or not. `graph-empty` means the index holds none of the files the call asks about,
+after `--scope` and `--exclude`. A new `--graph auto|off|root` flag and an optional `Code graph` bullet under
+`## Code tooling` select the mode; `auto` is the default. Eight skills use the code
+graph: `route-and-map` reports the tests the diff reaches and the impact of each changed
+exported symbol; `review` lists those tests under the risk table, and the verify gate runs
+them; `structured-debug` cites callers and callees as `[graph]` evidence; `implement` searches
+the graph before it writes new code; `design` may check who calls each precedent; the explorer
+brief in `feature` and the worker brief in `model-tiers` name `explore`, `node` and `callers`
+as the first move; `workspace` seeds a new worktree's index with a copy of the source
+checkout's index, which the next query syncs. With codegraph absent,
+every phase runs as before, plus one advisory line, once per project. A codegraph call that
+fails gives the regex result and one reason line. `signals.py` now writes, never into tracked
+files: `.codegraph/` (by codegraph, when shipgate builds the index), one `/.codegraph/` line
+in `.git/info/exclude` for an index it built, and a lock and advisory markers under
+`.git/shipgate/`. It never installs codegraph, never writes MCP configuration and never edits
+`CLAUDE.md`. Every codegraph call runs with telemetry off. No hook calls codegraph, and a test
+in `tests/test_hooks.py` keeps it so. ADR 0007 records the design, and amends ADR 0004.
+
 v0.16.2 — a linked worktree uses the main checkout's journal. A repository that commits
 `.claude/shipgate.json` gives every linked worktree a copy of it. For a session in the
 worktree that copy is the nearest sidecar, and its relative `db` named a file inside the

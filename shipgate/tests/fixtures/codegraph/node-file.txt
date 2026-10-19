@@ -1,0 +1,123 @@
+**shipgate-hud/hooks/diagram.ts** — 118 symbols, used by 2 files: shipgate-hud/hooks/views.tsx, shipgate-hud/tests/diagram.test.ts
+
+**Symbols**
+- `Fence` (type_alias) — :7
+- `FENCE_OPEN` (constant) = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`]*)/ — :9
+- `splitFences` (function) (markdown: string): Fence[] — :12
+- `flush` (function) (): void — :16
+- `Direction` (type_alias) — :46
+- `NodeShape` (type_alias) — :47
+- `shape` (property) shape: NodeShape — :48
+- `label` (property) label: string — :48
+- `id` (property) id: string — :48
+- `FlowNode` (type_alias) — :48
+- `EdgeStyle` (type_alias) — :49
+- `style` (property) style: EdgeStyle — :50
+- `label` (property) label: string — :50
+- `to` (property) to: string — :50
+- `from` (property) from: string — :50
+- `FlowEdge` (type_alias) — :50
+- `nodes` (property) nodes: FlowNode[] — :51
+- `edges` (property) edges: FlowEdge[] — :51
+- `direction` (property) direction: Direction — :51
+- `Flowchart` (type_alias) — :51
+- `DIRECTIONS` (constant) = ['LR', 'TD', 'TB', 'RL', 'BT'] — :53
+- `SKIPPED` (constant) = /^(subgraph|end|classDef|class|style|click|linkStyle|direction)(?=\s|;|$)/ — :55
+- `CSI` (constant) = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g — :59
+- `CONTROL` (constant) = /[\u0000-\u001f\u007f-\u009f]/g — :60
+- `cleanLabel` (function) (raw: string): string — :63
+- `id` (property) id: string — :69
+- `label` (property) label: string | null — :69
+- `shape` (property) shape: NodeShape — :69
+- `NodeRef` (type_alias) — :69
+- `NODE_ID` (constant) = /^\s*([\w]+(?:-[\w]+)*)/ — :71
+- `SHAPES` (constant) = [ [/^\(\((.*?)\)\)/, 'circle'], [/^\[\[(.*?)\]\]/, 'rect'], [/^\{\{(.*?)\}\}/, 'diamond'], [... — :73
+- `readNode` (function) (text: string): { node: NodeRef; rest: string } | null — :87
+- `readGroup` (function) (text: string): { nodes: NodeRef[]; rest: string } | null — :104
+- `styleOf` (function) (op: string): EdgeStyle — :120
+- `PLAIN_OP` (constant) = /^\s*(-{2,}>|-{3,}|-\.+->|-\.+-|={2,}>|={3,})/ — :123
+- `LABELLED_OPS` (constant) = [ /^\s*--\s*([^\s\->|].*?)\s*(-{2,}>|-{3,})/, /^\s*-\.\s*([^\s\->|.].*?)\s*(\.+->|\.+-)/, /^\s... — :124
+- `readEdge` (function) (text: string): { label: string; style: EdgeStyle; rest: string } | null — :130
+- `parseFlowchart` (function) (source: string): Flowchart | null — :157
+- `see` (function) (ref: NodeRef): void — :174
+- `y` (property) y: number — :206
+- `x` (property) x: number — :206
+- `h` (property) h: number — :206
+- `w` (property) w: number — :206
+- `Box` (type_alias) — :206
+- `width` (property) width: number — :207
+- `boxes` (property) boxes: Record<string, Box> — :207
+- `height` (property) height: number — :207
+- `layers` (property) layers: string[][] — :207
+- `Layout` (type_alias) — :207
+- `BOX_W` (constant) = 120 — :209
+- `BOX_H` (constant) = 36 — :210
+- `GAP` (constant) = 40 — :211
+- `MARGIN` (constant) = 20 — :212
+- `CHAR_W` (constant) = 7.5 — :213
+- `horizontal` (function) (direction: Direction): boolean — :215
+- `boxWidth` (function) (label: string): number — :218
+- `layoutFlowchart` (function) (chart: Flowchart): Layout — :221
+- `walk` (function) (id: string): void — :229
+- `size` (function) (id: string): { w: number; h: number } — :263
+- `along` (function) (s: { w: number; h: number }): number — :264
+- `across` (function) (s: { w: number; h: number }): number — :265
+- `escapeXml` (function) (text: string): string — :291
+- `num` (function) (n: number): string — :294
+- `exitPoint` (function) (b: Box, tx: number, ty: number): [number, number] — :297
+- `hashOf` (function) (text: string): string — :308
+- `RADIUS` (constant) = { rect: 4, round: 18, diamond: 4, circle: 18 } — :314
+- `flowchartSvg` (function) (chart: Flowchart, layout: Layout = layoutFlowchart(chart)): string — :317
+- `TEXT_LIMIT` (constant) = 24 — :355
+- `cut` (function) (text: string, width: number): string — :358
+- `cutLabel` (function) (label: string): string — :364
+- `ARROW` (constant) = { solid: { line: '──', head: '►' }, dotted: { line: '┄┄', head: '►' }, thick: { line: '══', he... — :366
+- `arrowOf` (function) (e: FlowEdge): string — :373
+- `edgeLine` (function) (chart: Flowchart, e: FlowEdge): string — :379
+- `label` (function) (id: string): string — :380
+- `flowchartText` (function) (chart: Flowchart, layout: Layout = layoutFlowchart(chart)): string — :385
+- `box` (function) (id: string): string — :387
+- `GRID_NODE_LIMIT` (constant) = 60 — :399
+- `GRID_LEG_LIMIT` (constant) = 200 — :401
+- `GRID_CELL_LIMIT` (constant) = 40000 — :403
+- `GRID_ROW_LIMIT` (constant) = 200 — :405
+- `backEdges` (property) backEdges: FlowEdge[] — :407
+- `rows` (property) rows: string[] — :407
+- `width` (property) width: number — :407
+- `FlowGrid` (type_alias) — :407
+- `GridSkip` (type_alias) — :409
+- `N` (constant) = 1 — :412
+- `E` (constant) = 2 — :413
+- `S` (constant) = 4 — :414
+- `W` (constant) = 8 — :415
+- `Glyphs` (type_alias) — :417
+- `SOLID` (constant) = { [N]: '│', [S]: '│', [N | S]: '│', [E]: '─', [W]: '─', [E | W]: '─', [S | E]: '┌', [S | W]: '┐'... — :418
+- `THICK` (constant) = { [N]: '║', [S]: '║', [N | S]: '║', [E]: '═', [W]: '═', [E | W]: '═', [S | E]: '╔', [S | W]: '╗'... — :423
+- `DOTTED` (constant) = { ...SOLID, [N]: '┆', [S]: '┆', [N | S]: '┆', [E]: '┄', [W]: '┄', [E | W]: '┄' } — :429
+- `STYLE_BIT` (constant) = { solid: 1, open: 1, dotted: 2, thick: 4 } — :431
+- `STYLE_GLYPHS` (constant) = { 1: SOLID, 2: DOTTED, 4: THICK } — :432
+- `CORNERS` (constant) = { rect: ['┌', '┐', '└', '┘'], round: ['╭', '╮', '╰', '╯'], circle: ['╭', '╮', '╰', '╯'], dia... — :434
+- `HEAD` (constant) = { LR: '►', RL: '◄', TD: '▼', TB: '▼', BT: '▲' } — :441
+- `label` (property) label: string — :444
+- `toBox` (property) toBox: boolean — :444
+- `src` (property) src: string — :444
+- `tc` (property) tc: number — :444
+- `sc` (property) sc: number — :444
+- `edge` (property) edge: FlowEdge — :444
+- `Leg` (type_alias) — :444
+- `channelOrder` (function) (owners: { key: string; sc: number; legs: Leg[] }[]): string[] — :447
+- `stops` (function) (b: { sc: number; legs: Leg[] }): boolean — :449
+- `mustPrecede` (function) (b: (typeof left)[number], a: (typeof left)[number]): boolean — :450
+- `flowchartGrid` (function) (chart: Flowchart, direction: Direction = chart.direction): FlowGrid | GridSkip — :472
+- `text` (function) (id: string): string — :478
+- `len` (function) (s: string): number — :479
+- `along` (function) (id: string): number — :480
+- `across` (function) (id: string): number — :481
+- `at` (function) (mm: number, c: number): [number, number] — :565
+- `toward` (function) (dm: number, dc: number): number — :569
+- `mark` (function) (mm: number, c: number, bits: number, s: EdgeStyle): void — :573
+- `line` (function) (m1: number, c1: number, m2: number, c2: number, s: EdgeStyle): void — :582
+- `put` (function) (x: number, y: number, chars: string, what: 'box' | 'label'): void — :631
+- `glyph` (function) (x: number, y: number): string — :658
+
+> Drop `symbolsOnly` (or pass `offset`/`limit`) to read the source, like Read.

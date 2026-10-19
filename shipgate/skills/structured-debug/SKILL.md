@@ -93,6 +93,21 @@ The suspect ranking is where to look first, not a verdict. Say so.
    suspects needs the history), note `Risk signals: unavailable (<reason>)` in one line.
    Then form hypotheses as before.
 
+   When the suspects JSON says `structure.source` is `graph`, also walk the code graph from
+   the symptom symbol. Take the symbol from the stack trace or the report. Ask for its
+   callers, and for its callees when the fault may sit below it:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json callers <symbol>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json callees <symbol>
+   ```
+
+   Put the shipgate flags before the action. When the result says `ambiguous: true`, run the
+   call again with `-f <path>` after the symbol. Cite each caller or callee the walk finds as
+   `[graph]` evidence, next to the `[signals]` suspect list. The graph knows structure, not
+   history, so `suspects` still sets the order. Relay a top-level `advisory` as one line.
+   When the code graph is absent, this step is as before, plus that one advisory line.
+
    **Journaled: append `bug-reproduced` now**, the moment the repro fails the way the report
    says. The event carries expected vs actual in one sentence and `refs` to where the steps
    live. The steps and the environment fingerprint stay in the worklog or on the issue, not

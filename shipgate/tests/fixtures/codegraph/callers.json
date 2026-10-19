@@ -1,0 +1,77 @@
+{
+  "symbol": "resolve_db",
+  "targets": [
+    {
+      "name": "resolve_db",
+      "kind": "function",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 352,
+      "id": "function:364c5d5d63816b41323433994ed21228",
+      "qualifiedName": "resolve_db",
+      "language": "python"
+    }
+  ],
+  "ambiguous": false,
+  "aggregation": "definition",
+  "filteredOut": false,
+  "definitions": [
+    {
+      "definition": {
+        "name": "resolve_db",
+        "kind": "function",
+        "filePath": "shipgate/scripts/journal.py",
+        "startLine": 352,
+        "id": "function:364c5d5d63816b41323433994ed21228",
+        "qualifiedName": "resolve_db",
+        "language": "python"
+      },
+      "roots": [
+        "function:364c5d5d63816b41323433994ed21228"
+      ],
+      "callers": [
+        {
+          "id": "function:adb791135b7e0b67ef2d8198b1088da3",
+          "name": "main",
+          "kind": "function",
+          "filePath": "shipgate/scripts/journal.py",
+          "startLine": 2943,
+          "relationships": [
+            "calls"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "source": "function:adb791135b7e0b67ef2d8198b1088da3",
+          "target": "function:364c5d5d63816b41323433994ed21228",
+          "kind": "calls",
+          "metadata": {
+            "confidence": 0.9,
+            "resolvedBy": "exact-match",
+            "refName": "resolve_db"
+          },
+          "line": 2952,
+          "column": 21,
+          "provenance": null
+        }
+      ],
+      "total": 1,
+      "limit": 20,
+      "truncated": false
+    }
+  ],
+  "callers": [
+    {
+      "name": "main",
+      "kind": "function",
+      "filePath": "shipgate/scripts/journal.py",
+      "startLine": 2943,
+      "relationships": [
+        "calls"
+      ]
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "truncated": false
+}

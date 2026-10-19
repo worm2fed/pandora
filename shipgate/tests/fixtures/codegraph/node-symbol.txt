@@ -1,0 +1,35 @@
+**blast_radius** (function)
+
+**Location:** shipgate/scripts/signals.py:1076
+**Signature:** `(graph: Graph, seeds: Sequence[str], limit: int) -> Dict[str, Any]`
+
+Reverse-adjacency BFS from the seeds; cycle-safe; seeds excluded.
+
+```python
+1076	def blast_radius(graph: Graph, seeds: Sequence[str], limit: int) -> Dict[str, Any]:
+1077	    """Reverse-adjacency BFS from the seeds; cycle-safe; seeds excluded."""
+1078	    import posixpath
+1079	    from collections import deque
+1080	
+1081	    seen = set(seeds)
+1082	    queue = deque(sorted(seen))
+1083	    reached: set = set()
+1084	    while queue:
+1085	        current = queue.popleft()
+1086	        for importer in graph.inn.get(current, ()):
+1087	            if importer not in seen:
+1088	                seen.add(importer)
+1089	                reached.add(importer)
+1090	                queue.append(importer)
+1091	    files = sorted(reached)
+1092	    by_dir = Counter(posixpath.dirname(f) or "." for f in files)
+1093	    return {
+1094	        "size": len(files),
+1095	        "files": files[:limit],
+1096	        "truncated": len(files) > limit,
+1097	        "by_dir": dict(sorted(by_dir.items())),
+1098	        "unknown_seeds": sorted(s for s in set(seeds) if s not in graph.status),
+1099	    }
+```
+**Trail — codegraph_node any of these to follow it (no Read needed)**
+**Called by ←** cmd_hotspots (shipgate/scripts/signals.py:1552), cmd_blast (shipgate/scripts/signals.py:1601)

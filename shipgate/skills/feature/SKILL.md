@@ -73,6 +73,20 @@ instruction to rank findings by it. The same goes for the workflow path's `brief
 signals are unavailable (see the JSON's `reason`, `trajectory.reason`, `structure.reason`),
 leave the table out.
 
+The code graph is available when a signals call in this flow returned `structure.source`
+`graph`. A `Code graph: off` bullet in the config means it is absent. When it is available,
+the brief names three graph commands as the explorer's first move, before grep:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> explore <words>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> node <symbol|file>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" graph --repo <repo> --json callers <symbol>
+```
+
+The brief also says that an `explore` or `node` result counts as a Read of the files it
+prints, so the explorer does not Read them again. The same goes for the workflow path's
+`brief`. When the code graph is absent, the brief says nothing about codegraph.
+
 Some lenses must read code other than the working tree. Examples: `origin/<integration>` for a
 staleness check of a dormant design, another branch, the history of a file. Such a lens names
 the ref in its prompt, and you run `git fetch` **before** you dispatch. Explorers read refs

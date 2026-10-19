@@ -1,0 +1,10 @@
+{
+  "changedFiles": [
+    "shipgate/hooks/_common.py"
+  ],
+  "affectedTests": [
+    "shipgate/tests/test_hooks.py",
+    "shipgate/tests/test_journal.py"
+  ],
+  "totalDependentsTraversed": 7
+}
