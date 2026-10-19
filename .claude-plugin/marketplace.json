@@ -68,26 +68,6 @@
       "category": "workflow"
     },
     {
-      "name": "bpmn",
-      "source": "./bpmn",
-      "displayName": "bpmn",
-      "description": "BPMN 2.0 diagrams from plain language: Claude writes the semantic XML, bundled tooling auto-layouts (pools, lanes, boundary events), validates with bpmnlint, and renders a self-contained HTML preview — no manual bpmn.io fixup loop.",
-      "version": "0.1.0",
-      "author": {
-        "name": "worm2fed",
-        "email": "worm2fed@gmail.com"
-      },
-      "license": "MIT",
-      "keywords": [
-        "bpmn",
-        "diagrams",
-        "process-modeling",
-        "workflow",
-        "visualization"
-      ],
-      "category": "productivity"
-    },
-    {
       "name": "herdr",
       "source": "./herdr",
       "displayName": "herdr",

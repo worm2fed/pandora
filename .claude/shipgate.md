@@ -5,7 +5,8 @@ it overrides their built-in defaults. Written by `/shipgate:setup` on 2026-08-20
 re-run it to change the journal or artifact homes rather than hand-editing those.
 
 pandora is a **plugin marketplace**: one git repo holding several independent plugins
-(`shipgate/`, `astrolabe/`, `bpmn/`), each its own deliverable with its own version.
+(`shipgate/`, `shipgate-hud/`, `astrolabe/`, `herdr/`), each its own deliverable with its own
+version.
 
 ## Knowledge base
 
