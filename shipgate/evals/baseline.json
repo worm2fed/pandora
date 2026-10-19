@@ -71,72 +71,72 @@
       "without": 1.0
     },
     "08-bug-localization-history": {
-      "claude": "2.1.296",
+      "claude": "2.1.303",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-12T18-18-00-683Z",
+      "results": "2026-10-19T14-59-02-551Z",
       "runs": 3,
-      "version": "0.15.0",
+      "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
     },
     "09-blast-radius-diff": {
-      "claude": "2.1.296",
+      "claude": "2.1.303",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-12T18-21-18-624Z",
+      "results": "2026-10-19T14-50-17-384Z",
       "runs": 3,
-      "version": "0.15.0",
+      "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
     },
     "10-risk-ranked-review": {
-      "claude": "2.1.296",
+      "claude": "2.1.303",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-12T12-05-51-055Z",
+      "results": "2026-10-19T15-02-34-909Z",
       "runs": 3,
-      "version": "0.15.0",
+      "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
     },
     "11-neg-one-line-change": {
-      "claude": "2.1.296",
+      "claude": "2.1.303",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-12T18-22-21-648Z",
+      "results": "2026-10-19T15-04-45-485Z",
       "runs": 3,
-      "version": "0.15.0",
+      "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
     },
     "12-bug-localization-explicit": {
-      "claude": "2.1.296",
+      "claude": "2.1.303",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-12T18-23-20-001Z",
+      "results": "2026-10-19T14-57-10-680Z",
       "runs": 3,
-      "version": "0.15.0",
+      "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
     },
     "13-blast-radius-explicit": {
-      "claude": "2.1.296",
+      "claude": "2.1.303",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-12T18-23-41-301Z",
+      "results": "2026-10-19T14-45-27-544Z",
       "runs": 3,
-      "version": "0.15.0",
+      "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
     },
     "14-risk-ranked-review-explicit": {
-      "claude": "2.1.296",
+      "claude": "2.1.303",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-12T12-06-44-062Z",
+      "results": "2026-10-19T14-54-06-004Z",
       "runs": 3,
-      "version": "0.15.0",
+      "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -699,8 +699,28 @@
       "version": "0.15.0",
       "with": 0.96,
       "without": 0.69
+    },
+    "71-graph-reuse-detection": {
+      "claude": "2.1.303",
+      "delta": 0.0,
+      "judge": "sonnet",
+      "results": "2026-10-19T14-45-27-545Z",
+      "runs": 3,
+      "version": "0.17.0",
+      "with": 1.0,
+      "without": 1.0
+    },
+    "73-graph-reuse-hidden-helper": {
+      "claude": "2.1.304",
+      "delta": 0.0,
+      "judge": "sonnet",
+      "results": "2026-10-19T22-25-29-073Z",
+      "runs": 3,
+      "version": "0.17.0",
+      "with": 1.0,
+      "without": 1.0
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
-  "updated": "2026-10-12"
+  "updated": "2026-10-19"
 }

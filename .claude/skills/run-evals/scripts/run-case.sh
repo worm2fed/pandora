@@ -2,11 +2,12 @@
 # Run one eval case of a plugin through `claude plugin eval` with this machine's
 # workarounds applied. Costs real money (about $1 per case per with+without tree).
 #
-#   run-case.sh [--config-dir DIR] <plugin-dir> <NN> [extra eval flags...]
+#   run-case.sh [--config-dir DIR] [--no-codegraph] <plugin-dir> <NN> [extra eval flags...]
 #
 #   run-case.sh shipgate 05
 #   run-case.sh shipgate 10 --runs 1 -j 3 --keep-temp --max-cost-usd 2
 #   run-case.sh --config-dir ~/.claude shipgate 11     # bill a specific account
+#   run-case.sh --no-codegraph shipgate 13             # codegraph off PATH for the agent
 #
 # Config dir: --config-dir, else $EVAL_CONFIG_DIR, else $CLAUDE_CONFIG_DIR, else
 # ~/.claude. Runs under a scratch HOME (credential-store symlink check), refuses
@@ -20,8 +21,15 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$here/_common.sh"
 
 cfg_flag=""
-if [ "${1:-}" = "--config-dir" ]; then cfg_flag="${2:-}"; shift 2; fi
-if [ $# -lt 2 ]; then sed -n '2,15p' "$0" >&2; exit 64; fi
+no_codegraph=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config-dir) cfg_flag="${2:-}"; shift 2 ;;
+    --no-codegraph) no_codegraph=1; shift ;;
+    *) break ;;
+  esac
+done
+if [ $# -lt 2 ]; then sed -n '2,16p' "$0" >&2; exit 64; fi
 [ -d "$1" ] || die "plugin dir not found: $1"
 plugin=$(cd "$1" && pwd); shift
 nn=$1; shift
@@ -29,6 +37,13 @@ case "$nn" in *\**) glob="$nn" ;; *) glob="${nn}-*" ;; esac
 
 cfg=$(resolve_config_dir "$cfg_flag")
 check_git
+claude_bin=$(command -v claude) || die "claude not found on PATH"
+run_path=$PATH
+if [ -n "$no_codegraph" ]; then
+  run_path=$(path_without_codegraph)
+  ! PATH="$run_path" command -v codegraph >/dev/null || die "codegraph still on PATH after the filter"
+  printf 'run-evals: --no-codegraph: codegraph removed from the agent PATH\n' >&2
+fi
 home=$(make_scratch_home)
 trap 'rm -rf "$home"' EXIT
 results_root="$plugin/evals/results"
@@ -40,8 +55,8 @@ printf 'run-evals: claude plugin eval %s --runs 3 --ablation with-without --scaf
 status=0
 harness_log=$(mktemp "${TMPDIR:-/tmp}/eval-run.XXXXXX")
 trap 'rm -rf "$home" "$harness_log"' EXIT
-env -u CLAUDECODE HOME="$home" CLAUDE_CONFIG_DIR="$cfg" \
-  claude plugin eval "$plugin" \
+env -u CLAUDECODE HOME="$home" CLAUDE_CONFIG_DIR="$cfg" PATH="$run_path" \
+  "$claude_bin" plugin eval "$plugin" \
     --runs 3 --ablation with-without --scaffold --judge-model sonnet --no-publish \
     --allow-tools Bash Edit Write \
     --case "$glob" "$@" 2>&1 | tee "$harness_log" || status=$?

@@ -40,3 +40,16 @@ check_git() {
 make_scratch_home() {
   mktemp -d "${TMPDIR:-/tmp}/eval-home.XXXXXX"
 }
+
+# Print $PATH without every directory that holds an executable `codegraph`, so the
+# agent sandbox runs shipgate's regex fallback. The harness drops unknown variables
+# such as SHIPGATE_CODEGRAPH_BIN from the agent's environment, but it passes PATH.
+path_without_codegraph() {
+  local out="" dir
+  local IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] && [ -x "$dir/codegraph" ] && continue
+    out="${out:+$out:}$dir"
+  done
+  printf '%s\n' "$out"
+}
