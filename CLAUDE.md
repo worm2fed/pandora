@@ -1,8 +1,8 @@
 # CLAUDE.md — pandora
 
-pandora is a **public** plugin marketplace (`shipgate/`, `shipgate-hud/`, `astrolabe/`,
-`herdr/`). Each plugin is its own deliverable with its own version; its `README.md`,
-`CHANGELOG.md` and `.claude-plugin/plugin.json` are authoritative for what it does.
+pandora is a **public** plugin marketplace (`shipgate/`, `shipgate-hud/`, `astrolabe/`). Each
+plugin is its own deliverable with its own version; its `README.md`, `CHANGELOG.md` and
+`.claude-plugin/plugin.json` are authoritative for what it does.
 
 ## Public repo — nothing employer- or customer-specific
 
