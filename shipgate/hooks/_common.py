@@ -257,9 +257,10 @@ def watch_paths(project):
     the sidecar have to be expanded here, and the list is only ever as current as the
     moment it was built. Two things keep that from rotting: `file_changed.py` returns a
     freshly expanded list every time it fires, and `post_tool_use.py` independently
-    catches files created through Write/Edit. The residual gap is a brand-new artifact
-    created by a Bash heredoc in a session where nothing else changed — it goes
-    unwatched until the next expansion.
+    catches files created through Write/Edit, and through a Bash call whose own evidence
+    names them. The residual gap is a brand-new artifact created by a Bash call that
+    claims nothing (a background command, a name the command text never spells out) in
+    a session where nothing else changed — it goes unwatched until the next expansion.
     """
     from glob import glob
 
@@ -292,22 +293,29 @@ def journal_script():
     )
 
 
-def run_journal(project, args):
-    """Invoke the journal CLI. Returns None when it could not be run at all."""
+def run_journal(project, args, stdin_text=None):
+    """Invoke the journal CLI. Returns None when it could not be run at all.
+
+    `stdin_text` feeds `append --batch`; without it the child's stdin is closed, so a
+    journal that ever tried to read it could not hang the hook.
+    """
     import subprocess
 
     script = journal_script()
     if not os.path.isfile(script):
         return None
     command = [sys.executable, script, "--db", project.db_path, *args]
+    feed = (
+        {"stdin": subprocess.DEVNULL} if stdin_text is None else {"input": stdin_text}
+    )
     try:
         return subprocess.run(
             command,
-            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=JOURNAL_TIMEOUT_SECONDS,
             cwd=project.root,
+            **feed,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -330,6 +338,27 @@ def append_event(project, stream, event_type, data):
             "--actor",
             "hook",
         ],
+    )
+
+
+def append_events(project, stream, event_type, payloads):
+    """Append several events of one type in a single journal run, ignoring failure.
+
+    One `append --batch` instead of one process per event: a Bash call can change many
+    artifacts at once, and the hook's own timeout is shorter than that many spawns.
+    """
+    import json
+
+    lines = [
+        json.dumps({"type": event_type, "data": data}, separators=(",", ":"))
+        for data in payloads
+    ]
+    if not lines:
+        return
+    run_journal(
+        project,
+        ["append", "--stream", stream, "--batch", "--actor", "hook"],
+        stdin_text="\n".join(lines) + "\n",
     )
 
 

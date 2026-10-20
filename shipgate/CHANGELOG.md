@@ -2,6 +2,63 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.18.0 — who wrote an artifact, and the facts the HUD draws.
+
+**Attribution (ADR 0008).** Every session's FileChanged hook fires on the same write. The hook
+recorded the observing session as `session`. The 5 s dedupe compared only path and mtime, so
+the first hook to land owned the row, and the writer's own record was dropped. With parallel
+sessions on one journal, a session that only saw a PRD change could be blocked at Stop, and
+the session that wrote it went free.
+
+Now each hook records a claim, and `journal.py` decides the author when it reads the claims:
+- **FileChanged** records `observed_by`. It is an observer, never an author.
+- **PostToolUse on Write, Edit and NotebookEdit** claims the file for its session.
+- **PostToolUse on Bash (new matcher)** claims an artifact with `evidence: diff` when Claude
+  Code's diff of the call lists it. It claims with `evidence: window` when the file's mtime
+  falls inside the call's `duration_ms` and the command writes to the file: a redirect into
+  it, `tee`, `sed -i`, `perl -i`, or the destination of `mv`, `cp` or `install`. The target
+  must be the artifact itself, by its project path, so a copy to a file of the same name
+  elsewhere claims nothing. A command that only reads the file claims nothing. The window also
+  covers artifacts the diff cannot list, such as gitignored files and submodules.
+- **A background Bash command** claims nothing. The hook runs `journal.py` only when it has
+  a claim, and an un-journaled project costs a stat walk, as before.
+- **The dedupe:** a claim is dropped only when the same session already claimed that write
+  with evidence at least as strong. An observation keeps the 5 s rule.
+- **The author:** the best evidence wins, in the order `tool`, `diff`, `window`. A tie
+  between sessions names no author. `check` (the Stop gate) and `stats` read authors only.
+  A legacy row that carries `session` with `source: disk` counts as observed.
+
+**The journal computes the HUD's facts (ADR 0009).**
+- `status --json` gains, per stream, `publish` (held, or authorized by which event, with its
+  `seq` and time; the same helper as `mr-opened`), `lifecycle` and `current`. The top level
+  always carries `nested_matches`.
+- A new `position --stream S [--json]` prints:
+  - phase marks: an earlier phase never entered is `skipped`, and a later phase entered
+    before a move back is `revisited`;
+  - the artifacts, classified with the configured homes, with unsafe refs dropped;
+  - the worklog fallback by name;
+  - the Build Plan tasks, parsed with `check`'s grammar;
+  - gate decisions with their real `seq`, the last verify, and the last verdict.
+- An unknown stream exits 1.
+
+**The nested-branch rule (HUD ADR 0004).** In an umbrella, nested branches are matched against
+live streams only. They bind a stream only when they name exactly one. Before, the most recently
+active match won, so a session at an umbrella root was shown another session's work.
+
+**Payload rules.**
+- A `gate-decision`'s `decision` must be a string. A list once authorized a publish in the
+  HUD's copy of the rule, while `mr-opened` refused it.
+- A `review-verdict` declares `criteria` (`met`, `unmet`) and `dispositions` (`fixed`,
+  `rejected`, `deferred`).
+- `vocab --shape` prints both rule kinds (`strings`, `map_enums`).
+
+**Fixes.**
+- `_matches_glob` stripped any run of `.` and `/` characters from a home glob. It now
+  strips only a leading `./`.
+
+**A golden contract.** A test generates `shipgate-hud/tests/fixtures.journal.ts` from a
+scripted journal, and the HUD decodes that file. Renaming a key fails the build on both sides.
+
 v0.17.0 — the code graph. When the codegraph CLI is on `PATH`, `signals.py` takes the
 structure half from codegraph's index instead of the regex scanner. Nothing needs to be
 configured. The first call on a repository with no index builds it, up to 10,000 tracked

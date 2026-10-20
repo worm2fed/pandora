@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """FileChanged hook — the capture path that cannot be dodged.
 
-`PostToolUse` only sees files written through Write/Edit. This one watches the disk, so
-a PRD rewritten by a Bash heredoc, `sed`, or an external editor is recorded too — which
-is the whole reason the enforcement story holds together.
+`PostToolUse` sees the tool calls: Write/Edit, and Bash only through the call's own
+evidence. This one watches the disk, so a PRD rewritten by a Bash heredoc, `sed`, or an
+external editor is recorded too — which is the whole reason the enforcement story holds
+together.
+
+What it records is an observation, never an author. Every session's watcher fires on the
+same write, so the session in the payload is one that saw the change (`observed_by`);
+the journal decides who wrote it from the tool hooks' claims (ADR 0008).
 
 Two mechanics worth remembering when editing this file:
 
@@ -66,7 +71,9 @@ def main() -> None:
             "source": "disk",
             "change": payload.get("event") or "change",
             "mtime": mtime_of(changed),
-            "session": payload.get("session_id"),
+            # Every session's watcher fires on one write, so this session saw the change
+            # and may not have made it: an observer, never an author (ADR 0008).
+            "observed_by": payload.get("session_id"),
         },
     )
 

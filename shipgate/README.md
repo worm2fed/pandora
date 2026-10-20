@@ -147,7 +147,8 @@ compacted or resumed session was driving, branch or no branch), then the checked
 
 | Command | Does |
 | --- | --- |
-| `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all]` | the status brief: the stream the session drives first (`--session`: the live stream that session last wrote to itself, hook-written events not counted — it may have no branch, and parallel sessions each get their own), then the checked-out branch's, both in full; dormant streams as one line, completed ones hidden unless `--all`; in an umbrella the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream, the most recently active match first |
+| `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. Dormant streams take one line, and completed ones are hidden unless `--all`. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each stream also carries `publish`, `lifecycle` and `current`, and the top level carries `nested_matches` |
+| `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict. An unknown stream exits 1 |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
@@ -160,7 +161,10 @@ is why such an append can advance the stream's version by two, and why a chain o
 must read each new version back from the output instead of assuming +1 — refuses a payload over
 1 KB (prose belongs in the worklog — the event carries `refs`), and refuses `mr-opened` until
 the stream holds, after its last `task-done`, either a `review-verdict` with `verdict=ready` or
-a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
+a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. A
+`gate-decision`'s `decision` must be a string. A `review-verdict`'s optional `criteria` map
+takes `met` or `unmet`, and its optional `dispositions` map takes `fixed`, `rejected` or
+`deferred`. `status --json` prints the same publish rule per stream as `publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's shell
 carries its parent's), else the session that started last (ADR 0005). A stream ends with `flow-completed` and leaves the status brief.
@@ -172,6 +176,29 @@ step that establishes the fact: the map emitted, the defect reproduced, the root
 confirmed, the worklog written, the verdict stated. Not at the end of the turn, and never
 skipped for want of a branch. The Stop hook enforces the build-side gates only (`task-done`,
 `verify-run`, clarify's `gate-decision`); the phase events rely on those steps.
+
+The hooks record which session wrote an artifact, and the journal decides it when it reads
+them (ADR 0008).
+- **PostToolUse on Write, Edit or NotebookEdit** claims the file for its session
+  (`source: tool`).
+- **PostToolUse on Bash** claims an artifact with `evidence: diff` when Claude Code's diff
+  of the call lists it. It claims with `evidence: window` when the file's mtime falls inside
+  the call's run time and the command writes to the file: a redirect into it, `tee`,
+  `sed -i`, `perl -i`, or the destination of `mv`, `cp` or `install`. A command that only
+  reads the file claims nothing.
+- **FileChanged** fires in every open session, so it records only who observed the change
+  (`observed_by`), never an author.
+
+The best evidence wins: `tool`, then `diff`, then `window`. Two sessions with the same best
+evidence give no author. The Stop gate and `stats` read authors only, so a session is never
+blocked for a write it only saw.
+
+Some writes have no author:
+- a write by an external editor or a sync;
+- a background Bash command;
+- a Bash call that failed.
+
+These are recorded as observed, and they gate no session.
 
 ## Code signals
 

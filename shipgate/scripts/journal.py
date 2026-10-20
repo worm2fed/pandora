@@ -7,7 +7,8 @@ Python 3 standard library only, no dependencies. See
 Exit codes (also printed by ``--help``):
 
     0  ok
-    1  infrastructure failure (db missing/unreadable, IO error)
+    1  infrastructure failure (db missing/unreadable, IO error, `position` on a
+       stream with no events)
     2  usage error
     3  version conflict (conditional append lost the race)
     4  gate violation (an append's precondition is unmet)
@@ -26,7 +27,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import (
-    Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple,
+    Any, Dict, Iterable, List, Literal, NamedTuple, Optional, Sequence, Set, Tuple,
+    TypedDict, Union, get_args,
 )
 
 # --------------------------------------------------------------------------
@@ -70,7 +72,10 @@ journaled_root = _hooks_common.journaled_root
 SIDECAR_RELPATH = _hooks_common.SIDECAR_RELPATH
 DEFAULT_DB_RELPATH = _hooks_common.DEFAULT_DB_RELPATH
 
-PHASE_ORDER = [
+# The phases in their declared order. `Phase` is the closed vocabulary the JSON contract
+# types against (ADR 0009); `PHASE_ORDER` is the same list at runtime, derived so the
+# two cannot drift.
+Phase = Literal[
     "workspace",
     "route-and-map",
     "explore",
@@ -80,6 +85,7 @@ PHASE_ORDER = [
     "review",
     "capture",
 ]
+PHASE_ORDER: List[str] = list(get_args(Phase))
 
 FEATURE_STREAM_PREFIX = "feature/"
 NEEDS_CLARIFICATION = "[NEEDS CLARIFICATION]"
@@ -150,7 +156,43 @@ EVENT_VOCABULARY: Dict[str, str] = {
 #   aliases       old key -> canonical key, renamed before validation
 #   value_aliases key -> {old value: canonical value}
 #   defaults      key -> value filled in when absent
-EVENT_SHAPES: Dict[str, Dict[str, Any]] = {
+#   strings       keys whose value must be a JSON string
+#   map_enums     key -> the only values accepted for each value of the JSON object at
+#                 that key
+# `normalize_payload` enforces every kind, and `vocab --shape` prints them.
+#
+# The closed values below are declared once as `Literal`s, so the JSON contract
+# (`status --json`, `position`) and the append check read the same list.
+GateMode = Literal["ask", "executive"]
+RaisedBy = Literal["user", "orchestrator"]
+VerifyOutcome = Literal["pass", "fail"]
+ReviewVerdict = Literal["ready", "not-ready"]
+# A `review-verdict`'s optional maps (ADR 0009): a PRD success criterion's status, and
+# what the orchestrator did with a review finding. The shape below closes them with
+# `map_enums`.
+CriterionStatus = Literal["met", "unmet"]
+Disposition = Literal["fixed", "rejected", "deferred"]
+
+
+class EventShape(TypedDict, total=False):
+    """One ``EVENT_SHAPES`` entry: the rule kinds above, each optional for a type.
+
+    ``strings`` and ``map_enums`` are the payload rules of ADR 0009:
+    ``gate-decision.decision`` is a string, and ``review-verdict`` closes the values of
+    ``criteria`` and ``dispositions``.
+    """
+
+    required: List[str]
+    enums: Dict[str, List[str]]
+    lists: List[str]
+    aliases: Dict[str, str]
+    value_aliases: Dict[str, Dict[str, str]]
+    defaults: Dict[str, Any]
+    strings: List[str]
+    map_enums: Dict[str, List[str]]
+
+
+EVENT_SHAPES: Dict[str, EventShape] = {
     "flow-started": {"required": ["request"]},
     "phase-entered": {"required": ["phase"]},
     "deviation": {
@@ -160,31 +202,75 @@ EVENT_SHAPES: Dict[str, Dict[str, Any]] = {
     "gate-decision": {
         "required": ["gate", "question", "decision", "mode"],
         "enums": {
-            "mode": ["ask", "executive"],
-            "raised_by": ["user", "orchestrator"],
+            "mode": list(get_args(GateMode)),
+            "raised_by": list(get_args(RaisedBy)),
         },
         "aliases": {"chosen": "decision", "kind": "gate"},
         "defaults": {"raised_by": "orchestrator"},
+        "strings": ["decision"],
     },
     "clarify-passed": {"required": ["prd"]},
     "design-committed": {"required": ["worklog"]},
     "task-done": {"required": ["task_id"]},
     "verify-run": {
         "required": ["outcome", "task_ids"],
-        "enums": {"outcome": ["pass", "fail"]},
+        "enums": {"outcome": list(get_args(VerifyOutcome))},
         "lists": ["task_ids"],
         "aliases": {"result": "outcome", "tasks": "task_ids"},
     },
     "review-verdict": {
         "required": ["verdict"],
-        "enums": {"verdict": ["ready", "not-ready"]},
+        "enums": {"verdict": list(get_args(ReviewVerdict))},
         "value_aliases": {"verdict": {"pass": "ready", "fail": "not-ready"}},
+        "map_enums": {
+            "criteria": list(get_args(CriterionStatus)),
+            "dispositions": list(get_args(Disposition)),
+        },
     },
     "capture-done": {
         "required": ["promoted", "dropped"],
         "lists": ["promoted", "dropped"],
     },
 }
+
+
+class _GateDecisionKeys(TypedDict):
+    gate: str
+    question: str
+    decision: str
+    mode: GateMode
+    raised_by: RaisedBy
+
+
+class GateDecisionPayload(_GateDecisionKeys, total=False):
+    """A ``gate-decision`` payload as ``normalize_payload`` leaves it (ADR 0009).
+
+    ``decision`` is a string: a list or an object is refused at append (T010, the
+    ``strings`` rule kind), so no reader ever has to stringify one. That stringifying is
+    how a list-valued decision authorized in the HUD and was refused by ``mr-opened``
+    (audit D6). ``raised_by`` is always present, because the shape's default fills it.
+    Rows written before T010 may break any of this; readers of old rows type them as
+    ``Dict[str, Any]``.
+    """
+
+    rationale: str
+
+
+class _ReviewVerdictKeys(TypedDict):
+    verdict: ReviewVerdict
+
+
+class ReviewVerdictPayload(_ReviewVerdictKeys, total=False):
+    """A ``review-verdict`` payload as ``normalize_payload`` leaves it (ADR 0009, T016).
+
+    ``criteria`` maps a PRD success criterion id (``SC-001``) to its status;
+    ``dispositions`` maps a review finding (``<path>:<line or ?>``) to what was done with
+    it. Both are optional — a verdict may judge neither — and a value outside its
+    vocabulary is refused at append (the ``map_enums`` rule kind).
+    """
+
+    criteria: Dict[str, CriterionStatus]
+    dispositions: Dict[str, Disposition]
 
 # Events that can only happen inside one phase, so appending one *is* entering it.
 # ADR 0002: `append` records the transition rather than refusing the event.
@@ -243,9 +329,15 @@ BRIEF_LINE_CHARS = 160
 PAYLOAD_CAP_BYTES = 1024
 
 # One file write reaches the journal twice — PostToolUse sees the tool call, FileChanged
-# sees the same bytes land — so an `artifact-written` repeating a path at the same mtime
-# this recently is the second hook, not a second write.
+# sees the same bytes land — so an observation (`disk`, or a row that names no author)
+# repeating a path at the same mtime this recently is the second hook, not a second write.
 ARTIFACT_DEDUPE_SECONDS = 5.0
+
+# An authored claim (`tool`, `bash`) is a repeat only when its own session already
+# claimed that write (ADR 0008). The repeat can come late: a Bash call reports when it
+# ends, and Claude Code's Bash timeout tops out at 10 minutes, so the lookback covers that
+# with a minute to spare. A repeat past it is a duplicate row, never a wrong author.
+ARTIFACT_CLAIM_DEDUPE_SECONDS = 11 * 60.0
 
 # Streams the tool owns. Everything else is a work stream — named for its branch
 # (`fix/1290-…`) or its feature slug, both of which are legitimate.
@@ -256,7 +348,9 @@ DEFAULT_LEDGER = "docs/ledger.md"
 # The knowledge-base skill's own threshold for nudging about an un-triaged ledger.
 LEDGER_NUDGE_THRESHOLD = 15
 
-_TICKED_TASK_RE = re.compile(r"^\s*[-*]\s*\[[xX]\]\s*(T\d+)\b", re.MULTILINE)
+# A Build Plan task line: the box, the id, then the rest of the line (`parse_build_plan`).
+_PLAN_TASK_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s*(T\d+)\b([^\n]*)", re.MULTILINE)
+_PLAN_HEADING_RE = re.compile(r"^#+[ \t]+(\S[^\n]*?)[ \t]*$", re.MULTILINE)
 _BUILD_PLAN_RE = re.compile(r"^(#+)\s*Build Plan\s*$", re.MULTILINE | re.IGNORECASE)
 
 
@@ -537,7 +631,10 @@ def parse_actor(
     """Canonicalize ``--actor`` to ``role[@label]`` (ADR 0003).
 
     An event that already names its session in the payload — every hook-written one —
-    keeps the bare role, so the two never disagree about which session it was.
+    keeps the bare role, so the two never disagree about which session it was. So does
+    an observation (``observed_by`` in the payload, ADR 0008): the hook's environment
+    names the session that saw the write, and labelling the row with it would make the
+    observer its author again.
     """
     role, separator, label = (raw or "orchestrator").partition("@")
     if role not in ACTOR_ROLES:
@@ -552,6 +649,8 @@ def parse_actor(
     if isinstance(data, dict):
         session = data.get("session")
         if isinstance(session, str) and session:
+            return role
+        if "observed_by" in data:
             return role
     session_id = os.environ.get(SESSION_ENV, "").strip() or current_session(conn)
     return f"{role}@{session_id}" if session_id else role
@@ -834,29 +933,81 @@ def _authorizes_publish(data: Dict[str, Any]) -> bool:
 
     All three conditions matter: the orchestrator can raise a publish gate and answer
     it itself, so a decision that only *sits at* the gate — or records "no" there —
-    would otherwise let the flow authorize its own MR.
+    would otherwise let the flow authorize its own MR. A ``decision`` that is not a string
+    (a row from before the ``strings`` rule) never authorizes.
     """
+    decision = data.get("decision")
     return (
         data.get("gate") == "publish"
         and data.get("raised_by") == "user"
-        and str(data.get("decision")).strip().lower() == "publish"
+        and isinstance(decision, str)
+        and decision.strip().lower() == "publish"
     )
+
+
+PublishBy = Literal["review-verdict", "gate-decision"]
+
+
+class PublishHeld(TypedDict):
+    """Nothing after the stream's last ``task-done`` authorizes publishing."""
+
+    kind: Literal["held"]
+
+
+class PublishAuthorized(TypedDict):
+    """The event that authorizes publishing: its type, ``seq`` and ``ts``."""
+
+    kind: Literal["authorized"]
+    by: PublishBy
+    seq: int
+    at: str
+
+
+# May the stream publish? The `mr-opened` gate, `status --json` and `position` all read
+# this one value, from one helper (ADR 0009).
+PublishAuthorization = Union[PublishHeld, PublishAuthorized]
+
+
+def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
+    """Whether one stream's events authorize publishing, and which event did.
+
+    ``events`` are one stream's, in any order; the rule reads them in seq order. After
+    the last ``task-done`` (seq 0 when there is none), the first event that is either a
+    ``review-verdict`` with ``verdict: ready`` or a ``gate-decision`` that
+    ``_authorizes_publish`` accepts gives ``{kind: authorized, by: <its type>, seq,
+    at: <its ts>}``. No such event gives ``{kind: held}``. A ``decision`` that is not a
+    string never authorizes (audit D6).
+
+    ``_validate_mr_opened`` raises when this is held, ``fold_stream`` prints it as
+    ``publish`` and ``build_position`` copies it, so the gate and the HUD cannot
+    disagree.
+    """
+    ordered = sorted(events, key=lambda event: event.seq)
+    last_task_done_seq = max(
+        (event.seq for event in ordered if event.type == "task-done"), default=0
+    )
+    for event in ordered:
+        if event.seq <= last_task_done_seq:
+            continue
+        by: PublishBy
+        if event.type == "review-verdict" and event.data.get("verdict") == "ready":
+            by = "review-verdict"
+        elif event.type == "gate-decision" and _authorizes_publish(event.data):
+            by = "gate-decision"
+        else:
+            continue
+        return {"kind": "authorized", "by": by, "seq": event.seq, "at": event.ts}
+    return {"kind": "held"}
 
 
 def _validate_mr_opened(
     conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
 ) -> None:
-    task_dones = read_events(conn, stream=stream, types=("task-done",))
-    last_task_done_seq = max((e.seq for e in task_dones), default=0)
-    for event in read_events(
-        conn, stream=stream, types=("review-verdict", "gate-decision")
-    ):
-        if event.seq <= last_task_done_seq:
-            continue
-        if event.type == "review-verdict" and event.data.get("verdict") == "ready":
-            return
-        if event.type == "gate-decision" and _authorizes_publish(event.data):
-            return
+    events = read_events(
+        conn, stream=stream, types=("task-done", "review-verdict", "gate-decision")
+    )
+    if publish_authorization(events)["kind"] == "authorized":
+        return
     raise GateViolation(
         f"mr-opened in stream {stream!r} needs, recorded after the last task-done, "
         "either a review-verdict with verdict=ready, or a gate-decision with "
@@ -937,11 +1088,32 @@ def normalize_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
             raise GateViolation(
                 f"{event_type}: data.{key} must be a list" + _shape_hint(event_type)
             )
+    for key in shape.get("strings", []):
+        if key in payload and not isinstance(payload[key], str):
+            raise GateViolation(
+                f"{event_type}: data.{key} must be a string, got "
+                f"{json.dumps(payload[key], sort_keys=True)}" + _shape_hint(event_type)
+            )
     for key, allowed in shape.get("enums", {}).items():
         if key in payload and payload[key] not in allowed:
             raise GateViolation(
                 f"{event_type}: data.{key} must be one of "
                 f"{', '.join(str(a) for a in allowed)}, got {payload[key]!r}"
+                + _shape_hint(event_type)
+            )
+    for key, allowed in shape.get("map_enums", {}).items():
+        if key not in payload:
+            continue
+        if not isinstance(payload[key], dict):
+            raise GateViolation(
+                f"{event_type}: data.{key} must be a JSON object"
+                + _shape_hint(event_type)
+            )
+        wrong = {k: v for k, v in payload[key].items() if v not in allowed}
+        if wrong:
+            raise GateViolation(
+                f"{event_type}: each value of data.{key} must be one of "
+                f"{', '.join(allowed)}, got {json.dumps(wrong, sort_keys=True)}"
                 + _shape_hint(event_type)
             )
     return payload
@@ -1077,35 +1249,55 @@ def _recent_duplicate_artifact(
 ) -> Optional[Tuple[int, int]]:
     """The ``(seq, version)`` of the row this ``artifact-written`` merely repeats.
 
-    The whole window is searched, not just the last row: two files saved in the same
-    tool call interleave as ``a, b, a`` and the repeat of ``a`` is still the second
-    hook seeing the first write. A row stamped in the future is never a duplicate —
-    a clock that ran backwards would otherwise swallow every subsequent write.
+    What counts as a repeat depends on what the new row claims (ADR 0008):
+    - an authored claim (``tool`` or ``bash`` naming a session) repeats a row only when
+      the same session already claimed the same path and mtime, with evidence at least
+      as strong, within ``ARTIFACT_CLAIM_DEDUPE_SECONDS``. An observation or another
+      session's claim never swallows it: the read-time fold needs every author's claim,
+      and a weaker claim landing first must not hide a stronger one;
+    - anything else (a ``disk`` observation, a row that names no author) repeats any
+      row for the same path and mtime within ``ARTIFACT_DEDUPE_SECONDS``.
+
+    Every earlier row of the path inside the window is searched, not just the last
+    row. A row stamped in the future is never a duplicate — a clock that ran
+    backwards would otherwise swallow every subsequent write.
 
     Accepted: `--force` does not bypass this, so two genuine writes of one path inside
-    5 s that leave an identical mtime collapse into the first one's row.
+    the window that leave an identical mtime collapse into the first one's row.
     """
     path = data.get("path")
     if not isinstance(path, str) or not path:
         return None
+    claim = claim_of(Event(0, stream, 0, "artifact-written", data, "", None))
+    authored = (
+        claim is not None and claim["source"] != "disk" and claim["session"] is not None
+    )
+    window = ARTIFACT_CLAIM_DEDUPE_SECONDS if authored else ARTIFACT_DEDUPE_SECONDS
+    key = _artifact_key(data)
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(seconds=ARTIFACT_DEDUPE_SECONDS)).isoformat()
+    cutoff = (now - timedelta(seconds=window)).isoformat()
     rows = conn.execute(
         "SELECT seq, stream, version, type, data, ts, actor FROM events "
         "WHERE stream = ? AND type = 'artifact-written' AND ts >= ? "
+        "AND json_extract(data, '$.path') = ? "
         "ORDER BY seq DESC LIMIT 50",
-        (stream, cutoff),
+        (stream, cutoff, path),
     ).fetchall()
     for row in rows:
         previous = _row_to_event(row)
-        if (
-            previous.data.get("path") != path
-            or previous.data.get("mtime") != data.get("mtime")
-        ):
+        if previous.data.get("path") != path or _artifact_key(previous.data) != key:
             continue
         elapsed = _seconds_since(previous.ts, now)
-        if elapsed is None or not 0 <= elapsed <= ARTIFACT_DEDUPE_SECONDS:
+        if elapsed is None or not 0 <= elapsed <= window:
             continue
+        if authored:
+            earlier = claim_of(previous)
+            if (
+                earlier is None
+                or earlier["session"] != claim["session"]
+                or _claim_rank(earlier) < _claim_rank(claim)
+            ):
+                continue
         return previous.seq, previous.version
     return None
 
@@ -1260,6 +1452,99 @@ def feature_slug(stream: str) -> str:
     ) else stream
 
 
+Lifecycle = Literal["live", "dormant", "terminal"]
+PhaseMark = Literal["done", "skipped", "current", "revisited", "todo"]
+
+
+class CurrentPhase(TypedDict):
+    """The phase a stream is in: its last ``phase-entered`` whose phase is in the order."""
+
+    phase: Phase
+    entered_at: str
+    implied: bool
+
+
+class StatusFeatureAdditions(TypedDict):
+    """The keys each ``fold_stream`` entry gains in ``status --json`` (ADR 0009).
+
+    ``fold_stream`` still returns a plain dict and keeps every key it prints today
+    (``phase``, ``phase_entered_at``, ``implied_phase``, ``terminal``, ``dormant``, ...),
+    so an older reader keeps working; these three join them. ``lifecycle`` restates
+    ``terminal`` and ``dormant`` as one closed value; ``current`` restates the three
+    phase keys and is null exactly when ``phase`` is (audit D7); ``publish`` is
+    ``publish_authorization`` over the stream's events. Bodies: T010 (``publish``),
+    T011 (``lifecycle``, ``current``).
+    """
+
+    publish: PublishAuthorization
+    lifecycle: Lifecycle
+    current: Optional[CurrentPhase]
+
+
+def stream_lifecycle(terminal: bool, age_days: Optional[int]) -> Lifecycle:
+    """The fold's ``terminal`` and ``dormant`` flags as one closed value.
+
+    The arguments are what ``fold_stream`` computes: ``terminal`` (a ``TERMINAL_TYPES``
+    event no ``REVIVING_TYPES`` event followed, or a ``capture-done`` older than
+    ``CAPTURE_TERMINAL_HOURS``) and ``age_days`` (whole days since the last event, None
+    with no events). ``terminal`` gives ``terminal``; else an age of ``DORMANT_DAYS`` or
+    more gives ``dormant``; else ``live``. That is the split the ``dormant`` key makes,
+    so the two never disagree.
+    """
+    if terminal:
+        return "terminal"
+    if age_days is not None and age_days >= DORMANT_DAYS:
+        return "dormant"
+    return "live"
+
+
+def current_phase(
+    phase: Optional[str], entered_at: Optional[str], implied: bool
+) -> Optional[CurrentPhase]:
+    """The fold's three phase keys as one value, or None when no phase was entered.
+
+    The arguments are what ``fold_stream`` tracks: the phase of the last
+    ``phase-entered`` whose phase is in ``PHASE_ORDER``, that event's ``ts``, and its
+    ``implied`` flag. A stream with only ``flow-started`` has no phase and gives None,
+    never ``workspace`` (audit D7).
+    """
+    if phase not in PHASE_ORDER or entered_at is None:
+        return None
+    return {"phase": phase, "entered_at": entered_at, "implied": implied}
+
+
+def phase_marks(events: Sequence[Event]) -> Dict[Phase, PhaseMark]:
+    """A mark for every phase in ``PHASE_ORDER``, from one stream's events.
+
+    Only ``phase-entered`` events count, and only phases in ``PHASE_ORDER``: the rule
+    ``fold_stream`` uses. A phase is *entered* when such an event names it in ``phase``.
+    - The phase the stream is in is ``current``.
+    - A phase before it is ``done`` when the stream entered it and left it, else
+      ``skipped``: never entered is skipped, whether or not an event lists it in
+      ``skipped`` (audit D8).
+    - A phase after it is ``revisited`` when the stream entered it before moving back
+      past it (review, then implement again, leaves review ``revisited``), else ``todo``.
+    - With no phase entered, every phase is ``todo``.
+    Every phase in ``PHASE_ORDER`` has a key.
+    """
+    entered: List[str] = []
+    for event in sorted(events, key=lambda e: e.seq):
+        if event.type == "phase-entered" and event.data.get("phase") in PHASE_ORDER:
+            entered.append(event.data["phase"])
+    marks: Dict[Phase, PhaseMark] = {}
+    current = PHASE_ORDER.index(entered[-1]) if entered else None
+    for index, phase in enumerate(get_args(Phase)):
+        if current is None:
+            marks[phase] = "todo"
+        elif index == current:
+            marks[phase] = "current"
+        elif index < current:
+            marks[phase] = "done" if phase in entered else "skipped"
+        else:
+            marks[phase] = "revisited" if phase in entered else "todo"
+    return marks
+
+
 def fold_stream(
     events: Sequence[Event], now: Optional[datetime] = None
 ) -> Dict[str, Any]:
@@ -1356,6 +1641,9 @@ def fold_stream(
         "last_verify": last_verify,
         "tasks_done": len(task_ids),
         "task_ids": task_ids,
+        "publish": publish_authorization(events),
+        "lifecycle": stream_lifecycle(terminal, age_days),
+        "current": current_phase(phase, phase_entered_at, phase_implied),
     }
 
 
@@ -1392,21 +1680,43 @@ def branch_match(branch: str, streams: Sequence[str]) -> Optional[str]:
 
 def nested_branch_match(branches: Sequence[str],
                         folded: Sequence[Dict[str, Any]]) -> Optional[str]:
-    """The stream to put first when the checkout is an umbrella.
+    """The stream to put first when the checkout is an umbrella, or None (the 1B rule).
 
     `branches` are the branches checked out in the nested repos (the hook collects
     them; the session directory's own branch, if any, was tried first and named no
-    stream). Several may name a stream — one live, the rest dormant — so the most
-    recently active match wins; a tie keeps the given order.
+    stream). Other sessions drive those checkouts too, so a stream binds only when the
+    branches name exactly one live stream (``nested_live_matches``). Two or more live
+    matches bind none, and dormant and finished streams never count.
     """
-    streams = [f["stream"] for f in folded]
-    last_at = {f["stream"]: (f.get("last_event") or {}).get("ts") or "" for f in folded}
-    best: Optional[str] = None
+    matches = nested_live_matches(branches, folded)
+    return matches[0] if len(matches) == 1 else None
+
+
+def nested_live_matches(branches: Sequence[str],
+                        folded: Sequence[Dict[str, Any]]) -> List[str]:
+    """The live streams the nested repos' branches name, newest first (the 1B rule).
+
+    Dormant and terminal streams are left out before any matching. Each branch then
+    names the stream ``branch_match`` picks for it from the live streams of ``folded``
+    only, so a dormant exact name never hides a live candidate. Each stream appears
+    once, ordered by its last event's ``ts``, newest first; a tie keeps the order of
+    ``branches``. ``nested_branch_match`` binds a stream only when this list holds
+    exactly one, and ``build_status`` prints the list as ``nested_matches``.
+    """
+    live = [
+        f for f in folded
+        if stream_lifecycle(bool(f.get("terminal")), f.get("age_days")) == "live"
+    ]
+    streams = [f["stream"] for f in live]
+    last_at = {f["stream"]: (f.get("last_event") or {}).get("ts") or "" for f in live}
+    matches: List[str] = []
     for branch in branches:
         matched = branch_match(branch, streams)
-        if matched is not None and (best is None or last_at[matched] > last_at[best]):
-            best = matched
-    return best
+        if matched is not None and matched not in matches:
+            matches.append(matched)
+    # A stable sort, so a tie keeps the order of `branches`.
+    matches.sort(key=lambda stream: last_at[stream], reverse=True)
+    return matches
 
 
 def session_stream(folded: Sequence[Tuple[Dict[str, Any], Sequence[Event]]],
@@ -1442,6 +1752,16 @@ def _brief_rank(feature: Dict[str, Any]) -> int:
     return 3 if feature.get("dormant") else 2
 
 
+class StatusBriefAdditions(TypedDict):
+    """The key the top level of ``status --json`` gains (T012).
+
+    ``nested_matches`` is ``nested_live_matches`` over the nested branches. The key is
+    always printed: ``[]`` when no nested branch was passed or none named a live stream.
+    """
+
+    nested_matches: List[str]
+
+
 def build_status(
     conn: sqlite3.Connection,
     feature: Optional[str] = None,
@@ -1475,6 +1795,9 @@ def build_status(
         with_events.append((entry, events))
 
     matched = branch_match(branch, [f["stream"] for f in folded]) if branch else None
+    nested_matches = (
+        nested_live_matches(nested_branches, folded) if nested_branches else []
+    )
     if matched is None and nested_branches:
         matched = nested_branch_match(nested_branches, folded)
     driven = session_stream(with_events, session) if session else None
@@ -1499,6 +1822,7 @@ def build_status(
         "hidden_terminal": hidden_terminal,
         "branch_match": matched,
         "session_match": driven,
+        "nested_matches": nested_matches,
     }
 
 
@@ -1687,21 +2011,84 @@ def parse_ticked_tasks(text: str) -> List[str]:
     """Return the task ids ticked in the Build Plan section, in document order.
 
     When no Build Plan heading exists the whole document is scanned, so a bare
-    checklist still works.
+    checklist still works. The grammar is ``parse_build_plan``'s, so the Stop gate and
+    the HUD read one list.
     """
-    match = _BUILD_PLAN_RE.search(text)
-    if match:
-        level = len(match.group(1))
-        rest = text[match.end():]
-        closing = re.search(r"^#{1,%d}\s+\S" % level, rest, re.MULTILINE)
-        region = rest[: closing.start()] if closing else rest
-    else:
-        region = text
     seen: List[str] = []
-    for task_id in _TICKED_TASK_RE.findall(region):
-        if task_id not in seen:
-            seen.append(task_id)
+    for task in parse_build_plan(text):
+        if task["ticked"] and task["id"] not in seen:
+            seen.append(task["id"])
     return seen
+
+
+def _build_plan_region(text: str) -> str:
+    """The text after the Build Plan heading, up to the next heading of its level or a
+    higher one; the whole text when there is no such heading."""
+    match = _BUILD_PLAN_RE.search(text)
+    if not match:
+        return text
+    level = len(match.group(1))
+    rest = text[match.end():]
+    closing = re.search(r"^#{1,%d}\s+\S" % level, rest, re.MULTILINE)
+    return rest[: closing.start()] if closing else rest
+
+
+def _plan_task_title(rest: str) -> Optional[str]:
+    """The title in what follows a task id: past ``[P]`` and a dash, up to the next
+    spaced em or en dash. None when nothing is left."""
+    lead = re.sub(r"^\[P\]\s*", "", rest.strip())
+    lead = re.sub(r"^[—–-]+\s*", "", lead)
+    title = re.split(r"\s+[—–](?:\s+|$)", lead, maxsplit=1)[0].strip()
+    return title or None
+
+
+class PlanTask(TypedDict):
+    """One task line of a worklog's Build Plan: ``- [x] T013 — title — file(s): ...``."""
+
+    id: str
+    title: Optional[str]
+    section: Optional[str]
+    ticked: bool
+
+
+def parse_build_plan(text: str) -> List[PlanTask]:
+    """Every task line of the Build Plan section, in document order.
+
+    The grammar is ``parse_ticked_tasks``', the Stop gate's rule A, and stays one
+    grammar: once this lands, ``parse_ticked_tasks`` returns the ticked ids of this
+    list, the first occurrence of each (audit D9).
+    - The region starts after a ``Build Plan`` heading of any level, in any case, and
+      ends at the next heading of the same or a higher level. With no such heading the
+      whole document is the region.
+    - A task line is a ``-`` or ``*`` bullet, a ``[ ]``, ``[x]`` or ``[X]`` box, then an
+      id: ``T`` and digits, ending at a word boundary (``T001``, never ``T001a``).
+      ``ticked`` is the box's state.
+    - ``title`` is the text after the id, an optional ``[P]`` marker and the dash after
+      them, up to the next spaced em or en dash (`` — file(s): ...``). It is kept as
+      written, backticks included: display work stays in the HUD. None when the line
+      has no title, never ''.
+    - ``section`` is the nearest heading above the line inside the region; None when
+      there is none.
+    A repeated id gives one entry per line, so ``parse_ticked_tasks`` keeps its current
+    result: the first *ticked* line of each id. ``build_position`` keeps the first line
+    of each id.
+    """
+    region = _build_plan_region(text)
+    headings = [(m.start(), m.group(1)) for m in _PLAN_HEADING_RE.finditer(region)]
+    tasks: List[PlanTask] = []
+    for match in _PLAN_TASK_RE.finditer(region):
+        section: Optional[str] = None
+        for start, heading in headings:
+            if start >= match.start():
+                break
+            section = heading
+        tasks.append({
+            "id": match.group(2),
+            "title": _plan_task_title(match.group(3)),
+            "section": section,
+            "ticked": match.group(1) in ("x", "X"),
+        })
+    return tasks
 
 
 def event_session(event: Event) -> Optional[str]:
@@ -1710,6 +2097,9 @@ def event_session(event: Event) -> Optional[str]:
     Hook-written events carry ``data.session``; skill-written events carry it as the
     ``role@label`` suffix `append` fills in from ``meta.current_session``. Both are
     honored; an actor with no label belongs to no particular session.
+
+    Who wrote an artifact is a different question: an ``artifact-written`` row may name
+    only the session that saw the write, so its author comes from ``artifact_authors``.
     """
     session = event.data.get("session")
     if isinstance(session, str) and session:
@@ -1719,14 +2109,119 @@ def event_session(event: Event) -> Optional[str]:
     return None
 
 
+ClaimSource = Literal["tool", "bash", "disk"]
+ClaimEvidence = Literal["diff", "window"]
+# One artifact write, as the hooks identify it: the path and the file's mtime (None when
+# the hook could not stat the file).
+ArtifactKey = Tuple[str, Optional[float]]
+
+
+class Claim(TypedDict):
+    """What one ``artifact-written`` row says about who wrote the file (ADR 0008).
+
+    ``session`` is the author the row claims. It is never set for ``disk``: a watcher's
+    ``observed_by`` names who saw the write, not who made it. ``evidence`` is set only
+    for ``bash``.
+    """
+
+    source: ClaimSource
+    session: Optional[str]
+    evidence: Optional[ClaimEvidence]
+
+
+def claim_of(event: Event) -> Optional[Claim]:
+    """The claim one event makes, or None when it makes none.
+
+    Only an ``artifact-written`` event with a string ``data.path`` claims, and its
+    ``data.source`` decides the rest:
+    - ``tool``: ``session`` is ``data.session``;
+    - ``bash``: ``session`` is ``data.session`` and ``evidence`` is ``data.evidence``;
+      evidence other than ``diff`` or ``window`` makes no claim;
+    - ``disk``: ``session`` is None whatever the row carries, so a legacy row with
+      ``session`` in place of ``observed_by`` counts as observed;
+    - any other source makes no claim.
+    A ``tool`` or ``bash`` row without a session string claims with ``session`` None.
+    """
+    if event.type != "artifact-written" or not isinstance(event.data.get("path"), str):
+        return None
+    source = event.data.get("source")
+    session = event.data.get("session")
+    author = session if isinstance(session, str) and session else None
+    if source == "tool":
+        return Claim(source="tool", session=author, evidence=None)
+    if source == "bash":
+        evidence = event.data.get("evidence")
+        if evidence == "diff":
+            return Claim(source="bash", session=author, evidence="diff")
+        if evidence == "window":
+            return Claim(source="bash", session=author, evidence="window")
+        return None
+    if source == "disk":
+        return Claim(source="disk", session=None, evidence=None)
+    return None
+
+
+# How strong each claim's evidence is; 0 never ranks (ADR 0008).
+_CLAIM_RANKS: Dict[Tuple[str, Optional[str]], int] = {
+    ("tool", None): 3,
+    ("bash", "diff"): 2,
+    ("bash", "window"): 1,
+}
+
+
+def _claim_rank(claim: Claim) -> int:
+    if claim["session"] is None:
+        return 0
+    return _CLAIM_RANKS.get((claim["source"], claim["evidence"]), 0)
+
+
+def _artifact_key(data: Dict[str, Any]) -> ArtifactKey:
+    """The write a claiming row names. A non-numeric mtime is no mtime at all."""
+    mtime = data.get("mtime")
+    if isinstance(mtime, bool) or not isinstance(mtime, (int, float)):
+        return data["path"], None
+    return data["path"], float(mtime)
+
+
+def artifact_authors(events: Iterable[Event]) -> Dict[ArtifactKey, Optional[str]]:
+    """Who wrote each artifact write, decided when the journal is read (ADR 0008).
+
+    Claims are grouped by ``(data.path, data.mtime)``; claims without a session are
+    left out of the ranking. ``tool`` beats ``bash`` with ``diff`` evidence, which beats
+    ``bash`` with ``window`` evidence. The session at the best rank is the author when
+    it is one session; two different sessions there give None, and so does a group with
+    no ranked claim (``disk`` only). Every key a claim names is in the result. The Stop
+    gate's rules A and B and ``stats`` read authors from this, never from raw rows.
+    """
+    best: Dict[ArtifactKey, Tuple[int, Set[str]]] = {}
+    for event in events:
+        claim = claim_of(event)
+        if claim is None:
+            continue
+        key = _artifact_key(event.data)
+        rank, sessions = best.setdefault(key, (0, set()))
+        claimed = _claim_rank(claim)
+        if claimed == 0 or claimed < rank or claim["session"] is None:
+            continue
+        if claimed > rank:
+            best[key] = (claimed, {claim["session"]})
+        else:
+            sessions.add(claim["session"])
+    return {
+        key: next(iter(sessions)) if len(sessions) == 1 else None
+        for key, (_, sessions) in best.items()
+    }
+
+
 def _matches_glob(path: str, pattern: str) -> bool:
     from fnmatch import fnmatch
 
     normalized = path.replace(os.sep, "/")
     if fnmatch(normalized, pattern):
         return True
-    # Allow a project-relative glob to match an absolute or deeper path.
-    return fnmatch(normalized, "*/" + pattern.lstrip("./"))
+    # Allow a project-relative glob to match an absolute or deeper path. Only a leading
+    # `./` goes: `lstrip("./")` stripped a character set, so `.notes/` lost its dot.
+    return fnmatch(normalized, "*/" + pattern.removeprefix("./"))
 
 
 def classify_artifact(path: str, homes: Dict[str, str]) -> Optional[str]:
@@ -1785,13 +2280,18 @@ def run_check(
     findings: List[Dict[str, Any]] = []
 
     # -- rule A: ticked build-plan boxes with no task-done ------------------
+    # The artifacts this session wrote, as the fold decides it (ADR 0008): a row's own
+    # `session` may name a session that only saw the write.
+    authors = artifact_authors(all_events)
     worklog_paths: List[Tuple[str, str]] = []  # (path, stream)
     prd_paths: List[Tuple[str, str]] = []
-    for event in session_events:
-        if event.type != "artifact-written":
+    for event in all_events:
+        if claim_of(event) is None:
             continue
-        path = event.data.get("path")
-        if not isinstance(path, str) or not path:
+        if authors.get(_artifact_key(event.data)) != session:
+            continue
+        path = event.data["path"]
+        if not path:
             continue
         kind = classify_artifact(path, homes)
         if kind == "worklog" and (path, event.stream) not in worklog_paths:
@@ -1941,6 +2441,488 @@ def render_findings(findings: Sequence[Dict[str, Any]]) -> str:
 
 
 # --------------------------------------------------------------------------
+# position — every fact the HUD draws for one stream (ADR 0009)
+# --------------------------------------------------------------------------
+
+WorklogFrom = Literal["event", "name"]
+
+# The event types whose refs commit a stream to an artifact: the design landing, work on
+# its tasks, its review and its decisions. A `flow-started`, `phase-entered` or
+# `deviation` ref is context, often an older slice's artifact, and never counts.
+POSITION_ARTIFACT_EVENTS = (
+    "design-committed", "design-queued", "task-done", "verify-run",
+    "review-verdict", "gate-decision",
+)
+
+
+class PositionArtifacts(TypedDict):
+    """The artifacts a stream works on, classified with the configured homes.
+
+    ``worklog_from`` says how ``worklog`` was found: ``event`` (a ref in the stream's
+    events) or ``name`` (the slug-named fallback); None when there is no worklog.
+
+    An unsafe ref is dropped, never printed: an absolute path (``/`` or ``\\`` first),
+    a path with a ``..`` segment, or one that starts with a drive (``C:``) or a scheme
+    (``x://``). The rule applies to every ref, ``prd`` included.
+    """
+
+    worklog: Optional[str]
+    worklog_from: Optional[WorklogFrom]
+    prd: Optional[str]
+    adrs: List[str]
+
+
+class PositionTaskVerify(TypedDict):
+    """The last ``verify-run`` in the stream that named a task, pass or fail."""
+
+    outcome: VerifyOutcome
+    at: str
+
+
+class PositionLastVerify(TypedDict):
+    """The stream's last ``verify-run``: the fold's ``last_verify``, ``ts`` as ``at``.
+
+    A run whose ``outcome`` is outside ``VerifyOutcome`` is dropped, so this is the last
+    run that passed or failed. ``task_ids`` keeps the run's string entries.
+    """
+
+    outcome: VerifyOutcome
+    task_ids: List[str]
+    at: str
+
+
+class PositionTask(TypedDict):
+    """A Build Plan task (``PlanTask``) with its journal state."""
+
+    id: str
+    title: Optional[str]
+    section: Optional[str]
+    ticked: bool
+    done: bool
+    last_verify: Optional[PositionTaskVerify]
+
+
+class PositionDecision(TypedDict):
+    """One ``gate-decision`` with its real ``seq`` (the HUD numbered them by index).
+
+    ``gate``, ``question`` and ``decision`` are None when a row from before the
+    canonical shape lacks the key or holds a non-string. ``raised_by`` falls back to the
+    shape's default; ``mode`` is None when absent or outside ``GateMode``.
+    """
+
+    seq: int
+    gate: Optional[str]
+    question: Optional[str]
+    decision: Optional[str]
+    raised_by: RaisedBy
+    mode: Optional[GateMode]
+    at: str
+
+
+class PositionVerdict(TypedDict):
+    """The stream's last ``review-verdict``: when, which, and its two maps."""
+
+    seq: int
+    at: str
+    verdict: ReviewVerdict
+    criteria: Dict[str, CriterionStatus]
+    dispositions: Dict[str, Disposition]
+
+
+class PositionDoc(TypedDict):
+    """``position --stream <s> --json``: every fact the HUD draws for one stream."""
+
+    stream: str
+    version: int
+    lifecycle: Lifecycle
+    current: Optional[CurrentPhase]
+    publish: PublishAuthorization
+    phases: Dict[Phase, PhaseMark]
+    artifacts: PositionArtifacts
+    tasks: Optional[List[PositionTask]]
+    last_verify: Optional[PositionLastVerify]
+    decisions: List[PositionDecision]
+    verdict: Optional[PositionVerdict]
+
+
+def build_position(
+    conn: sqlite3.Connection,
+    stream: str,
+    project_dir: Path,
+    homes: Dict[str, str],
+    now: Optional[datetime] = None,
+) -> PositionDoc:
+    """Every fact the HUD draws for ``stream``, from its events and its artifacts.
+
+    ``stream`` is an exact stream name. A stream with no events raises ``InfraError``,
+    so ``position`` exits 1: exit 2 stays reserved for argparse's usage errors, which
+    the HUD reads as an unknown flag.
+    - ``version``, ``lifecycle``, ``current`` and ``publish`` are ``fold_stream``'s for
+      the stream, with ``now`` as there. ``phases`` is ``phase_marks``.
+    - ``artifacts``: the refs are ``data.worklog``, ``data.refs`` and ``data.adrs`` of
+      the ``POSITION_ARTIFACT_EVENTS`` events, a ``#fragment`` dropped, unsafe refs
+      dropped (see ``PositionArtifacts``), classified by ``classify_artifact`` with
+      ``homes``. The last worklog ref is ``worklog`` (``worklog_from: event``); the ADR
+      refs are ``adrs``, each once, first seen first. With no worklog ref, ``worklog`` is
+      the newest file (by mtime) in the worklog home named for the stream's last path
+      segment ``<slug>`` (``<slug>.worklog.md``, or a name that starts with ``<slug>-``
+      or ``<slug>.``) that no other live stream's events name (``worklog_from: name``).
+      ``prd`` is the ``data.prd`` of the last ``clarify-passed``.
+    - ``tasks``: ``parse_build_plan`` over the worklog, each task id once (its first
+      line wins), each with ``done`` (a ``task-done`` in this stream names it) and
+      ``last_verify`` (the last ``verify-run`` here naming it). None when there is no
+      worklog or it cannot be read; [] when its Build Plan has no task line.
+    - ``last_verify``: the stream's last ``verify-run`` (``PositionLastVerify``), or
+      None.
+    - ``decisions``: every ``gate-decision``, oldest first; a field that is not a string
+      prints null.
+    - ``verdict``: the last ``review-verdict``, or None. A disposition key loses a
+      leading ``./``.
+    A value outside its vocabulary is dropped wherever it appears: a verdict map entry,
+    or a ``verify-run`` whose outcome is not ``pass`` or ``fail``. Paths are printed as
+    the events wrote them, relative to ``project_dir``.
+    """
+    events = read_events(conn, stream=stream)
+    if not events:
+        raise InfraError(
+            f"stream {stream!r} has no events — `journal.py streams` lists the streams"
+        )
+    folded = fold_stream(events, now=now)
+
+    worklog: Optional[str] = None
+    adrs: List[str] = []
+    for ref in _committed_refs(events):
+        kind = classify_artifact(ref, homes)
+        if kind == "worklog":
+            worklog = ref
+        elif kind == "adr" and ref not in adrs:
+            adrs.append(ref)
+    worklog_from: Optional[WorklogFrom] = "event" if worklog is not None else None
+    if worklog is None:
+        worklog = _free_slug_named_worklog(conn, stream, project_dir, homes, now)
+        worklog_from = "name" if worklog is not None else None
+    clarified = [e for e in events if e.type == "clarify-passed"]
+    prd = _safe_ref(clarified[-1].data.get("prd")) if clarified else None
+
+    tasks: Optional[List[PositionTask]] = None
+    if worklog is not None:
+        try:
+            text = (project_dir / worklog).read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            text = None
+        if text is not None:
+            tasks = _position_tasks(parse_build_plan(text), events)
+
+    runs = _verify_runs(events)
+    last_verify: Optional[PositionLastVerify] = None
+    if runs:
+        last_verify = {
+            "outcome": runs[-1].data["outcome"],
+            "task_ids": _string_list(runs[-1].data.get("task_ids")),
+            "at": runs[-1].ts,
+        }
+    # A verdict outside the vocabulary (an old row) is dropped like any other value, so
+    # this is the last verdict that said ready or not-ready.
+    verdicts = [
+        e for e in events
+        if e.type == "review-verdict"
+        and e.data.get("verdict") in get_args(ReviewVerdict)
+    ]
+    return {
+        "stream": stream,
+        "version": folded["version"],
+        "lifecycle": folded["lifecycle"],
+        "current": folded["current"],
+        "publish": folded["publish"],
+        "phases": phase_marks(events),
+        "artifacts": {
+            "worklog": worklog, "worklog_from": worklog_from, "prd": prd, "adrs": adrs,
+        },
+        "tasks": tasks,
+        "last_verify": last_verify,
+        "decisions": [
+            _position_decision(e) for e in events if e.type == "gate-decision"
+        ],
+        "verdict": _position_verdict(verdicts[-1]) if verdicts else None,
+    }
+
+
+def _is_safe_ref(path: str) -> bool:
+    """A ref the HUD may read: relative, no ``..`` segment, no drive or scheme."""
+    if not path or path[0] in "/\\":
+        return False
+    if re.match(r"[A-Za-z]:", path) or re.match(r"[A-Za-z]+://", path):
+        return False
+    return ".." not in re.split(r"[\\/]", path)
+
+
+def _safe_ref(value: Any) -> Optional[str]:
+    """``value`` as a ref to print: a string, its ``#fragment`` dropped, and safe."""
+    if not isinstance(value, str):
+        return None
+    path = value.split("#", 1)[0]
+    return path if _is_safe_ref(path) else None
+
+
+def _string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _committed_refs(events: Sequence[Event]) -> List[str]:
+    """The safe refs of the events that commit or work an artifact, in event order:
+    each event's ``data.worklog``, then ``data.refs``, then ``data.adrs``."""
+    refs: List[str] = []
+    for event in events:
+        if event.type not in POSITION_ARTIFACT_EVENTS:
+            continue
+        values: List[Any] = [event.data.get("worklog")]
+        for key in ("refs", "adrs"):
+            listed = event.data.get(key)
+            if isinstance(listed, list):
+                values.extend(listed)
+        refs.extend(ref for ref in map(_safe_ref, values) if ref is not None)
+    return refs
+
+
+_GLOB_MAGIC_RE = re.compile(r"[*?[]")
+
+
+def _worklog_home_dirs(project_dir: Path, home: str) -> List[Tuple[str, str]]:
+    """The directories a worklog home names, each with the file pattern for it.
+
+    A literal directory, or ``*`` as the first segment for each visible child directory
+    of the project. Deeper wildcards are not walked: this feeds a fallback, which is not
+    worth a walk of the whole project.
+    """
+    home = home.replace(os.sep, "/").removeprefix("./")
+    if not _is_safe_ref(home):
+        return []
+    directory, _, pattern = home.rpartition("/")
+    if not pattern:
+        return []
+    if not _GLOB_MAGIC_RE.search(directory):
+        return [(directory, pattern)]
+    head, _, rest = directory.partition("/")
+    if head != "*" or _GLOB_MAGIC_RE.search(rest):
+        return []
+    try:
+        children = sorted(
+            entry.name for entry in os.scandir(project_dir)
+            if entry.is_dir() and not entry.name.startswith(".")
+        )
+    except OSError:
+        return []
+    return [(f"{child}/{rest}" if rest else child, pattern) for child in children]
+
+
+def _normalized_ref(path: str) -> str:
+    return "/".join(s for s in path.replace("\\", "/").split("/") if s not in ("", "."))
+
+
+def _free_slug_named_worklog(
+    conn: sqlite3.Connection,
+    stream: str,
+    project_dir: Path,
+    homes: Dict[str, str],
+    now: Optional[datetime],
+) -> Optional[str]:
+    """The newest worklog in the worklog home named for the stream's last path segment,
+    that no other live stream's events name; None when there is none.
+
+    A name counts when it is ``<slug>.worklog.md`` or starts with ``<slug>-`` or
+    ``<slug>.``: a substring match would let a short slug take another feature's
+    worklog. Two streams can share a slug (``epic/x`` and a child whose worklog is
+    ``x.worklog.md``), so a worklog another live stream names is left to it. A nested
+    repo's stream names its worklog relative to that repo, so a claim also covers a
+    path that ends in it. The other streams are read only once a candidate exists.
+    """
+    from fnmatch import fnmatch
+
+    slug = stream.rsplit("/", 1)[-1]
+    if not slug:
+        return None
+    home = homes.get("worklog", DEFAULT_ARTIFACT_HOMES["worklog"])
+    found: List[Tuple[str, float]] = []
+    for directory, pattern in _worklog_home_dirs(project_dir, home):
+        try:
+            entries = list(os.scandir(project_dir / directory))
+        except OSError:
+            continue
+        for entry in entries:
+            name = entry.name
+            named = (
+                name == f"{slug}.worklog.md"
+                or name.startswith(f"{slug}-")
+                or name.startswith(f"{slug}.")
+            )
+            if not named or not fnmatch(name, pattern):
+                continue
+            try:
+                if not entry.is_file():
+                    continue
+                mtime = entry.stat().st_mtime
+            except OSError:
+                continue
+            found.append((f"{directory}/{name}" if directory else name, mtime))
+    if not found:
+        return None
+
+    claimed: List[str] = []
+    for other in list_streams(conn):
+        if other == stream or not is_work_stream(other):
+            continue
+        events = read_events(conn, stream=other)
+        if not events or fold_stream(events, now=now)["lifecycle"] != "live":
+            continue
+        claimed.extend(
+            _normalized_ref(ref) for ref in _committed_refs(events)
+            if classify_artifact(ref, homes) == "worklog"
+        )
+    free = [
+        (path, mtime) for path, mtime in sorted(found)
+        if not any(
+            own and (_normalized_ref(path) == own
+                     or _normalized_ref(path).endswith("/" + own))
+            for own in claimed
+        )
+    ]
+    if not free:
+        return None
+    # `max` keeps the first of equal mtimes, and `free` is in path order.
+    return max(free, key=lambda item: item[1])[0]
+
+
+def _verify_runs(events: Sequence[Event]) -> List[Event]:
+    """The ``verify-run`` events whose outcome is in the vocabulary, in order."""
+    return [
+        e for e in events
+        if e.type == "verify-run" and e.data.get("outcome") in get_args(VerifyOutcome)
+    ]
+
+
+def _position_tasks(
+    plan: Sequence[PlanTask], events: Sequence[Event]
+) -> List[PositionTask]:
+    done = {
+        e.data.get("task_id") for e in events
+        if e.type == "task-done" and isinstance(e.data.get("task_id"), str)
+    }
+    verified: Dict[str, PositionTaskVerify] = {}
+    for run in _verify_runs(events):
+        for task_id in _string_list(run.data.get("task_ids")):
+            verified[task_id] = {"outcome": run.data["outcome"], "at": run.ts}
+    tasks: List[PositionTask] = []
+    seen: Set[str] = set()
+    for task in plan:
+        if task["id"] in seen:
+            continue
+        seen.add(task["id"])
+        tasks.append({
+            "id": task["id"],
+            "title": task["title"],
+            "section": task["section"],
+            "ticked": task["ticked"],
+            "done": task["id"] in done,
+            "last_verify": verified.get(task["id"]),
+        })
+    return tasks
+
+
+def _string_or_none(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) else None
+
+
+def _position_decision(event: Event) -> PositionDecision:
+    data = event.data
+    raised_by = data.get("raised_by")
+    if raised_by not in get_args(RaisedBy):
+        raised_by = EVENT_SHAPES["gate-decision"]["defaults"]["raised_by"]
+    mode = data.get("mode")
+    return {
+        "seq": event.seq,
+        "gate": _string_or_none(data.get("gate")),
+        "question": _string_or_none(data.get("question")),
+        "decision": _string_or_none(data.get("decision")),
+        "raised_by": raised_by,
+        "mode": mode if mode in get_args(GateMode) else None,
+        "at": event.ts,
+    }
+
+
+def _vocabulary_map(value: Any, allowed: Sequence[str]) -> Dict[str, Any]:
+    """The entries of a JSON object whose value is in ``allowed``; {} for a non-object."""
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: item for key, item in value.items()
+        if isinstance(item, str) and item in allowed
+    }
+
+
+def _position_verdict(event: Event) -> PositionVerdict:
+    criteria = _vocabulary_map(event.data.get("criteria"), get_args(CriterionStatus))
+    dispositions = _vocabulary_map(event.data.get("dispositions"), get_args(Disposition))
+    return {
+        "seq": event.seq,
+        "at": event.ts,
+        "verdict": event.data["verdict"],
+        "criteria": criteria,
+        "dispositions": {
+            re.sub(r"^(?:\./)+", "", key): item for key, item in dispositions.items()
+        },
+    }
+
+
+def _render_position(position: PositionDoc) -> str:
+    """The position for people; ``--json`` is the contract."""
+    current = position["current"]
+    publish = position["publish"]
+    artifacts = position["artifacts"]
+    tasks = position["tasks"]
+    verify = position["last_verify"]
+    verdict = position["verdict"]
+    phase = "—"
+    if current is not None:
+        phase = current["phase"] + ("  (implied)" if current["implied"] else "")
+    lines = [
+        f"{_one_line(position['stream'])}  (v{position['version']})  "
+        f"{position['lifecycle']}",
+        f"  phase        : {phase}",
+        "  phases       : " + " ".join(
+            f"{name}={mark}" for name, mark in position["phases"].items()
+        ),
+        "  publish      : " + (
+            f"authorized by {publish['by']} (seq {publish['seq']})"
+            if publish["kind"] == "authorized" else "held"
+        ),
+        "  worklog      : " + (
+            f"{_one_line(artifacts['worklog'])} (from {artifacts['worklog_from']})"
+            if artifacts["worklog"] else "—"
+        ),
+        "  prd          : " + (
+            _one_line(artifacts["prd"]) if artifacts["prd"] else "—"
+        ),
+        "  adrs         : " + (
+            ", ".join(_one_line(a) for a in artifacts["adrs"]) or "—"
+        ),
+        "  tasks        : " + (
+            "—" if tasks is None
+            else f"{sum(1 for t in tasks if t['done'])}/{len(tasks)} done"
+        ),
+        "  last verify  : " + (
+            f"{verify['outcome']} ({_short_ts(verify['at'])})" if verify else "—"
+        ),
+        f"  decisions    : {len(position['decisions'])}",
+        "  verdict      : " + (
+            f"{verdict['verdict']} (seq {verdict['seq']})" if verdict else "—"
+        ),
+    ]
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
 # stats
 # --------------------------------------------------------------------------
 
@@ -1963,14 +2945,23 @@ def _counted_sessions(events: Iterable[Event]) -> Set[str]:
     Events actored `user@…` are excluded: that label is a person's name, not a session
     id (ADR 0003 only defaults the label to `meta.current_session` for machine roles),
     so counting them would inflate "sessions" by one per human who ever appeared.
+    An artifact write counts only its author from the fold (ADR 0008): a session that
+    merely saw the file change did not touch the stream.
     """
-    return {
+    events = list(events)
+    counted = {
+        author for author in artifact_authors(events).values() if author is not None
+    }
+    counted.update(
         session
         for session in (
-            event_session(event) for event in events if _actor_role(event) != "user"
+            event_session(event)
+            for event in events
+            if event.type != "artifact-written" and _actor_role(event) != "user"
         )
         if session
-    }
+    )
+    return counted
 
 
 def _stream_stats(
@@ -2323,7 +3314,8 @@ def import_events(conn: sqlite3.Connection, path: Path) -> Dict[str, Any]:
 EPILOG = """\
 exit codes:
   0  ok
-  1  infrastructure failure (database missing or unreadable, IO error)
+  1  infrastructure failure (database missing or unreadable, IO error,
+     `position` on a stream with no events)
   2  usage error
   3  version conflict — a conditional append (--expect) found a different
      current version; nothing was written
@@ -2441,7 +3433,9 @@ def build_parser() -> argparse.ArgumentParser:
                           dest="nested_branches", metavar="NAME",
                           help="a branch checked out in a nested repo of an umbrella "
                                "checkout (repeatable); tried only when --branch names "
-                               "no stream, the most recently active match first")
+                               "no stream, and binds only when the nested branches "
+                               "name exactly one live stream (nested_matches lists "
+                               "the live ones)")
     p_status.add_argument("--session", default=None, metavar="ID",
                           help="a Claude Code session id; the live stream it last "
                                "wrote to itself renders first (session_match), ahead "
@@ -2449,6 +3443,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--all", action="store_true", dest="show_all",
                           help="include completed and abandoned streams")
     p_status.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p_position = subparsers.add_parser(
+        "position",
+        help="every fact the HUD draws for one stream: phase marks, artifacts, Build "
+             "Plan tasks, decisions, verdict (--json is the contract)",
+    )
+    _add_db_flag(p_position)
+    p_position.add_argument("--stream", required=True,
+                            help="the exact stream name; one with no events exits 1")
+    p_position.add_argument("--json", action="store_true",
+                            help="machine-readable output")
 
     p_stats = subparsers.add_parser(
         "stats", help="per-stream counts: events by role, decisions by mode, sessions"
@@ -2798,6 +3803,29 @@ def cmd_status(args, resolution: Resolution) -> int:
     return EXIT_OK
 
 
+def cmd_position(args, resolution: Resolution) -> int:
+    """``position --stream <s> [--json]``: ``build_position`` for one stream.
+
+    ``--json`` prints the ``PositionDoc`` with sorted keys: the HUD's only input for the
+    stream's position (ADR 0009). Without ``--json`` the output is for people and is no
+    contract. A stream with no events exits 1 (``InfraError`` from ``build_position``),
+    never 2: exit 2 stays reserved for argparse's usage errors.
+    """
+    conn = connect(resolution.db_path)
+    try:
+        position = build_position(
+            conn, args.stream, resolution.project_dir,
+            artifact_homes(resolution.sidecar),
+        )
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(position, sort_keys=True))
+    else:
+        print(_render_position(position))
+    return EXIT_OK
+
+
 def cmd_stats(args, resolution: Resolution) -> int:
     conn = connect(resolution.db_path)
     try:
@@ -2930,6 +3958,7 @@ COMMANDS = {
     "append": cmd_append,
     "session": cmd_session,
     "status": cmd_status,
+    "position": cmd_position,
     "stats": cmd_stats,
     "check": cmd_check,
     "log": cmd_log,

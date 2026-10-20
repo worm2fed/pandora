@@ -39,7 +39,8 @@ NESTED_ENTRY_LIMIT = 512  # directory entries examined per parent
 HEAD_REF_PREFIX = "ref: refs/heads/"
 MAX_BRANCH_LENGTH = 255
 # A Claude Code session id is a UUID; anything else (absent, empty, odd characters) is not
-# passed to `status --session`, so a strange payload costs the ordering hint, never the brief.
+# passed to `status --session`. The id is the evidence the journal binds the session's own
+# stream on, so a strange payload loses that evidence, never the brief.
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -48,7 +49,8 @@ def current_branch(cwd):
 
     A detached HEAD answers with the literal `HEAD`, which is not a branch and matches
     no stream. No git, no repository and a hung git all land here as None as well: the
-    branch is an ordering hint for the brief, never a reason to degrade it.
+    branch is evidence the journal matches a stream on, and failing to read it loses that
+    evidence, never the brief.
     """
     import subprocess
 
@@ -124,7 +126,8 @@ def head_branch(git_entry, root):
     once and only when it stays under `root`, the session's directory — a checkout must
     not point the hook at files elsewhere on disk. A detached HEAD holds a hash, not a
     `ref:` line, and names no branch; so does anything unreadable, over-long or not a
-    regular file. Only ever a hint for ordering the brief.
+    regular file. The branch is evidence for journal.py's nested rule: None loses that
+    evidence, never the brief.
     """
     git_dir = git_entry
     if os.path.isfile(git_entry):
@@ -179,8 +182,10 @@ def nested_branches(cwd, own=None):
     NESTED_ENTRY_LIMIT entries of a directory are examined (sorted among themselves) and
     NESTED_REPO_LIMIT repos read in all, top level first, a repo's worktrees right after
     it, and the scan stops where the reads do. A single repo with no nested `.git` costs
-    a few directory scans. Nothing here may raise: the branches are an ordering hint for
-    the brief, and losing the brief over a hint would invert the hook's priorities.
+    a few directory scans. Nothing here may raise. The branches are the evidence
+    journal.py's nested rule binds on (a stream binds only when exactly one live stream
+    matches them, shipgate-hud ADR 0004); failing to read them loses that evidence,
+    never the brief.
     """
     if not isinstance(cwd, str):
         return []
@@ -192,7 +197,7 @@ def nested_branches(cwd, own=None):
             if branch and branch not in seen:
                 seen.add(branch)
                 found.append(branch)
-    except Exception:  # noqa: BLE001 — a hint, never the brief
+    except Exception:  # noqa: BLE001 — lose the evidence, never the brief
         return found
     return found
 
@@ -260,8 +265,9 @@ def main() -> None:
     branch = current_branch(payload.get("cwd"))
     # `--branch=<name>`, never two tokens: a branch may be literally named `--all`,
     # and argparse would read the second token as a flag. In an umbrella checkout the
-    # nested repos' branches go along as `--nested-branch=<name>`; which of them (if
-    # any) orders the brief is the journal's call, not the hook's.
+    # nested repos' branches go along as `--nested-branch=<name>`; whether they bind a
+    # stream (only when exactly one live stream matches) is the journal's call, not the
+    # hook's.
     status_args = ["status"] + ([f"--branch={branch}"] if branch else [])
     # The stream this session last wrote to leads the brief, ahead of the branch's: after a
     # compaction or a resume, that is the work in hand, branch or no branch.

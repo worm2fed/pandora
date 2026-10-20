@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -475,6 +476,67 @@ class TestShapeValidation(JournalTestCase):
     def test_force_does_not_waive_the_shape(self):
         """--force skips gate preconditions; it does not make a payload readable."""
         self.append_event("feature/x", "deviation", {}, "--force", rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_a_list_valued_decision_is_refused(self):
+        """Each reader stringified a list its own way, so one authorized a publish the
+        other refused (audit D6)."""
+        proc = self.append_event("feature/x", "gate-decision", {
+            "gate": "publish", "question": "q", "decision": ["publish"],
+            "mode": "ask", "raised_by": "user",
+        }, rc=GATE)
+        self.assertIn("data.decision must be a string", proc.stderr)
+        self.assertIn("vocab --shape gate-decision", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_an_object_valued_decision_is_refused(self):
+        self.append_event("feature/x", "gate-decision", {
+            "gate": "design", "question": "q", "decision": {"pick": "a"}, "mode": "ask",
+        }, rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_a_decision_given_under_its_alias_must_be_a_string_too(self):
+        self.append_event("feature/x", "gate-decision", {
+            "gate": "design", "question": "q", "chosen": ["a"], "mode": "ask",
+        }, rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    # `review-verdict` closes its two maps' vocabularies (ADR 0009, T016).
+    def verdict(self, rc=OK, **maps):
+        return self.append_event("feature/x", "review-verdict",
+                                 dict(maps, verdict="not-ready"), rc=rc)
+
+    def test_the_verdict_maps_accept_their_vocabularies(self):
+        self.verdict(
+            criteria={"SC-001": "met", "SC-002": "unmet"},
+            dispositions={"a.py:1": "fixed", "b.py:?": "rejected", "c.py:3": "deferred"},
+        )
+        self.assertEqual(self.data_of()["criteria"]["SC-002"], "unmet")
+
+    def test_a_criterion_status_outside_the_vocabulary_is_refused(self):
+        for status in ("Met", "partial", "", None, ["met"]):
+            with self.subTest(status=status):
+                proc = self.verdict(criteria={"SC-001": status}, rc=GATE)
+                self.assertIn("data.criteria", proc.stderr)
+                self.assertIn("met, unmet", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_disposition_outside_the_vocabulary_is_refused(self):
+        proc = self.verdict(dispositions={"a.py:1": "fixed", "b.py:2": "wontfix"},
+                            rc=GATE)
+        self.assertIn("data.dispositions", proc.stderr)
+        self.assertIn("fixed, rejected, deferred", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_verdict_map_must_be_an_object(self):
+        self.verdict(criteria=["SC-001"], rc=GATE)
+        self.verdict(dispositions="fixed", rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_force_does_not_waive_the_string_rule(self):
+        self.append_event("feature/x", "gate-decision", {
+            "gate": "publish", "question": "q", "decision": ["publish"], "mode": "ask",
+        }, "--force", "--force-reason", "testing", rc=GATE)
         self.assertEqual(self.events(), [])
 
     def test_a_shapeless_type_accepts_any_payload(self):
@@ -1110,6 +1172,141 @@ class TestGateMrOpened(JournalTestCase):
             "--force", "--force-reason", "docs-only MR, no review needed", rc=OK,
         )
         self.assertEqual(self.last_type(), "mr-opened")
+
+    # `status --json` prints the same rule per stream, so the HUD reads the gate's own
+    # answer instead of re-deriving it (ADR 0009).
+    def publish_of(self):
+        features = self.status_json()["features"]
+        return next(f for f in features if f["stream"] == "feature/x")["publish"]
+
+    def test_status_prints_held_until_something_authorizes(self):
+        self.assertEqual(self.publish_of(), {"kind": "held"})
+
+    def test_status_names_the_authorizing_decision(self):
+        self.publish_decision()
+        event = self.events("feature/x")[-1]
+        self.assertEqual(self.publish_of(), {
+            "kind": "authorized", "by": "gate-decision",
+            "seq": event["seq"], "at": event["ts"],
+        })
+
+    def test_status_names_the_authorizing_verdict(self):
+        self.append_event("feature/x", "verify-run", self.PASSING_VERIFY)
+        self.append_event("feature/x", "review-verdict", {"verdict": "ready"})
+        event = self.events("feature/x")[-1]
+        self.assertEqual(self.publish_of(), {
+            "kind": "authorized", "by": "review-verdict",
+            "seq": event["seq"], "at": event["ts"],
+        })
+
+    def test_status_and_the_gate_agree_on_a_stale_verdict(self):
+        self.test_a_verdict_from_before_the_last_task_done_is_stale()
+        self.assertEqual(self.publish_of(), {"kind": "held"})
+
+    def test_an_old_row_with_a_list_decision_never_authorizes(self):
+        """A row from before the string rule (here imported) can still hold a list;
+        neither the gate nor status reads it as a publish (audit D6)."""
+        raw = self.root / "old.jsonl"
+        raw.write_text(json.dumps({
+            "stream": "feature/x", "version": len(self.events("feature/x")) + 1,
+            "type": "gate-decision",
+            "data": {"gate": "publish", "question": "q", "decision": ["publish"],
+                     "mode": "ask", "raised_by": "user"},
+            "ts": "2026-10-01T09:00:00+00:00", "actor": "user",
+        }) + "\n", encoding="utf-8")
+        self.journal("--db", self.db, "import", raw, rc=OK)
+        self.assertEqual(self.publish_of(), {"kind": "held"})
+        self.mr_opened(rc=GATE)
+
+
+class TestPublishAuthorization(unittest.TestCase):
+    """The one publish rule that `mr-opened`, `status` and `position` read (ADR 0009)."""
+
+    def setUp(self):
+        self.journal = load_journal_module()
+
+    def event(self, seq, etype, data=None):
+        return self.journal.Event(
+            seq=seq, stream="feature/x", version=seq, type=etype, data=data or {},
+            ts=f"2026-10-01T09:{seq:02d}:00+00:00", actor="orchestrator@s",
+        )
+
+    def task_done(self, seq):
+        return self.event(seq, "task-done", {"task_id": "T001"})
+
+    def verdict(self, seq, verdict="ready"):
+        return self.event(seq, "review-verdict", {"verdict": verdict})
+
+    def decision(self, seq, decision="publish", raised_by="user", gate="publish"):
+        return self.event(seq, "gate-decision", {
+            "gate": gate, "question": "q", "decision": decision, "mode": "ask",
+            "raised_by": raised_by,
+        })
+
+    def authorize(self, *events):
+        return self.journal.publish_authorization(list(events))
+
+    def authorized(self, by, seq):
+        return {"kind": "authorized", "by": by, "seq": seq,
+                "at": f"2026-10-01T09:{seq:02d}:00+00:00"}
+
+    def test_no_events_is_held(self):
+        self.assertEqual(self.authorize(), {"kind": "held"})
+
+    def test_a_ready_verdict_names_its_seq_and_time(self):
+        self.assertEqual(
+            self.authorize(self.task_done(1), self.verdict(2)),
+            self.authorized("review-verdict", 2),
+        )
+
+    def test_a_not_ready_verdict_is_held(self):
+        self.assertEqual(
+            self.authorize(self.task_done(1), self.verdict(2, "not-ready")),
+            {"kind": "held"},
+        )
+
+    def test_with_no_task_done_any_authorizing_event_counts(self):
+        self.assertEqual(self.authorize(self.decision(1)),
+                         self.authorized("gate-decision", 1))
+
+    def test_the_decision_is_trimmed_and_read_in_any_case(self):
+        for value in ("publish", "  Publish ", "PUBLISH\n", "\tpublish"):
+            with self.subTest(value=value):
+                self.assertEqual(self.authorize(self.decision(1, value)),
+                                 self.authorized("gate-decision", 1))
+
+    def test_a_decision_that_says_more_than_publish_is_held(self):
+        for value in ("publish it", "'publish'", "no", ""):
+            with self.subTest(value=value):
+                self.assertEqual(self.authorize(self.decision(1, value)),
+                                 {"kind": "held"})
+
+    def test_a_decision_that_is_not_a_string_never_authorizes(self):
+        """Rows from before the string rule; Python's str() of a list is not JS's."""
+        for value in (["publish"], {"publish": True}, None, 1):
+            with self.subTest(value=value):
+                self.assertEqual(self.authorize(self.decision(1, value)),
+                                 {"kind": "held"})
+
+    def test_a_decision_the_user_did_not_raise_or_at_another_gate_is_held(self):
+        self.assertEqual(self.authorize(self.decision(1, raised_by="orchestrator")),
+                         {"kind": "held"})
+        self.assertEqual(self.authorize(self.decision(1, gate="design")),
+                         {"kind": "held"})
+
+    def test_the_events_are_read_in_seq_order_not_list_order(self):
+        """A task-done with a higher seq makes an earlier verdict stale, wherever the
+        list puts it."""
+        self.assertEqual(self.authorize(self.verdict(5), self.task_done(7)),
+                         {"kind": "held"})
+        self.assertEqual(self.authorize(self.task_done(7), self.verdict(5)),
+                         {"kind": "held"})
+
+    def test_the_first_authorizing_event_in_seq_order_is_named(self):
+        self.assertEqual(
+            self.authorize(self.decision(9), self.verdict(6), self.task_done(3)),
+            self.authorized("review-verdict", 6),
+        )
 
 
 class TestArtifactDedupe(JournalTestCase):
@@ -1760,6 +1957,179 @@ class TestTerminalAndDormant(JournalTestCase):
         streams = [f["stream"] for f in self.features()]
         self.assertEqual(streams, ["feature/newer", "feature/older"])
 
+    # `lifecycle` restates `terminal` and `dormant` as one closed value (audit D10).
+    def test_a_fresh_stream_is_live(self):
+        self.seed()
+        self.assertEqual(self.one()["lifecycle"], "live")
+
+    def test_a_week_old_stream_is_dormant(self):
+        self.seed()
+        self.backdate("feature/x", days=7)
+        feature = self.one()
+        self.assertTrue(feature["dormant"])
+        self.assertEqual(feature["lifecycle"], "dormant")
+
+    def test_six_days_is_still_live(self):
+        self.seed()
+        self.backdate("feature/x", days=6)
+        self.assertEqual(self.one()["lifecycle"], "live")
+
+    def test_a_finished_stream_is_terminal_however_old(self):
+        self.seed()
+        self.append_event("feature/x", "flow-completed", {})
+        self.backdate("feature/x", days=30)
+        self.assertEqual(self.one("--all")["lifecycle"], "terminal")
+
+    def test_a_stale_capture_done_is_terminal(self):
+        self.seed()
+        self.append_event("feature/x", "capture-done",
+                          {"promoted": ["a"], "dropped": []})
+        self.backdate("feature/x", days=3)
+        self.assertEqual(self.one("--all")["lifecycle"], "terminal")
+
+
+class TestCurrentPhase(JournalTestCase):
+    """`current` restates `phase`, `phase_entered_at` and `implied_phase`, and is null
+    exactly when no phase was entered (audit D7)."""
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+
+    def current(self):
+        return self.status_json()["features"][0]["current"]
+
+    def test_a_stream_with_only_flow_started_has_no_current_phase(self):
+        self.append_event("feature/x", "flow-started", {"request": "build it"})
+        feature = self.status_json()["features"][0]
+        self.assertIsNone(feature["phase"])
+        self.assertIsNone(feature["current"])
+
+    def test_an_entered_phase_is_current_with_its_time(self):
+        self.append_event("feature/x", "phase-entered", {"phase": "workspace"})
+        event = self.events("feature/x")[-1]
+        self.assertEqual(self.current(), {
+            "phase": "workspace", "entered_at": event["ts"], "implied": False,
+        })
+
+    def test_an_implied_phase_is_marked_implied(self):
+        self.append_event("feature/x", "flow-started", {"request": "build it"})
+        self.append_event("feature/x", "verify-run",
+                          {"outcome": "pass", "task_ids": ["T001"]})
+        implied = [e for e in self.events("feature/x") if e["type"] == "phase-entered"]
+        self.assertEqual(self.current(), {
+            "phase": "implement", "entered_at": implied[-1]["ts"], "implied": True,
+        })
+
+    def test_a_phase_outside_the_order_is_not_current(self):
+        """An imported row spelling a phase `Implement` is no position (fold rule)."""
+        raw = self.root / "old.jsonl"
+        raw.write_text(json.dumps({
+            "stream": "feature/x", "version": 1, "type": "phase-entered",
+            "data": {"phase": "Implement"}, "ts": "2026-10-01T09:00:00+00:00",
+            "actor": "orchestrator",
+        }) + "\n", encoding="utf-8")
+        self.journal("--db", self.db, "import", raw, rc=OK)
+        self.assertIsNone(self.current())
+
+
+class TestPhaseMarks(unittest.TestCase):
+    """A mark per phase from one stream's events: `skipped` for a phase never entered
+    before the current one, `revisited` for a later one entered before moving back
+    (audit D8)."""
+
+    def setUp(self):
+        self.journal = load_journal_module()
+        self.seq = 0
+
+    def event(self, etype, data=None):
+        self.seq += 1
+        return self.journal.Event(
+            seq=self.seq, stream="feature/x", version=self.seq, type=etype,
+            data=data or {}, ts=f"2026-10-01T09:{self.seq:02d}:00+00:00",
+            actor="orchestrator@s",
+        )
+
+    def entered(self, *phases, **extra):
+        return [self.event("phase-entered", dict(extra, phase=p)) for p in phases]
+
+    def marks(self, events):
+        return self.journal.phase_marks(events)
+
+    def expect(self, events, **by_phase):
+        """Every phase `todo` unless named (phase names with `_` for `-`)."""
+        expected = {p: "todo" for p in self.journal.PHASE_ORDER}
+        expected.update({k.replace("_", "-"): v for k, v in by_phase.items()})
+        self.assertEqual(self.marks(events), expected)
+
+    def test_no_events_marks_every_phase_todo(self):
+        self.expect([])
+
+    def test_only_flow_started_marks_every_phase_todo(self):
+        self.expect([self.event("flow-started", {"request": "x"})])
+
+    def test_every_phase_has_a_key(self):
+        marks = self.marks(self.entered("design"))
+        self.assertEqual(list(marks), self.journal.PHASE_ORDER)
+
+    def test_a_straight_walk_marks_the_earlier_phases_done(self):
+        self.expect(
+            self.entered("workspace", "route-and-map", "explore", "clarify", "design",
+                         "implement"),
+            workspace="done", route_and_map="done", explore="done", clarify="done",
+            design="done", implement="current",
+        )
+
+    def test_an_implied_jump_marks_the_phases_it_passed_skipped(self):
+        events = [self.event("flow-started", {"request": "x"})] + self.entered(
+            "design", implied=True, implied_by="design-committed",
+            skipped=["workspace", "route-and-map", "explore", "clarify"],
+        )
+        self.expect(events, workspace="skipped", route_and_map="skipped",
+                    explore="skipped", clarify="skipped", design="current")
+
+    def test_a_phase_never_entered_is_skipped_even_when_no_event_lists_it(self):
+        events = self.entered("workspace") + self.entered("clarify")
+        self.expect(events, workspace="done", route_and_map="skipped",
+                    explore="skipped", clarify="current")
+
+    def test_a_backward_transition_marks_the_later_phase_revisited(self):
+        events = self.entered("workspace", "route-and-map", "explore", "clarify",
+                              "design", "implement", "review", "implement")
+        self.expect(events, workspace="done", route_and_map="done", explore="done",
+                    clarify="done", design="done", implement="current",
+                    review="revisited")
+
+    def test_moving_back_past_several_phases_marks_each_entered_one_revisited(self):
+        events = self.entered("workspace", "design", "implement", "explore")
+        self.expect(events, workspace="done", route_and_map="skipped",
+                    explore="current", design="revisited", implement="revisited")
+
+    def test_a_phase_outside_the_order_is_ignored(self):
+        events = self.entered("workspace") + self.entered("Implement")
+        self.expect(events, workspace="current")
+
+    def test_other_events_do_not_mark_a_phase(self):
+        events = self.entered("clarify") + [
+            self.event("deviation", {"note": "x", "phase": "design"}),
+        ]
+        self.expect(events, workspace="skipped", route_and_map="skipped",
+                    explore="skipped", clarify="current")
+
+    def test_lifecycle_and_current_phase_helpers(self):
+        lifecycle = self.journal.stream_lifecycle
+        self.assertEqual(lifecycle(True, 0), "terminal")
+        self.assertEqual(lifecycle(True, None), "terminal")
+        self.assertEqual(lifecycle(False, self.journal.DORMANT_DAYS), "dormant")
+        self.assertEqual(lifecycle(False, self.journal.DORMANT_DAYS - 1), "live")
+        self.assertEqual(lifecycle(False, None), "live")
+        current = self.journal.current_phase
+        self.assertIsNone(current(None, None, False))
+        self.assertEqual(current("design", "2026-10-01T09:00:00+00:00", True), {
+            "phase": "design", "entered_at": "2026-10-01T09:00:00+00:00",
+            "implied": True,
+        })
+
 
 class TestBriefRendering(JournalTestCase):
     """FR-003: the brief pays for the last five decisions, not for all of them."""
@@ -2095,15 +2465,94 @@ class TestBranchOrdering(JournalTestCase):
         payload = self.status_json("--branch", "fix/1-b", "--nested-branch", "feature/a")
         self.assertEqual(payload["branch_match"], "fix/1-b")
 
-    def test_the_most_recently_active_nested_match_wins(self):
-        """Several nested repos sit on branches with streams — one live, the rest
-        dormant. Directory order must not decide."""
+    def test_two_live_nested_matches_bind_none(self):
+        """The 1B rule: nested checkouts are shared by other sessions, so two live
+        streams among them say nothing about this one. Both are named, newest first,
+        whatever the directory order."""
         self.seed("feature/a")
         self.seed("fix/1-b")
         self.backdate("feature/a", days=3)
         for order in (["feature/a", "fix/1-b"], ["fix/1-b", "feature/a"]):
             args = [t for b in order for t in ("--nested-branch", b)]
-            self.assertEqual(self.status_json(*args)["branch_match"], "fix/1-b", order)
+            payload = self.status_json(*args)
+            self.assertIsNone(payload["branch_match"], order)
+            self.assertEqual(payload["nested_matches"], ["fix/1-b", "feature/a"], order)
+            self.assertEqual([f["branch_match"] for f in payload["features"]],
+                             [False, False])
+
+    def test_one_live_and_one_dormant_nested_match_bind_the_live_one(self):
+        self.seed("feature/a")
+        self.seed("fix/1-b")
+        self.backdate("feature/a", days=10)
+        for order in (["feature/a", "fix/1-b"], ["fix/1-b", "feature/a"]):
+            args = [t for b in order for t in ("--nested-branch", b)]
+            payload = self.status_json(*args)
+            self.assertEqual(payload["branch_match"], "fix/1-b", order)
+            self.assertEqual(payload["nested_matches"], ["fix/1-b"], order)
+
+    def test_a_terminal_nested_match_does_not_count(self):
+        self.seed("feature/a")
+        self.append_event("feature/a", "flow-completed", {})
+        self.seed("fix/1-b")
+        payload = self.status_json("--nested-branch", "feature/a",
+                                   "--nested-branch", "fix/1-b")
+        self.assertEqual(payload["branch_match"], "fix/1-b")
+        self.assertEqual(payload["nested_matches"], ["fix/1-b"])
+
+    def test_only_dormant_nested_matches_bind_none(self):
+        self.seed("feature/a")
+        self.backdate("feature/a", days=10)
+        payload = self.status_json("--nested-branch", "feature/a")
+        self.assertIsNone(payload["branch_match"])
+        self.assertEqual(payload["nested_matches"], [])
+
+    def test_a_dormant_exact_name_does_not_hide_a_live_candidate(self):
+        """Matching runs over the live streams only, so the branch's slug finds the live
+        stream even where a dormant stream carries the branch's exact name."""
+        self.seed("fix/1-b")
+        self.backdate("fix/1-b", days=10)
+        self.seed("1-b")
+        payload = self.status_json("--nested-branch", "fix/1-b")
+        self.assertEqual(payload["branch_match"], "1-b")
+        self.assertEqual(payload["nested_matches"], ["1-b"])
+
+    def test_two_nested_branches_naming_one_live_stream_bind_it(self):
+        self.seed("feature/a")
+        payload = self.status_json("--nested-branch", "feature/a",
+                                   "--nested-branch", "a")
+        self.assertEqual(payload["branch_match"], "feature/a")
+        self.assertEqual(payload["nested_matches"], ["feature/a"])
+
+    def test_nested_matches_is_always_a_list(self):
+        """R3: [] with no nested branch, and [] when none names a live stream."""
+        self.seed("feature/a")
+        self.assertEqual(self.status_json()["nested_matches"], [])
+        self.assertEqual(self.status_json("--branch", "feature/a")["nested_matches"], [])
+        self.assertEqual(
+            self.status_json("--nested-branch", "feature/nothing")["nested_matches"], []
+        )
+
+    def test_nested_matches_are_named_when_the_own_branch_binds(self):
+        self.seed("feature/a")
+        self.seed("fix/1-b")
+        payload = self.status_json("--branch", "fix/1-b", "--nested-branch", "feature/a")
+        self.assertEqual(payload["branch_match"], "fix/1-b")
+        self.assertEqual(payload["nested_matches"], ["feature/a"])
+
+    def test_a_tie_keeps_the_order_of_the_branches(self):
+        module = load_journal_module()
+        folded = [
+            {"stream": s, "terminal": False, "age_days": 0,
+             "last_event": {"ts": "2026-10-01T09:00:00+00:00"}}
+            for s in ("feature/a", "feature/b")
+        ]
+        self.assertEqual(
+            module.nested_live_matches(["b", "a"], folded), ["feature/b", "feature/a"]
+        )
+        self.assertEqual(
+            module.nested_live_matches(["a", "b"], folded), ["feature/a", "feature/b"]
+        )
+        self.assertIsNone(module.nested_branch_match(["a", "b"], folded))
 
     def test_unmatched_nested_branches_are_not_an_error(self):
         self.seed("feature/a")
@@ -2207,8 +2656,10 @@ class TestCheck(JournalTestCase):
         )
 
     def artifact_written(self, path, stream="feature/demo", session=None):
+        # The shape PostToolUse records: `source: tool` is what makes it an author's claim.
         self.append_event(stream, "artifact-written", {
-            "path": path, "tool": "Write", "session": session or self.SESSION,
+            "path": path, "source": "tool", "tool": "Write",
+            "session": session or self.SESSION,
         })
 
     def check(self, rc=None, session=None):
@@ -2418,6 +2869,537 @@ class TestParseTickedTasks(unittest.TestCase):
             ["workspace", "route-and-map", "explore", "clarify",
              "design", "implement", "review", "capture"],
         )
+
+    def test_a_star_bullet_is_a_task_line(self):
+        """audit D9: the Stop gate reads `* [x]`, so the HUD must list it too."""
+        text = WORKLOG_TEMPLATE.format(tasks="- [x] T001 — a\n* [x] T002 — b")
+        self.assertEqual(self.journal.parse_ticked_tasks(text), ["T001", "T002"])
+
+    # parse_ticked_tasks now derives from parse_build_plan; this is its grammar before
+    # that change, kept to prove the results stay identical.
+    REFERENCE_TICKED = re.compile(r"^\s*[-*]\s*\[[xX]\]\s*(T\d+)\b", re.MULTILINE)
+    REFERENCE_HEADING = re.compile(
+        r"^(#+)\s*Build Plan\s*$", re.MULTILINE | re.IGNORECASE
+    )
+
+    def reference_ticked(self, text):
+        match = self.REFERENCE_HEADING.search(text)
+        if match:
+            level = len(match.group(1))
+            rest = text[match.end():]
+            closing = re.search(r"^#{1,%d}\s+\S" % level, rest, re.MULTILINE)
+            region = rest[: closing.start()] if closing else rest
+        else:
+            region = text
+        seen = []
+        for task_id in self.REFERENCE_TICKED.findall(region):
+            if task_id not in seen:
+                seen.append(task_id)
+        return seen
+
+    def test_the_ticked_ids_are_identical_to_the_old_grammar(self):
+        samples = [
+            WORKLOG_TEMPLATE.format(
+                tasks="- [x] T001 — a\n- [ ] T002 — b\n- [X] T010 — c"
+            ),
+            "- [x] T001 — a\n",
+            "# Build Plan\n- [ ] T001\n- [x] T001\n- [x] T002a\n- [x]T003\n",
+            "## Build Plan\n- [x] T001\n### Sub\n* [X] T002 — x\n## Next\n- [x] T009\n",
+            "### build plan   \n\n  - [x] T004 — indented\n# Top\n- [x] T005\n",
+            "-\n[x] T006 — split across lines\n- [ ]\n- [x] T007\n- [ ] \n T008\n",
+            "# Build Plan\n```\n- [x] T011 — in a fence\n```\n\t*\t[x]\tT012\n",
+            "no tasks here\n# Build Plan\n",
+            "",
+        ]
+        for text in samples:
+            with self.subTest(text=text):
+                self.assertEqual(self.journal.parse_ticked_tasks(text),
+                                 self.reference_ticked(text))
+
+
+class TestMatchesGlob(unittest.TestCase):
+    """A home matches as written, or one segment deeper. Only a leading `./` is dropped
+    from the glob: `lstrip("./")` stripped a character set and lost a dot directory."""
+
+    def setUp(self):
+        self.journal = load_journal_module()
+
+    def matches(self, path, pattern):
+        return self.journal._matches_glob(path, pattern)
+
+    def test_a_dot_directory_home_matches_one_level_down(self):
+        self.assertTrue(self.matches("pkg/.notes/x.worklog.md", ".notes/*.worklog.md"))
+        self.assertTrue(self.matches(".notes/x.worklog.md", ".notes/*.worklog.md"))
+
+    def test_a_dot_directory_home_does_not_match_the_undotted_name(self):
+        self.assertFalse(self.matches("pkg/notes/x.md", ".notes/*.md"))
+
+    def test_a_leading_dot_slash_is_still_dropped(self):
+        self.assertTrue(self.matches("pkg/docs/prd/x.md", "./docs/prd/*.md"))
+
+    def test_the_default_homes_match_as_before(self):
+        self.assertTrue(self.matches("docs/prd/x.md", "docs/prd/*.md"))
+        self.assertTrue(self.matches("/abs/repo/docs/prd/x.md", "docs/prd/*.md"))
+        self.assertFalse(self.matches("docs/other/x.md", "docs/prd/*.md"))
+
+    def test_classification_uses_the_dot_directory_home(self):
+        homes = {"prd": ".notes/*.md", "adr": ".notes/adr/*.md",
+                 "worklog": ".notes/*.worklog.md"}
+        classify = self.journal.classify_artifact
+        self.assertEqual(classify("pkg/.notes/x.md", homes), "prd")
+        self.assertEqual(classify("pkg/.notes/adr/0001.md", homes), "adr")
+        self.assertIsNone(classify("pkg/notes/x.md", homes))
+
+
+class TestParseBuildPlan(unittest.TestCase):
+    """Every Build Plan task line, with `check`'s grammar (audit D9)."""
+
+    def setUp(self):
+        self.journal = load_journal_module()
+
+    def parse(self, text):
+        return self.journal.parse_build_plan(text)
+
+    def task(self, task_id, title, section=None, ticked=False):
+        return {"id": task_id, "title": title, "section": section, "ticked": ticked}
+
+    def test_every_task_line_with_its_box(self):
+        text = WORKLOG_TEMPLATE.format(
+            tasks="- [x] T001 — a\n- [ ] T002 — b\n- [X] T010 — c\n* [x] T011 — d"
+        )
+        self.assertEqual(self.parse(text), [
+            self.task("T001", "a", ticked=True),
+            self.task("T002", "b"),
+            self.task("T010", "c", ticked=True),
+            self.task("T011", "d", ticked=True),
+        ])
+
+    def test_the_title_stops_at_the_spaced_dash_before_the_files(self):
+        line = ("- [ ] T011 [P] — `lifecycle`, phase marks — file(s): `journal.py` "
+                "— done when: tests pass")
+        self.assertEqual(self.parse(line)[0]["title"], "`lifecycle`, phase marks")
+
+    def test_an_en_dash_or_a_hyphen_separates_the_id_from_the_title(self):
+        self.assertEqual(self.parse("- [ ] T001 – a – file(s): x")[0]["title"], "a")
+        self.assertEqual(self.parse("- [ ] T001 - a - b")[0]["title"], "a - b")
+
+    def test_a_line_without_a_title_has_none_never_empty(self):
+        for line in ("- [ ] T005", "- [ ] T005 — ", "- [x] T005 [P] —"):
+            with self.subTest(line=line):
+                self.assertIsNone(self.parse(line)[0]["title"])
+
+    def test_the_section_is_the_nearest_heading_inside_the_region(self):
+        text = (
+            "# Design\n\n## Not a section\n\n# Build Plan\n\n- [ ] T000 — top\n\n"
+            "## Declarations\n- [x] T001 — a\n\n## shipgate\n- [ ] T010 — b\n"
+        )
+        self.assertEqual(self.parse(text), [
+            self.task("T000", "top"),
+            self.task("T001", "a", "Declarations", ticked=True),
+            self.task("T010", "b", "shipgate"),
+        ])
+
+    def test_a_nested_build_plan_heading_ends_at_the_next_same_level_heading(self):
+        text = (
+            "# Worklog\n\n## Build Plan\n- [ ] T001 — a\n### Sub\n- [ ] T002 — b\n"
+            "## Deviations\n- [x] T099 — not a task\n"
+        )
+        self.assertEqual(self.parse(text), [
+            self.task("T001", "a"),
+            self.task("T002", "b", "Sub"),
+        ])
+
+    def test_no_build_plan_heading_reads_the_whole_document(self):
+        text = "# Tasks\n- [x] T001 — a\n"
+        self.assertEqual(self.parse(text), [self.task("T001", "a", "Tasks", True)])
+
+    def test_an_id_must_end_at_a_word_boundary(self):
+        self.assertEqual(self.parse("- [x] T001a — x\n- [x] Tx — y\n"), [])
+
+    def test_a_repeated_id_gives_one_entry_per_line(self):
+        self.assertEqual(self.parse("- [ ] T001 — a\n- [x] T001 — b\n"), [
+            self.task("T001", "a"), self.task("T001", "b", ticked=True),
+        ])
+
+
+POSITION_KEYS = {
+    "stream", "version", "lifecycle", "current", "publish", "phases", "artifacts",
+    "tasks", "last_verify", "decisions", "verdict",
+}
+
+POSITION_WORKLOG = """# Worklog: demo
+
+# Design
+
+- [x] T900 — prose, not a task
+
+# Build Plan
+
+## Declarations
+- [x] T001 — the types — file(s): `a.py` — done when: reviewed
+- [ ] T002 [P] — the bodies
+
+## Release
+* [x] T003 — ship it
+- [ ] T001 — a repeated id
+- [ ] T004
+"""
+
+
+class TestPosition(JournalTestCase):
+    """`position --stream <s> --json`: every fact the HUD draws (ADR 0009)."""
+
+    S = "feature/demo"
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+
+    def position(self, stream=S):
+        proc = self.journal("--db", self.db, "position", "--stream", stream, "--json",
+                            rc=OK)
+        return json.loads(proc.stdout)
+
+    def last(self, stream=S):
+        return self.events(stream)[-1]
+
+    def sidecar(self, **homes):
+        claude = self.root / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "shipgate.json").write_text(
+            json.dumps({"version": 1, "artifact_homes": homes}), encoding="utf-8"
+        )
+
+    def import_row(self, stream, etype, data, ts="2026-10-01T09:00:00+00:00"):
+        """A row as an older journal.py wrote it: no shape, no gate."""
+        raw = self.root / "row.jsonl"
+        raw.write_text(json.dumps({
+            "stream": stream, "version": len(self.events(stream)) + 1, "type": etype,
+            "data": data, "ts": ts, "actor": "orchestrator",
+        }) + "\n", encoding="utf-8")
+        self.journal("--db", self.db, "import", raw, rc=OK)
+
+    def design(self, stream=S, **data):
+        data.setdefault("worklog", "docs/prd/demo.worklog.md")
+        self.append_event(stream, "design-committed", data)
+
+    def verify(self, outcome, *task_ids, stream=S):
+        self.append_event(stream, "verify-run",
+                          {"outcome": outcome, "task_ids": list(task_ids)})
+
+    # -- the envelope -------------------------------------------------------
+
+    def test_an_unknown_stream_exits_1_not_2(self):
+        """R4: exit 2 means argparse's usage error, which the HUD reads as an older
+        journal.py without `position`."""
+        proc = self.journal("--db", self.db, "position", "--stream", "feature/nope",
+                            "--json", rc=INFRA)
+        self.assertIn("feature/nope", proc.stderr)
+
+    def test_a_missing_stream_flag_is_a_usage_error(self):
+        self.journal("--db", self.db, "position", "--json", rc=USAGE)
+
+    def test_the_keys(self):
+        self.append_event(self.S, "flow-started", {"request": "build it"})
+        self.assertEqual(set(self.position()), POSITION_KEYS)
+
+    def test_a_stream_with_only_flow_started(self):
+        self.append_event(self.S, "flow-started", {"request": "build it"})
+        position = self.position()
+        self.assertEqual(position["stream"], self.S)
+        self.assertEqual(position["version"], 1)
+        self.assertEqual(position["lifecycle"], "live")
+        self.assertIsNone(position["current"])
+        self.assertEqual(set(position["phases"].values()), {"todo"})
+        self.assertEqual(position["publish"], {"kind": "held"})
+        self.assertEqual(position["artifacts"], {
+            "worklog": None, "worklog_from": None, "prd": None, "adrs": [],
+        })
+        self.assertIsNone(position["tasks"])
+        self.assertIsNone(position["last_verify"])
+        self.assertEqual(position["decisions"], [])
+        self.assertIsNone(position["verdict"])
+
+    def test_the_fold_fields_equal_the_status_brief(self):
+        self.append_event(self.S, "flow-started", {"request": "build it"})
+        self.design()
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {"verdict": "ready"})
+        feature = self.status_json("--feature", self.S)["features"][0]
+        position = self.position()
+        for key in ("stream", "version", "lifecycle", "current", "publish"):
+            self.assertEqual(position[key], feature[key], key)
+        self.assertEqual(position["publish"]["by"], "review-verdict")
+
+    def test_phases_mark_an_implied_jump_skipped(self):
+        self.append_event(self.S, "flow-started", {"request": "build it"})
+        self.design()
+        self.assertEqual(self.position()["phases"], {
+            "workspace": "skipped", "route-and-map": "skipped", "explore": "skipped",
+            "clarify": "skipped", "design": "current", "implement": "todo",
+            "review": "todo", "capture": "todo",
+        })
+
+    def test_a_terminal_stream_answers_too(self):
+        self.append_event(self.S, "flow-started", {"request": "build it"})
+        self.append_event(self.S, "flow-completed", {})
+        self.assertEqual(self.position()["lifecycle"], "terminal")
+
+    # -- artifacts ------------------------------------------------------------
+
+    def test_the_worklog_and_adrs_come_from_the_committing_events(self):
+        self.design(adrs=["docs/adr/0001-a.md", "docs/adr/0002-b.md#context"],
+                    refs=["docs/adr/0001-a.md", "docs/prd/demo.md"])
+        self.verify("pass", "T001", )
+        self.append_event(self.S, "task-done", {
+            "task_id": "T001", "refs": ["docs/adr/0003-c.md"],
+        })
+        self.assertEqual(self.position()["artifacts"], {
+            "worklog": "docs/prd/demo.worklog.md", "worklog_from": "event", "prd": None,
+            "adrs": ["docs/adr/0001-a.md", "docs/adr/0002-b.md", "docs/adr/0003-c.md"],
+        })
+
+    def test_context_refs_do_not_count(self):
+        """A flow-started, phase-entered or deviation ref is often an older slice's."""
+        self.append_event(self.S, "flow-started", {
+            "request": "x", "refs": ["docs/prd/old.worklog.md", "docs/adr/0009-old.md"],
+        })
+        self.append_event(self.S, "deviation", {
+            "note": "x", "worklog": "docs/prd/old.worklog.md",
+        })
+        artifacts = self.position()["artifacts"]
+        self.assertIsNone(artifacts["worklog"])
+        self.assertEqual(artifacts["adrs"], [])
+
+    def test_the_last_worklog_ref_wins(self):
+        self.design(worklog="docs/prd/first.worklog.md")
+        self.design(worklog="docs/prd/second.worklog.md#build-plan")
+        self.assertEqual(self.position()["artifacts"]["worklog"],
+                         "docs/prd/second.worklog.md")
+
+    def test_the_prd_is_the_last_clarify_passed_one(self):
+        self.write("docs/prd/one.md", "# one\n")
+        self.write("docs/prd/two.md", "# two\n")
+        self.append_event(self.S, "clarify-passed", {"prd": "docs/prd/one.md"})
+        self.append_event(self.S, "clarify-passed", {"prd": "docs/prd/two.md"})
+        self.assertEqual(self.position()["artifacts"]["prd"], "docs/prd/two.md")
+
+    def test_a_custom_adr_home_classifies_the_adrs(self):
+        """audit D13: the HUD hardcoded `/adr/`."""
+        self.sidecar(adr="design/decisions/*.md")
+        self.design(adrs=["design/decisions/0001-a.md", "docs/adr/0002-b.md"])
+        self.assertEqual(self.position()["artifacts"]["adrs"],
+                         ["design/decisions/0001-a.md"])
+
+    def test_unsafe_refs_are_dropped(self):
+        """R5: absolute, `..`, drive and scheme refs never reach the HUD."""
+        prd = self.write("docs/prd/demo.md", "# demo\n")
+        self.append_event(self.S, "clarify-passed", {"prd": str(prd)})
+        self.design(worklog="docs/prd/demo.worklog.md", adrs=[
+            "/etc/adr/0001.md", "\\share\\docs\\adr\\0002.md", "docs/adr/../adr/0003.md",
+            "C:/repo/docs/adr/0004.md", "file://host/docs/adr/0005.md",
+            "docs/adr/0006-ok.md",
+        ])
+        self.design(worklog="../outside/docs/prd/demo.worklog.md")
+        artifacts = self.position()["artifacts"]
+        self.assertIsNone(artifacts["prd"])
+        self.assertEqual(artifacts["adrs"], ["docs/adr/0006-ok.md"])
+        self.assertEqual(artifacts["worklog"], "docs/prd/demo.worklog.md")
+
+    # -- the worklog fallback --------------------------------------------------
+
+    def touch(self, relpath, mtime):
+        path = self.write(relpath, POSITION_WORKLOG)
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_with_no_worklog_ref_the_slug_named_worklog_is_used(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.touch("docs/prd/demo.worklog.md", 1_000)
+        self.touch("docs/prd/demo-part-two.worklog.md", 2_000)
+        self.touch("docs/prd/demonstration.worklog.md", 3_000)
+        artifacts = self.position()["artifacts"]
+        self.assertEqual(artifacts["worklog"], "docs/prd/demo-part-two.worklog.md")
+        self.assertEqual(artifacts["worklog_from"], "name")
+
+    def test_the_fallback_uses_the_last_path_segment_of_the_stream(self):
+        """R7."""
+        self.append_event("fix/1290-demo", "flow-started", {"request": "x"})
+        self.touch("docs/prd/1290-demo.worklog.md", 1_000)
+        self.assertEqual(self.position("fix/1290-demo")["artifacts"]["worklog"],
+                         "docs/prd/1290-demo.worklog.md")
+
+    def test_a_worklog_another_live_stream_names_is_left_to_it(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.touch("docs/prd/demo.worklog.md", 2_000)
+        self.touch("docs/prd/demo-old.worklog.md", 1_000)
+        self.design(stream="epic/demo", worklog="docs/prd/demo.worklog.md")
+        self.assertEqual(self.position()["artifacts"]["worklog"],
+                         "docs/prd/demo-old.worklog.md")
+
+    def test_a_claim_from_a_nested_repo_counts_by_its_tail(self):
+        """A nested repo's stream names its worklog relative to that repo."""
+        self.sidecar(worklog="*/docs/prd/*.worklog.md")
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.touch("svc/docs/prd/demo.worklog.md", 1_000)
+        self.design(stream="epic/demo", worklog="docs/prd/demo.worklog.md")
+        self.assertIsNone(self.position()["artifacts"]["worklog"])
+
+    def test_a_finished_streams_claim_does_not_count(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.touch("docs/prd/demo.worklog.md", 1_000)
+        self.design(stream="epic/demo", worklog="docs/prd/demo.worklog.md")
+        self.append_event("epic/demo", "flow-completed", {})
+        self.assertEqual(self.position()["artifacts"]["worklog"],
+                         "docs/prd/demo.worklog.md")
+
+    def test_the_fallback_reads_the_configured_worklog_home(self):
+        self.sidecar(worklog=".notes/*.worklog.md")
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.touch(".notes/demo.worklog.md", 1_000)
+        self.touch("docs/prd/demo.worklog.md", 2_000)
+        self.assertEqual(self.position()["artifacts"]["worklog"],
+                         ".notes/demo.worklog.md")
+
+    def test_no_slug_named_worklog_is_no_worklog(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.touch("docs/prd/other.worklog.md", 1_000)
+        artifacts = self.position()["artifacts"]
+        self.assertIsNone(artifacts["worklog"])
+        self.assertIsNone(artifacts["worklog_from"])
+
+    # -- tasks -----------------------------------------------------------------
+
+    def test_tasks_come_from_the_worklog_with_their_journal_state(self):
+        self.write("docs/prd/demo.worklog.md", POSITION_WORKLOG)
+        self.design()
+        self.verify("pass", "T001")
+        t001 = self.last()
+        self.append_event(self.S, "task-done", {"task_id": "T001"})
+        self.verify("pass", "T003")
+        self.verify("fail", "T003")
+        failed = self.last()
+        tasks = self.position()["tasks"]
+        self.assertEqual([t["id"] for t in tasks], ["T001", "T002", "T003", "T004"])
+        by_id = {t["id"]: t for t in tasks}
+        self.assertEqual(by_id["T001"], {
+            "id": "T001", "title": "the types", "section": "Declarations",
+            "ticked": True, "done": True,
+            "last_verify": {"outcome": "pass", "at": t001["ts"]},
+        })
+        self.assertEqual(by_id["T002"]["title"], "the bodies")
+        self.assertFalse(by_id["T002"]["done"])
+        self.assertIsNone(by_id["T002"]["last_verify"])
+        self.assertEqual(by_id["T003"]["section"], "Release")
+        self.assertTrue(by_id["T003"]["ticked"])
+        self.assertEqual(by_id["T003"]["last_verify"],
+                         {"outcome": "fail", "at": failed["ts"]})
+        self.assertIsNone(by_id["T004"]["title"])
+
+    def test_a_repeated_task_id_keeps_its_first_line(self):
+        """R6."""
+        self.write("docs/prd/demo.worklog.md", POSITION_WORKLOG)
+        self.design()
+        tasks = [t for t in self.position()["tasks"] if t["id"] == "T001"]
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["title"], "the types")
+
+    def test_tasks_from_a_nested_build_plan_heading(self):
+        self.write("docs/prd/demo.worklog.md",
+                   "# W\n\n## Build Plan\n- [ ] T001 — a\n### Sub\n* [x] T002 — b\n"
+                   "## Notes\n- [ ] T003 — not a task\n")
+        self.design()
+        tasks = self.position()["tasks"]
+        self.assertEqual([(t["id"], t["section"], t["ticked"]) for t in tasks],
+                         [("T001", None, False), ("T002", "Sub", True)])
+
+    def test_tasks_are_none_without_a_readable_worklog(self):
+        self.design(worklog="docs/prd/missing.worklog.md")
+        self.assertIsNone(self.position()["tasks"])
+
+    def test_tasks_are_empty_when_the_build_plan_lists_none(self):
+        self.write("docs/prd/demo.worklog.md", "# W\n\n# Build Plan\n\nnothing yet\n")
+        self.design()
+        self.assertEqual(self.position()["tasks"], [])
+
+    # -- verify, decisions, verdict ---------------------------------------------
+
+    def test_last_verify_is_the_last_run_that_passed_or_failed(self):
+        """R1. A row whose outcome is outside the vocabulary is dropped."""
+        self.verify("fail", "T001", "T002")
+        failed = self.last()
+        self.import_row(self.S, "verify-run", {"outcome": "green", "task_ids": ["T009"]})
+        self.assertEqual(self.position()["last_verify"], {
+            "outcome": "fail", "task_ids": ["T001", "T002"], "at": failed["ts"],
+        })
+
+    def test_decisions_are_oldest_first_with_their_real_seq(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.append_event(self.S, "gate-decision", {
+            "gate": "clarify", "question": "q1", "decision": "a", "mode": "executive",
+        })
+        first = self.last()
+        self.append_event(self.S, "gate-decision", {
+            "gate": "publish", "question": "q2", "decision": "publish", "mode": "ask",
+            "raised_by": "user", "rationale": "not printed",
+        })
+        second = self.last()
+        self.assertEqual(self.position()["decisions"], [
+            {"seq": first["seq"], "gate": "clarify", "question": "q1", "decision": "a",
+             "raised_by": "orchestrator", "mode": "executive", "at": first["ts"]},
+            {"seq": second["seq"], "gate": "publish", "question": "q2",
+             "decision": "publish", "raised_by": "user", "mode": "ask",
+             "at": second["ts"]},
+        ])
+
+    def test_an_old_decision_prints_null_for_what_it_lacks(self):
+        self.import_row(self.S, "gate-decision", {
+            "chosen": "sqlite", "decision": ["publish"], "mode": "sometimes",
+            "raised_by": "someone",
+        })
+        decision = self.position()["decisions"][0]
+        self.assertEqual(decision["gate"], None)
+        self.assertEqual(decision["question"], None)
+        self.assertEqual(decision["decision"], None)
+        self.assertEqual(decision["mode"], None)
+        self.assertEqual(decision["raised_by"], "orchestrator")
+
+    def test_the_verdict_is_the_last_review_verdict(self):
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {"verdict": "not-ready"})
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "ready",
+            "criteria": {"SC-001": "met", "SC-002": "unmet"},
+            "dispositions": {"./src/a.py:12": "fixed", "src/b.py:?": "deferred"},
+        })
+        event = self.last()
+        self.assertEqual(self.position()["verdict"], {
+            "seq": event["seq"], "at": event["ts"], "verdict": "ready",
+            "criteria": {"SC-001": "met", "SC-002": "unmet"},
+            "dispositions": {"src/a.py:12": "fixed", "src/b.py:?": "deferred"},
+        })
+
+    def test_verdict_values_outside_the_vocabularies_are_dropped(self):
+        self.import_row(self.S, "review-verdict", {
+            "verdict": "ready",
+            "criteria": {"SC-001": "met", "SC-002": "Met", "SC-003": ["met"]},
+            "dispositions": {"a.py:1": "fixed", "b.py:2": "wontfix"},
+        })
+        verdict = self.position()["verdict"]
+        self.assertEqual(verdict["criteria"], {"SC-001": "met"})
+        self.assertEqual(verdict["dispositions"], {"a.py:1": "fixed"})
+
+    def test_a_verdict_with_no_maps_has_empty_ones(self):
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {"verdict": "ready"})
+        verdict = self.position()["verdict"]
+        self.assertEqual((verdict["criteria"], verdict["dispositions"]), ({}, {}))
+
+    def test_the_human_form_names_the_stream(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        proc = self.journal("--db", self.db, "position", "--stream", self.S, rc=OK)
+        self.assertIn(self.S, proc.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -2718,6 +3700,16 @@ class TestVocabCommand(JournalTestCase):
         )
         self.assertEqual(shape["defaults"]["raised_by"], "orchestrator")
         self.assertEqual(shape["aliases"]["chosen"], "decision")
+        self.assertEqual(shape["strings"], ["decision"])
+
+    def test_the_review_verdict_shape_names_its_map_vocabularies(self):
+        out = self.journal(
+            "--db", self.db, "vocab", "--shape", "review-verdict", rc=OK
+        ).stdout
+        self.assertEqual(json.loads(out)["map_enums"], {
+            "criteria": ["met", "unmet"],
+            "dispositions": ["fixed", "rejected", "deferred"],
+        })
 
     def test_shape_of_a_shapeless_type_is_empty(self):
         out = self.journal(

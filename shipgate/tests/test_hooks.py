@@ -194,6 +194,27 @@ class TestCapture(HookTestCase):
         self.assertEqual(len(written), 1)
         self.assertEqual(written[0]["data"]["source"], "disk")
 
+    def test_file_changed_names_only_the_observer(self):
+        """ADR 0008: every session's watcher fires on a write, so the payload's session
+        saw the change and may not have made it. Its own id in the hook's environment
+        must not label the row either."""
+        result = run_hook(
+            "file_changed",
+            {
+                "session_id": SESSION,
+                "cwd": str(self.root),
+                "file_path": str(self.worklog),
+                "event": "change",
+            },
+            self.root,
+            env_extra={"CLAUDE_CODE_SESSION_ID": SESSION},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = self.events(event_type="artifact-written")[0]
+        self.assertEqual(row["data"]["observed_by"], SESSION)
+        self.assertNotIn("session", row["data"])
+        self.assertEqual(row["actor"], "hook")
+
     def test_file_changed_returns_a_refreshed_watch_list(self):
         result = run_hook(
             "file_changed",
@@ -905,14 +926,16 @@ class TestStopGate(HookTestCase):
         self.assertEqual(started.returncode, 0, started.stderr)
 
     def tick_and_capture(self, contents: str) -> None:
+        """The session ticks the box with its own Edit. A FileChanged row alone names
+        only an observer, and an observation gates nobody (ADR 0008)."""
         self.worklog.write_text(contents, encoding="utf-8")
         run_hook(
-            "file_changed",
+            "post_tool_use",
             {
                 "session_id": SESSION,
                 "cwd": str(self.root),
-                "file_path": str(self.worklog),
-                "event": "change",
+                "tool_name": "Edit",
+                "tool_input": {"file_path": str(self.worklog)},
             },
             self.root,
         )
@@ -1036,6 +1059,480 @@ class TestStopGate(HookTestCase):
         self.assertEqual(result.stdout.strip(), "", "infra failure must not block a stop")
 
 
+def load_journal_module():
+    """journal.py as a module, for the read-time fold over exported rows."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("shipgate_journal_hooks", JOURNAL)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestTwoSessionsWatchOneArtifact(HookTestCase):
+    """Two sessions watch one PRD, and only one of them writes it (ADR 0008).
+
+    Every session arms FileChanged on the same artifact homes, and a FileChanged payload names
+    the session whose hook ran, not the one that wrote. So that row names only an observer,
+    the writer's own claim survives whichever hook lands first, and the read-time fold makes
+    the writer the author in both orders: the writer is gated at Stop, the observer is not.
+    """
+
+    WRITER = "sess-writer"
+    OBSERVER = "sess-observer"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.J = load_journal_module()
+
+    def setUp(self) -> None:
+        super().setUp()
+        # the PRD's stream sits in clarify, so rule B of the Stop gate applies to its writes
+        started = journal(
+            self.db, "append", "--stream", STREAM, "--type", "phase-entered",
+            "--data", json.dumps(
+                {"phase": "clarify", "skipped": ["workspace", "route-and-map", "explore"]}
+            ),
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.prd.write_text("# PRD: feat\n\nRewritten by the writer.\n", encoding="utf-8")
+
+    def hook_as(self, session: str, name: str, payload: dict):
+        """Claude Code puts the session's own id in every hook's environment."""
+        result = run_hook(
+            name,
+            {"session_id": session, "cwd": str(self.root), **payload},
+            self.root,
+            env_extra={"CLAUDE_CODE_SESSION_ID": session},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def written_by_the_tool(self):
+        return self.hook_as(self.WRITER, "post_tool_use", {
+            "tool_name": "Write", "tool_input": {"file_path": str(self.prd)},
+        })
+
+    def written_by_bash(self):
+        return self.hook_as(self.WRITER, "post_tool_use", {
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat > docs/prd/feat.md <<'EOF'\n...\nEOF"},
+            "tool_response": {"stdout": "", "stderr": "", "interrupted": False},
+            "duration_ms": 1500,
+        })
+
+    def seen_on_disk(self, session: str):
+        return self.hook_as(session, "file_changed", {
+            "file_path": str(self.prd), "event": "change",
+        })
+
+    def stop_as(self, session: str):
+        return self.hook_as(session, "stop", {"stop_hook_active": False})
+
+    def rows(self):
+        return [
+            (r["data"]["source"], r["data"].get("session"), r["data"].get("observed_by"),
+             r["actor"])
+            for r in self.events(event_type="artifact-written")
+        ]
+
+    def assert_the_writer_is_the_author(self):
+        rows = [self.J.Event(**row) for row in self.events()]
+        key = (f"docs/prd/{SLUG}.md", os.stat(self.prd).st_mtime)
+        self.assertEqual(self.J.artifact_authors(rows), {key: self.WRITER})
+
+        self.assertEqual(self.stop_as(self.OBSERVER).stdout.strip(), "")
+        writer = json.loads(self.stop_as(self.WRITER).stdout)
+        self.assertEqual(writer["decision"], "block")
+        self.assertIn("gate-decision", writer["reason"])
+
+    def test_the_observer_lands_first(self):
+        self.seen_on_disk(self.OBSERVER)
+        self.written_by_the_tool()
+        self.seen_on_disk(self.WRITER)
+
+        self.assertEqual(self.rows(), [
+            ("disk", None, self.OBSERVER, "hook"),
+            ("tool", self.WRITER, None, "hook"),
+        ])
+        self.assert_the_writer_is_the_author()
+
+    def test_the_writer_lands_first(self):
+        self.written_by_the_tool()
+        self.seen_on_disk(self.OBSERVER)
+
+        self.assertEqual(self.rows(), [("tool", self.WRITER, None, "hook")])
+        self.assert_the_writer_is_the_author()
+
+    def test_a_bash_heredoc_is_attributed_to_its_session(self):
+        """The write no file-tool hook sees: the writer's Bash call claims it."""
+        self.seen_on_disk(self.OBSERVER)
+        self.written_by_bash()
+        self.seen_on_disk(self.WRITER)
+
+        self.assertEqual(self.rows(), [
+            ("disk", None, self.OBSERVER, "hook"),
+            ("bash", self.WRITER, None, "hook"),
+        ])
+        self.assert_the_writer_is_the_author()
+
+
+class TestBashClaims(HookTestCase):
+    """PostToolUse on Bash: a Bash call's own evidence that it wrote an artifact."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.prd.write_text("# PRD: feat\n\nWritten by a Bash call.\n", encoding="utf-8")
+
+    def bash(self, command: str, *, duration_ms=1500, diff=None, background=False,
+             tool_response=None):
+        tool_input = {"command": command, "description": "a test command"}
+        if background:
+            tool_input["run_in_background"] = True
+        response = {"stdout": "", "stderr": "", "interrupted": False, "isImage": False}
+        if diff is not None:
+            response["bashEditDiff"] = diff
+        payload = {
+            "session_id": SESSION,
+            "cwd": str(self.root),
+            "tool_name": "Bash",
+            "tool_input": tool_input,
+            "tool_response": response if tool_response is None else tool_response,
+            "tool_use_id": "toolu_test",
+        }
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        result = run_hook("post_tool_use", payload, self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        return result
+
+    def claims(self):
+        return [
+            (r["data"]["path"], r["data"]["source"], r["data"].get("evidence"),
+             r["data"].get("session"))
+            for r in self.events(event_type="artifact-written")
+        ]
+
+    def test_a_listed_artifact_is_a_diff_claim(self):
+        stray = self.root / "src" / "gen.py"
+        stray.parent.mkdir()
+        stray.write_text("x = 1\n", encoding="utf-8")
+        self.bash("python3 tools/regen.py", diff={
+            "changedFiles": [str(self.prd), str(stray)], "files": [], "moreFiles": 2,
+        })
+        self.assertEqual(self.claims(), [(f"docs/prd/{SLUG}.md", "bash", "diff", SESSION)])
+        row = self.events(event_type="artifact-written")[0]
+        self.assertEqual(row["data"]["mtime"], os.stat(self.prd).st_mtime)
+        self.assertEqual(row["data"]["tool_use_id"], "toolu_test")
+        self.assertEqual(row["actor"], "hook")
+
+    def test_an_artifact_the_diff_does_not_list_is_left_to_the_window(self):
+        """The diff never lists a file git ignores or a file in a submodule, so a
+        usable diff does not end the search: the unlisted artifacts get the window."""
+        self.bash("cat > docs/prd/feat.md <<'EOF'\n...\nEOF", diff={
+            "changedFiles": [], "files": [], "moreFiles": 0,
+        })
+        self.assertEqual(self.claims(), [(f"docs/prd/{SLUG}.md", "bash", "window", SESSION)])
+
+    def test_an_unlisted_artifact_outside_the_window_is_not_claimed(self):
+        an_hour_ago = os.stat(self.prd).st_mtime - 3600
+        os.utime(self.prd, (an_hour_ago, an_hour_ago))
+        self.bash("cat > docs/prd/feat.md <<'EOF'\n...\nEOF", diff={
+            "changedFiles": [], "files": [], "moreFiles": 0,
+        })
+        self.assertEqual(self.claims(), [])
+
+    def test_a_diff_claim_and_a_window_claim_on_two_artifacts(self):
+        self.worklog.write_text(WORKLOG_ONE_TICKED, encoding="utf-8")
+        self.bash(
+            f"python3 tools/regen.py docs/prd/{SLUG}.md"
+            f" && sed -i.bak 's/a/b/' docs/prd/{SLUG}.worklog.md",
+            diff={"changedFiles": [str(self.prd)], "files": [], "moreFiles": 1},
+        )
+        self.assertEqual(self.claims(), [
+            (f"docs/prd/{SLUG}.md", "bash", "diff", SESSION),
+            (f"docs/prd/{SLUG}.worklog.md", "bash", "window", SESSION),
+        ])
+
+    def test_a_named_artifact_written_during_the_call_is_a_window_claim(self):
+        self.bash("cat > docs/prd/feat.md <<'EOF'\n...\nEOF")
+        self.assertEqual(self.claims(), [(f"docs/prd/{SLUG}.md", "bash", "window", SESSION)])
+
+    def test_an_artifact_the_command_does_not_name_is_not_claimed(self):
+        self.bash("make docs")
+        self.assertEqual(self.claims(), [])
+
+    def test_a_name_inside_a_longer_name_is_not_a_mention(self):
+        self.bash("echo x > docs/prd/defeat.md && cp /tmp/draft.md docs/prd/feat.md.bak")
+        self.assertEqual(self.claims(), [])
+
+    def test_a_write_before_the_window_is_not_claimed(self):
+        an_hour_ago = os.stat(self.prd).st_mtime - 3600
+        os.utime(self.prd, (an_hour_ago, an_hour_ago))
+        self.bash("cat > docs/prd/feat.md <<'EOF'\n...\nEOF")
+        self.assertEqual(self.claims(), [])
+
+    # R1-F2: naming the file is not enough. The window claims only a write shape, so a
+    # session reading an artifact never claims an external editor's concurrent write.
+    READS = (
+        "cat docs/prd/feat.md",
+        "grep -n Goal docs/prd/feat.md",
+        "wc -l docs/prd/feat.md",
+        "python3 tools/check.py docs/prd/feat.md",
+        "pytest -q tests/ -k 'not slow' --maxfail=1 && cat docs/prd/feat.md",
+        "sed -n 1,5p docs/prd/feat.md",
+        "cp docs/prd/feat.md /tmp/copy.md",
+        "diff docs/prd/feat.md docs/prd/feat.worklog.md > /tmp/out.diff",
+        "cat > /tmp/notes.md <<'EOF'\nsee docs/prd/feat.md\n> docs/prd/feat.md is the PRD\n"
+        "EOF",
+        # R2-N2: a copy elsewhere that keeps the file name writes another file
+        "cp docs/prd/feat.md /tmp/feat.md",
+        "cp docs/prd/feat.md ~/backup/feat.md",
+        "cat docs/prd/feat.md > /tmp/feat.md",
+        "git show HEAD:docs/prd/feat.md > /tmp/old/feat.md",
+    )
+
+    WRITES = (
+        "cat > docs/prd/feat.md <<'EOF'\nx\nEOF",
+        "echo x >> docs/prd/feat.md",
+        "echo x >| docs/prd/feat.md",
+        "make docs 2> docs/prd/feat.md",
+        "make docs &> docs/prd/feat.md",
+        "echo x >docs/prd/feat.md",
+        "echo x > 'docs/prd/feat.md'",
+        "cd docs/prd && echo x > feat.md",
+        "echo x | tee docs/prd/feat.md",
+        "echo x | tee -a docs/prd/feat.md > /dev/null",
+        "sed -i '' 's/a/b/' docs/prd/feat.md",
+        "sed -i.bak -e 's/a/b/' docs/prd/feat.md",
+        "sed --in-place 's/a/b/' docs/prd/feat.md",
+        "perl -i -pe 's/a/b/' docs/prd/feat.md",
+        "perl -pi -e 's/a/b/' docs/prd/feat.md",
+        "mv /tmp/draft.md docs/prd/feat.md",
+        "cp -f /tmp/draft.md ./docs/prd/feat.md 2>/dev/null",
+        "install -m 644 /tmp/draft.md docs/prd/feat.md",
+        "cp /tmp/draft.md \\\n  docs/prd/feat.md",
+        # the target as a `/`-boundary suffix of the project-relative path
+        "cd docs && echo x > prd/feat.md",
+        # R2-N3: prefixes and variants the scan skips or accepts
+        "env A=1 sed -i s/a/b/ docs/prd/feat.md",
+        "env -i -u HOME A=1 cp /tmp/x docs/prd/feat.md",
+        "command cp /tmp/x docs/prd/feat.md",
+        "\\cp /tmp/x docs/prd/feat.md",
+        "sudo -u builder tee docs/prd/feat.md < /tmp/x",
+        "perl -wpi -e 's/a/b/' docs/prd/feat.md",
+        "perl -Wi -pe 's/a/b/' docs/prd/feat.md",
+        "git mv old.md docs/prd/feat.md",
+        "git mv -f old.md docs/prd/feat.md",
+        "gsed -i s/a/b/ docs/prd/feat.md",
+    )
+
+    def claims_on_a_fresh_write(self, command, diff=None):
+        """The evidence of every claim on the PRD after `command`, with the PRD stamped
+        now: a fresh mtime per command, so no claim repeats an earlier one, and the
+        write always falls inside the window."""
+        os.utime(self.prd)
+        mtime = os.stat(self.prd).st_mtime
+        self.bash(command, diff=diff)
+        return [
+            r["data"]["evidence"] for r in self.events(event_type="artifact-written")
+            if r["data"]["path"] == f"docs/prd/{SLUG}.md" and r["data"]["mtime"] == mtime
+        ]
+
+    def test_a_read_never_claims(self):
+        usable_empty_diff = {"changedFiles": [], "files": [], "moreFiles": 0}
+        for command in self.READS:
+            for diff in (None, usable_empty_diff):
+                with self.subTest(command=command, diff=diff):
+                    self.assertEqual(self.claims_on_a_fresh_write(command, diff), [])
+
+    def test_each_write_shape_is_a_window_claim(self):
+        for command in self.WRITES:
+            with self.subTest(command=command):
+                self.assertEqual(self.claims_on_a_fresh_write(command), ["window"])
+
+    def test_an_absolute_target_matches_only_the_artifact_itself(self):
+        """R2-N2: an absolute target counts only when it is the artifact's own path."""
+        self.assertEqual(self.claims_on_a_fresh_write(f"echo x > {self.prd}"), ["window"])
+        self.assertEqual(
+            self.claims_on_a_fresh_write(f"cp /tmp/x {self.root}/docs/../docs/prd/feat.md"),
+            ["window"],
+        )
+        elsewhere = self.root.parent / "elsewhere" / "docs" / "prd" / "feat.md"
+        self.assertEqual(self.claims_on_a_fresh_write(f"echo x > {elsewhere}"), [])
+
+    def test_without_a_usable_duration_there_is_no_window(self):
+        for duration in (None, "1500", True, -5, float("inf"), float("nan")):
+            with self.subTest(duration=duration):
+                self.bash("cat > docs/prd/feat.md <<'EOF'\n...\nEOF", duration_ms=duration)
+        self.assertEqual(self.claims(), [])
+
+    def test_an_unusable_diff_falls_back_to_the_window(self):
+        unusable = (
+            {"unavailable": True, "changedFiles": [str(self.prd)]},
+            {"skipped": True, "changedFiles": [str(self.prd)]},
+            {"files": [], "moreFiles": 0},
+        )
+        for diff in unusable:
+            with self.subTest(diff=diff):
+                self.bash("cat > docs/prd/feat.md <<'EOF'\n...\nEOF", diff=diff)
+        # one write, one session: the repeats of the window claim are duplicates
+        self.assertEqual(self.claims(), [(f"docs/prd/{SLUG}.md", "bash", "window", SESSION)])
+
+    def test_a_malformed_diff_is_no_diff(self):
+        malformed = (
+            "oops",
+            ["a"],
+            {"changedFiles": str(self.prd)},
+            {"changedFiles": [str(self.prd), 7]},
+            {"changedFiles": [f"docs/prd/{SLUG}.md"]},
+            {"changedFiles": [str(self.prd)], "unavailable": "yes"},
+            {"changedFiles": [str(self.prd)], "skipped": None},
+        )
+        for diff in malformed:
+            with self.subTest(diff=diff):
+                self.bash("python3 tools/regen.py", diff=diff, duration_ms=None)
+        for response in ("not an object", None, ["x"]):
+            with self.subTest(tool_response=response):
+                self.bash("python3 tools/regen.py", duration_ms=None,
+                          tool_response=response)
+        self.assertEqual(self.claims(), [])
+
+    def test_a_background_command_claims_nothing(self):
+        self.bash(
+            "cat > docs/prd/feat.md <<'EOF'\n...\nEOF", background=True,
+            diff={"changedFiles": [str(self.prd)], "files": [], "moreFiles": 1},
+        )
+        self.assertEqual(self.claims(), [])
+
+    def test_auto_capture_off_claims_nothing(self):
+        sidecar = self.root / ".claude" / "shipgate.json"
+        config = json.loads(sidecar.read_text())
+        config["enforce"]["auto_capture"] = False
+        sidecar.write_text(json.dumps(config), encoding="utf-8")
+        self.bash("cat > docs/prd/feat.md <<'EOF'\n...\nEOF")
+        self.assertEqual(self.claims(), [])
+
+    def test_a_malformed_tool_input_is_survived(self):
+        for tool_input in ("cat docs/prd/feat.md", None, ["x"]):
+            with self.subTest(tool_input=tool_input):
+                result = run_hook("post_tool_use", {
+                    "session_id": SESSION, "cwd": str(self.root), "tool_name": "Bash",
+                    "tool_input": tool_input, "duration_ms": 1500,
+                }, self.root)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stderr, "")
+        self.assertEqual(self.claims(), [])
+
+
+class TestBashHookRunsTheJournalOnlyForAClaim(StubJournalMixin, HookTestCase):
+    """Every Bash call in every project starts this hook; almost all of them claim nothing."""
+
+    # The default stub, plus a copy of what `append --batch` reads on stdin.
+    STUB = """#!/usr/bin/env python3
+import os
+import sys
+
+root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+with open(os.path.join(root, "calls.log"), "a", encoding="utf-8") as handle:
+    handle.write("\\t".join(sys.argv[1:]) + "\\n")
+if "--batch" in sys.argv[1:]:
+    with open(os.path.join(root, "batch.jsonl"), "a", encoding="utf-8") as handle:
+        handle.write(sys.stdin.read())
+"""
+
+    def batch(self) -> list[tuple[str, str]]:
+        lines = (self.plugin / "batch.jsonl").read_text(encoding="utf-8").splitlines()
+        records = [json.loads(line) for line in lines if line.strip()]
+        return [(r["data"]["path"], r["data"]["evidence"]) for r in records]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._elsewhere = tempfile.TemporaryDirectory()
+        self.elsewhere = Path(self._elsewhere.name).resolve()
+        self.addCleanup(self._elsewhere.cleanup)
+
+    def run_bash(self, cwd: Path, command: str, diff=None):
+        response = {"stdout": "", "stderr": "", "interrupted": False}
+        if diff is not None:
+            response["bashEditDiff"] = diff
+        return run_hook(
+            "post_tool_use",
+            {
+                "session_id": SESSION,
+                "cwd": str(cwd),
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "tool_response": response,
+                "duration_ms": 1500,
+            },
+            cwd,
+            hooks_dir=self.plugin / "hooks",
+        )
+
+    def test_an_unjournaled_project_never_runs_the_journal(self):
+        notes = self.elsewhere / "docs" / "prd" / "feat.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("# x\n", encoding="utf-8")
+        result = self.run_bash(
+            self.elsewhere, "cat > docs/prd/feat.md <<'EOF'\nx\nEOF",
+            diff={"changedFiles": [str(notes)], "files": [], "moreFiles": 1},
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertFalse((self.plugin / "calls.log").exists())
+        self.assertFalse((self.elsewhere / ".claude").exists())
+
+    def test_a_call_with_no_claim_never_runs_the_journal(self):
+        result = self.run_bash(self.root, "ls -la")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.plugin / "calls.log").exists())
+
+    def test_every_claim_goes_in_one_journal_run(self):
+        self.prd.write_text("# PRD v2\n", encoding="utf-8")
+        self.worklog.write_text(WORKLOG_ONE_TICKED, encoding="utf-8")
+        result = self.run_bash(self.root, "python3 tools/regen.py", diff={
+            "changedFiles": [str(self.prd), str(self.worklog)],
+            "files": [], "moreFiles": 2,
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(
+            self.journal_args("append"),
+            ["append", "--stream", "shipgate", "--batch", "--actor", "hook"],
+        )
+        self.assertEqual(self.batch(), [
+            (f"docs/prd/{SLUG}.md", "diff"), (f"docs/prd/{SLUG}.worklog.md", "diff"),
+        ])
+
+    def test_diff_and_window_claims_share_one_journal_run(self):
+        """A listed artifact is claimed once, by the diff; the window covers the rest."""
+        self.prd.write_text("# PRD v2\n", encoding="utf-8")
+        self.worklog.write_text(WORKLOG_ONE_TICKED, encoding="utf-8")
+        result = self.run_bash(
+            self.root,
+            f"python3 tools/regen.py > docs/prd/{SLUG}.md"
+            f" && sed -i.bak 's/a/b/' docs/prd/{SLUG}.worklog.md",
+            diff={"changedFiles": [str(self.prd)], "files": [], "moreFiles": 1},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.calls()), 1)
+        self.assertEqual(self.batch(), [
+            (f"docs/prd/{SLUG}.md", "diff"), (f"docs/prd/{SLUG}.worklog.md", "window"),
+        ])
+
+
+class TestHookWiring(unittest.TestCase):
+    def test_post_tool_use_fires_on_the_file_tools_and_bash(self):
+        config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
+        matchers = [entry["matcher"] for entry in config["hooks"]["PostToolUse"]]
+        self.assertEqual(matchers, ["Write|Edit|NotebookEdit|Bash"])
+
+
 class TestUnjournaledProjectIsInert(unittest.TestCase):
     """SC-004: a project that never ran setup must pay nothing, anywhere."""
 
@@ -1067,6 +1564,25 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
                 self.assertEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
                 self.assertEqual(result.stderr, "")
+
+    def test_a_bash_call_is_silent_and_creates_nothing(self):
+        result = run_hook(
+            "post_tool_use",
+            {
+                "session_id": "s",
+                "cwd": str(self.root),
+                "tool_name": "Bash",
+                "tool_input": {"command": "cat > docs/notes.md <<'EOF'\nx\nEOF"},
+                "tool_response": {"bashEditDiff": {"changedFiles": [str(self.file)]}},
+                "duration_ms": 1500,
+            },
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+        self.assertFalse((self.root / ".claude").exists())
+        self.assertEqual(list(self.root.rglob("*.db")), [])
 
     def test_no_state_is_created_anywhere(self):
         run_hook(
