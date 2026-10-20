@@ -23,7 +23,7 @@ import { PRD_WITH_CRITERIA, must } from './fixtures.review'
 /** A golden position decoded; a thrown error naming the path when it does not decode. */
 const docOf = (raw: unknown): PositionDoc => {
   const decoded = decodePosition(raw)
-  if (!decoded.ok) throw new Error(`fixture: position does not decode at ${decoded.error.path}`)
+  if (!decoded.ok) throw new Error(`fixture: position does not decode at ${decoded.error.error.path}`)
   return decoded.value
 }
 

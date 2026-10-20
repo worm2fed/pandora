@@ -9,33 +9,35 @@ import {
   decodeSidecarHomes,
   decodeStatus,
   failureText,
+  hasStatusMarker,
+  outdatedText,
 } from '../hooks/journal'
-import type { RunFailure, ShapeError } from '../types'
-import { SIDECAR } from './fixtures'
+import type { ReadFailure, ShapeError } from '../types'
+import { SIDECAR, olderStatus } from './fixtures'
 import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
 
 /** A golden document decoded; a thrown error naming the path when it does not decode (the test fails there). */
 const statusOf = (raw: unknown): StatusBrief => {
   const decoded = decodeStatus(raw)
-  if (!decoded.ok) throw new Error(`status does not decode at ${decoded.error.path}: expected ${decoded.error.expected}`)
+  if (!decoded.ok) throw new Error(`status does not decode: ${JSON.stringify(decoded.error)}`)
   return decoded.value
 }
 
 const positionOf = (raw: unknown): PositionDoc => {
   const decoded = decodePosition(raw)
-  if (!decoded.ok) throw new Error(`position does not decode at ${decoded.error.path}: expected ${decoded.error.expected}`)
+  if (!decoded.ok) throw new Error(`position does not decode at ${decoded.error.error.path}: expected ${decoded.error.error.expected}`)
   return decoded.value
 }
 
-/** Where a document that must not decode stopped; null when it decoded. */
+/** Where a document that must not decode stopped (a `BadShape`'s error); null when it decoded or was read as `Outdated`. */
 const statusError = (raw: unknown): ShapeError | null => {
   const decoded = decodeStatus(raw)
-  return decoded.ok ? null : decoded.error
+  return decoded.ok || decoded.error.kind !== 'BadShape' ? null : decoded.error.error
 }
 
 const positionError = (raw: unknown): ShapeError | null => {
   const decoded = decodePosition(raw)
-  return decoded.ok ? null : decoded.error
+  return decoded.ok ? null : decoded.error.error
 }
 
 const ALL = STATUS_GOLDEN.all
@@ -107,7 +109,6 @@ describe('journal: decodeStatus', () => {
     ['an authorization by another event', withFirstFeature({ ...FIRST, publish: { kind: 'authorized', by: 'mr-opened', seq: 3, at: '2026-10-01T11:55:00+00:00' } }), '$.features[0].publish.by'],
     ['session_match missing', { ...ALL, session_match: undefined }, '$.session_match'],
     ['branch_match of another type', { ...ALL, branch_match: 7 }, '$.branch_match'],
-    ['nested_matches missing (R3: always a list)', { ...ALL, nested_matches: undefined }, '$.nested_matches'],
     ['nested_matches null', { ...ALL, nested_matches: null }, '$.nested_matches'],
     ['a nested match that is no stream name', { ...ALL, nested_matches: [''] }, '$.nested_matches[0]'],
   ] as const) {
@@ -125,6 +126,48 @@ describe('journal: decodeStatus', () => {
 
   test('a shape error says what was expected', async () => {
     expect(statusError(withFirstFeature({ ...FIRST, lifecycle: 'asleep' }))?.expected).toMatch(/live.*dormant.*terminal/)
+  })
+})
+
+describe('journal: the 0.18 marker', () => {
+  /** The sign `decodeStatus` reads from a brief; null when it decoded or failed another way. */
+  const signOf = (raw: unknown) => {
+    const decoded = decodeStatus(raw)
+    return decoded.ok || decoded.error.kind !== 'Outdated' ? null : decoded.error.sign
+  }
+
+  test('a brief with nested_matches carries the marker, whatever its value; one without it does not', async () => {
+    expect(hasStatusMarker(ALL)).toBe(true)
+    expect(hasStatusMarker({ ...ALL, nested_matches: null })).toBe(true)
+    expect(hasStatusMarker({ ...ALL, nested_matches: 'x' })).toBe(true)
+    expect(hasStatusMarker({ features: ALL.features, session_match: null, branch_match: null })).toBe(false)
+    expect(hasStatusMarker({})).toBe(false)
+  })
+
+  test('JSON that is no object says nothing about the version: it carries no missing marker', async () => {
+    for (const raw of [null, [], 'x', 3]) expect(hasStatusMarker(raw)).toBe(true)
+  })
+
+  test('R3: a brief with no nested_matches key is Outdated (MissingMarker), never a shape error', async () => {
+    const { nested_matches: _gone, ...older } = ALL
+    expect(signOf(older)).toEqual({ kind: 'MissingMarker' })
+    expect(statusError(older)).toBeNull()
+  })
+
+  test('a brief as an older journal.py prints it is Outdated, though its features lack publish and lifecycle too', async () => {
+    for (const raw of Object.values(STATUS_GOLDEN)) expect(signOf(olderStatus(raw))).toEqual({ kind: 'MissingMarker' })
+  })
+
+  test('nested_matches present but null is a BadShape at that key, not Outdated', async () => {
+    expect(signOf({ ...ALL, nested_matches: null })).toBeNull()
+    expect(statusError({ ...ALL, nested_matches: null })?.path).toBe('$.nested_matches')
+  })
+
+  test('JSON that is no object is a BadShape at $, not Outdated', async () => {
+    for (const raw of [null, [], 'x', 3]) {
+      expect(signOf(raw)).toBeNull()
+      expect(statusError(raw)?.path).toBe('$')
+    }
   })
 })
 
@@ -254,12 +297,11 @@ describe('journal: decodeSidecarHomes', () => {
 })
 
 describe('journal: failureText', () => {
-  const failures: readonly (readonly [RunFailure, RegExp])[] = [
+  const failures: readonly (readonly [ReadFailure, RegExp])[] = [
     [{ kind: 'Cut' }, /cut/],
     [{ kind: 'CannotStart', message: 'spawn python3 ENOENT' }, /did not start: spawn python3 ENOENT/],
     [{ kind: 'Exited', exitCode: 1, stderr: "Traceback (most recent call last):\n  File x\nInfraError: stream 'feature/x' has no events\n\n" }, /exited 1: InfraError: stream 'feature\/x' has no events$/],
     [{ kind: 'Exited', exitCode: 3, stderr: '' }, /exited 3$/],
-    [{ kind: 'Unsupported', argument: 'position' }, /does not know position/],
     [{ kind: 'Truncated' }, /more output than/],
     [{ kind: 'NotJson', message: 'Unexpected token < in JSON' }, /no JSON: Unexpected token < in JSON/],
     [{ kind: 'BadShape', error: { path: '$.features[0].lifecycle', expected: 'live, dormant or terminal' } }, /\$\.features\[0\]\.lifecycle.*live, dormant or terminal/],
@@ -273,12 +315,29 @@ describe('journal: failureText', () => {
     })
   }
 
-  test('an older shipgate is told the version this HUD needs', async () => {
-    expect(failureText({ kind: 'Unsupported', argument: '--nested-branch' })).toContain(`shipgate ${MIN_SHIPGATE_VERSION}`)
-    expect(failureText({ kind: 'BadShape', error: { path: '$', expected: 'an object' } })).toContain(`shipgate ${MIN_SHIPGATE_VERSION}`)
+  test('a BadShape is a contract mismatch, not a known old version: the path and what was expected, no version', async () => {
+    const line = failureText({ kind: 'BadShape', error: { path: '$.features[0].publish', expected: 'an object' } })
+    expect(line).toBe('journal.py printed a shape this HUD does not read at $.features[0].publish (expected an object)')
+    expect(line).not.toContain(MIN_SHIPGATE_VERSION)
   })
 
   test('a long stderr line is cut, never a wall of text', async () => {
     expect(failureText({ kind: 'Exited', exitCode: 1, stderr: 'x'.repeat(5000) }).length).toBeLessThanOrEqual(240)
+  })
+})
+
+describe('journal: outdatedText', () => {
+  test('an argument argparse refused is named', async () => {
+    expect(outdatedText({ kind: 'UnknownArgument', argument: 'position' })).toBe('journal.py does not know position')
+  })
+
+  test('a missing marker names the key status --json did not print', async () => {
+    expect(outdatedText({ kind: 'MissingMarker' })).toBe('journal.py status --json printed no nested_matches key')
+  })
+
+  test('a refused argument is one line, cut, never a wall of text', async () => {
+    const line = outdatedText({ kind: 'UnknownArgument', argument: `x\n\u0007${'y'.repeat(5000)}` })
+    expect(line).not.toMatch(/[\n\r\u0000-\u001f]/)
+    expect(line.length).toBeLessThanOrEqual(240)
   })
 })

@@ -2,6 +2,20 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.6.1 — an older shipgate is a known state, not a read failure. 0.6.0 reads its facts from
+shipgate 0.18.0. Beside an older shipgate (a project install that lags behind), the publish
+gate read the mismatch as an unreadable journal and held every push. Now:
+- **The dependency.** `plugin.json` declares shipgate `>=0.18.0`. Installing or updating the
+  HUD brings a matching shipgate, and a shipgate outside the range keeps the HUD disabled.
+- **The detection.** A `journal.py` older than 0.18.0 is detected for certain: argparse
+  refuses `position`, or `status --json` lacks the `nested_matches` key that 0.18.0 always
+  prints. The band then shows a one-line notice. The pane names the minimum version and
+  says the publish gate is off, and the gate lets publishes through until shipgate is
+  updated, as it does when `journal.py` is not found. The next refresh searches for
+  `journal.py` again, so an update is picked up without a reload.
+- **Failures still hold.** Any other failed read (a locked database, a crash, a contract
+  mismatch) still holds the gate.
+
 v0.6.0 — the right stream for each session, the right stream at the gate, and a typed core.
 Needs shipgate 0.18.0 or newer.
 

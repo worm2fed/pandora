@@ -16,6 +16,7 @@ import type {
   HudView,
   Lifecycle,
   OpenRound,
+  OutdatedSign,
   Phase,
   PhaseMark,
   Position,
@@ -50,7 +51,7 @@ import {
   splitFences,
 } from './diagram'
 import { absurd } from './json'
-import { failureText } from './journal'
+import { MIN_SHIPGATE_VERSION, failureText, outdatedText } from './journal'
 import { PHASES, PHASE_SHORT, clock, isVetoable } from './position'
 import { boardsFor, criterionGlyph, dispositionIn, groupBySeverity, roundId, severityLabel, shortLocation, tickOf } from './review'
 
@@ -234,11 +235,16 @@ export function bandLines(position: Position, review: ReviewState, columns: numb
   return packSegments(summarySegments(position, review), Math.max(1, columns - BAND_BUTTON_ROOM))
 }
 
-/** The band above the prompt: the bound stream's summary packed into rows; null for any other view (nothing drawn there). */
+/**
+ * The band above the prompt: the bound stream's summary packed into rows; for `Outdated`, one
+ * notice line that the publish gate is off; null for any other view (nothing drawn there).
+ */
 export function bandOf(ui: Ui, view: HudView, actions: Actions, columns: number, review: ReviewState): El | null {
   switch (view.kind) {
     case 'Bound':
       return boundBandOf(ui, view.position, actions, columns, review)
+    case 'Outdated':
+      return outdatedBandOf(ui, actions, columns)
     case 'Off':
     case 'NoJournalScript':
     case 'Unbound':
@@ -247,6 +253,26 @@ export function bandOf(ui: Ui, view: HudView, actions: Actions, columns: number,
     default:
       return absurd(view)
   }
+}
+
+/** The band's notice under an outdated journal.py. */
+const OUTDATED_NOTICE = `shipgate is older than ${MIN_SHIPGATE_VERSION} · publish gate off`
+
+/**
+ * The band under an outdated journal.py: one warning notice line, cut to the room beside the
+ * `h hud` button (`BAND_BUTTON_ROOM`), naming MIN_SHIPGATE_VERSION and that the publish gate
+ * is off; the pane says how to update.
+ */
+function outdatedBandOf(ui: Ui, actions: Actions, columns: number): El {
+  const { Box, Text, Button } = ui
+  return (
+    <Box flexDirection="row" columnGap={2}>
+      <Text wrap="truncate-end" color="warning">
+        {fit(OUTDATED_NOTICE, Math.max(1, columns - BAND_BUTTON_ROOM))}
+      </Text>
+      <Button key="open-hud" label="hud" plain hotkey="h" dimColor onPress={() => actions.openPane()} />
+    </Box>
+  )
 }
 
 /** The bound stream's band: the first row beside the `h hud` button, the rest below it. */
@@ -974,7 +1000,9 @@ export const TAB_VIEW: Readonly<Record<Tab, TabView>> = {
  * The pane, by view: `Off` says no journal was found; `NoJournalScript` says journal.py was
  * not found and names the `journalScript` option; `Unbound` names the nearby live streams and
  * says this session drives none; `Bound` draws the timeline, the tabs and the active tab;
- * `Failed` shows `failureText(failure)` above the stale position (when one exists).
+ * `Failed` shows `failureText(failure)` above the stale position (when one exists);
+ * `Outdated` says shipgate is older than MIN_SHIPGATE_VERSION and the publish gate is off,
+ * how to update, and `outdatedText(sign)` (`outdatedPaneOf`).
  */
 export function paneOf(ui: Ui, view: HudView, state: PaneState, actions: Actions): El {
   switch (view.kind) {
@@ -990,9 +1018,34 @@ export function paneOf(ui: Ui, view: HudView, state: PaneState, actions: Actions
       const failure = `shipgate-hud: refresh failed — ${failureText(view.failure)}`
       return view.stale === null ? warningOf(ui, failure) : positionPaneOf(ui, view.stale, state, actions, failure)
     }
+    case 'Outdated':
+      return outdatedPaneOf(ui, view.sign)
     default:
       return absurd(view)
   }
+}
+
+/**
+ * The pane under an outdated journal.py: a warning that shipgate is older than
+ * MIN_SHIPGATE_VERSION and the publish gate is off, how to update (update the shipgate
+ * plugin, or point the `journalScript` option at a newer journal.py), and the sign as a dim
+ * detail line (`outdatedText`). Wrapped, never cut; no tabs: there is no position to draw.
+ */
+function outdatedPaneOf(ui: Ui, sign: OutdatedSign): El {
+  const { Box, Text } = ui
+  return (
+    <Box flexDirection="column" rowGap={1}>
+      <Text color="warning" wrap="wrap">
+        {`shipgate-hud: shipgate is older than ${MIN_SHIPGATE_VERSION} — the HUD reads nothing and the publish gate is off.`}
+      </Text>
+      <Text wrap="wrap">
+        {`Update the shipgate plugin to ${MIN_SHIPGATE_VERSION} or later (claude plugin update shipgate), or point the journalScript option at a newer journal.py.`}
+      </Text>
+      <Text dimColor wrap="wrap">
+        {outdatedText(sign)}
+      </Text>
+    </Box>
+  )
 }
 
 /** A pane of one dim line. */

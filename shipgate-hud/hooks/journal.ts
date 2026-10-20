@@ -1,7 +1,7 @@
 // The one boundary for journal.py's JSON: the decoded shapes of `status --json` and
 // `position --stream <s> --json`, the sidecar's homes, the smart constructors of the brands,
-// and the text of a journal run's failure (RunFailure itself is in the contract, because
-// HudView stores it). journal.py prints snake_case keys; the decoded shapes are camelCase. Pure: no `$` here, so the decoders run in tests on the golden file.
+// the 0.18 marker that tells an older journal.py, and the text of a journal run's failure
+// (RunFailure itself is in the contract, because HudView stores it). journal.py prints snake_case keys; the decoded shapes are camelCase. Pure: no `$` here, so the decoders run in tests on the golden file.
 // Never stored in $.state: register.tsx maps a decoded value into the stored view.
 
 import type {
@@ -16,11 +16,13 @@ import type {
   GateMode,
   IsoTime,
   Lifecycle,
+  OutdatedSign,
   Phase,
   PhaseMark,
   ProjectPath,
   PublishAuthorization,
   RaisedBy,
+  ReadFailure,
   RunFailure,
   ShapeError,
   StreamName,
@@ -41,6 +43,7 @@ import {
   decodeList,
   decodeMember,
   decodeRecord,
+  err,
   fail,
   numberOf,
   ok,
@@ -223,11 +226,38 @@ export const DEFAULT_HOMES: SidecarHomes = { globs: Object.values(DEFAULT_ARTIFA
 // Decoders and run failures
 // ---------------------------------------------------------------------------------------
 
-/** Where journal.py's JSON did not have the shape this HUD expects: a version mismatch, never a default. */
+/** Where JSON did not have the shape this HUD expects, never a default; a journal command's decoder reports it as a `BadShape`. */
 export type JournalShapeError = ShapeError
 
-/** The oldest shipgate whose journal.py prints what this HUD decodes (`position`, `nested_matches`, `publish`, `lifecycle`, `current`). */
+/** journal.py's JSON in another shape than this HUD decodes, as a run failure. */
+export type BadShape = Extract<RunFailure, { readonly kind: 'BadShape' }>
+
+/**
+ * Why a journal command's JSON gave no value: journal.py is older than MIN_SHIPGATE_VERSION
+ * (`Outdated`, the 0.18 marker missing), or the JSON has another shape (`BadShape`). The
+ * decoders of journal.py's commands return it, so a run passes it on as it is.
+ */
+export type DecodeFailure = Extract<RunFailure, { readonly kind: 'Outdated' | 'BadShape' }>
+
+/**
+ * The oldest shipgate whose journal.py prints what this HUD decodes (`position`, `nested_matches`, `publish`, `lifecycle`, `current`).
+ * An older one is a known state (`Outdated`), told by one of two signs (`OutdatedSign`).
+ */
 export const MIN_SHIPGATE_VERSION = '0.18.0'
+
+/**
+ * Does `status --json`'s JSON carry the 0.18 marker: an object with an own top-level
+ * `nested_matches` key, whatever its value? From 0.18.0 on, journal.py always prints the key
+ * (shipgate ruling R3), so an object without it is an older journal.py. Not an object: no
+ * answer about the version, so true here and a `BadShape` at `$` in `decodeStatus`.
+ */
+export function hasStatusMarker(raw: unknown): boolean {
+  const record = recordOf(raw)
+  return record === null || field(record, 'nested_matches') !== undefined
+}
+
+/** A shape decoder's failure as a journal run's: a `BadShape`. */
+const asBadShape = <A>(decoded: Result<JournalShapeError, A>): Result<BadShape, A> => (decoded.ok ? decoded : err({ kind: 'BadShape', error: decoded.error }))
 
 /** The most characters of a journal run's own text (stderr, a parser message) one failure line carries. */
 const FAILURE_DETAIL_LIMIT = 200
@@ -242,11 +272,11 @@ const oneLine = (text: string): string => {
 /** The last non-blank line of a process's stderr, as one line: a Python error ends with its cause. */
 const lastLine = (stderr: string): string => oneLine(stderr.split(/\r?\n/).filter(line => line.trim() !== '').at(-1) ?? '')
 
-/** What a journal.py that does not print this HUD's shape should be: the version, as the pane and the hold text name it. */
-const UPGRADE = `this HUD needs shipgate ${MIN_SHIPGATE_VERSION} or later`
-
-/** A run failure as one line the pane (from a stored `HudView.Failed`) and the hold text show, built when drawn. */
-export function failureText(failure: RunFailure): string {
+/**
+ * A read failure as one line the pane (from a stored `HudView.Failed`) and the hold text show,
+ * built when drawn. An outdated journal.py is no read failure: `outdatedText` names its sign.
+ */
+export function failureText(failure: ReadFailure): string {
   switch (failure.kind) {
     case 'Cut':
       return 'the journal read was cut before it finished'
@@ -256,16 +286,30 @@ export function failureText(failure: RunFailure): string {
       const cause = lastLine(failure.stderr)
       return cause === '' ? `journal.py exited ${failure.exitCode}` : `journal.py exited ${failure.exitCode}: ${cause}`
     }
-    case 'Unsupported':
-      return `journal.py does not know ${oneLine(failure.argument)}: ${UPGRADE}`
     case 'Truncated':
       return 'journal.py printed more output than the HUD reads'
     case 'NotJson':
       return `journal.py printed no JSON: ${oneLine(failure.message)}`
     case 'BadShape':
-      return `journal.py printed another shape at ${oneLine(failure.error.path)} (expected ${oneLine(failure.error.expected)}): ${UPGRADE}`
+      return `journal.py printed a shape this HUD does not read at ${oneLine(failure.error.path)} (expected ${oneLine(failure.error.expected)})`
     default:
       return absurd(failure)
+  }
+}
+
+/**
+ * How a run showed that journal.py is older than MIN_SHIPGATE_VERSION, as one line the pane's
+ * `Outdated` notice shows under its message, built when drawn: the argument argparse refused
+ * (cut to one line), or the missing `nested_matches` key.
+ */
+export function outdatedText(sign: OutdatedSign): string {
+  switch (sign.kind) {
+    case 'UnknownArgument':
+      return `journal.py does not know ${oneLine(sign.argument)}`
+    case 'MissingMarker':
+      return 'journal.py status --json printed no nested_matches key'
+    default:
+      return absurd(sign)
   }
 }
 
@@ -436,8 +480,20 @@ const listedIn =
     return features.some(feature => feature.stream === stream) ? named : fail(path, 'a stream listed in $.features, or null')
   }
 
-/** The status brief from `status --json`; a missing or mistyped key is an error, never a default. */
-export function decodeStatus(raw: unknown): Result<JournalShapeError, StatusBrief> {
+/**
+ * The status brief from `status --json`. The 0.18 marker is looked for first
+ * (`hasStatusMarker`), before any other key is decoded: an older journal.py's brief also lacks
+ * keys this HUD reads per feature (`publish`, `lifecycle`), which must not report it as a
+ * `BadShape`. No marker is `Outdated` (`MissingMarker`); with the marker, a missing or
+ * mistyped key is a `BadShape` (`decodeBrief`), never a default.
+ */
+export function decodeStatus(raw: unknown): Result<DecodeFailure, StatusBrief> {
+  if (!hasStatusMarker(raw)) return err({ kind: 'Outdated', sign: { kind: 'MissingMarker' } })
+  return asBadShape(decodeBrief(raw))
+}
+
+/** The status brief's keys, decoded once the marker is found: a missing or mistyped key is an error, never a default. */
+function decodeBrief(raw: unknown): Result<JournalShapeError, StatusBrief> {
   const brief = decodeRecord(raw, '$')
   if (!brief.ok) return brief
   const features = fieldOf(brief.value, '$', 'features', listing(decodeFeature))
@@ -633,11 +689,20 @@ const decodeVerdict: Decoder<Verdict> = (value, path) => {
 }
 
 /**
- * The stream's position from `position --stream <s> --json`; a missing or mistyped key is an
- * error, never a default. journal.py drops unsafe refs; one that gets through anyway (an
- * artifact path `projectPath` refuses) is a shape error too.
+ * The stream's position from `position --stream <s> --json`; a missing or mistyped key is a
+ * `BadShape`, never a default. Never `Outdated`: an older journal.py has no `position`, and
+ * argparse refuses it before any JSON is printed (`UnknownArgument`, read from the run).
  */
-export function decodePosition(raw: unknown): Result<JournalShapeError, PositionDoc> {
+export function decodePosition(raw: unknown): Result<BadShape, PositionDoc> {
+  return asBadShape(decodeDoc(raw))
+}
+
+/**
+ * The position's keys decoded: a missing or mistyped key is an error, never a default.
+ * journal.py drops unsafe refs; one that gets through anyway (an artifact path `projectPath`
+ * refuses) is a shape error too.
+ */
+function decodeDoc(raw: unknown): Result<JournalShapeError, PositionDoc> {
   const doc = decodeRecord(raw, '$')
   if (!doc.ok) return doc
   const stream = fieldOf(doc.value, '$', 'stream', decodeStream)

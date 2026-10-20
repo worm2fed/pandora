@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { CommandRunInput, On, PromptSubmitInput, RenderSurface } from 'claude-code'
 
-import { AUTHORIZED, EXAMPLE_FEATURE, EXAMPLE_POSITION, EXAMPLE_STREAM, SIDECAR, featureOf } from './fixtures'
+import { AUTHORIZED, EXAMPLE_FEATURE, EXAMPLE_POSITION, EXAMPLE_STREAM, SIDECAR, featureOf, olderStatus } from './fixtures'
 import type { FeatureJson, PositionJson } from './fixtures'
 import {
   BAND,
@@ -18,6 +18,7 @@ import {
   journalFaults,
   journaledWorld,
   ok,
+  printed,
   rejects,
   statusOver,
   usageError,
@@ -215,34 +216,6 @@ describe('register', () => {
     })
   }
 
-  test('a journal.py older than this HUD: the pane names the minimum shipgate version, never a guessed stream', async ($, on) => {
-    engineWorld(on)
-    const { faulted } = journalFaults(on, argv => (argv.includes('position') ? exits(usageError("argument COMMAND: invalid choice: 'position' (choose from 'init', 'append', 'status')")) : null))
-    journaledWorld(on)
-    await $.session.start(START)
-    expect(positionRuns(faulted).length).toBe(1)
-    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
-    expect(await pane.find({ type: 'Text', text: new RegExp(`does not know position: this HUD needs shipgate ${MIN_SHIPGATE_VERSION.replace(/\./g, '\\.')} or later`) })).toBeDefined()
-    await pane.unmount()
-    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
-    expect(await band.find({ key: 'open-hud' })).toBeUndefined()
-    await band.unmount()
-  })
-
-  test('a journal.py that refuses --session asks nothing more: the version message, not a branch fallback', async ($, on) => {
-    engineWorld(on)
-    const { faulted } = journalFaults(on, argv => (flagValues(argv, 'session').length > 0 ? exits(usageError('unrecognized arguments: --session=session-a')) : null))
-    const { runs } = journaledWorld(on)
-    await $.session.start(START)
-    // the one status call was refused, and nothing was asked after it
-    expect(statusRuns(faulted).length).toBe(1)
-    expect(statusRuns(runs)).toEqual([])
-    expect(positionRuns(runs)).toEqual([])
-    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
-    expect(await pane.find({ type: 'Text', text: /does not know --session=session-a: this HUD needs shipgate/ })).toBeDefined()
-    await pane.unmount()
-  })
-
   test('a status call that fails for another reason shows the error, not a fallback', async ($, on) => {
     engineWorld(on)
     const { faulted } = journalFaults(on, argv => (argv.includes('status') ? exits(exited(1, 'journal database not found')) : null))
@@ -264,7 +237,7 @@ describe('register', () => {
     await $.session.start(START)
     const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
     expect(await pane.find({ type: 'Text', text: /journal\.py exited 2: python3: can't open file/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: /this HUD needs shipgate/ })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /shipgate is older than/ })).toBeUndefined()
     await pane.unmount()
   })
 
@@ -769,6 +742,138 @@ describe('register', () => {
     }
 
     const check = ($: Engine, command: string) => $.tool.check({ tool: 'Bash', input: { command } })
+
+    describe('an older shipgate (journal.py before 0.18.0)', () => {
+      const ARGPARSE_POSITION = usageError("argument COMMAND: invalid choice: 'position' (choose from 'init', 'append', 'status')")
+      const OUTDATED_WARNING = `shipgate-hud: shipgate is older than ${MIN_SHIPGATE_VERSION} — the HUD reads nothing and the publish gate is off.`
+      const NOTICE = `shipgate is older than ${MIN_SHIPGATE_VERSION} · publish gate off`
+
+      /** A brief as journal.py older than 0.18.0 prints it, over the example journal. */
+      const olderBrief = (argv: readonly string[]) => exits(printed(JSON.stringify(olderStatus(statusOver([EXAMPLE_FEATURE])(argv)))))
+
+      /** The pane shows the Outdated notice with `detail`, and the band its one line beside the hud button. */
+      const expectOutdated = async ($: Engine, detail: string): Promise<void> => {
+        const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+        expect((await pane.find({ type: 'Text', text: OUTDATED_WARNING }))?.props.color).toBe('warning')
+        expect(await pane.find({ type: 'Text', text: detail })).toBeDefined()
+        expect(await pane.find({ type: 'Text', text: /refresh failed/ })).toBeUndefined()
+        await pane.unmount()
+        const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+        expect(await band.find({ type: 'Text', text: NOTICE })).toBeDefined()
+        expect(await band.find({ key: 'open-hud' })).toBeDefined()
+        await band.unmount()
+      }
+
+      test('argparse refuses position: Outdated in the pane and the band, and a push passes with no dialog', async ($, on) => {
+        engineWorld(on)
+        const { faulted } = journalFaults(on, argv => (argv.includes('position') ? exits(ARGPARSE_POSITION) : null))
+        journaledWorld(on)
+        const { asked } = gateWorld(on)
+        await $.session.start(START)
+        expect(positionRuns(faulted).length).toBe(1)
+        await expectOutdated($, 'journal.py does not know position')
+        expect(await check($, 'git push')).toMatchObject(BENEATH)
+        expect(asked).toEqual([])
+      })
+
+      test('argparse refuses --session: Outdated, and nothing more is asked of that journal.py', async ($, on) => {
+        engineWorld(on)
+        const { faulted } = journalFaults(on, argv => (flagValues(argv, 'session').length > 0 ? exits(usageError('unrecognized arguments: --session=session-a')) : null))
+        const { runs } = journaledWorld(on)
+        const { asked } = gateWorld(on)
+        await $.session.start(START)
+        // the one status call was refused, and nothing was asked after it
+        expect(statusRuns(faulted).length).toBe(1)
+        expect(statusRuns(runs)).toEqual([])
+        expect(positionRuns(runs)).toEqual([])
+        await expectOutdated($, 'journal.py does not know --session=session-a')
+        expect(await check($, 'git push')).toMatchObject(BENEATH)
+        expect(asked).toEqual([])
+      })
+
+      test('a pre-0.18 status (no nested_matches; no publish or lifecycle per feature): Outdated through a refresh, no position asked', async ($, on) => {
+        engineWorld(on)
+        journalFaults(on, argv => (argv.includes('status') ? olderBrief(argv) : null))
+        const { runs } = journaledWorld(on)
+        const { asked } = gateWorld(on)
+        await $.session.start(START)
+        expect(positionRuns(runs)).toEqual([])
+        await expectOutdated($, 'journal.py status --json printed no nested_matches key')
+        expect(await check($, 'git push')).toMatchObject(BENEATH)
+        expect(asked).toEqual([])
+      })
+
+      test('nested_matches present but null is a BadShape, not Outdated: the refresh failed, and a push is held', async ($, on) => {
+        engineWorld(on)
+        journalFaults(on, argv => (argv.includes('status') ? exits(printed(JSON.stringify({ ...statusOver([EXAMPLE_FEATURE])(argv), nested_matches: null }))) : null))
+        journaledWorld(on)
+        const { asked } = gateWorld(on)
+        await $.session.start(START)
+        const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+        expect(await pane.find({ type: 'Text', text: /refresh failed — journal\.py printed a shape this HUD does not read at \$\.nested_matches/ })).toBeDefined()
+        expect(await pane.find({ type: 'Text', text: OUTDATED_WARNING })).toBeUndefined()
+        await pane.unmount()
+        const verdict = await check($, 'git push')
+        expect(asked.length).toBe(1)
+        expect(asked[0]).toContain('$.nested_matches')
+        expect(verdict.decision).toBe('deny')
+      })
+
+      test('a target read that shows an older journal.py passes the push with no dialog', async ($, on) => {
+        engineWorld(on)
+        // the refresh (the session's own branch) reads a 0.18 brief; the pushed branch's read does not
+        journalFaults(on, argv => (flagValues(argv, 'branch')[0] === 'feature/x' ? olderBrief(argv) : null))
+        const { runs } = journaledWorld(on)
+        const { asked } = gateWorld(on)
+        await $.session.start(START)
+        expect(await check($, 'git push origin feature/x')).toMatchObject(BENEATH)
+        expect(asked).toEqual([])
+        // the session's own stream was read and is held: only the outdated read let the push through
+        expect(positionRuns(runs).length).toBeGreaterThan(0)
+      })
+
+      test('a target read with another shape still holds: a BadShape is no version sign', async ($, on) => {
+        engineWorld(on)
+        journalFaults(on, argv =>
+          flagValues(argv, 'branch')[0] === 'feature/x' ? exits(printed(JSON.stringify({ ...statusOver([EXAMPLE_FEATURE])(argv), nested_matches: 'x' }))) : null,
+        )
+        journaledWorld(on)
+        const { asked } = gateWorld(on)
+        await $.session.start(START)
+        const verdict = await check($, 'git push origin feature/x')
+        expect(asked.length).toBe(1)
+        expect(asked[0]).toContain('$.nested_matches')
+        expect(verdict.decision).toBe('deny')
+      })
+
+      test('after Outdated, a newer journal.py installed beside the old one is found on the next refresh', async ($, on) => {
+        engineWorld(on)
+        mock.env(on, { CLAUDE_CONFIG_DIR: '/cfg' })
+        const CACHE = '/cfg/plugins/cache/market/shipgate'
+        const OLD = `${CACHE}/0.17.0/scripts/journal.py`
+        const NEW = `${CACHE}/0.18.0/scripts/journal.py`
+        let isUpdated = false
+        // no checkout beside the plugin: only the plugin cache holds shipgate; the old version stays after the update
+        on('fs.exists', { path: /journal\.py$/ }, async (_$, e) => ({ value: e.path === OLD || (isUpdated && e.path === NEW) }))
+        on('fs.list', async (_$, e) => {
+          if (e.path === '/cfg/plugins/cache') return { value: [dir('market')] }
+          if (e.path === CACHE) return { value: isUpdated ? [dir('0.17.0'), dir('0.18.0')] : [dir('0.17.0')] }
+          return { deny: 'no such directory' }
+        })
+        journalFaults(on, argv => (argv[1] !== OLD ? null : argv.includes('status') ? olderBrief(argv) : exits(ARGPARSE_POSITION)))
+        const { runs } = journaledWorld(on)
+        appendWorld(on)
+        await $.session.start(START)
+        await expectOutdated($, 'journal.py status --json printed no nested_matches key')
+        isUpdated = true
+        await refreshByAppend($)
+        // the lookup was cleared on Outdated: the search ran again and found the newest version
+        expect(statusRuns(runs).map(argv => argv[1])).toEqual([NEW])
+        const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+        expect(await band.find({ type: 'Text', text: /feat\/example-stream/ })).toBeDefined()
+        await band.unmount()
+      })
+    })
 
     /** A journal whose example stream is reviewed: the status brief and the position both say authorized. */
     const REVIEWED = {

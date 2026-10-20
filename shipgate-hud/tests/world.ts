@@ -30,6 +30,9 @@ export const ok = (stdout: string): { readonly value: ProcessRunResult } => ({
   value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
 })
 
+/** A process that exited 0 having printed `stdout`, as a whole result (for a fault: `exits(printed(…))`). */
+export const printed = (stdout: string): ProcessRunResult => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+
 /** A process that exited `exitCode` having printed `stderr`. */
 export const exited = (exitCode: number, stderr: string): ProcessRunResult => ({ exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false })
 

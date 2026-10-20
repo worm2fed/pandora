@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { EngineInterface, On, ResolveInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { type PositionDoc, criterionId, decodePosition, eventSeq, isoTime, projectPath, streamName, taskId } from '../hooks/journal'
+import { MIN_SHIPGATE_VERSION, type PositionDoc, criterionId, decodePosition, eventSeq, isoTime, projectPath, streamName, taskId } from '../hooks/journal'
 import { clock, parseAdr, toPosition } from '../hooks/position'
 import { EMPTY_REVIEW, decodeReviewReturn, markSurvivor, roundId, toReviewBoard } from '../hooks/review'
 import {
@@ -85,7 +85,7 @@ const mountOwn = ($: Engine, requestId: string, surface: 'terminal' | 'desktop' 
 /** A golden position decoded; a thrown error naming the path when it does not decode. */
 const docOf = (raw: unknown): PositionDoc => {
   const decoded = decodePosition(raw)
-  if (!decoded.ok) throw new Error(`fixture: position does not decode at ${decoded.error.path}`)
+  if (!decoded.ok) throw new Error(`fixture: position does not decode at ${decoded.error.error.path}`)
   return decoded.value
 }
 
@@ -181,6 +181,25 @@ describe('views: the band', () => {
       await ui.unmount()
     })
   }
+
+  test('Outdated: one notice line that shipgate is older than the minimum and the publish gate is off, beside the hud button', async ($, on) => {
+    drawBand(on, { kind: 'Outdated', sign: { kind: 'MissingMarker' } })
+    const ui = await mountOwn($, BAND_DRAW, 'terminal', 120)
+    const notice = await ui.find({ type: 'Text', text: `shipgate is older than ${MIN_SHIPGATE_VERSION} · publish gate off` })
+    expect(notice?.props.color).toBe('warning')
+    expect(await ui.find({ key: 'open-hud' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: NO_BAND })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('Outdated in a narrow band: the notice is cut to the room beside the hud button', async ($, on) => {
+    const columns = 30
+    drawBand(on, { kind: 'Outdated', sign: { kind: 'UnknownArgument', argument: 'position' } })
+    const ui = await mountOwn($, BAND_DRAW, 'terminal', columns)
+    const notice = await ui.find({ type: 'Text', text: /^shipgate is older/ })
+    expect([...String(notice?.text ?? '')].length).toBeLessThanOrEqual(columns - BAND_BUTTON_ROOM)
+    await ui.unmount()
+  })
 })
 
 // T028: the band-width law over generated bound positions
@@ -389,6 +408,23 @@ describe('views: the pane, by view', () => {
     await ui.unmount()
   })
 
+  for (const [name, sign, detail] of [
+    ['an argument argparse refused', { kind: 'UnknownArgument', argument: 'position' }, 'journal.py does not know position'],
+    ['a missing marker', { kind: 'MissingMarker' }, 'journal.py status --json printed no nested_matches key'],
+  ] as const) {
+    test(`Outdated by ${name}: the minimum version, the gate off, how to update, the sign; no tabs`, async ($, on) => {
+      drawPane(on, { kind: 'Outdated', sign }, FRESH)
+      const ui = await mountOwn($, PANE_DRAW)
+      const warning = await ui.find({ type: 'Text', text: `shipgate-hud: shipgate is older than ${MIN_SHIPGATE_VERSION} — the HUD reads nothing and the publish gate is off.` })
+      expect(warning?.props.color).toBe('warning')
+      expect(await ui.find({ type: 'Text', text: /claude plugin update shipgate/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /journalScript/ })).toBeDefined()
+      expect((await ui.find({ type: 'Text', text: detail }))?.props.dimColor).toBe(true)
+      expect(await ui.find({ key: 'tab-flow' })).toBeUndefined()
+      await ui.unmount()
+    })
+  }
+
   test('Failed with nothing shown before: the failure, no tabs', async ($, on) => {
     drawPane(on, { kind: 'Failed', failure: { kind: 'Exited', exitCode: 1, stderr: 'boom\n' }, stale: null }, FRESH)
     const ui = await mountOwn($, PANE_DRAW)
@@ -398,9 +434,9 @@ describe('views: the pane, by view', () => {
   })
 
   test('Failed over a stale position: the failure above it, the stale position noted and still drawn', async ($, on) => {
-    drawPane(on, { kind: 'Failed', failure: { kind: 'Unsupported', argument: 'position' }, stale: FLOW }, FRESH)
+    drawPane(on, { kind: 'Failed', failure: { kind: 'Truncated' }, stale: FLOW }, FRESH)
     const ui = await mountOwn($, PANE_DRAW)
-    expect((await ui.find({ type: 'Text', text: /^shipgate-hud: refresh failed — journal\.py does not know position/ }))?.props.color).toBe('warning')
+    expect((await ui.find({ type: 'Text', text: /^shipgate-hud: refresh failed — journal\.py printed more output than the HUD reads/ }))?.props.color).toBe('warning')
     expect(await ui.find({ type: 'Text', text: /last position read/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: ' IMP ● ' })).toBeDefined()
     expect(await ui.find({ key: 'tab-flow' })).toBeDefined()

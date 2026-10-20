@@ -123,6 +123,23 @@ export const featureOf = (stream: string, publish: PublishJson = { kind: 'held' 
   publish,
 })
 
+/** One stream of `status --json` as a journal.py older than 0.18.0 prints it: no `publish`, no `lifecycle`. */
+export type OlderFeatureJson = Omit<FeatureJson, 'publish' | 'lifecycle'>
+
+/** `status --json` as a journal.py older than 0.18.0 prints it: no top-level `nested_matches`, and older features. */
+export interface OlderStatusJson {
+  readonly features: readonly OlderFeatureJson[]
+  readonly session_match: string | null
+  readonly branch_match: string | null
+}
+
+/** A brief as a journal.py older than 0.18.0 prints it: `nested_matches` gone, and `publish` and `lifecycle` gone from each feature. */
+export const olderStatus = (brief: StatusJson): OlderStatusJson => ({
+  features: brief.features.map(feature => ({ stream: feature.stream, current: feature.current, last_event: feature.last_event })),
+  session_match: brief.session_match,
+  branch_match: brief.branch_match,
+})
+
 /** The example stream's status entry. */
 export const EXAMPLE_FEATURE: FeatureJson = featureOf(EXAMPLE_STREAM)
 

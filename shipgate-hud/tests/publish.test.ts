@@ -19,7 +19,7 @@ import {
   type TargetBinding,
 } from '../hooks/publish'
 import { branchName, eventSeq, failureText, isoTime, streamName } from '../hooks/journal'
-import type { PublishAuthorization, RunFailure, StreamName } from '../types'
+import type { PublishAuthorization, ReadFailure, RunFailure, StreamName } from '../types'
 import { bool, forAll, listOf, pick, type Gen } from './arbitrary'
 
 /** A fixture value from a smart constructor: a null is a broken fixture, not a case. */
@@ -575,13 +575,14 @@ describe('gateVerdict', () => {
 
   const pass = (why: PassReason): GateVerdict => ({ kind: 'Pass', why })
   const unreviewed = (head: PublishHead, stream: StreamName): GateVerdict => ({ kind: 'Hold', holds: [{ kind: 'Unreviewed', head, stream }] })
-  const unreadable = (head: PublishHead, failure: RunFailure): GateVerdict => ({ kind: 'Hold', holds: [{ kind: 'Unreadable', head, failure }] })
+  const unreadable = (head: PublishHead, failure: ReadFailure): GateVerdict => ({ kind: 'Hold', holds: [{ kind: 'Unreadable', head, failure }] })
 
   const nothingToCheck: readonly (readonly [GateInputs, PassReason])[] = [
     [{ kind: 'NotPublish' }, 'NotPublish'],
     [{ kind: 'NoSurface' }, 'NoSurface'],
     [{ kind: 'NoProject' }, 'NoProject'],
     [{ kind: 'NoJournalScript' }, 'NoJournalScript'],
+    [{ kind: 'Outdated' }, 'Outdated'],
   ]
   for (const [inputs, why] of nothingToCheck) {
     test(`${inputs.kind} passes with ${why}`, async () => {

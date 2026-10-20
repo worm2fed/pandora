@@ -148,7 +148,7 @@ export type Verdict = {
 }
 
 // ---------------------------------------------------------------------------------------
-// A journal run's failure (stored by HudView.Failed, so declared here)
+// A journal run's failure (stored by HudView.Failed and HudView.Outdated, so declared here)
 // ---------------------------------------------------------------------------------------
 
 /** Where a decoded value did not have the expected shape: a JSON path (`$.features[2].stream`) and what was expected there. */
@@ -158,24 +158,43 @@ export type ShapeError = {
 }
 
 /**
+ * The certain sign that journal.py is older than the shipgate this HUD needs
+ * (`MIN_SHIPGATE_VERSION`, journal.ts); journal.py has no version command. `UnknownArgument`:
+ * a run exited 2 with argparse's usage text naming an argument this journal.py does not know
+ * (`position`, `--session`, `--nested-branch`); only that text makes an exit 2 a sign, as
+ * python3 also exits 2 for a script it cannot open. `MissingMarker`: `status --json` printed
+ * an object with no top-level `nested_matches` key, which every journal.py from 0.18.0 on
+ * prints (shipgate ruling R3); a key that is present with a wrong value is no sign.
+ */
+export type OutdatedSign =
+  | { readonly kind: 'UnknownArgument'; readonly argument: string }
+  | { readonly kind: 'MissingMarker' }
+
+/**
  * Why a journal.py run gave no value. `Cut`: the person denied or interrupted the call the
  * hook ran in. `CannotStart`: the process did not start. `Exited`: a non-zero exit, exit 1
- * for a stream `position` does not know among them. `Unsupported`: exit 2 with argparse's
- * text naming an argument (a flag or a subcommand) this journal.py does not know, an older
- * shipgate; only that text makes an exit 2 `Unsupported`. `Truncated`: stdout over the
- * engine's limit. `NotJson`: stdout did not parse. `BadShape`: it parsed into another shape.
+ * for a stream `position` does not know among them. `Outdated`: journal.py is older than the
+ * shipgate this HUD needs, and `sign` says how the run showed it; a known state, never read
+ * as a failed read. `Truncated`: stdout over the engine's limit. `NotJson`: stdout did not
+ * parse. `BadShape`: it parsed into another shape, the marker present.
  */
 export type RunFailure =
   | { readonly kind: 'Cut' }
   | { readonly kind: 'CannotStart'; readonly message: string }
   | { readonly kind: 'Exited'; readonly exitCode: number; readonly stderr: string }
-  | { readonly kind: 'Unsupported'; readonly argument: string }
+  | { readonly kind: 'Outdated'; readonly sign: OutdatedSign }
   | { readonly kind: 'Truncated' }
   | { readonly kind: 'NotJson'; readonly message: string }
   | { readonly kind: 'BadShape'; readonly error: ShapeError }
 
-/** A run failure other than a cut: a cut refresh writes nothing, so it is never a failure to show. */
-export type RefreshFailure = Exclude<RunFailure, { readonly kind: 'Cut' }>
+/**
+ * A run failure that says nothing certain about journal.py's version: the journal could not
+ * be read. The publish gate holds on one (`Hold.Unreadable`); an `Outdated` run never gets here.
+ */
+export type ReadFailure = Exclude<RunFailure, { readonly kind: 'Outdated' }>
+
+/** A read failure other than a cut, as `HudView.Failed` stores it: a cut refresh writes nothing, so it is never a failure to show. */
+export type RefreshFailure = Exclude<ReadFailure, { readonly kind: 'Cut' }>
 
 // ---------------------------------------------------------------------------------------
 // Position v2: the stream the session is bound to, as the band and the pane draw it
@@ -268,7 +287,12 @@ export type BindingVia = 'Session' | 'Branch'
  * `Unbound`: the session drives no stream; `nearby` are the live streams the checkout names.
  * `Bound`: the session's stream. `Failed`: the last refresh could not read the journal; the
  * text is built from `failure` when drawn (`failureText`); `stale` is the position shown
- * before it, null when none.
+ * before it, null when none. `Outdated`: journal.py is older than the shipgate this HUD
+ * needs, so the HUD reads nothing and the publish gate is off; `sign` is how the last
+ * refresh showed it, drawn as the pane's detail line (`outdatedText`).
+ *
+ * Stored under the shape tag `shipgate-hud.view-v3`: v2's `Failed` could hold the removed
+ * `Unsupported` failure, which no drawing code knows, so a v2 value reads as absent.
  */
 export type HudView =
   | { readonly kind: 'Off' }
@@ -276,6 +300,7 @@ export type HudView =
   | { readonly kind: 'Unbound'; readonly nearby: readonly StreamName[] }
   | { readonly kind: 'Bound'; readonly via: BindingVia; readonly position: Position }
   | { readonly kind: 'Failed'; readonly failure: RefreshFailure; readonly stale: Position | null }
+  | { readonly kind: 'Outdated'; readonly sign: OutdatedSign }
 
 // ---------------------------------------------------------------------------------------
 // ReviewState v2: the captured review rounds, the user's marks and ticks

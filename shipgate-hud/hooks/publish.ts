@@ -3,7 +3,7 @@
 // need `$`) and builds one GateInputs value; `gateVerdict` decides. No `$` here, so the tests
 // run it without an engine.
 
-import type { BranchName, PublishAuthorization, RunFailure, StreamName } from '../types'
+import type { BranchName, PublishAuthorization, ReadFailure, StreamName } from '../types'
 import { failureText } from './journal'
 import { absurd } from './json'
 
@@ -62,22 +62,24 @@ export type CommandScan =
  * The stream of the branch a publish command publishes. `Stream`: the branch has one, with its
  * publish authorization. `NoStream`: the branch was resolved, and no stream carries it.
  * `Unresolved`: no one branch could be named (several refspecs, `--all`, `--mirror`, a
- * deletion, a detached HEAD); `why` says which. `Unknown`: reading it failed.
+ * deletion, a detached HEAD); `why` says which. `Unknown`: reading it failed. A read that
+ * shows an outdated journal.py is no target: the whole line's inputs are `Outdated`.
  */
 export type TargetBinding =
   | { readonly kind: 'Stream'; readonly branch: BranchName; readonly stream: StreamName; readonly publish: PublishAuthorization }
   | { readonly kind: 'NoStream'; readonly branch: BranchName }
   | { readonly kind: 'Unresolved'; readonly why: string }
-  | { readonly kind: 'Unknown'; readonly failure: RunFailure }
+  | { readonly kind: 'Unknown'; readonly failure: ReadFailure }
 
 /**
  * The session's own stream at the gate, read fresh: the fallback for a target with no stream.
- * `Stream`: the session is bound. `None`: it drives no stream. `Unknown`: reading it failed.
+ * `Stream`: the session is bound. `None`: it drives no stream. `Unknown`: reading it failed. A
+ * refresh that shows an outdated journal.py is no bound stream: the inputs are `Outdated`.
  */
 export type BoundStream =
   | { readonly kind: 'Stream'; readonly stream: StreamName; readonly publish: PublishAuthorization }
   | { readonly kind: 'None' }
-  | { readonly kind: 'Unknown'; readonly failure: RunFailure }
+  | { readonly kind: 'Unknown'; readonly failure: ReadFailure }
 
 /** One publish command of a line, and the stream of the branch it publishes. */
 export interface PublishTarget {
@@ -86,25 +88,29 @@ export interface PublishTarget {
 }
 
 /**
- * Everything the gate decides on, built once per checked line. The first four pass with
+ * Everything the gate decides on, built once per checked line. The first five pass with
  * nothing to check: the line publishes nothing (or is opaque), the session draws no surface,
- * the project has no sidecar, journal.py was not found. `Target`: the line's publishes to
- * check, one entry per publish command in textual order, and the session's bound stream.
+ * the project has no sidecar, journal.py was not found, or journal.py is older than the
+ * shipgate this HUD needs (`Outdated`: the gate's refresh or one of its target reads showed
+ * it). The gate is a net for a forgetful model, not a boundary: during a known version skew
+ * it is off, and the pane and the band say so. `Target`: the line's publishes to check, one
+ * entry per publish command in textual order, and the session's bound stream.
  */
 export type GateInputs =
   | { readonly kind: 'NotPublish' }
   | { readonly kind: 'NoSurface' }
   | { readonly kind: 'NoProject' }
   | { readonly kind: 'NoJournalScript' }
+  | { readonly kind: 'Outdated' }
   | { readonly kind: 'Target'; readonly targets: readonly [PublishTarget, ...PublishTarget[]]; readonly bound: BoundStream }
 
 /** Why a publish is held: its stream lacks the evidence `mr-opened` demands, or the journal could not be read. */
 export type Hold =
   | { readonly kind: 'Unreviewed'; readonly head: PublishHead; readonly stream: StreamName }
-  | { readonly kind: 'Unreadable'; readonly head: PublishHead; readonly failure: RunFailure }
+  | { readonly kind: 'Unreadable'; readonly head: PublishHead; readonly failure: ReadFailure }
 
-/** Why a command passes. */
-export type PassReason = 'NotPublish' | 'NoSurface' | 'NoProject' | 'NoJournalScript' | 'Authorized' | 'NoStream'
+/** Why a command passes. `Outdated`: journal.py is older than the shipgate this HUD needs, so the gate is off. */
+export type PassReason = 'NotPublish' | 'NoSurface' | 'NoProject' | 'NoJournalScript' | 'Outdated' | 'Authorized' | 'NoStream'
 
 /** Every hold on a checked line, in textual order: at least one. */
 export type Holds = readonly [Hold, ...Hold[]]
@@ -149,7 +155,8 @@ export function scanCommand(command: string): CommandScan {
  * when any command holds, and the hold names every command that holds, in textual order (one "Let
  * it through once" covers the line, so the person is asked about all of them); it passes only
  * when every command passes, `Authorized` when any was checked against a stream. A failed read
- * never passes.
+ * never passes; an outdated journal.py (`Outdated`) passes with nothing checked, as a missing
+ * one does.
  */
 export function gateVerdict(inputs: GateInputs): GateVerdict {
   switch (inputs.kind) {
@@ -157,6 +164,7 @@ export function gateVerdict(inputs: GateInputs): GateVerdict {
     case 'NoSurface':
     case 'NoProject':
     case 'NoJournalScript':
+    case 'Outdated':
       return { kind: 'Pass', why: inputs.kind }
     case 'Target': {
       const [first, ...rest] = inputs.targets

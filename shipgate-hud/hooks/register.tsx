@@ -10,11 +10,30 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, FsEntry, ProcessRunResult, Register, ResolveInput } from 'claude-code'
 
-import type { Adr, BindingVia, BranchName, CriterionId, Decision, HudView, OpenRound, Position, RefreshFailure, ReviewMark, ReviewState, RoundId, RunFailure, StreamName, Tab } from '../types'
+import type {
+  Adr,
+  BindingVia,
+  BranchName,
+  CriterionId,
+  Decision,
+  HudView,
+  OpenRound,
+  OutdatedSign,
+  Position,
+  ReadFailure,
+  RefreshFailure,
+  ReviewMark,
+  ReviewState,
+  RoundId,
+  RunFailure,
+  StreamName,
+  Tab,
+} from '../types'
 import { type Result, absurd, err, ok, parseJson, recordOf, stringOf } from './json'
 import {
+  type BadShape,
   DEFAULT_HOMES,
-  type JournalShapeError,
+  type DecodeFailure,
   type PositionDoc,
   type SidecarHomes,
   type StatusBrief,
@@ -76,11 +95,14 @@ type Engine = EngineInterface
 /** A journal run's value, or why there is none. */
 export type Run<A> = Result<RunFailure, A>
 
-/** Why a `$` call rejected: the person cut it, or it could not run. */
+/** Why a `$` call rejected: the person cut it, or it could not run. Only a journal run says more (`outcomeOf`). */
 type Rejection = Extract<RunFailure, { readonly kind: 'Cut' | 'CannotStart' }>
 
+/** A journal run's sign that journal.py is older than the shipgate this HUD needs. */
+type Outdated = Extract<RunFailure, { readonly kind: 'Outdated' }>
+
 /** The cut: the person denied or interrupted the call the hook runs in. */
-const CUT_FAILURE: RunFailure = { kind: 'Cut' }
+const CUT_FAILURE: Rejection = { kind: 'Cut' }
 
 /**
  * A `$` call's value, or why it rejected (`classifyRejection`). One of the two places a `try`
@@ -105,7 +127,7 @@ function settleSync<A>(call: () => A): Result<Rejection, A> {
 }
 
 /** A `$` call's value; `fallback` when it rejects for any reason but a cut, which stays a `Cut` failure. */
-async function attempt<A>(call: () => Promise<A>, fallback: A): Promise<Run<A>> {
+async function attempt<A>(call: () => Promise<A>, fallback: A): Promise<Result<Rejection, A>> {
   const settled = await settle(call)
   return settled.ok || settled.error.kind === 'Cut' ? settled : ok(fallback)
 }
@@ -136,17 +158,20 @@ function unknownArgumentOf(stderr: string): string | null {
   return argument === undefined ? null : argument.trim()
 }
 
-/** A finished journal.py run as a value: its decoded stdout, or why there is none. */
-function outcomeOf<A>(ran: ProcessRunResult, decode: (raw: unknown) => Result<JournalShapeError, A>): Run<A> {
+/**
+ * A finished journal.py run as a value: its decoded stdout, or why there is none. An argument
+ * argparse refused is `Outdated` (`UnknownArgument`); the decoder says `Outdated`
+ * (`MissingMarker`) or `BadShape` for the JSON, passed on as it is.
+ */
+function outcomeOf<A>(ran: ProcessRunResult, decode: (raw: unknown) => Result<DecodeFailure, A>): Run<A> {
   if (ran.exitCode !== 0) {
     const argument = ran.exitCode === EXIT_USAGE ? unknownArgumentOf(ran.stderr) : null
-    return err(argument === null ? { kind: 'Exited', exitCode: ran.exitCode, stderr: ran.stderr } : { kind: 'Unsupported', argument })
+    return err(argument === null ? { kind: 'Exited', exitCode: ran.exitCode, stderr: ran.stderr } : { kind: 'Outdated', sign: { kind: 'UnknownArgument', argument } })
   }
   if (ran.isStdoutTruncated) return err({ kind: 'Truncated' })
   const parsed = parseJson(ran.stdout)
   if (!parsed.ok) return err({ kind: 'NotJson', message: parsed.error.message })
-  const decoded = decode(parsed.value)
-  return decoded.ok ? decoded : err({ kind: 'BadShape', error: decoded.error })
+  return decode(parsed.value)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -154,7 +179,7 @@ function outcomeOf<A>(ran: ProcessRunResult, decode: (raw: unknown) => Result<Jo
 // ---------------------------------------------------------------------------------------
 
 /** Does the path exist? Any rejection but a cut reads as no; a cut is a `Cut` failure (D3). */
-const existsRun = ($: Engine, path: string): Promise<Run<boolean>> => attempt(() => $.fs.exists(path), false)
+const existsRun = ($: Engine, path: string): Promise<Result<Rejection, boolean>> => attempt(() => $.fs.exists(path), false)
 
 /** A file's text; null when it cannot be read. */
 const readText = async ($: Engine, path: string): Promise<string | null> => {
@@ -163,7 +188,7 @@ const readText = async ($: Engine, path: string): Promise<string | null> => {
 }
 
 /** A file's text; null when it cannot be read for any reason but a cut, which is a `Cut` failure. */
-const readRun = ($: Engine, path: string): Promise<Run<string | null>> => attempt<string | null>(() => $.fs.read(path), null)
+const readRun = ($: Engine, path: string): Promise<Result<Rejection, string | null>> => attempt<string | null>(() => $.fs.read(path), null)
 
 /** What a path leads to (a link followed); null when it cannot be stat'ed. */
 const statOf = async ($: Engine, path: string): Promise<{ readonly kind: string; readonly size: number } | null> => {
@@ -172,7 +197,7 @@ const statOf = async ($: Engine, path: string): Promise<{ readonly kind: string;
 }
 
 /** A directory's entries; [] when it cannot be listed for any reason but a cut, which is a `Cut` failure. */
-const listRun = ($: Engine, path: string): Promise<Run<readonly FsEntry[]>> => attempt<readonly FsEntry[]>(() => $.fs.list(path), [])
+const listRun = ($: Engine, path: string): Promise<Result<Rejection, readonly FsEntry[]>> => attempt<readonly FsEntry[]>(() => $.fs.list(path), [])
 
 /**
  * The review return of a task whose notification text carries a cut result: read whole from the
@@ -243,7 +268,7 @@ const inProject = (path: string): string => (path.startsWith('/') || projectRoot
  * a session opened inside a nested repo of an umbrella finds the umbrella's journal this way,
  * as shipgate's hooks do. Null when no ancestor has a sidecar; a cut is a `Cut` failure.
  */
-async function sidecarAbove($: Engine, dir: string): Promise<Run<string | null>> {
+async function sidecarAbove($: Engine, dir: string): Promise<Result<Rejection, string | null>> {
   const isHere = await existsRun($, `${dir === '/' ? '' : dir}/${SIDECAR}`)
   if (!isHere.ok) return isHere
   if (isHere.value) return ok(dir)
@@ -253,7 +278,7 @@ async function sidecarAbove($: Engine, dir: string): Promise<Run<string | null>>
 }
 
 /** The project the session is in: the sidecar at the session root or above it (`sidecarAbove`). */
-const locateProject = async ($: Engine): Promise<Run<string | null>> => sidecarAbove($, await sessionRoot($))
+const locateProject = async ($: Engine): Promise<Result<Rejection, string | null>> => sidecarAbove($, await sessionRoot($))
 
 /** A written path relative to the project root; null when it lies outside it. */
 async function projectRelative($: Engine, path: string): Promise<string | null> {
@@ -364,9 +389,10 @@ export async function locateJournal($: Engine, journalScript: string): Promise<R
  * One journal.py run in the project root (`python3 <script> <args>`), its stdout parsed (the
  * declared cast boundary for process stdout) and decoded. Every failure is a value: a rejected
  * `$` call is classified by `classifyRejection`; exit 2 with argparse's text naming an argument
- * is `Unsupported`; any other non-zero exit is `Exited`; a truncated stdout is `Truncated`.
+ * is `Outdated`; any other non-zero exit is `Exited`; a truncated stdout is `Truncated`; the
+ * decoder's `Outdated` or `BadShape` is passed on.
  */
-async function runJournal<A>($: Engine, script: string, args: readonly string[], decode: (raw: unknown) => Result<JournalShapeError, A>): Promise<Run<A>> {
+async function runJournal<A>($: Engine, script: string, args: readonly string[], decode: (raw: unknown) => Result<DecodeFailure, A>): Promise<Run<A>> {
   const ran = await settle(() => $.process.run(['python3', script, ...args], { timeoutMs: 10_000, ...(projectRoot === null ? {} : { cwd: projectRoot }) }))
   return ran.ok ? outcomeOf(ran.value, decode) : ran
 }
@@ -376,7 +402,7 @@ async function runJournal<A>($: Engine, script: string, args: readonly string[],
  * itself); null when detached or not a repo (git exits non-zero). A run that could not start,
  * or a cut, is a failure.
  */
-async function branchIn($: Engine, dir: string | null): Promise<Run<BranchName | null>> {
+async function branchIn($: Engine, dir: string | null): Promise<Result<Rejection, BranchName | null>> {
   const argv = dir === null ? ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] : ['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']
   const root = await sessionRoot($)
   const ran = await settle(() => $.process.run(argv, { timeoutMs: 5_000, cwd: root }))
@@ -424,13 +450,15 @@ export type Binding =
 
 /**
  * One refresh's outcome. `NoProject`: no sidecar here or above. `NoJournalScript`: journal.py
- * was not found. `Cut`: the person cut the call the refresh ran in; nothing is written.
- * `Failed`: a journal run failed, never read as "no stream". `Unbound` / `Bound`: as `Binding`,
- * with the bound stream's position.
+ * was not found. `Outdated`: a journal run showed journal.py older than the shipgate this HUD
+ * needs (`sign`: how); a known state, never a failure. `Cut`: the person cut the call the
+ * refresh ran in; nothing is written. `Failed`: a journal run failed, never read as "no
+ * stream". `Unbound` / `Bound`: as `Binding`, with the bound stream's position.
  */
 export type Refreshed =
   | { readonly kind: 'NoProject' }
   | { readonly kind: 'NoJournalScript' }
+  | { readonly kind: 'Outdated'; readonly sign: OutdatedSign }
   | { readonly kind: 'Cut' }
   | { readonly kind: 'Failed'; readonly failure: RefreshFailure }
   | { readonly kind: 'Unbound'; readonly nearby: readonly StreamName[] }
@@ -440,14 +468,29 @@ const NO_PROJECT: Refreshed = { kind: 'NoProject' }
 const NO_JOURNAL_SCRIPT: Refreshed = { kind: 'NoJournalScript' }
 const CUT: Refreshed = { kind: 'Cut' }
 
-/** A failed run as a refresh's outcome: a cut writes nothing; any other failure is shown. */
-const refreshedOf = (failure: RunFailure): Refreshed => (failure.kind === 'Cut' ? CUT : { kind: 'Failed', failure })
+/** A failed run as a refresh's outcome: a cut writes nothing; an outdated journal.py is `Outdated`; any other failure is shown. */
+function refreshedOf(failure: RunFailure): Refreshed {
+  switch (failure.kind) {
+    case 'Cut':
+      return CUT
+    case 'Outdated':
+      return { kind: 'Outdated', sign: failure.sign }
+    case 'CannotStart':
+    case 'Exited':
+    case 'Truncated':
+    case 'NotJson':
+    case 'BadShape':
+      return { kind: 'Failed', failure }
+    default:
+      return absurd(failure)
+  }
+}
 
-/** A brief whose top-level name points at no listed stream: the decoder refuses one, so this is a version mismatch, never "no stream". */
-const unlisted = (stream: StreamName): RunFailure => ({ kind: 'BadShape', error: { path: '$.features', expected: `the stream ${stream} the brief names` } })
+/** A brief whose top-level name points at no listed stream: the decoder refuses one, so this is a shape error, never "no stream". */
+const unlisted = (stream: StreamName): BadShape => ({ kind: 'BadShape', error: { path: '$.features', expected: `the stream ${stream} the brief names` } })
 
 /** The brief's entry for `stream`. */
-const featureNamed = (brief: StatusBrief, stream: StreamName): Run<StatusFeature> => {
+const featureNamed = (brief: StatusBrief, stream: StreamName): Result<BadShape, StatusFeature> => {
   const feature = brief.features.find(listed => listed.stream === stream)
   return feature === undefined ? err(unlisted(stream)) : ok(feature)
 }
@@ -663,8 +706,8 @@ export async function refreshPosition($: Engine, script: string): Promise<Refres
 
 /**
  * The stored view after a refresh. `Cut` keeps `before` as it was; `Failed` stores the failure
- * with `before`'s position (bound, or already stale) as stale; `NoJournalScript` and the
- * others map to their own view; `NoProject` is `Off`.
+ * with `before`'s position (bound, or already stale) as stale; `Outdated` stores its sign and
+ * no position; `NoJournalScript` and the others map to their own view; `NoProject` is `Off`.
  */
 function viewAfter(refreshed: Refreshed, before: HudView): HudView {
   switch (refreshed.kind) {
@@ -674,6 +717,8 @@ function viewAfter(refreshed: Refreshed, before: HudView): HudView {
       return OFF
     case 'NoJournalScript':
       return { kind: 'NoJournalScript' }
+    case 'Outdated':
+      return { kind: 'Outdated', sign: refreshed.sign }
     case 'Failed':
       return { kind: 'Failed', failure: refreshed.failure, stale: shownPositionOf(before) }
     case 'Unbound':
@@ -691,7 +736,7 @@ const boundStreamOf = (shown: HudView): StreamName | null => (shown.kind === 'Bo
 /** The view before the first refresh, and after a project loses its sidecar. */
 const OFF: HudView = { kind: 'Off' }
 
-const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v2' })
+const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v3' })
 const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null)
 const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null)
 const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, EMPTY_REVIEW, { shape: 'shipgate-hud.review-v2' })
@@ -765,7 +810,7 @@ const uiOf = ($: Engine, e: ResolveInput): Ui =>
 const isJournaled = async ($: Engine): Promise<boolean> => (await read($, view)).kind !== 'Off'
 
 /** Locate the project again; a project with no sidecar turns the view `Off`. A cut writes nothing and is a `Cut` failure. */
-async function detect($: Engine): Promise<Run<boolean>> {
+async function detect($: Engine): Promise<Result<Rejection, boolean>> {
   const located = await locateProject($)
   if (!located.ok) return located
   projectRoot = located.value
@@ -789,10 +834,17 @@ async function journalScriptOf($: Engine): Promise<Run<string | null>> {
 
 /**
  * A refresh with `path`, searched again once when a run exited and the script is gone (a
- * plugin cache update moved it: python3 exits 2 for a file it cannot open).
+ * plugin cache update moved it: python3 exits 2 for a file it cannot open). An `Outdated`
+ * refresh clears the lookup: a newer journal.py may sit beside this one (a plugin cache update
+ * keeps the old version), and the next refresh searches again. Only the next one: no refresh
+ * searches twice.
  */
 async function refreshWith($: Engine, path: string): Promise<Refreshed> {
   const refreshed = await refreshPosition($, path)
+  if (refreshed.kind === 'Outdated') {
+    script = NOT_SEARCHED
+    return refreshed
+  }
   if (refreshed.kind !== 'Failed' || refreshed.failure.kind !== 'Exited') return refreshed
   const isThere = await existsRun($, path)
   if (!isThere.ok) return CUT
@@ -928,6 +980,7 @@ const shownPositionOf = (shown: HudView): Position | null => {
     case 'Off':
     case 'NoJournalScript':
     case 'Unbound':
+    case 'Outdated':
       return null
     default:
       return absurd(shown)
@@ -1061,14 +1114,17 @@ interface Resolution {
   readonly read: readonly BranchRead[]
 }
 
-/** The stream of `branch` and its `publish`, from one `status --branch` call. */
-async function branchTarget($: Engine, script: string, branch: BranchName): Promise<TargetBinding> {
+/** The stream of `branch` and its `publish`, from one `status --branch` call; `Outdated` when the read shows an older journal.py. */
+async function branchTarget($: Engine, script: string, branch: BranchName): Promise<Result<Outdated, TargetBinding>> {
   const brief = await runJournal($, script, ['status', '--json', `--branch=${branch}`], decodeStatus)
-  if (!brief.ok) return { kind: 'Unknown', failure: brief.error }
+  if (!brief.ok) {
+    const failure = brief.error
+    return failure.kind === 'Outdated' ? err(failure) : ok({ kind: 'Unknown', failure })
+  }
   const stream = brief.value.branchMatch
-  if (stream === null) return { kind: 'NoStream', branch }
+  if (stream === null) return ok({ kind: 'NoStream', branch })
   const feature = featureNamed(brief.value, stream)
-  return feature.ok ? { kind: 'Stream', branch, stream, publish: feature.value.publish } : { kind: 'Unknown', failure: feature.error }
+  return ok(feature.ok ? { kind: 'Stream', branch, stream, publish: feature.value.publish } : { kind: 'Unknown', failure: feature.error })
 }
 
 /**
@@ -1076,19 +1132,24 @@ async function branchTarget($: Engine, script: string, branch: BranchName): Prom
  * `status --branch` call; a branch in `read` (an earlier command's) is not read again.
  * `ref.Unresolved` gives `Unresolved{why}`. `ref.Branch` is that branch, and `dir` is not
  * needed. `ref.Head` in a `dir.Unreadable` gives `Unresolved{why}`. Otherwise it is the HEAD of
- * `dir`, resolved against the shell's directory.
+ * `dir`, resolved against the shell's directory. A read that shows an older journal.py is
+ * `Outdated`, and no later command is read.
  */
-async function resolveTarget($: Engine, script: string, command: PublishCommand, read: readonly BranchRead[]): Promise<Resolution> {
+async function resolveTarget($: Engine, script: string, command: PublishCommand, read: readonly BranchRead[]): Promise<Result<Outdated, Resolution>> {
   const branch = await targetBranchOf($, command)
-  if (!branch.ok) return { target: branch.error, read }
+  if (!branch.ok) return ok({ target: branch.error, read })
   const known = read.find(entry => entry.branch === branch.value)
-  if (known !== undefined) return { target: known.target, read }
+  if (known !== undefined) return ok({ target: known.target, read })
   const target = await branchTarget($, script, branch.value)
-  return { target, read: [...read, { branch: branch.value, target }] }
+  return target.ok ? ok({ target: target.value, read: [...read, { branch: branch.value, target: target.value }] }) : target
 }
 
-/** The session's own stream as a refresh left it: bound with its `publish`, none, or unknown (a failed or cut refresh never passes for none). */
-function boundOf(refreshed: Refreshed): BoundStream {
+/**
+ * The session's own stream as a refresh left it: bound with its `publish`, none, or unknown (a
+ * failed or cut refresh never passes for none). An `Outdated` refresh has no bound stream: the
+ * gate's inputs are `Outdated` before this is asked.
+ */
+function boundOf(refreshed: Exclude<Refreshed, { readonly kind: 'Outdated' }>): BoundStream {
   switch (refreshed.kind) {
     case 'Bound':
       return { kind: 'Stream', stream: refreshed.position.stream, publish: refreshed.position.publish }
@@ -1106,22 +1167,38 @@ function boundOf(refreshed: Refreshed): BoundStream {
 }
 
 /** A publish line whose targets and bound stream could not be read: each command held, naming `failure`. */
-const unreadableTargets = (commands: PublishCommands, failure: RunFailure): GateInputs => {
+const unreadableTargets = (commands: PublishCommands, failure: ReadFailure): GateInputs => {
   const unknown = (command: PublishCommand): PublishTarget => ({ command, target: { kind: 'Unknown', failure } })
   const [first, ...rest] = commands
   return { kind: 'Target', targets: [unknown(first), ...rest.map(unknown)], bound: { kind: 'Unknown', failure } }
 }
 
-/** Each publish command's target, in textual order (`resolveTarget`): one `status --branch` call per distinct branch, `read` holding those made. */
-async function targetsOf($: Engine, script: string, commands: PublishCommands, read: readonly BranchRead[]): Promise<readonly [PublishTarget, ...PublishTarget[]]> {
+/**
+ * Each publish command's target, in textual order (`resolveTarget`): one `status --branch` call
+ * per distinct branch, `read` holding those made; `Outdated` at the first read that shows an
+ * older journal.py.
+ */
+async function targetsOf(
+  $: Engine,
+  script: string,
+  commands: PublishCommands,
+  read: readonly BranchRead[],
+): Promise<Result<Outdated, readonly [PublishTarget, ...PublishTarget[]]>> {
   const [command, ...rest] = commands
   const resolved = await resolveTarget($, script, command, read)
-  const first: PublishTarget = { command, target: resolved.target }
+  if (!resolved.ok) return resolved
+  const first: PublishTarget = { command, target: resolved.value.target }
   const [next, ...after] = rest
-  return next === undefined ? [first] : [first, ...(await targetsOf($, script, [next, ...after], resolved.read))]
+  if (next === undefined) return ok([first])
+  const later = await targetsOf($, script, [next, ...after], resolved.value.read)
+  return later.ok ? ok([first, ...later.value]) : later
 }
 
-/** The gate's inputs for a line that publishes: the surfaces, the project, journal.py, then each command's target and the bound stream. */
+/**
+ * The gate's inputs for a line that publishes: the surfaces, the project, journal.py, then each
+ * command's target and the bound stream. `Outdated` when the refresh or a target read shows an
+ * older journal.py.
+ */
 async function publishInputsOf($: Engine, commands: PublishCommands): Promise<GateInputs> {
   if (!(await isDrawing($))) return { kind: 'NoSurface' }
   const project = await detect($)
@@ -1131,10 +1208,17 @@ async function publishInputsOf($: Engine, commands: PublishCommands): Promise<Ga
   const refreshed = await refresh($)
   if (refreshed.kind === 'NoProject') return { kind: 'NoProject' }
   if (refreshed.kind === 'NoJournalScript') return { kind: 'NoJournalScript' }
+  if (refreshed.kind === 'Outdated') return { kind: 'Outdated' }
   const bound = boundOf(refreshed)
   const found = script
   if (found.kind !== 'Found') return unreadableTargets(commands, bound.kind === 'Unknown' ? bound.failure : CUT_FAILURE)
-  return { kind: 'Target', targets: await targetsOf($, found.path, commands, []), bound }
+  const targets = await targetsOf($, found.path, commands, [])
+  if (!targets.ok) {
+    // a newer journal.py may sit beside this one: the next refresh searches again
+    script = NOT_SEARCHED
+    return { kind: 'Outdated' }
+  }
+  return { kind: 'Target', targets: targets.value, bound }
 }
 
 /**

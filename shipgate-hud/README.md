@@ -110,8 +110,14 @@ otherwise. A request that arrives during a refresh queues one trailing refresh.
 ## What it needs
 
 - Claude Code **2.1.290 or newer** (the mods API; early access, so a release may move it).
-- **shipgate 0.18.0 or newer** installed from the same marketplace (for `journal.py position`),
-  and a project that ran `/shipgate:setup`
+- **shipgate 0.18.0 or newer** (for `journal.py position`). The HUD's `plugin.json` declares
+  it as a dependency (`>=0.18.0`), so installing or updating the HUD brings a matching
+  shipgate. A shipgate outside the range keeps the HUD disabled, and `claude plugin list`
+  names the requirement. A `journal.py` that is still older (a lagging project install, a
+  `journalScript` option, a `--plugin-dir` copy) makes the band say so: the pane names the
+  minimum version, and the publish gate is off until shipgate is updated. A failed read of
+  a current shipgate still holds.
+- A project that ran `/shipgate:setup`
   with a journal: the HUD keys off the `.claude/shipgate.json` sidecar, in the session's
   project root (where it started; a shell `cd` does not move it) or any directory above it
   (a session inside a nested repo of an umbrella uses the umbrella's journal, as shipgate's
