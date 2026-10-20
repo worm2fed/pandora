@@ -38,6 +38,11 @@ pattern and its paths; treat a hit as a blocker, not a nit.
   `.claude/shipgate.db` (local, gitignored).
 - A behaviour change to a plugin bumps its version in `<plugin>/.claude-plugin/plugin.json`
   and the matching entry in `.claude-plugin/marketplace.json`, in the same change.
+- Every shipgate release gets a git tag `shipgate--v<version>` on the commit that bumps its
+  version: run `claude plugin tag --push` in `shipgate/` once that commit is on `main`.
+  shipgate-hud declares `shipgate >=0.18.0`, and Claude Code resolves that range against
+  these tags. Install and auto-update fetch the highest tagged shipgate, so an untagged
+  release never reaches a HUD user.
 - Release notes have one home. A plugin with a `CHANGELOG.md` keeps them only there; its
   `README.md` links to the changelog and never copies entries, because copies drift.
 - Hooks under `<plugin>/hooks/` run on every user's machine in every project they open:
