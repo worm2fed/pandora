@@ -1,11 +1,17 @@
-// The pure core: shipgate's shapes (the `status --json` feature record, the `log --json`
-// events, a worklog's Build Plan and Design section, an ADR's frontmatter) in, a Position
-// out. No `$` here, so the tests run it without a process or a file system.
+// The pure core of the Position: journal.py's decoded `position --json` and the artifacts it
+// names in, the stored Position out. journal.py computes every fact the HUD draws (shipgate
+// ADR 0009); this module keeps only the markdown parsing for display (an ADR's title and
+// status, the worklog's Design sections) and the refresh trigger's glob. No `$` here, so the
+// tests run it without a process or a file system.
 
-import type { Adr, Decision, DesignSection, Phase, PhaseMark, Position, PublishAuthorization, Task, TaskVerify, Verify } from '../types'
-import { asRecord, asString, asStringList, type JsonRecord } from './json'
+import type { Adr, Decision, DesignSection, IsoTime, Phase, Plan, Position, ProjectPath, Task, TaskLine } from '../types'
+import type { PositionDoc, PositionTask } from './journal'
 import { parseCriteria } from './review'
 
+/** A ref the HUD will read: kept beside `projectPath` in journal.ts, where the boundary checks it. */
+export { isSafeRef } from './journal'
+
+/** The phases in flow order: the timeline's columns. */
 export const PHASES: readonly Phase[] = [
   'workspace',
   'route-and-map',
@@ -17,7 +23,8 @@ export const PHASES: readonly Phase[] = [
   'capture',
 ]
 
-export const PHASE_SHORT: Record<Phase, string> = {
+/** A phase's short label on the timeline. */
+export const PHASE_SHORT: Readonly<Record<Phase, string>> = {
   workspace: 'WS',
   'route-and-map': 'MAP',
   explore: 'EXP',
@@ -26,51 +33,6 @@ export const PHASE_SHORT: Record<Phase, string> = {
   implement: 'IMP',
   review: 'REV',
   capture: 'CAP',
-}
-
-const isPhase = (value: unknown): value is Phase => typeof value === 'string' && (PHASES as readonly string[]).includes(value)
-
-/** Every phase before the current one is done, the current is current, the rest to do;
- *  a phase the journal entered at any point is done as well (backward transitions). */
-export function phaseMarks(current: string, entered: readonly string[]): Record<Phase, PhaseMark> {
-  const index = PHASES.indexOf(current as Phase)
-  const marks = {} as Record<Phase, PhaseMark>
-  for (const [i, phase] of PHASES.entries()) {
-    if (phase === current) marks[phase] = 'current'
-    else if ((index >= 0 && i < index) || entered.includes(phase)) marks[phase] = 'done'
-    else marks[phase] = 'todo'
-  }
-  return marks
-}
-
-const TASK_LINE = /^\s*-\s*\[( |x|X)\]\s*(T\d+[a-z]?)\s*(?:\[P\]\s*)?[—–-]+\s*(.*?)\s*(?:[—–]\s*file\(s\):.*)?$/
-
-/** The worklog's Build Plan lines, in order, each under its `##` section: `- [ ] T001 — title — file(s): …`. */
-export function parseBuildPlan(worklog: string): Task[] {
-  const start = worklog.search(/^#\s*Build Plan\s*$/m)
-  const body = start >= 0 ? worklog.slice(start) : worklog
-  const tasks: Task[] = []
-  let section = ''
-  for (const line of body.split('\n')) {
-    const heading = /^##\s+(.*?)\s*$/.exec(line)
-    if (heading) {
-      section = heading[1] ?? ''
-      continue
-    }
-    const match = TASK_LINE.exec(line)
-    if (!match) continue
-    const [, tick, id, rawTitle] = match
-    const title = ((rawTitle ?? '').split(/\s+[—–]\s+/)[0] ?? '').replace(/`/g, '').trim()
-    tasks.push({
-      id: id ?? '',
-      title,
-      section,
-      tickedInWorklog: tick !== ' ',
-      doneInJournal: false,
-      lastVerify: null,
-    })
-  }
-  return tasks
 }
 
 const slugify = (title: string): string =>
@@ -114,7 +76,7 @@ export function reflowMarkdown(markdown: string): string {
 }
 
 /** The worklog's Design section split at its `##` headings, each body reflowed; the lead-in (if any) first. */
-export function parseDesignSections(worklog: string): DesignSection[] {
+export function parseDesignSections(worklog: string): readonly DesignSection[] {
   const whole = parseDesignSection(worklog)
   if (!whole) return []
   const sections: DesignSection[] = []
@@ -138,230 +100,93 @@ export function parseDesignSections(worklog: string): DesignSection[] {
   return sections
 }
 
-/** Everything between the worklog's `# Design` heading and its `# Build Plan` heading. */
-export function parseDesignSection(worklog: string): string {
+/** Everything between the worklog's `# Design` heading and its `# Build Plan` heading, trimmed; null when the worklog has no Design heading. */
+export function parseDesignSection(worklog: string): string | null {
   const start = worklog.search(/^#\s*Design\s*$/m)
-  if (start < 0) return ''
+  if (start < 0) return null
   const rest = worklog.slice(start)
   const end = rest.search(/^#\s*Build Plan\s*$/m)
   const section = end >= 0 ? rest.slice(0, end) : rest
-  return section.replace(/^#\s*Design\s*\n/, '').replace(/\n-{3,}\s*$/, '').trim()
+  return section.replace(/^#\s*Design\s*\n?/, '').replace(/\n-{3,}\s*$/, '').trim()
 }
 
-/** An ADR's title and status from its frontmatter; the filename stands in for a missing title. */
-export function parseAdr(path: string, text: string): Adr {
-  const front = /^---\n([\s\S]*?)\n---/.exec(text)?.[1] ?? ''
-  const field = (name: string) => {
-    const m = new RegExp(`^${name}:\\s*(.*)$`, 'm').exec(front)
-    return m?.[1]?.trim().replace(/^"(.*)"$/, '$1') ?? ''
-  }
-  const fileTitle = path.split('/').pop()?.replace(/\.md$/, '') ?? path
-  return { path, title: field('title') || fileTitle, status: field('status') || 'unknown' }
+/** A frontmatter field's value, unquoted; null when the field is absent or empty. */
+const frontmatterField = (front: string, name: string): string | null => {
+  const line = new RegExp(`^${name}:[ \\t]*(.*)$`, 'm').exec(front)
+  const value = (line?.[1] ?? '').trim().replace(/^"(.*)"$/, '$1').trim()
+  return value === '' ? null : value
 }
 
-export type PositionInputs = {
-  feature: unknown
-  events: readonly unknown[]
-  worklog: { path: string; text: string } | null
-  adrs: readonly Adr[]
-  /** The PRD the stream's clarify-passed event names, read; null or absent when none. */
-  prd?: { path: string; text: string } | null
+/** An ADR's title and status from its frontmatter: the file name stands in for a missing title; a missing status is null. */
+export function parseAdr(path: ProjectPath, text: string): Adr {
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? ''
+  const fileTitle = (path.split('/').pop() ?? path).replace(/\.md$/, '')
+  return { path, title: frontmatterField(front, 'title') ?? fileTitle, status: frontmatterField(front, 'status') }
 }
 
-/** A ref the HUD will read: relative, inside the project, no `..` segment, no drive or scheme. */
-export function isSafeRef(path: string): boolean {
-  if (!path || path.startsWith('/') || path.startsWith('\\')) return false
-  if (/^[A-Za-z]:/.test(path) || /^[a-z]+:\/\//i.test(path)) return false
-  return !path.split(/[\\/]/).some(segment => segment === '..')
+/** A markdown artifact the refresh read: its path and its text. */
+export interface MarkdownFile {
+  readonly path: ProjectPath
+  readonly text: string
 }
 
-/**
- * The event types whose refs commit the stream to an artifact: the design landing, work on its
- * tasks, its review and its decisions. A `flow-started`, `phase-entered` or `deviation` ref is
- * context — often an older slice's PRD or worklog — and never names this stream's worklog.
- */
-const ARTIFACT_EVENTS = new Set(['design-committed', 'design-queued', 'task-done', 'verify-run', 'review-verdict', 'gate-decision'])
-
-/**
- * The paths the stream's events point at: the worklog and the ADRs the design committed to, and
- * the PRD the last `clarify-passed` event names (a safe `.md` ref, else none).
- */
-export function artifactRefs(events: readonly unknown[]): { worklog: string | null; adrs: string[]; prd: string | null } {
-  let worklog: string | null = null
-  let prd: string | null = null
-  const adrs: string[] = []
-  for (const raw of events) {
-    const event = asRecord(raw)
-    if (asString(event.type) === 'clarify-passed') {
-      const path = asString(asRecord(event.data).prd).split('#')[0] ?? ''
-      if (path.endsWith('.md') && isSafeRef(path)) prd = path
-      continue
-    }
-    if (!ARTIFACT_EVENTS.has(asString(event.type))) continue
-    const data = asRecord(event.data)
-    const candidates = [asString(data.worklog), ...asStringList(data.refs), ...asStringList(data.adrs)]
-    for (const ref of candidates) {
-      const path = ref.split('#')[0] ?? ''
-      if (!path || !isSafeRef(path)) continue
-      if (path.endsWith('.worklog.md')) worklog = path
-      else if (/\/adr\/.+\.md$/.test(path) && !adrs.includes(path)) adrs.push(path)
-    }
-  }
-  return { worklog, adrs, prd }
-}
-
-/** An event's journal sequence number; -1 when it has none. */
-const seqOf = (event: JsonRecord): number => (typeof event.seq === 'number' ? event.seq : -1)
-
-/**
- * May the stream publish? The rule `journal.py` applies to `mr-opened` (`_validate_mr_opened`):
- * after the last `task-done` (seq 0 when none), a `review-verdict` with `verdict: ready`, or a
- * `gate-decision` with `gate: publish`, `raised_by: user` and `decision: publish` (trimmed,
- * any case). Ordered by `seq`, not by position in the list; the first such event in seq order
- * is the one named.
- */
-export function publishAuthorization(events: readonly unknown[]): PublishAuthorization {
-  const records = events.map(asRecord)
-  const lastTaskDone = Math.max(0, ...records.filter(e => e.type === 'task-done').map(seqOf))
-  const authorizing = records
-    .filter(e => seqOf(e) > lastTaskDone)
-    .sort((a, b) => seqOf(a) - seqOf(b))
-    .find(e => {
-      const data = asRecord(e.data)
-      if (e.type === 'review-verdict') return data.verdict === 'ready'
-      if (e.type !== 'gate-decision') return false
-      return data.gate === 'publish' && data.raised_by === 'user' && String(data.decision).trim().toLowerCase() === 'publish'
-    })
-  if (authorizing === undefined) return { authorized: false, by: null, at: '' }
-  return { authorized: true, by: authorizing.type === 'review-verdict' ? 'review-verdict' : 'gate-decision', at: asString(authorizing.ts) }
-}
-
-/** The last `review-verdict` (by `seq`)'s `data.criteria` as SC id → status, string values only; {} when none. */
-export function criteriaStatus(events: readonly unknown[]): Record<string, string> {
-  return verdictMap(lastVerdict(events), 'criteria')
+/** What `toPosition` maps: the decoded `position --json` and the artifacts it names, read (null: absent or unreadable). */
+export interface PositionInputs {
+  readonly doc: PositionDoc
+  readonly worklog: MarkdownFile | null
+  /** The ADRs `doc.artifacts.adrs` names that could be read, parsed. */
+  readonly adrs: readonly Adr[]
+  readonly prd: MarkdownFile | null
 }
 
 /**
- * The last `review-verdict` (by `seq`)'s `data.dispositions`: the orchestrator's word per
- * finding (`fixed`, `rejected`, `deferred`, …), keyed `<path>:<line or ?>`, full or short path,
- * a leading `./` dropped; {} when none.
+ * The stored Position: the journal's facts as `doc` gives them; the plan (null when `doc` has
+ * no worklog or the worklog could not be read) with each task's state from its tick,
+ * `task-done` and last verify; the Design sections and criteria parsed from the worklog and
+ * the PRD.
  */
-export function dispositions(events: readonly unknown[]): Record<string, string> {
-  return verdictMap(lastVerdict(events), 'dispositions')
-}
-
-/** The last `review-verdict` by `seq`; undefined when none. */
-function lastVerdict(events: readonly unknown[]): JsonRecord | undefined {
-  return events
-    .map(asRecord)
-    .filter(e => e.type === 'review-verdict')
-    .sort((a, b) => seqOf(a) - seqOf(b))
-    .at(-1)
-}
-
-/** A string-valued map from a verdict's `data[field]`; {} when none. A disposition key loses a leading `./`. */
-function verdictMap(verdict: JsonRecord | undefined, field: 'criteria' | 'dispositions'): Record<string, string> {
-  const map: Record<string, string> = {}
-  for (const [key, value] of Object.entries(asRecord(asRecord(verdict?.data)[field]))) {
-    if (typeof value === 'string') map[field === 'dispositions' ? key.replace(/^(\.\/)+/, '') : key] = value
-  }
-  return map
-}
-
-/** A verdict's `ts` and `seq`: when the dispositions were recorded, and which verdict a tick was made against. */
-function stampOf(verdict: JsonRecord | undefined): { at: string | null; seq: number | null } {
-  if (verdict === undefined) return { at: null, seq: null }
-  return { at: asString(verdict.ts) || null, seq: typeof verdict.seq === 'number' ? verdict.seq : null }
-}
-
-/** The last review-verdict's `ts` and `seq`. */
-export function verdictStamp(events: readonly unknown[]): { at: string | null; seq: number | null } {
-  return stampOf(lastVerdict(events))
-}
-
-export function toPosition({ feature, events, worklog, adrs, prd = null }: PositionInputs): Position {
-  const record = asRecord(feature)
-  // the last review-verdict, found once: its criteria, dispositions, time and seq
-  const verdict = lastVerdict(events)
-  const stamp = stampOf(verdict)
-  const phase = asString(record.phase, 'workspace')
-
-  const entered: string[] = []
-  const verifies = new Map<string, TaskVerify>()
-  const doneIds = new Set<string>(asStringList(record.task_ids))
-  for (const raw of events) {
-    const event = asRecord(raw)
-    const data = asRecord(event.data)
-    const type = asString(event.type)
-    const ts = asString(event.ts)
-    if (type === 'phase-entered' && isPhase(data.phase)) entered.push(data.phase)
-    if (type === 'verify-run') {
-      // The last verify-run that covered a task wins, pass or fail.
-      const outcome = asString(data.outcome, '?')
-      for (const id of asStringList(data.task_ids)) verifies.set(id, { outcome, at: ts })
-    }
-    if (type === 'task-done') {
-      const id = asString(data.task_id)
-      if (id) doneIds.add(id)
-    }
-  }
-
-  const decisions: Decision[] = (Array.isArray(record.gate_decisions) ? record.gate_decisions : [])
-    .map((raw, i) => {
-      const d = asRecord(raw)
-      return {
-        seq: i,
-        gate: asString(d.gate, '?'),
-        question: asString(d.question),
-        decision: asString(d.decision),
-        raisedBy: asString(d.raised_by, 'orchestrator'),
-        mode: typeof d.mode === 'string' ? d.mode : null,
-        at: asString(d.ts),
-      }
-    })
-    .reverse()
-
-  const tasks: Task[] = (worklog ? parseBuildPlan(worklog.text) : []).map(task => ({
-    ...task,
-    doneInJournal: doneIds.has(task.id),
-    lastVerify: verifies.get(task.id) ?? null,
-  }))
-
-  const verify = asRecord(record.last_verify)
-  const lastVerify: Verify | null =
-    record.last_verify && typeof record.last_verify === 'object'
-      ? { outcome: asString(verify.outcome, '?'), taskIds: asStringList(verify.task_ids), at: asString(verify.ts) }
-      : null
-
+export function toPosition(inputs: PositionInputs): Position {
+  const { doc, worklog, adrs, prd } = inputs
   return {
-    stream: asString(record.stream) || asString(record.feature, '?'),
-    phase,
-    phaseEnteredAt: typeof record.phase_entered_at === 'string' ? record.phase_entered_at : null,
-    version: typeof record.version === 'number' ? record.version : 0,
-    phases: phaseMarks(phase, entered),
-    decisions,
-    tasks,
-    lastVerify,
-    design: { adrs: [...adrs], sections: worklog ? parseDesignSections(worklog.text) : [] },
-    worklogPath: worklog?.path ?? null,
-    publish: publishAuthorization(events),
-    criteria: prd ? parseCriteria(prd.text) : [],
-    criteriaStatus: verdictMap(verdict, 'criteria'),
-    dispositions: verdictMap(verdict, 'dispositions'),
-    dispositionsAt: stamp.at,
-    criteriaSeq: stamp.seq,
+    stream: doc.stream,
+    version: doc.version,
+    lifecycle: doc.lifecycle,
+    current: doc.current,
+    phases: doc.phases,
+    decisions: newestFirst(doc.decisions),
+    plan: planOf(doc, worklog),
+    lastVerify: doc.lastVerify,
+    design: { adrs, sections: worklog === null ? [] : parseDesignSections(worklog.text) },
+    publish: doc.publish,
+    criteria: prd === null ? [] : parseCriteria(prd.text),
+    lastVerdict: doc.verdict,
   }
 }
 
-/** The slug a stream carries after its last `/`: `feat/x-y` → `x-y`; a bare name is its own slug. */
-export function streamSlug(stream: string): string {
-  const cut = stream.lastIndexOf('/')
-  return cut >= 0 ? stream.slice(cut + 1) : stream
+/** The decisions newest first: by seq, the highest first (journal.py prints them oldest first). */
+const newestFirst = (decisions: readonly Decision[]): readonly Decision[] => [...decisions].sort((a, b) => b.seq - a.seq)
+
+/**
+ * The plan: the worklog the journal names, how it found it, and its tasks; null when the
+ * journal names none, could not read it (`tasks` null), or the HUD could not read it.
+ */
+const planOf = (doc: PositionDoc, worklog: MarkdownFile | null): Plan | null => {
+  const ref = doc.artifacts.worklog
+  if (ref === null || doc.tasks === null || worklog === null) return null
+  return { worklog: ref.path, from: ref.from, tasks: doc.tasks.map(taskOf) }
+}
+
+/** A task's state, first match wins: failed (its last verify failed), done (a task-done), debt (ticked, no task-done), open. */
+const taskOf = (task: PositionTask): Task => {
+  const line: TaskLine = { id: task.id, title: task.title, section: task.section }
+  const verify = task.lastVerify
+  if (verify !== null && verify.outcome === 'fail') return { ...line, state: 'failed', lastVerifyAt: verify.at }
+  return { ...line, state: task.isDone ? 'done' : task.isTicked ? 'debt' : 'open', lastVerifyAt: verify === null ? null : verify.at }
 }
 
 /**
  * A sidecar glob as shipgate matches it (Python `fnmatch`): `*` matches any run of characters,
- * `/` included; `?` one character; `[...]` a class; anchored at both ends.
+ * `/` included; `?` one character; `[...]` a class (`classBody`); anchored at both ends.
  */
 export function globToRegExp(glob: string): RegExp {
   let out = ''
@@ -373,7 +198,7 @@ export function globToRegExp(glob: string): RegExp {
       const close = glob.indexOf(']', i + 1)
       if (close < 0) out += '\\['
       else {
-        out += `[${glob.slice(i + 1, close).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`
+        out += `[${classBody(glob.slice(i + 1, close))}]`
         i = close
       }
     } else out += ch.replace(/[.+^${}()|\\]/g, '\\$&')
@@ -381,11 +206,27 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${out}$`)
 }
 
-/** Does a project-relative path sit in a home? shipgate's rule: the glob as written, else the glob under one more `*` segment. */
+/**
+ * A glob class's body as a RegExp class's, as fnmatch reads it: a leading `!` negates; a
+ * leading `^` is itself (fnmatch escapes it, so `[^a]` matches `^` or `a`); a backslash is
+ * itself.
+ */
+const classBody = (body: string): string => {
+  const escaped = body.replace(/\\/g, '\\\\')
+  if (escaped.startsWith('!')) return `^${escaped.slice(1)}`
+  return escaped.startsWith('^') ? `\\${escaped}` : escaped
+}
+
+/**
+ * Does a project-relative path sit in a home? shipgate's rule (journal.py's `_matches_glob`):
+ * the glob as written, else the glob under one more `*` segment, with one leading `./` (and
+ * nothing else) dropped. Only the refresh trigger asks: does a Write need a refresh? It is not
+ * a fact the HUD draws, and a false match costs one extra refresh.
+ */
 export function matchesHome(path: string, glob: string): boolean {
   const normalized = path.replace(/\\/g, '/')
   if (globToRegExp(glob).test(normalized)) return true
-  return globToRegExp(`*/${glob.replace(/^\.?\/+/, '')}`).test(normalized)
+  return globToRegExp(`*/${glob.startsWith('./') ? glob.slice(2) : glob}`).test(normalized)
 }
 
 /** Can a decision be vetoed from the pane? Only one the orchestrator took on its own, in executive mode. */
@@ -394,7 +235,7 @@ export function isVetoable(decision: Decision): boolean {
 }
 
 /** `HH:MM` of an ISO timestamp, in the local zone; the raw text when it does not parse. */
-export function clock(iso: string): string {
+export function clock(iso: IsoTime): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
   const hh = String(date.getHours()).padStart(2, '0')

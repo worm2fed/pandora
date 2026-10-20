@@ -1,56 +1,186 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { type PositionDoc, type PositionTask, decodePosition, isoTime, projectPath, taskId } from '../hooks/journal'
 import {
-  artifactRefs,
-  criteriaStatus,
-  dispositions,
+  type PositionInputs,
+  clock,
   globToRegExp,
   isSafeRef,
   isVetoable,
   matchesHome,
   parseAdr,
-  parseBuildPlan,
   parseDesignSection,
   parseDesignSections,
-  phaseMarks,
-  publishAuthorization,
   reflowMarkdown,
-  streamSlug,
   toPosition,
 } from '../hooks/position'
-import { ADR, FEATURE, LOG, WORKLOG } from './fixtures'
-import { PRD_WITH_CRITERIA } from './fixtures.review'
+import type { Phase, PhaseMark, ProjectPath } from '../types'
+import { type Gen, bool, forAll, int, orNull, pick } from './arbitrary'
+import { ADR, WORKLOG } from './fixtures'
+import { POSITION_GOLDEN } from './fixtures.journal'
+import { PRD_WITH_CRITERIA, must } from './fixtures.review'
 
-describe('position', () => {
-  test('phase marks: phases before the current are done, the current is current', async () => {
-    const marks = phaseMarks('implement', [])
-    expect(marks.workspace).toBe('done')
-    expect(marks.design).toBe('done')
-    expect(marks.implement).toBe('current')
-    expect(marks.review).toBe('todo')
-    expect(marks.capture).toBe('todo')
+/** A golden position decoded; a thrown error naming the path when it does not decode. */
+const docOf = (raw: unknown): PositionDoc => {
+  const decoded = decodePosition(raw)
+  if (!decoded.ok) throw new Error(`fixture: position does not decode at ${decoded.error.path}`)
+  return decoded.value
+}
+
+const pathOf = (raw: string): ProjectPath => must(projectPath(raw))
+
+const FLOW_DOC = docOf(POSITION_GOLDEN.flow)
+
+/** The flow stream with every artifact it names read: the worklog (the generic fixture text), one ADR, the PRD. */
+const FLOW_INPUTS: PositionInputs = {
+  doc: FLOW_DOC,
+  worklog: { path: pathOf('docs/prd/golden-flow.worklog.md'), text: WORKLOG },
+  adrs: [parseAdr(pathOf('docs/adr/0001-golden-choice.md'), ADR)],
+  prd: { path: pathOf('docs/prd/golden-flow.md'), text: PRD_WITH_CRITERIA },
+}
+
+/** A golden stream with nothing read beside its document. */
+const bare = (doc: PositionDoc): PositionInputs => ({ doc, worklog: null, adrs: [], prd: null })
+
+const ALL_MARKS = (mark: PhaseMark): Readonly<Record<Phase, PhaseMark>> => ({
+  workspace: mark,
+  'route-and-map': mark,
+  explore: mark,
+  clarify: mark,
+  design: mark,
+  implement: mark,
+  review: mark,
+  capture: mark,
+})
+
+describe('position: toPosition', () => {
+  test('the journal\'s facts as the document gives them; decisions newest first with their real seq', async () => {
+    const position = toPosition(FLOW_INPUTS)
+    expect(position.stream).toBe('feature/golden-flow')
+    expect(position.version).toBe(17)
+    expect(position.lifecycle).toBe('live')
+    expect(position.current).toEqual(FLOW_DOC.current)
+    expect(position.phases).toEqual(FLOW_DOC.phases)
+    expect(position.decisions.map(decision => decision.seq)).toEqual([26, 13])
+    expect(position.decisions.map(isVetoable)).toEqual([false, true])
+    expect(position.lastVerify).toEqual({ outcome: 'fail', taskIds: ['T002'], at: '2026-10-01T11:54:00+00:00' })
+    expect(position.lastVerdict).toEqual(FLOW_DOC.verdict)
   })
 
-  test('phase marks: a later phase entered earlier (backward transition) stays done', async () => {
-    const marks = phaseMarks('implement', ['workspace', 'implement', 'review', 'implement'])
-    expect(marks.review).toBe('done')
-    expect(marks.implement).toBe('current')
+  // D6: the publish rule is the journal's, never re-derived from events
+  test('D6: publish is the document\'s, the authorizing event named by its seq', async () => {
+    expect(toPosition(FLOW_INPUTS).publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 26, at: '2026-10-01T11:55:00+00:00' })
+    expect(toPosition(bare(docOf(POSITION_GOLDEN.named))).publish).toEqual({ kind: 'held' })
   })
 
-  test('build plan: tasks in worklog order with their tick state', async () => {
-    const tasks = parseBuildPlan(WORKLOG)
-    expect(tasks.map(t => t.id)).toEqual(['T001', 'T002', 'T010', 'T011'])
-    expect(tasks[0]).toMatchObject({ id: 'T001', title: 'add the widget', section: 'Setup', tickedInWorklog: true })
-    expect(tasks[1]).toMatchObject({ id: 'T002', title: 'wire the widget', tickedInWorklog: false })
-    expect(tasks[2]).toMatchObject({ id: 'T010', title: 'parse the input', section: 'Feature' })
+  test('the plan: the worklog, how the journal found it, and each task\'s state, first match wins', async () => {
+    expect(toPosition(FLOW_INPUTS).plan).toEqual({
+      worklog: 'docs/prd/golden-flow.worklog.md',
+      from: 'event',
+      tasks: [
+        { id: 'T001', title: 'the declarations', section: 'Declarations', state: 'done', lastVerifyAt: '2026-10-01T11:50:00+00:00' },
+        { id: 'T002', title: 'the bodies', section: 'Bodies', state: 'failed', lastVerifyAt: '2026-10-01T11:54:00+00:00' },
+        { id: 'T003', title: 'a star bullet', section: 'Bodies', state: 'debt', lastVerifyAt: null },
+        { id: 'T004', title: null, section: 'Bodies', state: 'open', lastVerifyAt: null },
+      ],
+    })
+    const named = docOf(POSITION_GOLDEN.named)
+    const plan = toPosition({ ...bare(named), worklog: { path: pathOf('docs/prd/golden-named.worklog.md'), text: WORKLOG } }).plan
+    expect(plan?.from).toBe('name')
+    // ticked, no task-done, a passing verify: debt, its last verify kept
+    expect(plan?.tasks).toEqual([{ id: 'T001', title: 'found by its name, not by an event', section: null, state: 'debt', lastVerifyAt: '2026-10-01T11:38:00+00:00' }])
   })
 
-  test('design section: everything between # Design and # Build Plan', async () => {
+  // D9: the Build Plan grammar is the journal's (check's), not a TypeScript copy
+  test('D9: the tasks are the journal\'s, including a `*` bullet, whatever the worklog text the HUD read lists', async () => {
+    // the worklog text read lists T001, T002, T010 and T011; the journal parsed T001 to T004
+    const tasks = toPosition(FLOW_INPUTS).plan?.tasks ?? []
+    expect(tasks.map(task => task.id)).toEqual(['T001', 'T002', 'T003', 'T004'])
+    expect(tasks[2]).toMatchObject({ id: 'T003', title: 'a star bullet', state: 'debt' })
+  })
+
+  test('no plan: no worklog in the document, a worklog the HUD could not read, or one the journal could not read', async () => {
+    expect(toPosition(bare(docOf(POSITION_GOLDEN.epic))).plan).toBeNull()
+    expect(toPosition({ ...FLOW_INPUTS, worklog: null }).plan).toBeNull()
+    expect(toPosition({ ...FLOW_INPUTS, doc: { ...FLOW_DOC, tasks: null } }).plan).toBeNull()
+    // a Build Plan with no task line is a plan with no task
+    expect(toPosition({ ...FLOW_INPUTS, doc: { ...FLOW_DOC, tasks: [] } }).plan?.tasks).toEqual([])
+  })
+
+  // D7: no phase entered is null, never `workspace`
+  test('D7: a stream that entered no phase has no current phase, and every phase is to do', async () => {
+    const position = toPosition(bare(docOf(POSITION_GOLDEN.started)))
+    expect(position.current).toBeNull()
+    expect(position.phases).toEqual(ALL_MARKS('todo'))
+  })
+
+  // D8: skipped and implied phases are not done
+  test('D8: phases the stream jumped past are skipped, not done; one it came back from is revisited', async () => {
+    const named = toPosition(bare(docOf(POSITION_GOLDEN.named)))
+    expect(named.current?.isImplied).toBe(true)
+    expect([named.phases.workspace, named.phases['route-and-map'], named.phases.explore, named.phases.clarify, named.phases.design]).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped'])
+    const flow = toPosition(FLOW_INPUTS)
+    expect([flow.phases.workspace, flow.phases['route-and-map'], flow.phases.review]).toEqual(['done', 'skipped', 'revisited'])
+  })
+
+  // D10: the lifecycle is kept, never dropped
+  test('D10: a terminal stream stays terminal; a dormant one dormant', async () => {
+    expect(toPosition(bare(docOf(POSITION_GOLDEN.done))).lifecycle).toBe('terminal')
+    expect(toPosition(bare(docOf(POSITION_GOLDEN.dormant))).lifecycle).toBe('dormant')
+  })
+
+  // D13: the journal classifies the ADRs with the configured homes; the HUD lists what it names
+  test('D13: an ADR from a custom home is listed', async () => {
+    const custom = 'notes/decisions/0003-golden-custom.md'
+    const doc = docOf({ ...POSITION_GOLDEN.flow, artifacts: { ...POSITION_GOLDEN.flow.artifacts, adrs: [custom] } })
+    expect(doc.artifacts.adrs).toEqual([custom])
+    const position = toPosition({ ...FLOW_INPUTS, doc, adrs: [parseAdr(pathOf(custom), ADR)] })
+    expect(position.design.adrs).toEqual([{ path: custom, title: '0007. Example decision', status: 'accepted' }])
+  })
+
+  test('the design: the ADRs read, the worklog\'s Design sections; the criteria from the PRD', async () => {
+    const position = toPosition(FLOW_INPUTS)
+    expect(position.design.adrs.map(adr => adr.title)).toEqual(['0007. Example decision'])
+    expect(position.design.sections.map(section => section.slug)).toEqual(['approach', 'architecture'])
+    expect(position.criteria.map(criterion => criterion.id)).toEqual(['SC-001', 'SC-002', 'SC-003', 'SC-004', 'SC-010'])
+    expect(position.criteria[1]).toEqual({ id: 'SC-002', text: 'The pane lists the Build Plan, wrapped onto a second line.' })
+  })
+
+  test('nothing read: no sections, no criteria', async () => {
+    const position = toPosition(bare(FLOW_DOC))
+    expect(position.design).toEqual({ adrs: [], sections: [] })
+    expect(position.criteria).toEqual([])
+    expect(position.plan).toBeNull()
+  })
+
+  const AT = must(isoTime('2026-10-01T11:00:00+00:00'))
+  const taskGen: Gen<PositionTask> = rng => ({
+    id: must(taskId(`T${int(1, 999)(rng)}`)),
+    title: orNull(pick(['a title', 'another one']))(rng),
+    section: orNull(pick(['Setup', 'Bodies']))(rng),
+    isTicked: bool(rng),
+    isDone: bool(rng),
+    lastVerify: orNull(rng2 => ({ outcome: pick(['pass', 'fail'] as const)(rng2), at: AT }), 3)(rng),
+  })
+
+  test('task state law: failed when its last verify failed, else done, else debt when ticked, else open; the line and the verify time kept', async () => {
+    forAll(20261020, 500, taskGen, task => {
+      const [mapped] = toPosition({ ...FLOW_INPUTS, doc: { ...FLOW_DOC, tasks: [task] } }).plan?.tasks ?? []
+      const state = task.lastVerify?.outcome === 'fail' ? 'failed' : task.isDone ? 'done' : task.isTicked ? 'debt' : 'open'
+      expect(mapped).toEqual({ id: task.id, title: task.title, section: task.section, state, lastVerifyAt: task.lastVerify?.at ?? null })
+    })
+  })
+})
+
+describe('position: markdown for display', () => {
+  test('design section: everything between # Design and # Build Plan; null without a Design heading', async () => {
     const md = parseDesignSection(WORKLOG)
     expect(md).toContain('## Approach')
     expect(md).toContain('Minimal change')
     expect(md).not.toContain('Build Plan')
     expect(md).not.toContain('T001')
+    expect(parseDesignSection('# Worklog\n\n# Build Plan\n- [ ] T001 — x\n')).toBeNull()
+    expect(parseDesignSections('# Worklog\n')).toEqual([])
   })
 
   test('reflow: hard-wrapped prose joins into one line per paragraph, blocks keep their lines', async () => {
@@ -71,67 +201,28 @@ describe('position', () => {
     expect(sections[1]?.markdown).toBe('- parser\n- view')
   })
 
-  test('adr: title and status from the frontmatter', async () => {
-    expect(parseAdr('docs/adr/0007-example-decision.md', ADR)).toEqual({
+  test('adr: title and status from the frontmatter; the file name for a missing title; null for a missing status', async () => {
+    expect(parseAdr(pathOf('docs/adr/0007-example-decision.md'), ADR)).toEqual({
       path: 'docs/adr/0007-example-decision.md',
       title: '0007. Example decision',
       status: 'accepted',
     })
-  })
-
-  test('toPosition: decisions newest first, tasks cross-checked against the journal', async () => {
-    const position = toPosition({
-      feature: FEATURE,
-      events: LOG.events,
-      worklog: { path: 'docs/prd/example.worklog.md', text: WORKLOG },
-      adrs: [parseAdr('docs/adr/0007-example-decision.md', ADR)],
+    expect(parseAdr(pathOf('notes/decisions/0003-golden-custom.md'), '# 0003. No frontmatter\n')).toEqual({
+      path: 'notes/decisions/0003-golden-custom.md',
+      title: '0003-golden-custom',
+      status: null,
     })
-    expect(position.stream).toBe('feat/example-stream')
-    expect(position.phase).toBe('implement')
-    expect(position.version).toBe(12)
-    expect(position.decisions.map(d => d.gate)).toEqual(['publish', 'clarify', 'clarify'])
-    expect(position.decisions[2]).toMatchObject({ raisedBy: 'orchestrator', mode: 'executive' })
-    expect(position.decisions.map(isVetoable)).toEqual([false, false, true])
-    const byId = Object.fromEntries(position.tasks.map(t => [t.id, t]))
-    expect(byId.T001).toMatchObject({ tickedInWorklog: true, doneInJournal: true, lastVerify: { outcome: 'pass', at: '2026-10-01T09:20:00+00:00' } })
-    // the later failing verify-run wins over the earlier pass
-    expect(byId.T010?.lastVerify).toEqual({ outcome: 'fail', at: '2026-10-01T09:40:00+00:00' })
-    expect(byId.T002).toMatchObject({ tickedInWorklog: false, doneInJournal: false, lastVerify: null })
-    // ticked in the worklog, never recorded in the journal: the debt the Stop hook would flag
-    expect(byId.T011).toMatchObject({ tickedInWorklog: true, doneInJournal: false })
-    expect(position.lastVerify).toEqual({ outcome: 'pass', taskIds: ['T001', 'T010'], at: '2026-10-01T09:20:00+00:00' })
-    expect(position.design.adrs[0]?.title).toBe('0007. Example decision')
-    expect(position.design.sections.map(s => s.slug)).toEqual(['approach', 'architecture'])
-    expect(position.design.sections[0]?.markdown).toContain('Minimal change')
-    expect(position.worklogPath).toBe('docs/prd/example.worklog.md')
+    expect(parseAdr(pathOf('docs/adr/0004-x.md'), '---\ntitle: "0004. Quoted"\nstatus:\n---\n')).toEqual({ path: 'docs/adr/0004-x.md', title: '0004. Quoted', status: null })
   })
 
-  test('artifact refs: a context ref on flow-started or phase-entered is not the stream\'s worklog', async () => {
-    const context = [
-      { seq: 1, type: 'flow-started', ts: 't', data: { request: 'slice 2', refs: ['docs/prd/older.md', 'docs/prd/older.worklog.md'] } },
-      { seq: 2, type: 'phase-entered', ts: 't', data: { phase: 'workspace', refs: ['docs/adr/0001-older.md'] } },
-      { seq: 3, type: 'deviation', ts: 't', data: { refs: ['docs/prd/older.worklog.md#deviations'] } },
-    ]
-    expect(artifactRefs(context)).toEqual({ worklog: null, adrs: [], prd: null })
-    const committed = [...context, { seq: 4, type: 'design-committed', ts: 't', data: { worklog: 'docs/prd/new.worklog.md', adrs: ['docs/adr/0002-new.md'] } }]
-    expect(artifactRefs(committed)).toEqual({ worklog: 'docs/prd/new.worklog.md', adrs: ['docs/adr/0002-new.md'], prd: null })
-  })
-
-  test('artifact refs: only safe relative paths are kept', async () => {
-    const refs = artifactRefs(LOG.events)
-    expect(refs.worklog).toBe('docs/prd/example.worklog.md')
-    expect(refs.adrs).toEqual(['docs/adr/0007-example-decision.md'])
+  test('only safe relative paths are refs the HUD reads', async () => {
     expect(isSafeRef('/etc/x.worklog.md')).toBe(false)
     expect(isSafeRef('../x/adr/0001.md')).toBe(false)
     expect(isSafeRef('C:/x/adr/0001.md')).toBe(false)
     expect(isSafeRef('plugin/docs/adr/0001.md')).toBe(true)
   })
 
-  test('stream slug and sidecar globs', async () => {
-    expect(streamSlug('feat/example-stream')).toBe('example-stream')
-    expect(streamSlug('feature/example-stream')).toBe('example-stream')
-    expect(streamSlug('feat/group/example-stream')).toBe('example-stream')
-    expect(streamSlug('example')).toBe('example')
+  test('sidecar globs, as the refresh trigger matches a written path', async () => {
     // fnmatch rules, as shipgate applies them: `*` crosses `/`, `?` is one character, anchored
     const re = globToRegExp('*/docs/prd/*.worklog.md')
     expect(re.test('plugin/docs/prd/example.worklog.md')).toBe(true)
@@ -148,97 +239,40 @@ describe('position', () => {
     expect(matchesHome('plugin/docs/prd/x.md', '*/docs/prd/*.md')).toBe(true)
   })
 
-  test('publish: a ready verdict after the last task-done authorizes, as journal.py checks mr-opened', async () => {
-    const ready = { seq: 50, type: 'review-verdict', ts: '2026-10-01T10:00:00+00:00', data: { verdict: 'ready' } }
-    expect(publishAuthorization([...LOG.events, ready])).toEqual({ authorized: true, by: 'review-verdict', at: '2026-10-01T10:00:00+00:00' })
-    // order by seq, not by array position
-    expect(publishAuthorization([ready, ...LOG.events]).authorized).toBe(true)
-  })
+  // R1-F6: the trigger stripped any run of `.` and `/` from a glob's front, and read a class's
+  // leading `^` as a negation; journal.py's `_matches_glob` strips exactly `./`, and fnmatch
+  // reads `^` there as itself (only `!` negates). Each row is what `_matches_glob` answers.
+  const fnmatchRows: readonly (readonly [string, string, boolean])[] = [
+    // one leading `./` goes, and only that
+    ['plugin/docs/prd/x.md', './docs/prd/*.md', true],
+    ['docs/prd/x.md', './docs/prd/*.md', false],
+    ['./docs/prd/x.md', './docs/prd/*.md', true],
+    ['a/.notes/x.md', '.notes/*.md', true],
+    // a leading `/` is no `./`: it stays, so the second try needs `//`
+    ['plugin/docs/prd/x.md', '/docs/prd/*.md', false],
+    ['docs/prd/x.md', '/docs/prd/*.md', false],
+    ['/docs/prd/x.md', '/docs/prd/*.md', true],
+    // `.//` loses its `./` only
+    ['a/docs/x.md', './/docs/*.md', false],
+    ['a//docs/x.md', './/docs/*.md', true],
+    // `^` first in a class is itself; `!` negates
+    ['docs/b.md', 'docs/[^a].md', false],
+    ['docs/^.md', 'docs/[^a].md', true],
+    ['docs/a.md', 'docs/[^a].md', true],
+    ['docs/b.md', 'docs/[!a].md', true],
+    ['docs/a.md', 'docs/[!a].md', false],
+    ['docs/!.md', 'docs/[!a].md', true],
+    ['docs/^.md', 'docs/[!^].md', false],
+    ['docs/b.md', 'docs/[!^].md', true],
+    ['docs/_.md', 'docs/[^-a].md', true], // `^-a` is a range, `^` its first end
+  ]
+  for (const [path, glob, expected] of fnmatchRows) {
+    test(`R1-F6: matchesHome(${JSON.stringify(path)}, ${JSON.stringify(glob)}) is ${expected}, as journal.py's _matches_glob`, async () => {
+      expect(matchesHome(path, glob)).toBe(expected)
+    })
+  }
 
-  test('publish: a ready verdict before a later task-done does not authorize', async () => {
-    const early = { seq: 39, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }
-    expect(publishAuthorization([...LOG.events, early])).toEqual({ authorized: false, by: null, at: '' })
-    const later = [{ seq: 1, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }, { seq: 2, type: 'task-done', ts: 't', data: { task_id: 'T1' } }]
-    expect(publishAuthorization([...later].reverse()).authorized).toBe(false)
-  })
-
-  test('publish: a not-ready verdict does not authorize', async () => {
-    expect(publishAuthorization([...LOG.events, { seq: 50, type: 'review-verdict', ts: 't', data: { verdict: 'not-ready' } }]).authorized).toBe(false)
-  })
-
-  test('publish: only the user\'s own decision to publish authorizes', async () => {
-    const decision = (data: Record<string, unknown>) => [...LOG.events, { seq: 50, type: 'gate-decision', ts: 'at-50', data }]
-    expect(publishAuthorization(decision({ gate: 'publish', raised_by: 'user', decision: ' Publish ' }))).toEqual({ authorized: true, by: 'gate-decision', at: 'at-50' })
-    expect(publishAuthorization(decision({ gate: 'publish', raised_by: 'orchestrator', decision: 'publish' })).authorized).toBe(false)
-    expect(publishAuthorization(decision({ gate: 'publish', raised_by: 'user', decision: 'no' })).authorized).toBe(false)
-    expect(publishAuthorization(decision({ gate: 'clarify', raised_by: 'user', decision: 'publish' })).authorized).toBe(false)
-  })
-
-  test('publish: no events, no task-done — nothing authorizes until a verdict is recorded', async () => {
-    expect(publishAuthorization([])).toEqual({ authorized: false, by: null, at: '' })
-    expect(publishAuthorization([{ seq: 3, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }]).authorized).toBe(true)
-  })
-
-  test('toPosition sets publish from the events', async () => {
-    expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [] }).publish.authorized).toBe(false)
-    const ready = { seq: 50, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }
-    expect(toPosition({ feature: FEATURE, events: [...LOG.events, ready], worklog: null, adrs: [] }).publish).toEqual({ authorized: true, by: 'review-verdict', at: 't' })
-  })
-
-  test('criteria: the clarify-passed event names the PRD, the last one wins', async () => {
-    expect(artifactRefs(LOG.events).prd).toBe('docs/prd/example.md')
-    const later = { seq: 50, type: 'clarify-passed', ts: 't', data: { prd: 'docs/prd/second.md#success-criteria' } }
-    expect(artifactRefs([...LOG.events, later]).prd).toBe('docs/prd/second.md')
-    // a PRD ref on another event type is context, never the stream's PRD
-    expect(artifactRefs([{ seq: 1, type: 'flow-started', ts: 't', data: { prd: 'docs/prd/older.md' } }]).prd).toBeNull()
-  })
-
-  test('criteria: an absolute, a parent-traversal or a non-Markdown PRD ref is not read', async () => {
-    const passed = (prd: unknown) => [{ seq: 1, type: 'clarify-passed', ts: 't', data: { prd } }]
-    expect(artifactRefs(passed('/etc/prd.md')).prd).toBeNull()
-    expect(artifactRefs(passed('../outside/prd.md')).prd).toBeNull()
-    expect(artifactRefs(passed('docs/../../prd.md')).prd).toBeNull()
-    expect(artifactRefs(passed('docs/prd/example.txt')).prd).toBeNull()
-    expect(artifactRefs(passed(42)).prd).toBeNull()
-    // a later unsafe ref does not erase an earlier safe one
-    expect(artifactRefs([...passed('docs/prd/a.md'), ...passed('/etc/b.md')]).prd).toBe('docs/prd/a.md')
-  })
-
-  test('criteria: toPosition parses the PRD\'s success criteria; none without a PRD', async () => {
-    const position = toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [], prd: { path: 'docs/prd/example.md', text: PRD_WITH_CRITERIA } })
-    expect(position.criteria.map(c => c.id)).toEqual(['SC-001', 'SC-002', 'SC-003', 'SC-004', 'SC-010'])
-    expect(position.criteria[1]).toEqual({ id: 'SC-002', text: 'The pane lists the Build Plan, wrapped onto a second line.' })
-    expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [] }).criteria).toEqual([])
-    expect(toPosition({ feature: FEATURE, events: LOG.events, worklog: null, adrs: [], prd: null }).criteria).toEqual([])
-  })
-
-  test('criteria status: the last review-verdict by seq wins; none is {}', async () => {
-    const verdict = (seq: number, criteria: unknown) => ({ seq, type: 'review-verdict', ts: 't', data: { verdict: 'ready', criteria } })
-    const events = [...LOG.events, verdict(60, { 'SC-001': 'met', 'SC-002': 'met' }), verdict(50, { 'SC-001': 'unmet' })]
-    expect(criteriaStatus(events)).toEqual({ 'SC-001': 'met', 'SC-002': 'met' })
-    // non-string values are dropped; a last verdict without criteria is {}
-    expect(criteriaStatus([verdict(1, { 'SC-001': 'met', 'SC-002': true })])).toEqual({ 'SC-001': 'met' })
-    expect(criteriaStatus([verdict(1, { 'SC-001': 'met' }), { seq: 2, type: 'review-verdict', ts: 't', data: { verdict: 'ready' } }])).toEqual({})
-    expect(criteriaStatus(LOG.events)).toEqual({})
-    expect(toPosition({ feature: FEATURE, events, worklog: null, adrs: [] }).criteriaStatus).toEqual({ 'SC-001': 'met', 'SC-002': 'met' })
-    expect(toPosition({ feature: FEATURE, events: [], worklog: null, adrs: [] }).criteriaStatus).toEqual({})
-  })
-
-  test('dispositions: the last review-verdict by seq names each finding\'s fate; none is {}', async () => {
-    const verdict = (seq: number, data: Record<string, unknown>) => ({ seq, type: 'review-verdict', ts: 't', data: { verdict: 'ready', ...data } })
-    const later = verdict(60, { dispositions: { 'src/a.ts:42': 'fixed', 'src/widget.ts:?': 'rejected', 'src/b.ts:1': 7 } })
-    const events = [...LOG.events, later, verdict(50, { dispositions: { 'src/a.ts:42': 'deferred' } })]
-    expect(dispositions(events)).toEqual({ 'src/a.ts:42': 'fixed', 'src/widget.ts:?': 'rejected' })
-    expect(dispositions([...events, verdict(70, {})])).toEqual({})
-    expect(dispositions(LOG.events)).toEqual({})
-    expect(toPosition({ feature: FEATURE, events, worklog: null, adrs: [] }).dispositions).toEqual({ 'src/a.ts:42': 'fixed', 'src/widget.ts:?': 'rejected' })
-    expect(toPosition({ feature: FEATURE, events: [], worklog: null, adrs: [] }).dispositions).toEqual({})
-  })
-
-  test('toPosition: no worklog and no events still yields a position', async () => {
-    const position = toPosition({ feature: FEATURE, events: [], worklog: null, adrs: [] })
-    expect(position.tasks).toEqual([])
-    expect(position.design.sections).toEqual([])
-    expect(position.phases.implement).toBe('current')
+  test('clock: HH:MM in the local zone', async () => {
+    expect(clock(must(isoTime('2026-10-01T11:42:00+00:00')))).toMatch(/^\d\d:\d\d$/)
   })
 })

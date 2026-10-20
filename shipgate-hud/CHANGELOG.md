@@ -2,6 +2,77 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.6.0 — the right stream for each session, the right stream at the gate, and a typed core.
+Needs shipgate 0.18.0 or newer.
+
+**Binding (ADR 0004).** For a session that wrote to no stream, the HUD probed every nested repo
+of an umbrella and showed the most recently active stream among them. Those checkouts are
+shared with other sessions. So an idle session at an umbrella root showed another session's
+work, and the label moved whenever an unrelated stream moved. Now:
+- **The rule.** The nested branches go to journal.py in one `status` call. They bind only
+  when they name exactly one live stream.
+- **Unbound.** An unbound session shows no band. Its pane names the nearby live streams.
+- **Issue worktrees.** A session opened inside an issue worktree still binds its one stream
+  before its first write.
+- **Failures.** A failed probe is a failure the pane shows. It never reads as "no stream".
+
+**The publish gate (ADR 0005).** The gate held `git push` against whatever stream the band
+showed, whatever repo the command targeted. Now:
+- **Which branch.** The gate reads which branch the command publishes. It uses `git -C`, an
+  earlier `cd`, a refspec, `gh pr create --head` or `glab mr create --source-branch`, or else
+  the HEAD of the command's directory.
+- **Which stream.** It checks that branch's stream. When the branch has no stream, or no
+  single branch is named, it checks the session's own stream instead.
+- **Every publish in the line.** It checks every publish command in a line, and holds the
+  line when any of them holds. The dialog names every held command, because one "Let it
+  through once" covers the whole line.
+- **Literal strings.** A literal `sh -c`, `bash -c` or `eval` string is read.
+- **Five ways a publish passed:**
+  - a failed nested probe;
+  - an exit 2 from a script file that went missing;
+  - a cut search for `journal.py`;
+  - a refresh that wrote between two reads;
+  - the gate staying open after a plugin reload, until the next session start.
+
+  Each of these now holds. The surface is read when the gate runs, and the gate decides from
+  the value its own refresh returns.
+
+**The journal computes the facts (shipgate ADR 0009).** The HUD kept TypeScript copies of
+journal rules, and several copies disagreed with journal.py:
+- the publish rule (a list-valued `decision` authorized here and was refused by `mr-opened`);
+- the phase when none was entered (drawn as `workspace`);
+- skipped phases (drawn as done);
+- the Build Plan grammar (a `* [x]` task was missing here, while the Stop gate blocked on it);
+- ADRs in a custom home (dropped);
+- finished streams (drawn as live).
+
+The HUD now reads `journal.py position` and draws the result:
+- skipped phases as `↷`, and a phase entered again as `↺`;
+- "no phase entered" when none was;
+- a dormant or finished stream marked as such;
+- the plan exactly as the Stop gate reads it.
+
+The worklog fallback by name moved into journal.py, so the HUD no longer reads every
+sibling stream's log.
+
+**A typed core (ADR 0006, astrolabe adapted to a mod).**
+- **One boundary.** journal.py's JSON is decoded in one place, strictly. A renamed key is an
+  error, not a default. A golden file that shipgate's tests generate pins the contract on
+  both sides.
+- **Unions for states.** The view, the binding, refresh results, run failures, the publish
+  command and the gate's verdict are closed unions.
+- **Stored values.** They are decoded on read and versioned by shape tags, so this upgrade
+  drops the v0.5 values and re-derives them.
+- **The review board.**
+  - Its findings come in three typed variants.
+  - A junk entry in a review return no longer becomes a clickable card.
+  - A stored board that does not decode is dropped. Before, it could break the band.
+- **Exhaustive drawing.** Tabs, marks, severities and phase glyphs are drawn through total
+  tables.
+- **Property tests.** They cover the band width, the diagram grid, the review rounds, tick
+  presses and the command scan. The band-width law found that band lines overflowed below 10
+  columns, which is now fixed.
+
 v0.5.1 — the worklog fallback leaves another stream's worklog alone. When a stream's events
 name no worklog, the HUD scans the worklog home for one named for the stream's slug. Two
 streams can share a slug: an epic stream `epic/x` beside a child whose worklog is

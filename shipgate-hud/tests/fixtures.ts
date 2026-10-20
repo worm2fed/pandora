@@ -1,96 +1,133 @@
 // Generic fixtures: a public repository, so stream names, task titles and questions are
-// invented, never copied from a private project.
+// invented, never copied from a private project. The journal's JSON is journal.py's own (the
+// golden file, fixtures.journal.ts) or a variant of it typed against the raw shapes below: a
+// variant cannot drop a key the decoders read, nor give it a value of another type.
 
-export const FEATURE = {
-  age_days: 0,
-  branch_match: true,
-  dormant: false,
-  feature: 'feat/example-stream',
-  gate_decision_count: 3,
-  gate_decisions: [
-    {
-      decision: 'no PRD; executive assumptions in the worklog',
-      gate: 'clarify',
-      mode: 'executive',
-      question: 'PRD for a prose-only fix?',
-      raised_by: 'orchestrator',
-      ts: '2026-10-01T08:00:00+00:00',
-    },
-    {
-      decision: 'yes, both',
-      gate: 'clarify',
-      mode: 'ask',
-      question: 'Both widgets, or one?',
-      raised_by: 'orchestrator',
-      ts: '2026-10-01T08:30:00+00:00',
-    },
-    {
-      decision: 'publish',
-      gate: 'publish',
-      mode: 'ask',
-      question: 'How does it land?',
-      raised_by: 'user',
-      ts: '2026-10-01T09:00:00+00:00',
-    },
-  ],
-  implied_phase: false,
-  last_event: { seq: 42, ts: '2026-10-01T09:30:00+00:00', type: 'task-done' },
-  last_verify: {
-    outcome: 'pass',
-    scope: null,
-    task_ids: ['T001', 'T010'],
-    ts: '2026-10-01T09:20:00+00:00',
+import type { AuthorizedBy, GateMode, Lifecycle, Phase, PhaseMark, RaisedBy, VerdictValue, VerifyOutcome, WorklogFrom } from '../types'
+import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
+
+// ---------------------------------------------------------------------------------------
+// The raw shapes: the keys of journal.py's JSON the decoders read (journal.py prints more)
+// ---------------------------------------------------------------------------------------
+
+/** `current` as journal.py prints it. */
+export interface CurrentJson {
+  readonly phase: Phase
+  readonly entered_at: string
+  readonly implied: boolean
+}
+
+/** `publish` as journal.py prints it. */
+export type PublishJson =
+  | { readonly kind: 'held' }
+  | { readonly kind: 'authorized'; readonly by: AuthorizedBy; readonly seq: number; readonly at: string }
+
+/** One stream of `status --json`. */
+export interface FeatureJson {
+  readonly stream: string
+  readonly lifecycle: Lifecycle
+  readonly current: CurrentJson | null
+  readonly last_event: { readonly ts: string } | null
+  readonly publish: PublishJson
+}
+
+/** `status --json`. */
+export interface StatusJson {
+  readonly features: readonly FeatureJson[]
+  readonly session_match: string | null
+  readonly branch_match: string | null
+  readonly nested_matches: readonly string[]
+}
+
+/** One task of `position --json`. */
+export interface TaskJson {
+  readonly id: string
+  readonly title: string | null
+  readonly section: string | null
+  readonly ticked: boolean
+  readonly done: boolean
+  readonly last_verify: { readonly outcome: VerifyOutcome; readonly at: string } | null
+}
+
+/** One gate decision of `position --json`. */
+export interface DecisionJson {
+  readonly seq: number
+  readonly gate: string | null
+  readonly question: string | null
+  readonly decision: string | null
+  readonly raised_by: RaisedBy
+  readonly mode: GateMode | null
+  readonly at: string
+}
+
+/** `position --stream <s> --json`. */
+export interface PositionJson {
+  readonly stream: string
+  readonly version: number
+  readonly lifecycle: Lifecycle
+  readonly current: CurrentJson | null
+  readonly publish: PublishJson
+  readonly phases: Readonly<Record<Phase, PhaseMark>>
+  readonly artifacts: {
+    readonly worklog: string | null
+    readonly worklog_from: WorklogFrom | null
+    readonly prd: string | null
+    readonly adrs: readonly string[]
+  }
+  readonly tasks: readonly TaskJson[] | null
+  readonly decisions: readonly DecisionJson[]
+  readonly last_verify: { readonly outcome: VerifyOutcome; readonly task_ids: readonly string[]; readonly at: string } | null
+  readonly verdict: {
+    readonly seq: number
+    readonly at: string
+    readonly verdict: VerdictValue
+    readonly criteria: Readonly<Record<string, string>>
+    readonly dispositions: Readonly<Record<string, string>>
+  } | null
+}
+
+/** journal.py's own output has the raw shapes: a key the golden file renames or drops is a compile error here. */
+export const GOLDEN_STATUS: readonly StatusJson[] = Object.values(STATUS_GOLDEN)
+export const GOLDEN_POSITIONS: readonly PositionJson[] = Object.values(POSITION_GOLDEN)
+
+// ---------------------------------------------------------------------------------------
+// The example stream: the golden `flow` stream renamed, held, with no verdict yet, and
+// naming the example artifacts below
+// ---------------------------------------------------------------------------------------
+
+/** The stream the example checkout's branch names. */
+export const EXAMPLE_STREAM = 'feat/example-stream'
+
+/**
+ * The example stream's position: the golden `flow` position (four tasks: T001 done, T002
+ * failing, T003 ticked and unrecorded, T004 open; an executive decision to veto and the user's
+ * publish decision), held, with no verdict, its worklog, ADR and PRD the fixtures below.
+ */
+export const EXAMPLE_POSITION = {
+  ...POSITION_GOLDEN.flow,
+  stream: EXAMPLE_STREAM,
+  publish: { kind: 'held' },
+  verdict: null,
+  artifacts: {
+    worklog: 'docs/prd/example.worklog.md',
+    worklog_from: 'event',
+    prd: 'docs/prd/example.md',
+    adrs: ['docs/adr/0007-example-decision.md'],
   },
-  open_designs: [],
-  phase: 'implement',
-  phase_entered_at: '2026-10-01T09:10:00+00:00',
-  stream: 'feat/example-stream',
-  task_ids: ['T001', 'T010'],
-  tasks_done: 2,
-  terminal: false,
-  version: 12,
-}
+} satisfies PositionJson
 
-export const STATUS = {
-  branch_match: 'feat/example-stream',
-  features: [FEATURE],
-  hidden_terminal: 3,
-  ledger: { entries: 0, exists: true, nudge: false, path: 'docs/ledger.md' },
-}
+/** A stream's status entry: the golden `branch` brief's first stream, renamed and held. */
+export const featureOf = (stream: string, publish: PublishJson = { kind: 'held' }): FeatureJson => ({
+  ...STATUS_GOLDEN.branch.features[0],
+  stream,
+  publish,
+})
 
-export const LOG = {
-  events: [
-    { seq: 30, type: 'flow-started', ts: '2026-10-01T07:00:00+00:00', data: { request: 'x' } },
-    { seq: 31, type: 'phase-entered', ts: '2026-10-01T07:01:00+00:00', data: { phase: 'workspace' } },
-    { seq: 32, type: 'phase-entered', ts: '2026-10-01T07:02:00+00:00', data: { phase: 'route-and-map' } },
-    { seq: 33, type: 'phase-entered', ts: '2026-10-01T07:03:00+00:00', data: { phase: 'clarify', implied: true } },
-    { seq: 34, type: 'clarify-passed', ts: '2026-10-01T08:00:00+00:00', data: { prd: 'docs/prd/example.md' } },
-    {
-      seq: 35,
-      type: 'design-committed',
-      ts: '2026-10-01T08:30:00+00:00',
-      data: {
-        worklog: 'docs/prd/example.worklog.md',
-        adrs: ['docs/adr/0007-example-decision.md'],
-        refs: ['docs/prd/example.worklog.md#design'],
-      },
-    },
-    { seq: 36, type: 'phase-entered', ts: '2026-10-01T09:10:00+00:00', data: { phase: 'implement' } },
-    { seq: 40, type: 'verify-run', ts: '2026-10-01T09:20:00+00:00', data: { outcome: 'pass', task_ids: ['T001', 'T010'] } },
-    { seq: 41, type: 'task-done', ts: '2026-10-01T09:21:00+00:00', data: { task_id: 'T001' } },
-    { seq: 42, type: 'task-done', ts: '2026-10-01T09:30:00+00:00', data: { task_id: 'T010' } },
-    { seq: 43, type: 'verify-run', ts: '2026-10-01T09:40:00+00:00', data: { outcome: 'fail', task_ids: ['T010'] } },
-    // an absolute ref and a parent-traversal ref: the HUD must never read these
-    { seq: 44, type: 'deviation', ts: '2026-10-01T09:41:00+00:00', data: { refs: ['/etc/evil.worklog.md', '../../outside/adr/0001-x.md'] } },
-  ],
-}
+/** The example stream's status entry. */
+export const EXAMPLE_FEATURE: FeatureJson = featureOf(EXAMPLE_STREAM)
 
-/** The same stream named with the `feature/` prefix the journal folds into a bare slug. */
-export const FEATURE_PREFIXED = {
-  ...FEATURE,
-  feature: 'example-stream',
-  stream: 'feature/example-stream',
-}
+/** The publish authorization a `review-verdict` with `verdict: ready` gives. */
+export const AUTHORIZED: PublishJson = { kind: 'authorized', by: 'review-verdict', seq: 50, at: '2026-10-01T10:00:00+00:00' }
 
 export const SIDECAR = {
   version: 1,

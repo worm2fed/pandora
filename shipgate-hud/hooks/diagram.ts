@@ -4,12 +4,13 @@
 // 0003), and a one-line-per-edge text form, the terminal's fallback.
 // No `$` here, so the tests run it without a process or a file system.
 
-export type Fence = { kind: 'markdown'; text: string } | { kind: 'fence'; lang: 'mermaid' | 'svg'; source: string }
+/** A chunk of a section's markdown: prose, or a `mermaid` / `svg` fence's source. */
+export type Fence = { readonly kind: 'markdown'; readonly text: string } | { readonly kind: 'fence'; readonly lang: 'mermaid' | 'svg'; readonly source: string }
 
 const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`]*)/
 
 /** A section's markdown split at its ```mermaid and ```svg fences; every other fence stays inside the markdown chunks. */
-export function splitFences(markdown: string): Fence[] {
+export function splitFences(markdown: string): readonly Fence[] {
   const out: Fence[] = []
   const lines = markdown.split('\n')
   let text: string[] = []
@@ -45,10 +46,23 @@ export function splitFences(markdown: string): Fence[] {
 
 export type Direction = 'LR' | 'TD' | 'TB' | 'RL' | 'BT'
 export type NodeShape = 'rect' | 'round' | 'diamond' | 'circle'
-export type FlowNode = { id: string; label: string; shape: NodeShape }
+export interface FlowNode {
+  readonly id: string
+  readonly label: string
+  readonly shape: NodeShape
+}
 export type EdgeStyle = 'solid' | 'dotted' | 'thick' | 'open'
-export type FlowEdge = { from: string; to: string; label: string; style: EdgeStyle }
-export type Flowchart = { direction: Direction; nodes: FlowNode[]; edges: FlowEdge[] }
+export interface FlowEdge {
+  readonly from: string
+  readonly to: string
+  readonly label: string
+  readonly style: EdgeStyle
+}
+export interface Flowchart {
+  readonly direction: Direction
+  readonly nodes: readonly FlowNode[]
+  readonly edges: readonly FlowEdge[]
+}
 
 const DIRECTIONS: readonly Direction[] = ['LR', 'TD', 'TB', 'RL', 'BT']
 // a keyword alone, not the start of an id such as `end-user` or `style-guide`
@@ -167,14 +181,14 @@ export function parseFlowchart(source: string): Flowchart | null {
   const kind = header[0]
   if (kind !== 'flowchart' && kind !== 'graph') return null
   const dir = (header[1] ?? '').toUpperCase()
-  const direction: Direction = (DIRECTIONS as readonly string[]).includes(dir) ? (dir as Direction) : 'TD'
+  const direction: Direction = DIRECTIONS.find(known => known === dir) ?? 'TD'
 
-  const nodes = new Map<string, FlowNode & { declared: boolean }>()
+  const nodes = new Map<string, FlowNode & { readonly declared: boolean }>()
   const edges: FlowEdge[] = []
   const see = (ref: NodeRef): void => {
     const known = nodes.get(ref.id)
     if (!known) nodes.set(ref.id, { id: ref.id, label: ref.label ?? ref.id, shape: ref.shape, declared: ref.label !== null })
-    else if (!known.declared && ref.label !== null) Object.assign(known, { label: ref.label, shape: ref.shape, declared: true })
+    else if (!known.declared && ref.label !== null) nodes.set(ref.id, { id: ref.id, label: ref.label, shape: ref.shape, declared: true })
   }
 
   for (const line of statements) {
@@ -203,8 +217,18 @@ export function parseFlowchart(source: string): Flowchart | null {
   return { direction, nodes: [...nodes.values()].map(({ id, label, shape }) => ({ id, label, shape })), edges }
 }
 
-export type Box = { x: number; y: number; w: number; h: number }
-export type Layout = { layers: string[][]; width: number; height: number; boxes: Record<string, Box> }
+export interface Box {
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+}
+export interface Layout {
+  readonly layers: readonly (readonly string[])[]
+  readonly width: number
+  readonly height: number
+  readonly boxes: Readonly<Record<string, Box>>
+}
 
 const BOX_W = 120
 const BOX_H = 36
@@ -216,6 +240,11 @@ const horizontal = (direction: Direction): boolean => direction === 'LR' || dire
 
 /** The box width for a label: 120, wider for long labels. */
 export const boxWidth = (label: string): number => Math.max(BOX_W, Math.ceil([...label].length * CHAR_W) + 24)
+
+// STATEFUL EXCEPTION (HUD ADR 0006): the layout and the terminal grid router below are graph
+// walks and a cell canvas, written as loops over local Maps and arrays that they mutate in
+// place. That state never leaves the call: each function returns fresh values, and the rest
+// of the module (and the HUD) sees only readonly ones.
 
 /** Layers by longest path from the sources (cycles broken by first-seen order), nodes in first-seen order within a layer; pixel boxes for the SVG. */
 export function layoutFlowchart(chart: Flowchart): Layout {
@@ -242,8 +271,8 @@ export function layoutFlowchart(chart: Flowchart): Layout {
   for (const tos of forward.values()) for (const to of tos) indegree.set(to, (indegree.get(to) ?? 0) + 1)
   const layer = new Map<string, number>(order.map(id => [id, 0]))
   const queue = order.filter(id => indegree.get(id) === 0)
-  while (queue.length > 0) {
-    const id = queue.shift() as string
+  // a for…of over an array visits what the loop pushes onto it: a queue without a shift
+  for (const id of queue) {
     for (const to of forward.get(id) ?? []) {
       layer.set(to, Math.max(layer.get(to) ?? 0, (layer.get(id) ?? 0) + 1))
       indegree.set(to, (indegree.get(to) ?? 0) - 1)
@@ -404,9 +433,28 @@ export const GRID_CELL_LIMIT = 40000
 /** Past this many rows a terminal picture is too tall to read; the caller draws the text form. */
 export const GRID_ROW_LIMIT = 200
 
-export type FlowGrid = { rows: string[]; backEdges: FlowEdge[]; width: number }
-/** Why `flowchartGrid` drew no picture: too many nodes, too many forward legs, or too many cells. */
-export type GridSkip = { skip: 'nodes'; nodes: number } | { skip: 'legs'; legs: number } | { skip: 'size'; width: number; height: number }
+/** The terminal picture: rows of cells, each exactly `width` code points; the back edges it did not route. */
+export interface FlowGrid {
+  readonly rows: readonly string[]
+  readonly backEdges: readonly FlowEdge[]
+  readonly width: number
+}
+
+/**
+ * Why `flowchartGrid` drew no picture: too many nodes, too many forward legs, too many cells,
+ * or a box or a label that would land outside the grid, on fixed text or on a line (`overlap`:
+ * a broken router invariant, drawn as the text form rather than as a broken picture).
+ */
+export type GridSkip =
+  | { readonly kind: 'nodes'; readonly nodes: number }
+  | { readonly kind: 'legs'; readonly legs: number }
+  | { readonly kind: 'size'; readonly width: number; readonly height: number }
+  | { readonly kind: 'overlap'; readonly what: 'box' | 'label'; readonly on: 'outside' | 'text' | 'line'; readonly x: number; readonly y: number }
+
+/** The grid, or why there is none. */
+export type GridResult = { readonly kind: 'grid'; readonly grid: FlowGrid } | { readonly kind: 'skip'; readonly reason: GridSkip }
+
+const skipFor = (reason: GridSkip): GridResult => ({ kind: 'skip', reason })
 
 // a line cell's connections, in screen directions
 const N = 1
@@ -452,7 +500,9 @@ const channelOrder = (owners: { key: string; sc: number; legs: Leg[] }[]): strin
   while (left.length > 0) {
     // the first owner with nothing left that must precede it; on a cycle, the first by position
     const i = Math.max(0, left.findIndex(a => !left.some(b => mustPrecede(b, a))))
-    out.push((left.splice(i, 1)[0] as (typeof left)[number]).key)
+    const [next] = left.splice(i, 1)
+    if (next === undefined) break
+    out.push(next.key)
   }
   return out
 }
@@ -466,11 +516,11 @@ const channelOrder = (owners: { key: string; sc: number; legs: Leg[] }[]): strin
  * an edge that spans layers runs through a slot under each layer between. Back edges are not
  * drawn but returned. Labels cut to 24 cells. Identical edges are drawn once. A skip, before
  * any cell is allocated, past `GRID_NODE_LIMIT` nodes (`nodes`), past `GRID_LEG_LIMIT` forward
- * legs (`legs`) or past `GRID_CELL_LIMIT` cells (`size`). Throws when a box or label would land
- * on a line or another box; callers catch it and fall back.
+ * legs (`legs`) or past `GRID_CELL_LIMIT` cells (`size`). A box or label that would land on a
+ * line, on other text or outside the grid is the `overlap` skip: never a throw.
  */
-export function flowchartGrid(chart: Flowchart, direction: Direction = chart.direction): FlowGrid | GridSkip {
-  if (chart.nodes.length > GRID_NODE_LIMIT) return { skip: 'nodes', nodes: chart.nodes.length }
+export function flowchartGrid(chart: Flowchart, direction: Direction = chart.direction): GridResult {
+  if (chart.nodes.length > GRID_NODE_LIMIT) return skipFor({ kind: 'nodes', nodes: chart.nodes.length })
   const { layers } = layoutFlowchart(chart)
   const flat = horizontal(direction)
   const mirror = direction === 'RL' || direction === 'BT'
@@ -499,7 +549,7 @@ export function flowchartGrid(chart: Flowchart, direction: Direction = chart.dir
     else forward.push({ edge, index, lf, lt })
   })
   const legCount = forward.reduce((sum, f) => sum + (f.lt - f.lf), 0)
-  if (legCount > GRID_LEG_LIMIT) return { skip: 'legs', legs: legCount }
+  if (legCount > GRID_LEG_LIMIT) return skipFor({ kind: 'legs', legs: legCount })
 
   // Cross axis: boxes stacked one cell apart, then a blank and a slot per edge passing through.
   const slots: string[][] = layers.map(() => [])
@@ -555,9 +605,11 @@ export function flowchartGrid(chart: Flowchart, direction: Direction = chart.dir
   const crossSize = flat ? crossTotal : Math.max(crossTotal, ...gaps.map(g => g.longest))
   const width = flat ? mainTotal : crossSize
   const height = flat ? crossSize : mainTotal
-  if (width * height > GRID_CELL_LIMIT) return { skip: 'size', width, height }
+  if (width * height > GRID_CELL_LIMIT) return skipFor({ kind: 'size', width, height })
 
   // Cells: line connections and styles, heads, and fixed text (boxes, labels) drawn over all.
+  // a box or a label that would land where it must not; the first one skips the grid
+  const overlaps: GridSkip[] = []
   const mask = Array.from({ length: height }, () => new Array<number>(width).fill(0))
   const style = Array.from({ length: height }, () => new Array<number>(width).fill(0))
   const head = Array.from({ length: height }, () => new Array<string | null>(width).fill(null))
@@ -627,15 +679,16 @@ export function flowchartGrid(chart: Flowchart, direction: Direction = chart.dir
     })
   })
 
-  /** Fixed text at screen (x, y): a box never lands on a line, and nothing lands on fixed text. */
+  /** Fixed text at screen (x, y): a box never lands on a line, and nothing lands on fixed text; the first that would is the overlap. */
   function put(x: number, y: number, chars: string, what: 'box' | 'label'): void {
     ;[...chars].forEach((ch, i) => {
       const fx = fixed[y]
-      if (!fx || x + i < 0 || x + i >= width) throw new Error(`flowchartGrid: ${what} outside the grid at ${x + i},${y}`)
-      if (fx[x + i] !== null) throw new Error(`flowchartGrid: ${what} over fixed text at ${x + i},${y}`)
-      if (what === 'box' && ((mask[y]?.[x + i] ?? 0) !== 0 || head[y]?.[x + i] != null))
-        throw new Error(`flowchartGrid: a line over a box at ${x + i},${y}`)
-      fx[x + i] = ch
+      const cx = x + i
+      if (overlaps.length > 0) return
+      if (!fx || cx < 0 || cx >= width) overlaps.push({ kind: 'overlap', what, on: 'outside', x: cx, y })
+      else if (fx[cx] !== null) overlaps.push({ kind: 'overlap', what, on: 'text', x: cx, y })
+      else if (what === 'box' && ((mask[y]?.[cx] ?? 0) !== 0 || head[y]?.[cx] != null)) overlaps.push({ kind: 'overlap', what, on: 'line', x: cx, y })
+      else fx[cx] = ch
     })
   }
 
@@ -661,8 +714,10 @@ export function flowchartGrid(chart: Flowchart, direction: Direction = chart.dir
     const glyphs = STYLE_GLYPHS[style[y]?.[x] ?? 1] ?? SOLID
     return glyphs[bits] ?? SOLID[bits] ?? ' '
   }
+  const overlap = overlaps[0]
+  if (overlap !== undefined) return skipFor(overlap)
   const rows = Array.from({ length: height }, (_, y) =>
     Array.from({ length: width }, (_, x) => fixed[y]?.[x] ?? head[y]?.[x] ?? glyph(x, y)).join(''),
   )
-  return { rows, backEdges, width }
+  return { kind: 'grid', grid: { rows, backEdges, width } }
 }

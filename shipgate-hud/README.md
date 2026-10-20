@@ -7,16 +7,18 @@ interface, from the journal shipgate already keeps.
   and a `hud` button that opens the pane. A band narrower than the summary wraps it onto more
   rows at the ` · ` separators rather than cutting it.
 - **Pane** (`/hud`, or opened at session start in a wide terminal) with the phase timeline
-  `WS ✓ MAP ✓ EXP ✓ CLR ✓ DSN ✓ IMP ● REV · CAP ·` and four tabs:
+  `WS ✓ MAP ✓ EXP ↷ CLR ✓ DSN ✓ IMP ● REV · CAP ·` (`✓` done, `↷` skipped, `●` current, `↺`
+  entered again after a move back, `·` to do; journal.py computes the marks) and four tabs:
   - **Flow** — the stream's gate decisions, newest first, with who raised each one. A
     decision the orchestrator took on its own (`raised_by: orchestrator`, `mode: executive`)
     carries a **Veto** button; pressing it submits a prompt that names that decision (stream,
     gate, timestamp) and asks the orchestrator to read it from the journal and revisit it.
     The prompt never carries the journal's own text.
   - **Plan** — a progress bar and the worklog's Build Plan under its section headers, one line
-    per task, cross-checked against the journal: `✓` done with a `task-done` event and the last
-    verify that covered it, `✗` when that last verify failed, `◐` ticked in the worklog but never
-    recorded (what the Stop hook will block on), `○` to do.
+    per task, as journal.py parsed it with the Stop gate's grammar. Each task has one state:
+    `✗` when the last verify that covered it failed, `✓` done with a `task-done` event, `◐`
+    ticked in the worklog but never recorded (what the Stop hook will block on), `○` to do.
+    So the counts add up.
   - **Design** — the ADRs the design committed to, one line each, and the worklog's Design
     section as collapsible `##` sections, one open at a time (prose reflowed to the pane's width).
     **Diagrams:** a fenced `svg` block is drawn as a picture on desktop, mobile and vscode, and
@@ -57,30 +59,49 @@ interface, from the journal shipgate already keeps.
 
 - **Publish gate** — the gate holds `git push`, `gh pr create` (or `gh pr new`) and
   `glab mr create` (or `glab mr new`). It accepts git's, gh's and glab's global options before
-  the subcommand. The command waits until the stream may publish. The stream may publish when
-  the journal holds a `review-verdict` of `ready` after its last `task-done`. The user's own
-  publish `gate-decision` after the last `task-done` also lets it publish. This is the rule
-  journal.py applies to `mr-opened`.
+  the subcommand. The command waits until the stream **of the branch it publishes** may
+  publish (ADR 0005). The stream may publish when the journal holds a `review-verdict` of
+  `ready` after its last `task-done`. The user's own publish `gate-decision` after the last
+  `task-done` also lets it publish. journal.py computes this rule (the one `mr-opened` uses)
+  and prints it as `publish`; the HUD does not copy it.
 
-  The gate finds the command anywhere in the shell line. It looks after `&&`, `;` or a
-  newline. It looks behind shell words such as `if`, `do` or `{`. It looks behind wrappers
-  such as `env`, `sudo` or `timeout`. Quoted text is one word and never a command. So a `grep`
-  for the verb is not held. A heredoc body counts only when it is fed to a shell such as
-  `bash`.
+  The gate finds the command anywhere in the shell line. It looks after `&&`, `;`, `||`, `|`
+  or a newline. It looks behind shell words such as `if`, `do` or `{`, and behind wrappers
+  such as `env`, `sudo` or `timeout`. Quoted text is one word and never a command, so a
+  `grep` for the verb is not held. A heredoc body, a here-string, or a literal string given
+  to `sh -c`, `bash -c` or `eval` is read as a command line of its own.
+
+  A line may hold several publish commands (`git push origin a && git push origin b`). The gate
+  checks each one, and holds the line when any of them holds. The dialog names every held
+  command with its stream, because one answer covers the whole line. For each command it finds which
+  branch the command publishes:
+  - **The directory.** The shell's directory, a `git -C <dir>`, or a `cd <dir>` earlier on the
+    line. A directory the scan cannot read (`cd -`, `cd $X`, `git -C "$(…)"`) is unreadable.
+  - **The branch.** A refspec names it (`git push origin feat/x`; `+src:dst` gives `src`,
+    `refs/heads/x` gives `x`), and so do `gh pr create --head` and `glab mr create
+    --source-branch`. Otherwise it is the HEAD of that directory. Several refspecs, `--all`,
+    `--branches`, `--mirror`, `--tags` or a deletion name no single branch.
+  - **The stream.** One `status --branch` call gives that branch's stream and whether it may
+    publish. When the branch has no stream, or the gate cannot resolve the branch, it checks
+    the stream the session is bound to instead.
 
   Before it decides, the gate refreshes the position once. A stream that is not reviewed
   opens the engine's dialog with **Refuse** and **Let it through once**. A journal that cannot
-  be read opens the same dialog. Any other answer refuses. The model then reads what the
-  stream still needs: a review verdict to record, or a question for the user. It is never
-  told to record the user's decision itself.
+  be read opens the same dialog, and the hold names the failure. Any other answer refuses.
+  The model then reads what the stream still needs: a review verdict to record, the journal
+  to repair, or a question for the user. It is never told to record the user's decision
+  itself.
 
-  The gate passes the command in these cases: the stream is reviewed, the session has no
-  stream, the project has no sidecar, no `journal.py` is found, or the session has no surface
-  (`claude -p`). It writes nothing and remembers nothing. The next publish command asks
-  again. The gate trusts the journal. So it is a net for a forgetful model, not a boundary
-  against a deliberate one.
-  Known limits: the gate does not hold `"$(…)"` inside double quotes, `sh -c '…'`,
-  `eval "…"`, `… | bash`, `ssh host git push` or `find -exec`.
+  The gate passes the command in these cases: the stream may publish; neither the branch
+  nor the session has a stream; the project has no sidecar; no `journal.py` is found; or no
+  surface is drawing (`claude -p`). A read that fails never passes. The gate writes nothing
+  and remembers nothing, so the next publish command asks again. The gate trusts the
+  journal. It is a net for a forgetful model, not a boundary against a deliberate one.
+  Known limits: the gate does not hold a command it cannot read: `"$(…)"` inside double
+  quotes, `… | bash`, `sh -c "$X"`, `ssh host git push` or `find -exec`. It does not see a
+  directory change made by a shell function, an alias, a sourced script, `eval 'cd x'` or an
+  exported `GIT_DIR`. A bare `git push` is checked as a push of the HEAD branch, even when the
+  repository's push settings publish other branches as well.
 
 The position refreshes when the orchestrator appends to the journal, when a file in one of
 the sidecar's artifact homes is written, after `/clear` or `/resume`, and once a minute
@@ -89,7 +110,8 @@ otherwise. A request that arrives during a refresh queues one trailing refresh.
 ## What it needs
 
 - Claude Code **2.1.290 or newer** (the mods API; early access, so a release may move it).
-- **shipgate** installed from the same marketplace, and a project that ran `/shipgate:setup`
+- **shipgate 0.18.0 or newer** installed from the same marketplace (for `journal.py position`),
+  and a project that ran `/shipgate:setup`
   with a journal: the HUD keys off the `.claude/shipgate.json` sidecar, in the session's
   project root (where it started; a shell `cd` does not move it) or any directory above it
   (a session inside a nested repo of an umbrella uses the umbrella's journal, as shipgate's
@@ -109,30 +131,46 @@ Or, for development, from a checkout: `claude --plugin-dir ./shipgate-hud`.
 
 ## How it reads the position
 
-The hooks module runs with no Node and no SQLite, so it never opens the journal database.
-One refresh is `git rev-parse --abbrev-ref HEAD`, then shipgate's own CLI —
-`journal.py status --json --session=<id> --branch=<current>` and `journal.py log --stream <s> --json` —
-then bounded reads of the worklog and ADR files those events point at (relative paths
-inside the project only). The stream shown is the one **this session drives**: the status
-call carries `--session=<$.session.id()>` and journal.py marks the live stream this session
-last wrote to itself (hook-written events do not count). That stream may have no branch (an
-epic's planning stream), and several sessions open on one project each see their own. A
-session that has written to no live stream yet sees the stream of the checked-out branch; on a
-branch with no stream the band is empty and the pane says so. A `journal.py` older than
-`--session` refuses the flag, and the HUD then asks by branch alone. In an umbrella checkout (the
-session directory is a plain folder or a repo of its own, the real repos one level down,
-in `source/` or in `packages/`, and worktrees under `.worktrees/` beside the repos or inside
-one) the session directory's branch carries no stream, so the HUD then asks each nested repo
-and worktree for its branch (`git -C <repo> rev-parse --abbrev-ref HEAD`),
-probes each distinct branch once, and shows the most recently active stream among the
-matches (several nested repos may sit on branches with streams, one live, the rest dormant).
-Dot-directories and `node_modules` are not looked into. When the events name no worklog yet,
-the HUD looks in the sidecar's worklog home for a `*.worklog.md` whose name carries the
-stream's slug (`feat/x-y` → `x-y`) and otherwise shows no plan. A worklog that another live
-stream's events name belongs to that stream, so the HUD leaves it alone (`epic/x` next to a
-child whose worklog is `x.worklog.md`); that check reads each sibling stream's log, and only
-once a slug-named worklog was found. It writes nothing: a veto goes through the prompt, and
-the orchestrator records the outcome.
+The hooks module runs with no Node and no SQLite, so it never opens the journal database. It
+runs shipgate's own CLI, and journal.py computes every fact the HUD draws (shipgate ADR 0009).
+The HUD decodes that JSON strictly. A missing or mistyped key is an error the pane shows,
+never a default.
+
+One refresh does these steps:
+1. **Binding** (ADR 0004). `journal.py status --json --session=<id> --branch=<root branch>`
+   finds the stream the session is bound to, in this order:
+   - **Session:** the live stream this session last wrote to itself. Hook-written events do
+     not count. It may have no branch (an epic's planning stream), and parallel sessions each
+     see their own.
+   - **Branch:** the stream of the branch checked out at the session root.
+   - **Nested repos:** in an umbrella checkout (the real repos one level down, in `source/` or
+     in `packages/`, plus worktrees under `.worktrees/` beside the repos or inside one), one
+     more `status` call passes every nested branch. It binds only when they name exactly
+     one live stream. A session opened inside an issue worktree, with every repo on one
+     branch, binds that stream before its first write. An umbrella root with several live
+     nested streams binds nothing. Dot-directories, `node_modules` and anything below
+     `.worktrees/<name>` are not looked into.
+2. **Position.** For a bound stream, `journal.py position --stream <s> --json` gives:
+   - the phase marks;
+   - the Build Plan tasks with their journal state;
+   - the decisions with their `seq`;
+   - the last verify and the last verdict;
+   - whether the stream may publish;
+   - its artifacts. When no event names a worklog, journal.py finds it by name.
+3. **Files.** The HUD reads only the worklog, the ADRs and the PRD that `position` names, to
+   draw the design sections and the criteria. It reads only relative paths inside the
+   project.
+
+What the pane shows:
+- **No binding:** the band stays empty. The pane says that this session drives no stream,
+  and names the live streams the checkout's branches name.
+- **A failed read:** a failed `journal.py` run never reads as "no stream". The pane shows the
+  failure, and the last position read, marked as stale.
+- **An older shipgate:** a `journal.py` that does not know `position` gets a pane that names
+  the minimum shipgate version (0.18.0).
+
+The HUD writes nothing. A veto goes through the prompt, and the orchestrator records the
+outcome.
 
 `journal.py` is looked for, in order: the `journalScript` option; beside this plugin in a
 marketplace checkout (`../shipgate/scripts/journal.py`, the plugin folder resolved through a
@@ -152,18 +190,21 @@ shipgate-hud/
   .claude-plugin/plugin.json   manifest (types, userConfig)
   hooks/hooks.json             { "modules": ["./register.tsx"] }
   hooks/register.tsx           the hooks and the side effects (locate, run, read)
-  hooks/position.ts            pure: status / log / worklog / ADR → Position
-  hooks/publish.ts             pure: which shell lines publish, and the hold's text
+  hooks/json.ts                pure: Result, parseJson, absurd, the narrowing and decode helpers
+  hooks/journal.ts             pure: the one boundary for journal.py's JSON (decoders, brands)
+  hooks/position.ts            pure: decoded position + worklog / ADR / PRD → Position
+  hooks/publish.ts             pure: what a shell line publishes, the gate's verdict, the hold's text
   hooks/review.ts              pure: task-notification → review board, Accept / Kill prompts, SC criteria
   hooks/diagram.ts             pure: mermaid flowchart subset → layout, SVG, terminal grid and text form
   hooks/views.tsx              pure: Position → band and pane trees
   types/index.d.ts             the $.state contract
-  tests/                       claude plugin test — the world beneath the plugin mocked
+  tests/                       claude plugin test — the world beneath the plugin mocked;
+                               fixtures.journal.ts is generated by shipgate's contract test
   docs/prd, docs/adr           PRD, worklog and ADRs for this plugin
 ```
 
 `claude plugin validate shipgate-hud` and `claude plugin test shipgate-hud` are the checks.
-Nothing under `shipgate/` changes for this plugin to work.
+The code follows astrolabe, adapted to a mod with no dependencies (ADR 0006).
 
 ## Roadmap
 

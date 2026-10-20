@@ -1,85 +1,271 @@
-// The hooks and the side effects: locating journal.py, running it, reading the artifacts.
-// Position parsing lives in position.ts and drawing in views.tsx; both are pure. Every
-// function here that receives `$` lives in this file, because `claude plugin validate`
-// follows `$` into functions of the same file only (declarations or consts), never across
-// an import.
+// The hooks and the side effects: locating journal.py, running it, reading the artifacts,
+// the publish gate's reads. Decoding lives in journal.ts, position mapping in position.ts,
+// the gate's decision in publish.ts and drawing in views.tsx; all are pure. Every function
+// here that receives `$` lives in this file, because `claude plugin validate` follows `$`
+// into functions of the same file only (declarations or consts), never across an import.
+// The casts at the engine's boundaries (`$.ui.resolve`) and the try/catch around a rejected
+// `$` call (`settle`, `settleSync`) live here and nowhere else; a run's stdout is parsed by
+// `parseJson` and decoded, never cast.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, FsEntry, ProcessRunResult, Register, ResolveInput } from 'claude-code'
 
-import type { Adr, Decision, Position, ReviewMark, ReviewState, Tab } from '../types'
-import { artifactRefs, matchesHome, parseAdr, streamSlug, toPosition } from './position'
-import { FAIL_CLOSED, denyReason, holdReason, publishCommandOf } from './publish'
-import { TASK_OUTPUT_LIMIT, findingPrompt, isReviewLaunch, isReviewReturn, isSafeTaskOutput, parseTaskNotification, reviewReturnOfOutput, runIdOf, nextTicks, boardsFor, boardsOf, markKey, pruneMarks, pushBoard, reviewStateOf, roundId, tickKey, toReviewBoard } from './review'
+import type { Adr, BindingVia, BranchName, CriterionId, Decision, HudView, OpenRound, Position, RefreshFailure, ReviewMark, ReviewState, RoundId, RunFailure, StreamName, Tab } from '../types'
+import { type Result, absurd, err, ok, parseJson, recordOf, stringOf } from './json'
+import {
+  DEFAULT_HOMES,
+  type JournalShapeError,
+  type PositionDoc,
+  type SidecarHomes,
+  type StatusBrief,
+  type StatusFeature,
+  branchName,
+  decodePosition,
+  decodeSidecarHomes,
+  decodeStatus,
+  isoTime,
+} from './journal'
+import { type MarkdownFile, type PositionInputs, matchesHome, parseAdr, toPosition } from './position'
+import {
+  FAIL_CLOSED,
+  type BoundStream,
+  type CommandDir,
+  type CommandScan,
+  type GateInputs,
+  type Holds,
+  type PublishCommand,
+  type PublishCommands,
+  type PublishTarget,
+  type TargetBinding,
+  denyReason,
+  gateVerdict,
+  holdReason,
+  publishCommandOf,
+  scanCommand,
+} from './publish'
+import {
+  EMPTY_REVIEW,
+  type ReviewReturn,
+  TASK_OUTPUT_LIMIT,
+  boardsFor,
+  decodeReviewReturn,
+  decodeReviewState,
+  findingPrompt,
+  isReviewLaunch,
+  isSafeTaskOutput,
+  markSurvivor,
+  nextTicks,
+  parseTaskNotification,
+  pushBoard,
+  reviewReturnOfOutput,
+  roundId,
+  runIdOf,
+  toReviewBoard,
+} from './review'
 import { PANE_ID, bandOf, paneOf } from './views'
-import type { Actions, Ui } from './views'
+import type { Actions, PaneState, Ui } from './views'
 
 export const SIDECAR = '.claude/shipgate.json'
 
-/** shipgate's own defaults (journal.py DEFAULT_ARTIFACT_HOMES); a sidecar overrides them key by key. */
-const DEFAULT_ARTIFACT_HOMES: Record<string, string> = {
-  prd: 'docs/prd/*.md',
-  adr: 'docs/adr/*.md',
-  worklog: 'docs/prd/*.worklog.md',
-}
-
 type Engine = EngineInterface
 
-/** What the sidecar tells the HUD: where worklogs live, and which paths count as artifacts. */
-type Homes = { worklogGlob: string; artifactGlobs: string[] }
+// ---------------------------------------------------------------------------------------
+// The effect boundary: a `$` call's rejection and a journal run's failure as values
+// ---------------------------------------------------------------------------------------
 
-const homesOf = (merged: Record<string, string>): Homes => ({
-  worklogGlob: merged.worklog ?? DEFAULT_ARTIFACT_HOMES.worklog ?? 'docs/prd/*.worklog.md',
-  artifactGlobs: Object.values(merged),
-})
+/** A journal run's value, or why there is none. */
+export type Run<A> = Result<RunFailure, A>
 
-const DEFAULT_HOMES: Homes = homesOf(DEFAULT_ARTIFACT_HOMES)
+/** Why a `$` call rejected: the person cut it, or it could not run. */
+type Rejection = Extract<RunFailure, { readonly kind: 'Cut' | 'CannotStart' }>
 
-const exists = async ($: Engine, path: string): Promise<boolean> => {
+/** The cut: the person denied or interrupted the call the hook runs in. */
+const CUT_FAILURE: RunFailure = { kind: 'Cut' }
+
+/**
+ * A `$` call's value, or why it rejected (`classifyRejection`). One of the two places a `try`
+ * stands in the HUD's hooks, with `settleSync` (HUD ADR 0006): every other effect helper reads
+ * a rejection through this one.
+ */
+async function settle<A>(call: () => Promise<A>): Promise<Result<Rejection, A>> {
   try {
-    return await $.fs.exists(path)
-  } catch {
-    return false
+    return ok(await call())
+  } catch (error) {
+    return err(classifyRejection(error))
   }
 }
 
-const readText = async ($: Engine, path: string): Promise<string | null> => {
+/** A synchronous call's value, or why it threw: `settle` for a call that returns no promise. */
+function settleSync<A>(call: () => A): Result<Rejection, A> {
   try {
-    const text = await $.fs.read(path)
-    return typeof text === 'string' ? text : null
-  } catch {
-    return null
+    return ok(call())
+  } catch (error) {
+    return err(classifyRejection(error))
   }
 }
 
-/** What a path leads to (a link followed); null when it cannot be stat'ed. */
-const statOf = async ($: Engine, path: string): Promise<{ kind: string; size: number } | null> => {
-  try {
-    const stat = await $.fs.stat(path)
-    return { kind: stat.kind, size: stat.size }
-  } catch {
-    return null
-  }
+/** A `$` call's value; `fallback` when it rejects for any reason but a cut, which stays a `Cut` failure. */
+async function attempt<A>(call: () => Promise<A>, fallback: A): Promise<Run<A>> {
+  const settled = await settle(call)
+  return settled.ok || settled.error.kind === 'Cut' ? settled : ok(fallback)
 }
 
 /**
- * The review return of a task whose notification text carries a cut result: read whole from the
- * task output file the notification names. Only for a prompt the engine stamped
- * `task-notification`, only an absolute `…/tasks/*.output` path, only a regular file of at most
- * TASK_OUTPUT_LIMIT bytes. Any failure (stat, read, parse, shape) is null: no board, no error.
+ * Why a `$` call rejected: `Cut` when the engine cut it because the person denied or
+ * interrupted the call the hook runs in (an `AbortError`, or the engine's `) aborted` message);
+ * `CannotStart` for anything else. Only the engine's own rejection counts as a cut.
  */
-async function reviewReturnFromOutput($: Engine, path: string | null): Promise<unknown> {
+function classifyRejection(error: unknown): Extract<RunFailure, { readonly kind: 'Cut' | 'CannotStart' }> {
+  if (!(error instanceof Error)) return { kind: 'CannotStart', message: String(error) }
+  return error.name === 'AbortError' || /\) aborted$/.test(error.message) ? { kind: 'Cut' } : { kind: 'CannotStart', message: error.message }
+}
+
+/** journal.py's exit code for a usage error: an unknown flag or subcommand among them (EXIT_USAGE). */
+const EXIT_USAGE = 2
+
+/**
+ * The argument an argparse usage error names: `<prog>: error: unrecognized arguments: <args>`
+ * or `<prog>: error: argument <name>: invalid choice: '<choice>'`, after argparse's `usage:`
+ * line. Null for any other text: python3 also exits 2 for a script file it cannot open (D1).
+ */
+function unknownArgumentOf(stderr: string): string | null {
+  if (!/^usage: /m.test(stderr)) return null
+  const unrecognized = /: error: unrecognized arguments: (.+)$/m.exec(stderr)?.[1]
+  const choice = /: error: argument [^:\n]+: invalid choice: '([^'\n]*)'/m.exec(stderr)?.[1]
+  const argument = unrecognized ?? choice
+  return argument === undefined ? null : argument.trim()
+}
+
+/** A finished journal.py run as a value: its decoded stdout, or why there is none. */
+function outcomeOf<A>(ran: ProcessRunResult, decode: (raw: unknown) => Result<JournalShapeError, A>): Run<A> {
+  if (ran.exitCode !== 0) {
+    const argument = ran.exitCode === EXIT_USAGE ? unknownArgumentOf(ran.stderr) : null
+    return err(argument === null ? { kind: 'Exited', exitCode: ran.exitCode, stderr: ran.stderr } : { kind: 'Unsupported', argument })
+  }
+  if (ran.isStdoutTruncated) return err({ kind: 'Truncated' })
+  const parsed = parseJson(ran.stdout)
+  if (!parsed.ok) return err({ kind: 'NotJson', message: parsed.error.message })
+  const decoded = decode(parsed.value)
+  return decoded.ok ? decoded : err({ kind: 'BadShape', error: decoded.error })
+}
+
+// ---------------------------------------------------------------------------------------
+// The file system and the session
+// ---------------------------------------------------------------------------------------
+
+/** Does the path exist? Any rejection but a cut reads as no; a cut is a `Cut` failure (D3). */
+const existsRun = ($: Engine, path: string): Promise<Run<boolean>> => attempt(() => $.fs.exists(path), false)
+
+/** A file's text; null when it cannot be read. */
+const readText = async ($: Engine, path: string): Promise<string | null> => {
+  const text = await settle(() => $.fs.read(path))
+  return text.ok ? text.value : null
+}
+
+/** A file's text; null when it cannot be read for any reason but a cut, which is a `Cut` failure. */
+const readRun = ($: Engine, path: string): Promise<Run<string | null>> => attempt<string | null>(() => $.fs.read(path), null)
+
+/** What a path leads to (a link followed); null when it cannot be stat'ed. */
+const statOf = async ($: Engine, path: string): Promise<{ readonly kind: string; readonly size: number } | null> => {
+  const stat = await settle(() => $.fs.stat(path))
+  return stat.ok ? { kind: stat.value.kind, size: stat.value.size } : null
+}
+
+/** A directory's entries; [] when it cannot be listed for any reason but a cut, which is a `Cut` failure. */
+const listRun = ($: Engine, path: string): Promise<Run<readonly FsEntry[]>> => attempt<readonly FsEntry[]>(() => $.fs.list(path), [])
+
+/**
+ * The review return of a task whose notification text carries a cut result: read whole from the
+ * task output file the notification names, and decoded. Only an absolute `…/tasks/<name>.output`
+ * path (`isSafeTaskOutput`), only a regular file of at most TASK_OUTPUT_LIMIT bytes. Any failure
+ * (stat, read, parse, decode) is null: no board, no error.
+ */
+async function reviewReturnFromOutput($: Engine, path: string | null): Promise<ReviewReturn | null> {
   if (path === null || !isSafeTaskOutput(path)) return null
   const stat = await statOf($, path)
   if (stat === null || stat.kind !== 'file' || stat.size > TASK_OUTPUT_LIMIT) return null
   const text = await readText($, path)
   if (text === null) return null
-  try {
-    return reviewReturnOfOutput(JSON.parse(text) as unknown)
-  } catch {
-    return null
-  }
+  const parsed = parseJson(text)
+  if (!parsed.ok) return null
+  const ret = reviewReturnOfOutput(parsed.value)
+  return ret.ok ? ret.value : null
 }
+
+/**
+ * The session's project root, no trailing slash: where the session started (or `/cd` took it).
+ * Not `$.session.cwd()`, which follows the shell's `cd` — a turn that steps into a nested repo
+ * must not move the HUD's journal, sidecar or branch along with it. The same anchor as
+ * shipgate's hooks, which read the session's directory from their payload.
+ */
+const sessionRoot = async ($: Engine): Promise<string> => {
+  const root = await settle(() => $.session.root())
+  const dir = root.ok ? root.value : await $.session.cwd()
+  return dir.replace(/\/+$/, '') || '/'
+}
+
+/** Where a relative path a tool was given resolves: the shell's directory, which `cd` moves. */
+const shellDir = async ($: Engine): Promise<string> => (await $.session.cwd()).replace(/\/+$/, '') || '/'
+
+/** This session's id, the label journal.py gives the events it appends; null when the engine cannot say. */
+const sessionIdOf = async ($: Engine): Promise<string | null> => {
+  const id = await settle(() => $.session.id())
+  return id.ok && id.value.trim() !== '' ? id.value.trim() : null
+}
+
+/** `root` as the prefix an absolute path under it starts with (`/` is its own prefix). */
+const prefixOf = (root: string): string => (root === '/' ? '/' : `${root}/`)
+
+/**
+ * `a/./b/../c` as `a/c`: segments resolved. An absolute path stops at `/`, as POSIX does
+ * (`/a/../../x` is `/x`); a relative one that climbs above its start is `..`.
+ */
+const normalizePath = (path: string): string => {
+  const isAbsolute = path.startsWith('/')
+  // null: a relative path climbed above its start
+  const segments = path.split('/').reduce<readonly string[] | null>((out, segment) => {
+    if (out === null || segment === '' || segment === '.') return out
+    if (segment !== '..') return [...out, segment]
+    if (out.length > 0) return out.slice(0, -1)
+    return isAbsolute ? out : null
+  }, [])
+  return segments === null ? '..' : `${isAbsolute ? '/' : ''}${segments.join('/')}`
+}
+
+/** `path` as an absolute path: as given when absolute, else resolved under `base`. */
+const absoluteIn = (base: string, path: string): string => (path.startsWith('/') ? path : normalizePath(`${prefixOf(base)}${path}`))
+
+/** A project-relative path made absolute under the located project root; unchanged (session-relative) without one. */
+const inProject = (path: string): string => (path.startsWith('/') || projectRoot === null ? path : `${prefixOf(projectRoot)}${path}`)
+
+/**
+ * The directory the sidecar marks as the project: `dir`, or the nearest ancestor holding one —
+ * a session opened inside a nested repo of an umbrella finds the umbrella's journal this way,
+ * as shipgate's hooks do. Null when no ancestor has a sidecar; a cut is a `Cut` failure.
+ */
+async function sidecarAbove($: Engine, dir: string): Promise<Run<string | null>> {
+  const isHere = await existsRun($, `${dir === '/' ? '' : dir}/${SIDECAR}`)
+  if (!isHere.ok) return isHere
+  if (isHere.value) return ok(dir)
+  if (dir === '/') return ok(null)
+  const cut = dir.lastIndexOf('/')
+  return sidecarAbove($, cut <= 0 ? '/' : dir.slice(0, cut))
+}
+
+/** The project the session is in: the sidecar at the session root or above it (`sidecarAbove`). */
+const locateProject = async ($: Engine): Promise<Run<string | null>> => sidecarAbove($, await sessionRoot($))
+
+/** A written path relative to the project root; null when it lies outside it. */
+async function projectRelative($: Engine, path: string): Promise<string | null> {
+  const root = projectRoot ?? (await sessionRoot($))
+  const absolute = normalizePath(path.startsWith('/') ? path : `${prefixOf(await shellDir($))}${path}`)
+  const prefix = prefixOf(root)
+  return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : null
+}
+
+// ---------------------------------------------------------------------------------------
+// journal.py: where it is, and one run of it
+// ---------------------------------------------------------------------------------------
 
 /** Newest-version-first: numeric versions by segment (`0.14.1` before `0.9.0`), then every other name. */
 const byVersionDesc = (a: string, b: string): number => {
@@ -90,40 +276,71 @@ const byVersionDesc = (a: string, b: string): number => {
   return b.localeCompare(a, undefined, { numeric: true })
 }
 
-/** The plugin's folder and, when the folder is a symbolic link (a dev-mods link, `--plugin-dir` on a link), where it lands. */
-async function pluginRoots($: Engine): Promise<string[]> {
-  const root = $.plugin.root
-  try {
-    const stat = await $.fs.stat(root, { resolve: true })
-    if (stat.realPath && stat.realPath !== root) return [root, stat.realPath]
-  } catch {
-    // unresolvable: the folder as named
+/** One place journal.py may be: its path, null when it is not there, or a cut. */
+type Search = () => Promise<Run<string | null>>
+
+/** The first search, in order, that finds journal.py; a cut stops the searching as a cut. */
+async function firstFound(searches: readonly Search[]): Promise<Run<string | null>> {
+  const [search, ...rest] = searches
+  if (search === undefined) return ok(null)
+  const found = await search()
+  return !found.ok || found.value !== null ? found : firstFound(rest)
+}
+
+/** The search for one file: its path when it exists. */
+const fileAt =
+  ($: Engine, path: string): Search =>
+  async () => {
+    const there = await existsRun($, path)
+    return there.ok ? ok(there.value ? path : null) : there
   }
-  return [root]
+
+/** The child directories of `dir` by name; [] when it cannot be listed (a cut is a cut). */
+async function dirNamesIn($: Engine, dir: string): Promise<Run<readonly string[]>> {
+  const listed = await listRun($, dir)
+  return listed.ok ? ok(listed.value.filter(entry => entry.kind === 'dir').map(entry => entry.name)) : listed
+}
+
+/** The plugin's folder and, when the folder is a symbolic link (a dev-mods link, `--plugin-dir` on a link), where it lands. */
+async function pluginRoots($: Engine): Promise<Run<readonly string[]>> {
+  const root = $.plugin.root
+  const stat = await attempt<{ readonly realPath?: string } | null>(() => $.fs.stat(root, { resolve: true }), null)
+  if (!stat.ok) return stat
+  const real = stat.value?.realPath
+  return ok(real !== undefined && real !== '' && real !== root ? [root, real] : [root])
 }
 
 /** `<dir>/<newest version>/scripts/journal.py` under a plugin-cache `shipgate` folder, or null. */
-async function newestJournalUnder($: Engine, shipgateDir: string): Promise<string | null> {
-  try {
-    const versions = (await $.fs.list(shipgateDir)).filter(e => e.kind === 'dir').map(e => e.name)
-    for (const version of versions.sort(byVersionDesc)) {
-      const candidate = `${shipgateDir}/${version}/scripts/journal.py`
-      if (await exists($, candidate)) return candidate
-    }
-  } catch {
-    // no such folder
-  }
-  return null
+async function newestJournalUnder($: Engine, shipgateDir: string): Promise<Run<string | null>> {
+  const versions = await dirNamesIn($, shipgateDir)
+  if (!versions.ok) return versions
+  return firstFound([...versions.value].sort(byVersionDesc).map(version => fileAt($, `${shipgateDir}/${version}/scripts/journal.py`)))
 }
 
-/** The Claude config directories whose plugin cache may hold an installed shipgate. */
-async function configDirs($: Engine): Promise<string[]> {
-  const dirs: string[] = []
-  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
-  if (configured) dirs.push(configured.replace(/\/+$/, ''))
-  const home = await $.env.get('HOME')
-  if (home) dirs.push(`${home.replace(/\/+$/, '')}/.claude`)
-  return [...new Set(dirs)]
+/** The Claude config directories whose plugin cache may hold an installed shipgate: `CLAUDE_CONFIG_DIR`, then `~/.claude`. */
+async function configDirs($: Engine): Promise<Run<readonly string[]>> {
+  const configured = await attempt<string | undefined>(() => $.env.get('CLAUDE_CONFIG_DIR'), undefined)
+  if (!configured.ok) return configured
+  const home = await attempt<string | undefined>(() => $.env.get('HOME'), undefined)
+  if (!home.ok) return home
+  const dirs = [
+    ...(configured.value ? [configured.value.replace(/\/+$/, '')] : []),
+    ...(home.value ? [`${home.value.replace(/\/+$/, '')}/.claude`] : []),
+  ]
+  return ok([...new Set(dirs)])
+}
+
+/** journal.py in the plugin cache of the Claude config directories, any marketplace. */
+async function inConfigCaches($: Engine): Promise<Run<string | null>> {
+  const dirs = await configDirs($)
+  if (!dirs.ok) return dirs
+  return firstFound(
+    dirs.value.map(dir => async () => {
+      const cache = `${dir}/plugins/cache`
+      const markets = await dirNamesIn($, cache)
+      return markets.ok ? firstFound(markets.value.map(market => () => newestJournalUnder($, `${cache}/${market}/shipgate`))) : markets
+    }),
+  )
 }
 
 /**
@@ -131,142 +348,147 @@ async function configDirs($: Engine): Promise<string[]> {
  * marketplace checkout (`../shipgate/scripts/journal.py`, the plugin folder resolved through a
  * link); beside it in the plugin cache (`cache/<market>/<plugin>/<ver>/`); the plugin cache of the
  * Claude config directory (`CLAUDE_CONFIG_DIR`, then `~/.claude`), any marketplace. Never a path
- * taken from the project.
+ * taken from the project. A cut while searching is a `Cut` failure, never "not found" (D3).
  */
-export async function locateJournal($: Engine, journalScript: string): Promise<string | null> {
-  if (journalScript && (await exists($, journalScript))) return journalScript
-  for (const root of await pluginRoots($)) {
-    const checkout = `${root}/../shipgate/scripts/journal.py`
-    if (await exists($, checkout)) return checkout
-    const cached = await newestJournalUnder($, `${root}/../../shipgate`)
-    if (cached) return cached
+export async function locateJournal($: Engine, journalScript: string): Promise<Run<string | null>> {
+  const option: readonly Search[] = journalScript ? [fileAt($, journalScript)] : []
+  const besidePlugin: Search = async () => {
+    const roots = await pluginRoots($)
+    if (!roots.ok) return roots
+    return firstFound(roots.value.flatMap(root => [fileAt($, `${root}/../shipgate/scripts/journal.py`), () => newestJournalUnder($, `${root}/../../shipgate`)]))
   }
-  for (const dir of await configDirs($)) {
-    const cache = `${dir}/plugins/cache`
-    try {
-      for (const market of (await $.fs.list(cache)).filter(e => e.kind === 'dir')) {
-        const found = await newestJournalUnder($, `${cache}/${market.name}/shipgate`)
-        if (found) return found
-      }
-    } catch {
-      // no plugin cache there
-    }
+  return firstFound([...option, besidePlugin, () => inConfigCaches($)])
+}
+
+/**
+ * One journal.py run in the project root (`python3 <script> <args>`), its stdout parsed (the
+ * declared cast boundary for process stdout) and decoded. Every failure is a value: a rejected
+ * `$` call is classified by `classifyRejection`; exit 2 with argparse's text naming an argument
+ * is `Unsupported`; any other non-zero exit is `Exited`; a truncated stdout is `Truncated`.
+ */
+async function runJournal<A>($: Engine, script: string, args: readonly string[], decode: (raw: unknown) => Result<JournalShapeError, A>): Promise<Run<A>> {
+  const ran = await settle(() => $.process.run(['python3', script, ...args], { timeoutMs: 10_000, ...(projectRoot === null ? {} : { cwd: projectRoot }) }))
+  return ran.ok ? outcomeOf(ran.value, decode) : ran
+}
+
+/**
+ * The branch checked out in `dir` (relative to the session root, or absolute; null: the root
+ * itself); null when detached or not a repo (git exits non-zero). A run that could not start,
+ * or a cut, is a failure.
+ */
+async function branchIn($: Engine, dir: string | null): Promise<Run<BranchName | null>> {
+  const argv = dir === null ? ['git', 'rev-parse', '--abbrev-ref', 'HEAD'] : ['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD']
+  const root = await sessionRoot($)
+  const ran = await settle(() => $.process.run(argv, { timeoutMs: 5_000, cwd: root }))
+  if (!ran.ok) return ran
+  return ok(ran.value.exitCode === 0 ? branchName(ran.value.stdout.trim()) : null)
+}
+
+/** shipgate's defaults overlaid key by key with the sidecar's `artifact_homes` (`decodeSidecarHomes`); the defaults when the sidecar cannot be read or decoded. */
+async function readHomes($: Engine): Promise<SidecarHomes> {
+  const text = await readText($, inProject(SIDECAR))
+  const parsed = text === null ? null : parseJson(text)
+  const decoded = parsed === null || !parsed.ok ? null : decodeSidecarHomes(parsed.value)
+  return decoded === null || !decoded.ok ? DEFAULT_HOMES : decoded.value
+}
+
+// ---------------------------------------------------------------------------------------
+// The binding (HUD ADR 0004) and one refresh
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Where journal.py is, as far as this module knows: not searched yet (after a plugin reload),
+ * found at `path`, or not found. A failed run with a found script searches again: a plugin
+ * cache update may have moved it.
+ */
+export type ScriptLookup = { readonly kind: 'NotSearched' } | { readonly kind: 'Found'; readonly path: string } | { readonly kind: 'NotFound' }
+
+/**
+ * The coalescing refresh: idle, or one run in flight. A request during a run sets
+ * `hasTrailing`: one more run follows, and every caller awaits the run that covers its request.
+ */
+export type RefreshSlot = { readonly kind: 'Idle' } | { readonly kind: 'Running'; readonly run: Promise<Refreshed>; readonly hasTrailing: boolean }
+
+/**
+ * The stream this session is bound to (HUD ADR 0004), as the status brief's top-level names
+ * say; `feature` is the brief's entry for the stream named. `Session`: `sessionMatch`, the
+ * live stream it last wrote to. `Branch`: `branchMatch`, the session root's branch names the
+ * stream, or the nested repos' branches name exactly one live stream (`branch` is the one
+ * that named it). `Unbound`: neither; `nearby` are the live streams the checkout's branches
+ * name (`nestedMatches`).
+ */
+export type Binding =
+  | { readonly kind: 'Session'; readonly feature: StatusFeature }
+  | { readonly kind: 'Branch'; readonly branch: BranchName; readonly feature: StatusFeature }
+  | { readonly kind: 'Unbound'; readonly nearby: readonly StreamName[] }
+
+/**
+ * One refresh's outcome. `NoProject`: no sidecar here or above. `NoJournalScript`: journal.py
+ * was not found. `Cut`: the person cut the call the refresh ran in; nothing is written.
+ * `Failed`: a journal run failed, never read as "no stream". `Unbound` / `Bound`: as `Binding`,
+ * with the bound stream's position.
+ */
+export type Refreshed =
+  | { readonly kind: 'NoProject' }
+  | { readonly kind: 'NoJournalScript' }
+  | { readonly kind: 'Cut' }
+  | { readonly kind: 'Failed'; readonly failure: RefreshFailure }
+  | { readonly kind: 'Unbound'; readonly nearby: readonly StreamName[] }
+  | { readonly kind: 'Bound'; readonly via: BindingVia; readonly position: Position }
+
+const NO_PROJECT: Refreshed = { kind: 'NoProject' }
+const NO_JOURNAL_SCRIPT: Refreshed = { kind: 'NoJournalScript' }
+const CUT: Refreshed = { kind: 'Cut' }
+
+/** A failed run as a refresh's outcome: a cut writes nothing; any other failure is shown. */
+const refreshedOf = (failure: RunFailure): Refreshed => (failure.kind === 'Cut' ? CUT : { kind: 'Failed', failure })
+
+/** A brief whose top-level name points at no listed stream: the decoder refuses one, so this is a version mismatch, never "no stream". */
+const unlisted = (stream: StreamName): RunFailure => ({ kind: 'BadShape', error: { path: '$.features', expected: `the stream ${stream} the brief names` } })
+
+/** The brief's entry for `stream`. */
+const featureNamed = (brief: StatusBrief, stream: StreamName): Run<StatusFeature> => {
+  const feature = brief.features.find(listed => listed.stream === stream)
+  return feature === undefined ? err(unlisted(stream)) : ok(feature)
+}
+
+/** `status --json` for the session and its root's branch: `--session` and `--branch` when known. */
+const statusArgs = (session: string | null, branch: BranchName | null): readonly string[] => [
+  'status',
+  '--json',
+  ...(session === null ? [] : [`--session=${session}`]),
+  ...(branch === null ? [] : [`--branch=${branch}`]),
+]
+
+/** The binding the first brief gives: the session's own stream, else the root branch's; null when it names neither. */
+function directBinding(brief: StatusBrief, own: BranchName | null): Run<Binding> | null {
+  if (brief.sessionMatch !== null) {
+    const feature = featureNamed(brief, brief.sessionMatch)
+    return feature.ok ? ok({ kind: 'Session', feature: feature.value }) : feature
+  }
+  if (brief.branchMatch !== null && own !== null) {
+    const feature = featureNamed(brief, brief.branchMatch)
+    return feature.ok ? ok({ kind: 'Branch', branch: own, feature: feature.value }) : feature
   }
   return null
 }
 
 /**
- * The session's project root, no trailing slash: where the session started (or `/cd` took it).
- * Not `$.session.cwd()`, which follows the shell's `cd` — a turn that steps into a nested repo
- * must not move the HUD's journal, sidecar or branch along with it. The same anchor as
- * shipgate's hooks, which read the session's directory from their payload.
+ * The nested branch that names `stream`: the one spelled as the stream, else one ending in the
+ * stream's last segment, else the first passed. Only drawn as the binding's evidence; which
+ * stream binds is journal.py's word (`branchMatch`).
  */
-const sessionRoot = async ($: Engine): Promise<string> => {
-  let dir: string
-  try {
-    dir = await $.session.root()
-  } catch {
-    dir = await $.session.cwd()
-  }
-  return dir.replace(/\/+$/, '') || '/'
+const namingBranch = (branches: readonly [BranchName, ...BranchName[]], stream: StreamName): BranchName => {
+  const name: string = stream
+  const slug = name.split('/').pop() ?? name
+  return branches.find(branch => branch === name) ?? branches.find(branch => branch.split('/').pop() === slug) ?? branches[0]
 }
 
-/** Where a relative path a tool was given resolves: the shell's directory, which `cd` moves. */
-const shellDir = async ($: Engine): Promise<string> => (await $.session.cwd()).replace(/\/+$/, '') || '/'
-
-/**
- * The directory the sidecar marks as the project: the session's own, or the nearest ancestor
- * holding one — a session opened inside a nested repo of an umbrella finds the umbrella's
- * journal this way, as shipgate's hooks do. Null when no ancestor has a sidecar.
- */
-async function locateProject($: Engine): Promise<string | null> {
-  let dir = await sessionRoot($)
-  for (;;) {
-    if (await exists($, `${dir}/${SIDECAR}`)) return dir
-    const cut = dir.lastIndexOf('/')
-    if (cut <= 0) return (await exists($, `/${SIDECAR}`)) ? '/' : null
-    dir = dir.slice(0, cut)
-  }
-}
-
-/** `root` as the prefix an absolute path under it starts with (`/` is its own prefix). */
-const prefixOf = (root: string): string => (root === '/' ? '/' : `${root}/`)
-
-/** `a/./b/../c` as `a/c`: segments resolved, nothing above the start. */
-const normalizePath = (path: string): string => {
-  const out: string[] = []
-  for (const segment of path.split('/')) {
-    if (segment === '' || segment === '.') continue
-    if (segment === '..') {
-      if (out.length === 0) return '..'
-      out.pop()
-    } else out.push(segment)
-  }
-  return (path.startsWith('/') ? '/' : '') + out.join('/')
-}
-
-/** A project-relative path made absolute under the located project root; unchanged (session-relative) without one. */
-const inProject = (path: string): string => (path.startsWith('/') || projectRoot === null ? path : `${prefixOf(projectRoot)}${path}`)
-
-/** shipgate's defaults overlaid key by key with the sidecar's `artifact_homes`, as journal.py merges them. */
-async function readHomes($: Engine): Promise<Homes> {
-  const merged: Record<string, string> = { ...DEFAULT_ARTIFACT_HOMES }
-  const text = await readText($, inProject(SIDECAR))
-  if (text !== null) {
-    try {
-      const homes = (JSON.parse(text) as { artifact_homes?: unknown }).artifact_homes
-      if (homes && typeof homes === 'object' && !Array.isArray(homes)) {
-        for (const [key, value] of Object.entries(homes as Record<string, unknown>)) {
-          if (typeof value === 'string') merged[key] = value
-        }
-      }
-    } catch {
-      // a sidecar that does not parse keeps the defaults
-    }
-  }
-  return homesOf(merged)
-}
-
-/** A written path relative to the project root; null when it lies outside it. */
-async function projectRelative($: Engine, path: string): Promise<string | null> {
-  const root = projectRoot ?? (await sessionRoot($))
-  const absolute = normalizePath(path.startsWith('/') ? path : `${prefixOf(await shellDir($))}${path}`)
-  const prefix = prefixOf(root)
-  return absolute.startsWith(prefix) ? absolute.slice(prefix.length) : null
-}
-
-/** journal.py's exit code for a usage error — an unknown flag among them (EXIT_USAGE). */
-const EXIT_USAGE = 2
-
-/** A journal.py run that exited non-zero, with its exit code. */
-class RunFailed extends Error {
-  constructor(
-    message: string,
-    readonly exitCode: number | null,
-  ) {
-    super(message)
-  }
-}
-
-/** journal.py runs in the project root: there it finds the sidecar and the database by itself. */
-const runJson = async ($: Engine, argv: readonly string[]): Promise<unknown> => {
-  const ran = await $.process.run(argv, { timeoutMs: 10_000, ...(projectRoot ? { cwd: projectRoot } : {}) })
-  if (ran.exitCode !== 0) throw new RunFailed(`${argv.slice(-2).join(' ')} failed: ${(ran.stderr || ran.stdout).trim().slice(0, 160)}`, ran.exitCode)
-  if (ran.isStdoutTruncated) throw new Error(`${argv.slice(-2).join(' ')}: output over 4 MiB, not parsed`)
-  return JSON.parse(ran.stdout) as unknown
-}
-
-/** The branch checked out in `dir`, relative to the session root (the root itself when absent); null when detached or not a repo. */
-const branchIn = async ($: Engine, dir?: string): Promise<string | null> => {
-  const argv = dir ? ['git', '-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'] : ['git', 'rev-parse', '--abbrev-ref', 'HEAD']
-  try {
-    const ran = await $.process.run(argv, { timeoutMs: 5_000, cwd: await sessionRoot($) })
-    const name = ran.stdout.trim()
-    return ran.exitCode === 0 && name && name !== 'HEAD' ? name : null
-  } catch (error) {
-    if (isAborted(error)) throw error // a cut refresh, not a checkout without a branch
-    return null
-  }
+/** The binding the nested brief gives: the one live stream the nested branches name (journal.py's 1B rule), else Unbound with the live ones they name. */
+function nestedBinding(brief: StatusBrief, branches: readonly [BranchName, ...BranchName[]]): Run<Binding> {
+  if (brief.branchMatch === null) return ok({ kind: 'Unbound', nearby: brief.nestedMatches })
+  const feature = featureNamed(brief, brief.branchMatch)
+  return feature.ok ? ok({ kind: 'Branch', branch: namingBranch(branches, brief.branchMatch), feature: feature.value }) : feature
 }
 
 /** Where setup looks for an umbrella's nested repos: `<dir>/.git`, `source/<dir>/.git`, `packages/<dir>/.git`. */
@@ -277,19 +499,35 @@ const WORKTREES_DIR = '.worktrees'
 /** The most nested repos and worktrees one refresh probes (each costs a git run); the hook keeps the same cap. */
 const NESTED_REPO_LIMIT = 64
 
-/** The child directories of `base` under the session root (the root itself when empty), as root-relative paths, sorted; dot-names, node_modules and links left out. */
-async function childDirs($: Engine, base: string): Promise<string[]> {
-  try {
-    const root = await sessionRoot($)
-    const entries = await $.fs.list(base ? `${prefixOf(root)}${base}` : root)
-    return entries
-      .filter(e => e.kind === 'dir' && !e.isLink && !e.name.startsWith('.') && e.name !== 'node_modules')
-      .map(e => (base ? `${base}/${e.name}` : e.name))
-      .sort()
-  } catch {
-    return []
-  }
+/** The child directories of `base` under the session root (the root itself when empty), as root-relative paths, sorted; dot-names, node_modules and links left out. A cut is a cut. */
+async function childDirs($: Engine, base: string): Promise<Run<readonly string[]>> {
+  const root = await sessionRoot($)
+  const listed = await listRun($, base ? `${prefixOf(root)}${base}` : root)
+  if (!listed.ok) return listed
+  return ok(
+    listed.value
+      .filter(entry => entry.kind === 'dir' && !entry.isLink && !entry.name.startsWith('.') && entry.name !== 'node_modules')
+      .map(entry => (base ? `${base}/${entry.name}` : entry.name))
+      .sort(),
+  )
 }
+
+/**
+ * One step of the nested-repo walk. `repos`: list a parent's children, each a possible repo.
+ * `repo`: a child taken when it is a repo, its own worktrees next. `worktrees`: list
+ * `<base>/.worktrees`. `worktree`: an entry there, taken when it is a repo; never walked below.
+ */
+type WalkStep =
+  | { readonly kind: 'repos'; readonly parent: string }
+  | { readonly kind: 'repo'; readonly dir: string }
+  | { readonly kind: 'worktrees'; readonly base: string }
+  | { readonly kind: 'worktree'; readonly dir: string }
+
+/** The walk's start: each parent's children, then the parent's own worktrees. */
+const WALK_START: readonly WalkStep[] = NESTED_REPO_PARENTS.flatMap((parent): WalkStep[] => [
+  { kind: 'repos', parent },
+  { kind: 'worktrees', base: parent },
+])
 
 /**
  * The nested repos of an umbrella checkout, relative to the session root. An umbrella
@@ -297,431 +535,421 @@ async function childDirs($: Engine, base: string): Promise<string[]> {
  * branch (if any) carries no stream, the nested repos' branches do. A worktree sits in
  * `.worktrees/` beside the repos or inside one, so those are looked into as well: a repo,
  * then its own worktrees, then the parent's — each directory once, at most NESTED_REPO_LIMIT
- * in all, the scan stopping there too. The same order and cap as shipgate's SessionStart hook.
+ * in all, the walk stopping there too. Nothing below `.worktrees/<name>` is walked (HUD ADR
+ * 0004): a session opened inside an issue worktree finds its repos as its own nested repos.
+ * The same order and cap as shipgate's SessionStart hook. A cut is a cut.
  */
-async function nestedRepos($: Engine): Promise<string[]> {
-  const found: string[] = []
+async function nestedRepos($: Engine): Promise<Run<readonly string[]>> {
   const prefix = prefixOf(await sessionRoot($))
   // root-relative paths, checked absolute: a relative one would resolve from the shell's directory
-  const isRepo = (dir: string) => exists($, `${prefix}${dir}/.git`)
-  const take = async (dir: string): Promise<boolean> => {
-    if (found.length >= NESTED_REPO_LIMIT) return false
-    if (!found.includes(dir) && (await isRepo(dir))) found.push(dir)
-    return true
-  }
-  for (const parent of NESTED_REPO_PARENTS) {
-    for (const repo of await childDirs($, parent)) {
-      if (!(await isRepo(repo))) continue
-      if (!(await take(repo))) return found
-      for (const worktree of await childDirs($, `${repo}/${WORKTREES_DIR}`)) {
-        if (!(await take(worktree))) return found
+  const isRepo = (dir: string): Promise<Run<boolean>> => existsRun($, `${prefix}${dir}/.git`)
+  const walk = async (found: readonly string[], steps: readonly WalkStep[]): Promise<Run<readonly string[]>> => {
+    const [step, ...rest] = steps
+    if (step === undefined || found.length >= NESTED_REPO_LIMIT) return ok(found)
+    switch (step.kind) {
+      case 'repos': {
+        const repos = await childDirs($, step.parent)
+        return repos.ok ? walk(found, [...repos.value.map((dir): WalkStep => ({ kind: 'repo', dir })), ...rest]) : repos
       }
-    }
-    for (const worktree of await childDirs($, parent ? `${parent}/${WORKTREES_DIR}` : WORKTREES_DIR)) {
-      if (!(await take(worktree))) return found
-    }
-  }
-  return found
-}
-
-type Feature = { feature?: unknown; stream?: unknown; branch_match?: unknown; session_match?: unknown }
-
-/** The stream status marked with `flag`, and nothing else: an unmarked stream is not this position. */
-const pickFeature = (status: unknown, flag: 'session_match' | 'branch_match'): Feature | null => {
-  const features = (status as { features?: unknown })?.features
-  if (!Array.isArray(features)) return null
-  return features.find((f: Feature) => f?.[flag] === true) ?? null
-}
-
-/** The stream name a status entry carries: `stream`, else the folded `feature`. */
-const streamOf = (feature: Feature | null): string | null =>
-  typeof feature?.stream === 'string' ? feature.stream : typeof feature?.feature === 'string' ? feature.feature : null
-
-/** The stream the checkout is on, with the other live streams the same status brief listed (its siblings). */
-type Checkout = { feature: Feature; siblings: string[] }
-
-/** The `flag`-marked stream of a status brief and its siblings, or null when none is marked. */
-const checkoutOf = (status: unknown, flag: 'session_match' | 'branch_match'): Checkout | null => {
-  const feature = pickFeature(status, flag)
-  if (feature === null) return null
-  const stream = streamOf(feature)
-  const features = (status as { features?: unknown })?.features
-  const siblings = (Array.isArray(features) ? features : [])
-    .map((f: Feature) => streamOf(f))
-    .filter((name): name is string => name !== null && name !== stream)
-  return { feature, siblings: [...new Set(siblings)] }
-}
-
-/** This session's id, the label journal.py gives the events it appends; null when the engine cannot say. */
-const sessionIdOf = async ($: Engine): Promise<string | null> => {
-  try {
-    const id = (await $.session.id()).trim()
-    return id || null
-  } catch {
-    return null
-  }
-}
-
-/**
- * The directories a worklog glob names, for the fallback scan: a literal directory, or `*` as its
- * first segment standing for each child directory. Deeper wildcards are not walked (the scan is a
- * fallback; the primary path is the worklog the journal events name).
- */
-async function worklogDirs($: Engine, glob: string): Promise<{ dir: string; file: string }[]> {
-  const cut = glob.lastIndexOf('/')
-  const dirGlob = cut >= 0 ? glob.slice(0, cut) : '.'
-  const file = glob.slice(cut + 1)
-  if (!dirGlob.startsWith('*/')) return [{ dir: dirGlob, file }]
-  const rest = dirGlob.slice(2)
-  try {
-    const top = await $.fs.list(projectRoot ?? undefined)
-    return top.filter(e => e.kind === 'dir' && !e.name.startsWith('.')).map(e => ({ dir: `${e.name}/${rest}`, file }))
-  } catch {
-    return []
-  }
-}
-
-/**
- * Does a worklog another stream's events name (`claimed`, project-relative) stand for this
- * candidate? The same path, or the candidate ending in it: a nested repo's stream names its
- * worklog relative to that repo, the scan names it relative to the umbrella root.
- */
-const claims = (claimed: string, candidate: string): boolean => {
-  const own = normalizePath(claimed)
-  const path = normalizePath(candidate)
-  return own !== '' && own !== '..' && (path === own || path.endsWith(`/${own}`))
-}
-
-/**
- * The newest worklog in the configured worklog home named for the stream's slug — `<slug>.worklog.md`,
- * or a name that starts with `<slug>-` or `<slug>.` — else null. A substring match would let a short
- * slug claim another feature's worklog. Two streams may share a slug outright (`epic/x` and a
- * child whose worklog is `x.worklog.md`), so a worklog that `claimed()` names — the worklogs other
- * live streams' events point at — is left to that stream. `claimed` is asked only once a
- * slug-named worklog was found: it costs a journal run per sibling stream.
- */
-export async function worklogForStream($: Engine, stream: string, homes: Homes, claimed?: () => Promise<readonly string[]>): Promise<string | null> {
-  const slug = streamSlug(stream)
-  if (!slug) return null
-  const named = (name: string) => name === `${slug}.worklog.md` || name.startsWith(`${slug}-`) || name.startsWith(`${slug}.`)
-  const found: { path: string; mtimeMs: number }[] = []
-  for (const { dir, file } of await worklogDirs($, homes.worklogGlob)) {
-    try {
-      for (const entry of await $.fs.list(inProject(dir))) {
-        if (entry.kind !== 'file' || !matchesHome(entry.name, file) || !named(entry.name)) continue
-        found.push({ path: `${dir}/${entry.name}`, mtimeMs: entry.mtimeMs })
+      case 'worktrees': {
+        const worktrees = await childDirs($, step.base ? `${step.base}/${WORKTREES_DIR}` : WORKTREES_DIR)
+        return worktrees.ok ? walk(found, [...worktrees.value.map((dir): WalkStep => ({ kind: 'worktree', dir })), ...rest]) : worktrees
       }
-    } catch {
-      // no such home
+      case 'repo':
+      case 'worktree': {
+        if (found.includes(step.dir)) return walk(found, rest)
+        const repo = await isRepo(step.dir)
+        if (!repo.ok) return repo
+        if (!repo.value) return walk(found, rest)
+        const next: readonly WalkStep[] = step.kind === 'repo' ? [{ kind: 'worktrees', base: step.dir }, ...rest] : rest
+        return walk([...found, step.dir], next)
+      }
+      default:
+        return absurd(step)
     }
   }
-  if (found.length === 0) return null
-  const taken = claimed ? await claimed() : []
-  const free = found.filter(candidate => !taken.some(path => claims(path, candidate.path)))
-  return free.reduce<{ path: string; mtimeMs: number } | null>((best, entry) => (!best || entry.mtimeMs > best.mtimeMs ? entry : best), null)?.path ?? null
+  return walk([], WALK_START)
 }
 
-/**
- * The worklogs the events of `streams` name, one `log` run each. A stream whose log cannot be
- * read claims nothing: a sibling's broken log is no reason to show no plan here. A cut refresh
- * still propagates.
- */
-async function claimedWorklogs($: Engine, script: string, streams: readonly string[]): Promise<string[]> {
-  const claimed: string[] = []
-  for (const stream of streams) {
-    try {
-      const log = (await runJson($, ['python3', script, 'log', '--stream', stream, '--json'])) as { events?: unknown[] }
-      const worklog = artifactRefs(Array.isArray(log?.events) ? log.events : []).worklog
-      if (worklog !== null) claimed.push(worklog)
-    } catch (error) {
-      if (isAborted(error)) throw error
-    }
-  }
-  return claimed
-}
-
-/** A refresh, or `aborted` when the person cut the call it ran inside (a denied or interrupted tool call): nothing to show then. */
-export type Refreshed = { position: Position | null; error: string | null; aborted?: true }
-
-/**
- * Was a `$` call cut because the person denied or interrupted the call the hook runs in? Only
- * the engine's own rejection counts: an Error named `AbortError`, or one whose message ends in
- * `) aborted` (`$.process.run(python3) aborted`) and that is no RunFailed. A RunFailed is a
- * journal.py run that exited non-zero; its message carries argv and stderr, which may hold the
- * word, and it is a failure to show.
- */
-const isAborted = (error: unknown): boolean =>
-  error instanceof Error && (error.name === 'AbortError' || (!(error instanceof RunFailed) && /\) aborted$/.test(error.message)))
-
-const lastEventAt = (feature: Feature): string => {
-  const last = (feature as { last_event?: { ts?: unknown } }).last_event
-  return typeof last?.ts === 'string' ? last.ts : ''
-}
-
-/**
- * The stream this session is driving, else the stream of the checked-out branch. The session
- * comes first: the live stream it last wrote to itself (`status --session`, journal.py's call),
- * which may have no branch at all (an epic's planning stream) and differs per session when
- * several run on one project — each HUD asks with its own id. A session that has written to no
- * live stream gets the checkout's: the session directory's branch first; when it has none or no
- * stream carries it, the branch of each nested repo (an umbrella checkout: the real repos one
- * level down), each distinct branch probed once. Several nested repos may sit on branches with
- * streams of their own (a dormant one beside the live one), so among the matches the most
- * recently active stream wins, not the first directory. The session and the own branch share
- * one status call.
- */
-async function streamOfCheckout($: Engine, script: string): Promise<Checkout | null> {
-  const status = (branch: string | null, session: string | null) =>
-    runJson($, ['python3', script, 'status', '--json', ...(session ? [`--session=${session}`] : []), ...(branch ? [`--branch=${branch}`] : [])])
-  const probe = async (branch: string) => checkoutOf(await status(branch, null), 'branch_match')
-  const own = await branchIn($)
-  const session = await sessionIdOf($)
-  let first: unknown = null
-  if (session !== null) {
-    try {
-      first = await status(own, session)
-    } catch (error) {
-      // a journal.py older than --session refuses the flag as a usage error: ask by branch alone.
-      // Any other failure (no database, a broken journal) is the HUD's error to show.
-      if (!(error instanceof RunFailed && error.exitCode === EXIT_USAGE)) throw error
-      first = null
-    }
-  }
-  if (first === null && own !== null) first = await status(own, null)
-  const found = checkoutOf(first, 'session_match') ?? checkoutOf(first, 'branch_match')
-  if (found) return found
-  const tried = new Set(own === null ? [] : [own])
-  let best: Checkout | null = null
-  for (const dir of await nestedRepos($)) {
+/** The distinct branches checked out in `dirs`, in order, the root's own (`own`) left out; a failed git run is a failure (D1). */
+async function nestedBranches($: Engine, dirs: readonly string[], own: BranchName | null): Promise<Run<readonly BranchName[]>> {
+  return dirs.reduce<Promise<Run<readonly BranchName[]>>>(async (pending, dir) => {
+    const found = await pending
+    if (!found.ok) return found
     const branch = await branchIn($, dir)
-    if (branch === null || tried.has(branch)) continue
-    tried.add(branch)
-    let checkout: Checkout | null
-    try {
-      checkout = await probe(branch)
-    } catch (error) {
-      if (isAborted(error)) throw error
-      continue // one nested repo's failed probe must not discard another's match
-    }
-    if (checkout && (best === null || lastEventAt(checkout.feature) > lastEventAt(best.feature))) best = checkout
-  }
-  return best
+    if (!branch.ok) return branch
+    const name = branch.value
+    return name === null || name === own || found.value.includes(name) ? found : ok([...found.value, name])
+  }, Promise.resolve(ok([])))
 }
 
-/** One refresh: git branch, status, the stream's log, then the artifacts those events point at. */
-export async function refreshPosition($: Engine, script: string, homes: Homes): Promise<Refreshed> {
-  try {
-    const checkout = await streamOfCheckout($, script)
-    const feature = checkout?.feature ?? null
-    const stream = streamOf(feature)
-    if (!feature || stream === null) return { position: null, error: null }
-    const log = (await runJson($, ['python3', script, 'log', '--stream', stream, '--json'])) as { events?: unknown[] }
-    const events = Array.isArray(log?.events) ? log.events : []
-    const refs = artifactRefs(events)
-    const worklogPath = refs.worklog ?? (await worklogForStream($, stream, homes, () => claimedWorklogs($, script, checkout?.siblings ?? [])))
-    const worklogText = worklogPath ? await readText($, inProject(worklogPath)) : null
-    const adrs: Adr[] = []
-    for (const path of refs.adrs) {
-      const text = await readText($, inProject(path))
-      if (text !== null) adrs.push(parseAdr(path, text))
-    }
-    const prdText = refs.prd ? await readText($, inProject(refs.prd)) : null
-    const position = toPosition({
-      feature,
-      events,
-      worklog: worklogPath && worklogText !== null ? { path: worklogPath, text: worklogText } : null,
-      adrs,
-      prd: refs.prd && prdText !== null ? { path: refs.prd, text: prdText } : null,
-    })
-    return { position, error: null }
-  } catch (error) {
-    if (isAborted(error)) return { position: null, error: null, aborted: true }
-    return { position: null, error: `shipgate-hud: ${error instanceof Error ? error.message : String(error)}` }
+/**
+ * The session's binding: one `status --json --session --branch` call with the root's branch,
+ * then, when it binds nothing, one call with every nested repo's branch (journal.py's 1B rule
+ * binds only when they name exactly one live stream). A failed call is a failure, never
+ * `Unbound` (D1).
+ */
+async function bindSession($: Engine, script: string): Promise<Run<Binding>> {
+  const own = await branchIn($, null)
+  if (!own.ok) return own
+  const brief = await runJournal($, script, statusArgs(await sessionIdOf($), own.value), decodeStatus)
+  if (!brief.ok) return brief
+  const direct = directBinding(brief.value, own.value)
+  if (direct !== null) return direct
+  const repos = await nestedRepos($)
+  if (!repos.ok) return repos
+  const branches = await nestedBranches($, repos.value, own.value)
+  if (!branches.ok) return branches
+  const [first, ...more] = branches.value
+  if (first === undefined) return ok({ kind: 'Unbound', nearby: [] })
+  const nested = await runJournal($, script, ['status', '--json', ...branches.value.map(branch => `--nested-branch=${branch}`)], decodeStatus)
+  return nested.ok ? nestedBinding(nested.value, [first, ...more]) : nested
+}
+
+/** A markdown artifact the position names, read under the project root; null when it cannot be read (a cut is a cut). */
+async function markdownAt($: Engine, path: MarkdownFile['path']): Promise<Run<MarkdownFile | null>> {
+  const text = await readRun($, inProject(path))
+  return text.ok ? ok(text.value === null ? null : { path, text: text.value }) : text
+}
+
+/** The ADRs the position names that could be read, parsed, in its order (a cut is a cut). */
+async function adrsAt($: Engine, paths: readonly MarkdownFile['path'][]): Promise<Run<readonly Adr[]>> {
+  return paths.reduce<Promise<Run<readonly Adr[]>>>(async (pending, path) => {
+    const read = await pending
+    if (!read.ok) return read
+    const file = await markdownAt($, path)
+    if (!file.ok) return file
+    return file.value === null ? read : ok([...read.value, parseAdr(file.value.path, file.value.text)])
+  }, Promise.resolve(ok([])))
+}
+
+/** What `toPosition` maps: the decoded position and the worklog, ADRs and PRD it names, read. */
+async function positionInputsOf($: Engine, doc: PositionDoc): Promise<Run<PositionInputs>> {
+  const worklog = doc.artifacts.worklog === null ? ok(null) : await markdownAt($, doc.artifacts.worklog.path)
+  if (!worklog.ok) return worklog
+  const adrs = await adrsAt($, doc.artifacts.adrs)
+  if (!adrs.ok) return adrs
+  const prd = doc.artifacts.prd === null ? ok(null) : await markdownAt($, doc.artifacts.prd)
+  if (!prd.ok) return prd
+  return ok({ doc, worklog: worklog.value, adrs: adrs.value, prd: prd.value })
+}
+
+/** The bound stream's position: `position --stream <s> --json`, then the artifacts it names. */
+async function boundRefresh($: Engine, script: string, via: BindingVia, stream: StreamName): Promise<Refreshed> {
+  const doc = await runJournal($, script, ['position', '--stream', stream, '--json'], decodePosition)
+  if (!doc.ok) return refreshedOf(doc.error)
+  const inputs = await positionInputsOf($, doc.value)
+  return inputs.ok ? { kind: 'Bound', via, position: toPosition(inputs.value) } : refreshedOf(inputs.error)
+}
+
+/**
+ * One refresh with a found journal.py: the binding, then `position --stream <s> --json` for a
+ * bound stream, then the worklog, ADRs and PRD it names, read.
+ */
+export async function refreshPosition($: Engine, script: string): Promise<Refreshed> {
+  const binding = await bindSession($, script)
+  if (!binding.ok) return refreshedOf(binding.error)
+  const bound = binding.value
+  switch (bound.kind) {
+    case 'Unbound':
+      return { kind: 'Unbound', nearby: bound.nearby }
+    case 'Session':
+    case 'Branch':
+      return boundRefresh($, script, bound.kind, bound.feature.stream)
+    default:
+      return absurd(bound)
   }
 }
 
-const position = atom({ plugin: 'shipgate-hud', key: 'position' } as const, null as Position | null)
-const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null as Tab | null)
-const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null as string | null)
-const lastError = atom({ plugin: 'shipgate-hud', key: 'lastError' } as const, null as string | null)
-const isJournaled = atom({ plugin: 'shipgate-hud', key: 'isJournaled' } as const, false)
-const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, { boards: [], marks: {}, ticks: {}, open: null } as ReviewState)
+/**
+ * The stored view after a refresh. `Cut` keeps `before` as it was; `Failed` stores the failure
+ * with `before`'s position (bound, or already stale) as stale; `NoJournalScript` and the
+ * others map to their own view; `NoProject` is `Off`.
+ */
+function viewAfter(refreshed: Refreshed, before: HudView): HudView {
+  switch (refreshed.kind) {
+    case 'Cut':
+      return before
+    case 'NoProject':
+      return OFF
+    case 'NoJournalScript':
+      return { kind: 'NoJournalScript' }
+    case 'Failed':
+      return { kind: 'Failed', failure: refreshed.failure, stale: shownPositionOf(before) }
+    case 'Unbound':
+      return { kind: 'Unbound', nearby: refreshed.nearby }
+    case 'Bound':
+      return { kind: 'Bound', via: refreshed.via, position: refreshed.position }
+    default:
+      return absurd(refreshed)
+  }
+}
+
+/** The stream a view is bound to; null for any other view. */
+const boundStreamOf = (shown: HudView): StreamName | null => (shown.kind === 'Bound' ? shown.position.stream : null)
+
+/** The view before the first refresh, and after a project loses its sidecar. */
+const OFF: HudView = { kind: 'Off' }
+
+const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v2' })
+const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null)
+const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null)
+const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, EMPTY_REVIEW, { shape: 'shipgate-hud.review-v2' })
 
 const JOURNAL_APPEND = /journal\.py\b[\s\S]*\bappend\b/
-
-/** The gate's error when its refresh was cut by the person: the stored position may be stale. */
-const CUT_REFRESH = 'shipgate-hud: the refresh was cut before the journal answered, so the stored position may be stale'
-
-/** What the dialog and the deny reason add when the refresh was cut: the stream's stored state was not checked. */
-const CUT_NOTE = ' The refresh was cut before the journal answered, so the stored position may be stale.'
 
 /** The publish hold's two choices; any other answer refuses. */
 const REFUSE = 'Refuse'
 const ONCE = 'Let it through once'
 
-/** A Bash call's command line as `tool.check` carries it; '' when the input has none. */
-const commandOf = (input: unknown): string => {
-  const command = typeof input === 'object' && input !== null ? (input as { command?: unknown }).command : undefined
-  return typeof command === 'string' ? command : ''
+/** A Bash call's command line as `tool.check` carries it; null when the input has none. */
+const commandOf = (input: unknown): string | null => stringOf(recordOf(input)?.['command'])
+
+/** A tool call's argument read off the event as a string; undefined when absent or another type. */
+const stringArg = (e: unknown, key: string): string | undefined => stringOf(recordOf(e)?.[key]) ?? undefined
+
+/** A value's JSON text; null when it has none (a cycle, a bigint, nothing to print). */
+const jsonTextOf = (value: unknown): string | null => {
+  const text = settleSync(() => JSON.stringify(value))
+  return text.ok ? stringOf(text.value) : null
 }
 
-/** A Workflow argument read off the call as a string; undefined when absent or another type. */
-const stringArg = (e: unknown, key: string): string | undefined => {
-  const value = typeof e === 'object' && e !== null ? (e as Record<string, unknown>)[key] : undefined
-  return typeof value === 'string' ? value : undefined
-}
-
-/** A tool result's text: core's `text`, else the result itself when a string, else its JSON. */
-const textOf = (ran: { result?: unknown; text?: unknown }): string => {
-  if (typeof ran.text === 'string') return ran.text
-  if (typeof ran.result === 'string') return ran.result
-  try {
-    return JSON.stringify(ran.result) ?? ''
-  } catch {
-    return ''
-  }
+/** The run id a Workflow result names: read from core's `text`, else the result as text, else the result's JSON. */
+const runIdOfResult = (ran: { readonly result?: unknown; readonly text?: unknown }): string | null => {
+  const text = stringOf(ran.text) ?? stringOf(ran.result) ?? jsonTextOf(ran.result)
+  return text === null ? null : runIdOf(text)
 }
 
 /** A review workflow launch this session noted: the Workflow call's id, the run id its result named, and the stream shown when it launched. */
-type Launch = { toolUseId: string; runId: string | null; stream: string | null }
+interface Launch {
+  readonly toolUseId: string
+  readonly runId: string | null
+  readonly stream: StreamName | null
+}
 
 /** The most launches remembered; an older one's notification is still captured by its shape. */
 const LAUNCH_LIMIT = 8
 
 // The review launches noted this session. Lost on a plugin reload and never refilled: a lost
 // launch's return is still captured by its shape, only without its run id and launch stream.
-const launches: Launch[] = []
+let launches: readonly Launch[] = []
 
 const noteLaunch = (launch: Launch): void => {
-  launches.push(launch)
-  if (launches.length > LAUNCH_LIMIT) launches.splice(0, launches.length - LAUNCH_LIMIT)
+  launches = [...launches, launch].slice(-LAUNCH_LIMIT)
 }
 
 const launchFor = (toolUseId: string | null): Launch | undefined =>
   toolUseId === null ? undefined : launches.find(launch => launch.toolUseId === toolUseId)
 
-// Module state: lost on a reload, which is fine — session.start runs again and refills it.
+const IDLE: RefreshSlot = { kind: 'Idle' }
+const NOT_SEARCHED: ScriptLookup = { kind: 'NotSearched' }
+const NOT_FOUND: ScriptLookup = { kind: 'NotFound' }
+
+// Module state: lost on a reload, which is fine: session.start runs again and refills it, and
+// each hook that needs it locates the project and journal.py again when it is empty.
 let journalScript = ''
-let script: string | null = null
-let homes: Homes | null = null
+let script: ScriptLookup = NOT_SEARCHED
+let homes: SidecarHomes | null = null
 let projectRoot: string | null = null
-let inFlight: Promise<boolean> | null = null
-let isPending = false
-let hasSurface = false
+let slot: RefreshSlot = IDLE
 
-async function detect($: EngineInterface): Promise<boolean> {
-  projectRoot = await locateProject($)
-  const present = projectRoot !== null
-  await update($, isJournaled, () => present)
-  if (!present) homes = null
-  return present
-}
+/** Does the session draw anywhere? Read at each hook, never cached (D5): empty in a plain -p run. */
+const isDrawing = async ($: Engine): Promise<boolean> => (await $.session.surfaces()).length > 0
 
-/** One refresh; false when the person cut it (nothing written), true when it completed, an error included. */
-async function refreshOnce($: EngineInterface): Promise<boolean> {
-  // Module state is empty after a plugin reload, until session.start refills it, while $.state
-  // (the position, the last error) survives it: locate the project again rather than show what
-  // an older module left behind.
-  if (projectRoot === null && !(await detect($))) {
-    await update($, position, () => null)
-    await update($, lastError, () => null)
-    return true
-  }
-  if (script === null) script = await locateJournal($, journalScript)
-  if (script === null) {
-    await update($, lastError, () => 'shipgate-hud: cannot find shipgate/scripts/journal.py — set the journalScript option.')
-    await update($, position, () => null)
-    return true
-  }
-  homes = await readHomes($)
-  const refreshed = await refreshPosition($, script, homes)
-  if (refreshed.aborted) return false // cut by the person: keep the position and the error as they were
-  await update($, position, () => refreshed.position)
-  await update($, lastError, () => refreshed.error)
-  return true
+/** The surface's element table: the declared cast boundary for `$.ui.resolve`. */
+const uiOf = ($: Engine, e: ResolveInput): Ui =>
+  // cast: the engine answers its own element table for the surface; views.tsx draws with the elements Ui names
+  $.ui.resolve(e) as unknown as Ui
+
+/** Is the project journaled? Read off the view: any view but `Off` is (no atom of its own). */
+const isJournaled = async ($: Engine): Promise<boolean> => (await read($, view)).kind !== 'Off'
+
+/** Locate the project again; a project with no sidecar turns the view `Off`. A cut writes nothing and is a `Cut` failure. */
+async function detect($: Engine): Promise<Run<boolean>> {
+  const located = await locateProject($)
+  if (!located.ok) return located
+  projectRoot = located.value
+  if (located.value !== null) return ok(true)
+  homes = null
+  await update($, view, () => OFF)
+  return ok(false)
 }
 
 /**
- * Coalescing refresh: a request during a run marks one trailing run, every caller awaits the run
- * that covers it, and a failure lands in `lastError` instead of rejecting a caller. Resolves
- * false when the last run was cut by the person (the stored position is then stale), else true.
+ * journal.py's path: the one found before, else a search. A search that finds nothing is
+ * searched again next time (shipgate may be installed meanwhile); a cut search is a cut and
+ * leaves the lookup as it was.
  */
-async function refresh($: EngineInterface): Promise<boolean> {
-  if (inFlight) {
-    isPending = true
-    return await inFlight
-  }
-  inFlight = (async () => {
-    let completed = true
-    try {
-      do {
-        isPending = false
-        try {
-          completed = await refreshOnce($)
-        } catch (error) {
-          completed = !isAborted(error)
-          if (completed) await update($, lastError, () => `shipgate-hud: refresh failed — ${error instanceof Error ? error.message : String(error)}`)
-        }
-      } while (isPending)
-    } finally {
-      inFlight = null
-    }
-    return completed
-  })()
-  return await inFlight
+async function journalScriptOf($: Engine): Promise<Run<string | null>> {
+  if (script.kind === 'Found') return ok(script.path)
+  const found = await locateJournal($, journalScript)
+  if (found.ok) script = found.value === null ? NOT_FOUND : { kind: 'Found', path: found.value }
+  return found
 }
 
-/** Does a written path land in a configured artifact home? shipgate's defaults apply before the first refresh. */
+/**
+ * A refresh with `path`, searched again once when a run exited and the script is gone (a
+ * plugin cache update moved it: python3 exits 2 for a file it cannot open).
+ */
+async function refreshWith($: Engine, path: string): Promise<Refreshed> {
+  const refreshed = await refreshPosition($, path)
+  if (refreshed.kind !== 'Failed' || refreshed.failure.kind !== 'Exited') return refreshed
+  const isThere = await existsRun($, path)
+  if (!isThere.ok) return CUT
+  if (isThere.value) return refreshed
+  script = NOT_SEARCHED
+  const moved = await journalScriptOf($)
+  if (!moved.ok) return refreshedOf(moved.error)
+  return moved.value === null ? NO_JOURNAL_SCRIPT : refreshPosition($, moved.value)
+}
+
+/** One refresh's outcome, nothing written: the project (located again after a reload), journal.py, the homes, the position. */
+async function readRefresh($: Engine): Promise<Refreshed> {
+  if (projectRoot === null) {
+    const located = await locateProject($)
+    if (!located.ok) return refreshedOf(located.error)
+    projectRoot = located.value
+  }
+  if (projectRoot === null) {
+    homes = null
+    return NO_PROJECT
+  }
+  const found = await journalScriptOf($)
+  if (!found.ok) return refreshedOf(found.error)
+  if (found.value === null) return NO_JOURNAL_SCRIPT
+  homes = await readHomes($)
+  return refreshWith($, found.value)
+}
+
+/** One refresh, its outcome written to the view in one write (a cut writes nothing). */
+async function refreshOnce($: Engine): Promise<Refreshed> {
+  const refreshed = await readRefresh($)
+  if (refreshed.kind !== 'Cut') await update($, view, before => viewAfter(refreshed, before))
+  return refreshed
+}
+
+/**
+ * `refreshOnce` that never rejects: a rejection the module did not turn into a value (a state
+ * write, the session's directory) is a cut, or a failure written to the view when it can be.
+ */
+async function refreshSettled($: Engine): Promise<Refreshed> {
+  const settled = await settle(() => refreshOnce($))
+  if (settled.ok) return settled.value
+  const refreshed = refreshedOf(settled.error)
+  if (refreshed.kind !== 'Cut') await settle(() => update($, view, before => viewAfter(refreshed, before)))
+  return refreshed
+}
+
+/** Runs refreshes until no request is left waiting, then frees the slot: the value is the last run's. */
+async function drain($: Engine): Promise<Refreshed> {
+  const refreshed = await refreshSettled($)
+  if (slot.kind === 'Running' && slot.hasTrailing) {
+    slot = { ...slot, hasTrailing: false }
+    return drain($)
+  }
+  slot = IDLE
+  return refreshed
+}
+
+/**
+ * Coalescing refresh through `slot`: a request during a run marks one trailing run, every
+ * caller awaits the run that covers it, and a failure lands in the view instead of rejecting a
+ * caller. Resolves with the outcome of the run that covered the request.
+ */
+async function refresh($: Engine): Promise<Refreshed> {
+  switch (slot.kind) {
+    case 'Running':
+      slot = { ...slot, hasTrailing: true }
+      return slot.run
+    case 'Idle': {
+      const run = drain($)
+      slot = { kind: 'Running', run, hasTrailing: false }
+      return run
+    }
+    default:
+      return absurd(slot)
+  }
+}
+
+/**
+ * Does a written path land in a configured artifact home? shipgate's defaults apply before the
+ * first refresh. A home whose glob no pattern can be built from (`isReadableGlob`) is skipped.
+ */
 async function isArtifactPath($: EngineInterface, path: string): Promise<boolean> {
   const relative = await projectRelative($, path)
   if (relative === null || relative.startsWith('..')) return false
-  return (homes ?? DEFAULT_HOMES).artifactGlobs.some(glob => matchesHome(relative, glob))
+  return (homes ?? DEFAULT_HOMES).globs.some(glob => isReadableGlob(glob) && matchesHome(relative, glob))
 }
 
-/** The veto prompt names the decision by stream, gate, position and time; the model reads its text from the journal. */
-function vetoText(stream: string, total: number, decision: Decision): string {
-  const nth = total - decision.seq
-  const when = decision.at ? `, recorded ${decision.at}` : ''
+/**
+ * Can `matchesHome` build a pattern from a sidecar glob? Its `[...]` classes become RegExp
+ * classes, and a range whose ends are out of order (`[z-a]`) is a SyntaxError there. Every
+ * other glob builds. A class is read as `globToRegExp` reads it: up to the next `]`, a leading
+ * `!` the negation, each character (a backslash too) itself.
+ */
+function isReadableGlob(glob: string): boolean {
+  const open = glob.indexOf('[')
+  if (open < 0) return true
+  const close = glob.indexOf(']', open + 1)
+  if (close < 0) return true
+  const body = glob.slice(open + 1, close).replace(/^!/, '')
+  return hasOrderedRanges(body, 0) && isReadableGlob(glob.slice(close + 1))
+}
+
+/** Is every `a-b` range of a class body, from `at`, in order (code units, as a RegExp without the `u` flag reads them)? */
+function hasOrderedRanges(body: string, at: number): boolean {
+  if (at >= body.length) return true
+  const isRange = body[at + 1] === '-' && at + 2 < body.length
+  if (!isRange) return hasOrderedRanges(body, at + 1)
+  return body.charCodeAt(at) <= body.charCodeAt(at + 2) && hasOrderedRanges(body, at + 3)
+}
+
+/** The veto prompt names the decision by stream, gate, its place among the decisions (newest first) and time; the model reads its text from the journal. */
+function vetoText(position: Position, decision: Decision): string {
+  const total = position.decisions.length
+  const index = position.decisions.findIndex(drawn => drawn.seq === decision.seq)
+  const place = index < 0 ? `gate decision seq ${decision.seq}` : `gate decision ${index + 1} of ${total} (newest first, seq ${decision.seq})`
+  const gate = decision.gate === null ? 'no gate named' : `gate ${decision.gate}`
   return (
-    `The user pressed Veto in the shipgate HUD on gate decision ${nth} of ${total} in stream ${stream} ` +
-    `(gate ${decision.gate}${when}; raised by the orchestrator in executive mode). ` +
-    `Read that decision from the journal (journal.py status --json / log), revisit it with the user — the alternatives and what ` +
+    `The user pressed Veto in the shipgate HUD on ${place} in stream ${position.stream} ` +
+    `(${gate}, recorded ${decision.at}; raised by the orchestrator in executive mode). ` +
+    `Read that decision from the journal (journal.py position --json lists the stream's decisions by seq), revisit it with the user — the alternatives and what ` +
     `changes — and record a deviation event once you agree.`
   )
 }
 
-/** Accept or Kill on survivor `index` of the round `id` names, as drawn: the plain prompt names it (never `asUser`), and the mark is kept with its round. */
-function markFinding($: EngineInterface, current: Position | null, drawn: ReviewState | null, action: ReviewMark, id: string, index: number): void {
-  const board = boardsFor(boardsOf(drawn), current?.stream ?? null).find(b => roundId(b) === id) ?? null
+/** The position a view draws: the bound stream's, or the stale one under a failure; null for any other view. */
+const shownPositionOf = (shown: HudView): Position | null => {
+  switch (shown.kind) {
+    case 'Bound':
+      return shown.position
+    case 'Failed':
+      return shown.stale
+    case 'Off':
+    case 'NoJournalScript':
+    case 'Unbound':
+      return null
+    default:
+      return absurd(shown)
+  }
+}
+
+/** Accept or Kill on survivor `index` of the round `id` names, as drawn: the mark is kept on its board, and the plain prompt names it (never `asUser`). */
+function markFinding($: Engine, shown: HudView, drawn: ReviewState, action: ReviewMark, id: RoundId, index: number): void {
+  const position = shownPositionOf(shown)
+  const board = boardsFor(drawn.boards, position === null ? null : position.stream).find(held => roundId(held) === id) ?? null
   if (board === null || board.survivors[index] === undefined) return
-  const key = markKey(board, index)
-  void update($, review, s => {
-    const state = reviewStateOf(s)
-    return { ...state, marks: { ...state.marks, [key]: action } }
+  void update($, review, stored => {
+    const state = decodeReviewState(stored)
+    return { ...state, boards: state.boards.map(held => (roundId(held) === id ? markSurvivor(held, index, action) : held)) }
   })
   void $.prompt.submit({ text: findingPrompt(action, index, board) })
 }
 
-function actionsOf($: EngineInterface, current: Position | null, drawn: ReviewState | null = null): Actions {
+/** The pane's controls bound to `$`, for the view and the review state as drawn. */
+function actionsOf($: Engine, shown: HudView, drawn: ReviewState): Actions {
+  const position = shownPositionOf(shown)
   return {
-    accept: (id: string, index: number) => {
-      markFinding($, current, drawn, 'accepted', id, index)
-    },
-    kill: (id: string, index: number) => {
-      markFinding($, current, drawn, 'killed', id, index)
-    },
-    openRound: (id: string) => {
-      void update($, review, s => ({ ...reviewStateOf(s), open: id }))
-    },
-    tick: (id: string) => {
-      const key = tickKey(current?.stream ?? null, id)
-      const status = current?.criteriaStatus?.[id]
-      const seq = current?.criteriaSeq ?? null
-      void update($, review, s => {
-        const state = reviewStateOf(s)
-        return { ...state, ticks: nextTicks(state.ticks, key, status, seq) }
-      })
-    },
     setTab: (next: Tab) => {
       void update($, tab, () => next)
     },
@@ -729,7 +957,7 @@ function actionsOf($: EngineInterface, current: Position | null, drawn: ReviewSt
       void update($, designOpen, () => slug)
     },
     veto: (decision: Decision) => {
-      void $.prompt.submit({ text: vetoText(current?.stream ?? '?', current?.decisions.length ?? 0, decision) })
+      if (position !== null) void $.prompt.submit({ text: vetoText(position, decision) })
     },
     refresh: () => {
       void refresh($)
@@ -737,7 +965,214 @@ function actionsOf($: EngineInterface, current: Position | null, drawn: ReviewSt
     openPane: () => {
       void $.ui.open({ id: PANE_ID, title: 'shipgate', focus: true })
     },
+    accept: (id: RoundId, index: number) => {
+      markFinding($, shown, drawn, 'accepted', id, index)
+    },
+    kill: (id: RoundId, index: number) => {
+      markFinding($, shown, drawn, 'killed', id, index)
+    },
+    tick: (criterion: CriterionId) => {
+      // a criterion is drawn only under a position: no position, no press
+      if (position === null) return
+      const verdict = position.lastVerdict
+      const status = verdict === null ? null : (verdict.criteria[criterion] ?? null)
+      const seq = verdict === null ? null : verdict.seq
+      void update($, review, stored => {
+        const state = decodeReviewState(stored)
+        return { ...state, ticks: nextTicks(state.ticks, position.stream, criterion, status, seq) }
+      })
+    },
+    openRound: (open: OpenRound) => {
+      void update($, review, stored => ({ ...decodeReviewState(stored), open }))
+    },
   }
+}
+
+/**
+ * A decoded review return captured as its stream's next round: a noted launch stamps its run id
+ * and launch stream, else the stream the view is bound to; the newest round opens; older rounds,
+ * their marks and the ticks stay.
+ */
+async function captureBoard($: Engine, ret: ReviewReturn, toolUseId: string | null): Promise<void> {
+  const launch = launchFor(toolUseId)
+  const stream = launch?.stream ?? boundStreamOf(await read($, view))
+  const now = new Date(await $.clock.now())
+  const at = Number.isNaN(now.getTime()) ? null : isoTime(now.toISOString())
+  if (at === null) return
+  const board = toReviewBoard(ret, launch?.runId ?? null, stream, at)
+  // the newest round opens; older rounds, their marks and the ticks stay
+  await update($, review, (stored): ReviewState => {
+    const state = decodeReviewState(stored)
+    return { ...state, boards: pushBoard(state.boards, board), open: { kind: 'newest' } }
+  })
+}
+
+// ---------------------------------------------------------------------------------------
+// The publish gate (HUD ADR 0005)
+// ---------------------------------------------------------------------------------------
+
+/** A target or a bound stream the gate could not resolve: why, or the failure that kept it from reading. */
+type Unbranched = Extract<TargetBinding, { readonly kind: 'Unresolved' | 'Unknown' }>
+
+/** The branch checked out where a `Head` publish runs: `dir` resolved against the shell's directory. */
+async function headBranchOf($: Engine, dir: CommandDir): Promise<Result<Unbranched, BranchName>> {
+  switch (dir.kind) {
+    case 'Unreadable':
+      return err({ kind: 'Unresolved', why: dir.why })
+    case 'Shell':
+    case 'Path': {
+      const shell = await shellDir($)
+      const at = dir.kind === 'Shell' ? shell : absoluteIn(shell, dir.path)
+      const head = await branchIn($, at)
+      if (!head.ok) return err({ kind: 'Unknown', failure: head.error })
+      return head.value === null ? err({ kind: 'Unresolved', why: `no branch is checked out in ${at} (a detached HEAD, or no repository)` }) : ok(head.value)
+    }
+    default:
+      return absurd(dir)
+  }
+}
+
+/** The one branch a publish command publishes, or why there is none. */
+async function targetBranchOf($: Engine, command: PublishCommand): Promise<Result<Unbranched, BranchName>> {
+  const ref = command.ref
+  switch (ref.kind) {
+    case 'Unresolved':
+      return err({ kind: 'Unresolved', why: ref.why })
+    case 'Branch': {
+      const branch = branchName(ref.name)
+      return branch === null ? err({ kind: 'Unresolved', why: `\`${ref.name}\` is no branch name` }) : ok(branch)
+    }
+    case 'Head':
+      return headBranchOf($, command.dir)
+    default:
+      return absurd(ref)
+  }
+}
+
+/** A branch whose stream the gate has read for an earlier command of the line, and what the read gave. */
+interface BranchRead {
+  readonly branch: BranchName
+  readonly target: TargetBinding
+}
+
+/** A publish command's target, and the branches read once it is resolved. */
+interface Resolution {
+  readonly target: TargetBinding
+  readonly read: readonly BranchRead[]
+}
+
+/** The stream of `branch` and its `publish`, from one `status --branch` call. */
+async function branchTarget($: Engine, script: string, branch: BranchName): Promise<TargetBinding> {
+  const brief = await runJournal($, script, ['status', '--json', `--branch=${branch}`], decodeStatus)
+  if (!brief.ok) return { kind: 'Unknown', failure: brief.error }
+  const stream = brief.value.branchMatch
+  if (stream === null) return { kind: 'NoStream', branch }
+  const feature = featureNamed(brief.value, stream)
+  return feature.ok ? { kind: 'Stream', branch, stream, publish: feature.value.publish } : { kind: 'Unknown', failure: feature.error }
+}
+
+/**
+ * The publish command's target (HUD ADR 0005), with its stream and `publish` from one
+ * `status --branch` call; a branch in `read` (an earlier command's) is not read again.
+ * `ref.Unresolved` gives `Unresolved{why}`. `ref.Branch` is that branch, and `dir` is not
+ * needed. `ref.Head` in a `dir.Unreadable` gives `Unresolved{why}`. Otherwise it is the HEAD of
+ * `dir`, resolved against the shell's directory.
+ */
+async function resolveTarget($: Engine, script: string, command: PublishCommand, read: readonly BranchRead[]): Promise<Resolution> {
+  const branch = await targetBranchOf($, command)
+  if (!branch.ok) return { target: branch.error, read }
+  const known = read.find(entry => entry.branch === branch.value)
+  if (known !== undefined) return { target: known.target, read }
+  const target = await branchTarget($, script, branch.value)
+  return { target, read: [...read, { branch: branch.value, target }] }
+}
+
+/** The session's own stream as a refresh left it: bound with its `publish`, none, or unknown (a failed or cut refresh never passes for none). */
+function boundOf(refreshed: Refreshed): BoundStream {
+  switch (refreshed.kind) {
+    case 'Bound':
+      return { kind: 'Stream', stream: refreshed.position.stream, publish: refreshed.position.publish }
+    case 'Unbound':
+    case 'NoProject':
+    case 'NoJournalScript':
+      return { kind: 'None' }
+    case 'Failed':
+      return { kind: 'Unknown', failure: refreshed.failure }
+    case 'Cut':
+      return { kind: 'Unknown', failure: CUT_FAILURE }
+    default:
+      return absurd(refreshed)
+  }
+}
+
+/** A publish line whose targets and bound stream could not be read: each command held, naming `failure`. */
+const unreadableTargets = (commands: PublishCommands, failure: RunFailure): GateInputs => {
+  const unknown = (command: PublishCommand): PublishTarget => ({ command, target: { kind: 'Unknown', failure } })
+  const [first, ...rest] = commands
+  return { kind: 'Target', targets: [unknown(first), ...rest.map(unknown)], bound: { kind: 'Unknown', failure } }
+}
+
+/** Each publish command's target, in textual order (`resolveTarget`): one `status --branch` call per distinct branch, `read` holding those made. */
+async function targetsOf($: Engine, script: string, commands: PublishCommands, read: readonly BranchRead[]): Promise<readonly [PublishTarget, ...PublishTarget[]]> {
+  const [command, ...rest] = commands
+  const resolved = await resolveTarget($, script, command, read)
+  const first: PublishTarget = { command, target: resolved.target }
+  const [next, ...after] = rest
+  return next === undefined ? [first] : [first, ...(await targetsOf($, script, [next, ...after], resolved.read))]
+}
+
+/** The gate's inputs for a line that publishes: the surfaces, the project, journal.py, then each command's target and the bound stream. */
+async function publishInputsOf($: Engine, commands: PublishCommands): Promise<GateInputs> {
+  if (!(await isDrawing($))) return { kind: 'NoSurface' }
+  const project = await detect($)
+  if (!project.ok) return unreadableTargets(commands, project.error)
+  if (!project.value) return { kind: 'NoProject' }
+  // the refresh this request covers: its value, never the atoms it wrote (D4)
+  const refreshed = await refresh($)
+  if (refreshed.kind === 'NoProject') return { kind: 'NoProject' }
+  if (refreshed.kind === 'NoJournalScript') return { kind: 'NoJournalScript' }
+  const bound = boundOf(refreshed)
+  const found = script
+  if (found.kind !== 'Found') return unreadableTargets(commands, bound.kind === 'Unknown' ? bound.failure : CUT_FAILURE)
+  return { kind: 'Target', targets: await targetsOf($, found.path, commands, []), bound }
+}
+
+/**
+ * Everything the gate decides on, read fresh: the surfaces (`$.session.surfaces()`), the
+ * project, journal.py, each publish command's target stream and the session's bound stream.
+ */
+async function gateInputsOf($: Engine, scan: CommandScan): Promise<GateInputs> {
+  switch (scan.kind) {
+    case 'clear':
+    case 'opaque':
+      return { kind: 'NotPublish' }
+    case 'publishes':
+      return publishInputsOf($, scan.commands)
+    default:
+      return absurd(scan)
+  }
+}
+
+/**
+ * Held means asked: the dialog shows `holdReason`, which names every held command of the line,
+ * so one "Let it through once" lets the whole line through on informed consent; true only for
+ * that answer. A dismissed dialog, a -p run or an engine with no dialog refuses.
+ */
+async function askToPass($: Engine, holds: Holds): Promise<boolean> {
+  const answer = await settle(() => $.ui.ask(`${holdReason(holds)} Let it through?`, { options: [REFUSE, ONCE], header: 'publish' }))
+  return answer.ok && answer.value === ONCE
+}
+
+/** The scan of a Bash call's input: a line with no command publishes nothing. */
+const scanOf = (input: unknown): CommandScan => {
+  const command = commandOf(input)
+  return command === null ? { kind: 'clear' } : scanCommand(command)
+}
+
+/** Does a Bash call's input publish? The gate's fail-closed `.catch` asks (pure only). */
+const isPublishInput = (input: unknown): boolean => {
+  const command = commandOf(input)
+  return command !== null && publishCommandOf(command) !== null
 }
 
 export const register: Register = (on, options) => {
@@ -750,8 +1185,8 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     // A session with no surface (claude -p, the SDK) draws nothing: run nothing either.
-    hasSurface = e.surface !== null
-    if (hasSurface && (await detect($))) {
+    const project = e.surface === null ? ok(false) : await detect($)
+    if (project.ok && project.value) {
       await refresh($)
       void $.ui.open({ id: PANE_ID, title: 'shipgate' })
       $.clock.every(60_000, () => {
@@ -763,12 +1198,17 @@ export const register: Register = (on, options) => {
 
   // /clear, /resume and /branch reset $.state and fire no session.start: detect again.
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
-    if (hasSurface && (await detect($))) await refresh($)
+    if (await isDrawing($)) {
+      const project = await detect($)
+      if (project.ok && project.value) await refresh($)
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'hud' }, async $ => {
-    if (!(await detect($))) {
+    const project = await detect($)
+    if (!project.ok) return {} // cut by the person: nothing to open
+    if (!project.value) {
       return { text: `shipgate-hud: no ${SIDECAR} in this project or any directory above it — run /shipgate:setup to create a flow journal.` }
     }
     await $.ui.open({ id: PANE_ID, title: 'shipgate', focus: true, closeOnEscape: true })
@@ -780,97 +1220,66 @@ export const register: Register = (on, options) => {
   // result lands after the pane does; the process time is not counted against the hook.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.deny === undefined && JOURNAL_APPEND.test(e.command) && (await read($, isJournaled))) await refresh($)
+    if (ran.deny === undefined && JOURNAL_APPEND.test(e.command) && (await isJournaled($))) await refresh($)
     return ran
   }).catch(($, e, next) => next(e))
 
   // An artifact in a configured home was written: the plan or the design may have changed.
   on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
     const ran = await next(e)
-    const path = 'file_path' in e && typeof e.file_path === 'string' ? e.file_path : ''
-    if (ran.deny === undefined && (await read($, isJournaled)) && (await isArtifactPath($, path))) await refresh($)
+    const path = stringArg(e, 'file_path')
+    if (ran.deny === undefined && path !== undefined && (await isJournaled($)) && (await isArtifactPath($, path))) await refresh($)
     return ran
   }).catch(($, e, next) => next(e))
 
-  // The publish gate: `git push`, `gh pr create` and `glab mr create` wait for the stream's
-  // review verdict or the user's publish decision, the evidence journal.py demands before
-  // mr-opened. Held means asked; any answer but "Let it through once" refuses. Nothing is
-  // written and nothing remembered. A failure refuses a publish command (`.catch`, pure only).
+  // The publish gate: `git push`, `gh pr create` and `glab mr create` wait for the evidence
+  // journal.py demands before mr-opened, on the stream of the branch the command publishes
+  // (HUD ADR 0005). Held means asked; any answer but "Let it through once" refuses. Nothing
+  // is written and nothing remembered. A failure refuses a publish command (`.catch`, pure only).
   on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
-    const head = publishCommandOf(commandOf(e.input))
-    if (head === null || !hasSurface) return next(e)
-    if (!(await detect($))) return next(e)
-    const fresh = await refresh($)
-    if (script === null) return next(e) // no journal.py found: nothing to check against (FR-022)
-    const current = await read($, position)
-    // A cut refresh leaves the old position behind with no error: treat it as one, so it asks.
-    const error = fresh ? await read($, lastError) : CUT_REFRESH
-    // A failed refresh leaves the old position behind, and an older module build may have
-    // stored one without `publish`: neither may pass.
-    const authorized = error === null && current?.publish?.authorized === true
-    if (authorized) return next(e)
-    if (current === null && error === null) return next(e) // no stream for this session
-    let answer: string = REFUSE
-    try {
-      answer = await $.ui.ask(`${holdReason(head, current, error)}${fresh ? '' : CUT_NOTE} Let it through?`, { options: [REFUSE, ONCE], header: 'publish' })
-    } catch {
-      answer = REFUSE // dismissed, a -p run, or no dialog on this engine
-    }
-    return answer === ONCE ? next(e) : { decision: 'deny' as const, reason: `${denyReason(head, current, error)}${fresh ? '' : CUT_NOTE}` }
-  }).catch(($, e, next) => (publishCommandOf(commandOf(e.input)) !== null ? { decision: 'deny' as const, reason: FAIL_CLOSED } : next(e)))
+    const verdict = gateVerdict(await gateInputsOf($, scanOf(e.input)))
+    if (verdict.kind === 'Pass') return next(e)
+    return (await askToPass($, verdict.holds)) ? next(e) : { decision: 'deny' as const, reason: denyReason(verdict.holds) }
+  }).catch(($, e, next) => (isPublishInput(e.input) ? { decision: 'deny' as const, reason: FAIL_CLOSED } : next(e)))
 
   // The review workflow launched: note its call id and run id, so its notification is known by id.
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const ran = await next(e)
     if (ran.deny === undefined && isReviewLaunch([stringArg(e, 'script'), stringArg(e, 'scriptPath'), stringArg(e, 'name')])) {
-      const current = await read($, position)
-      noteLaunch({ toolUseId: e.tool_use_id, runId: runIdOf(textOf(ran)), stream: current?.stream ?? null })
+      noteLaunch({ toolUseId: e.tool_use_id, runId: runIdOfResult(ran), stream: boundStreamOf(await read($, view)) })
     }
     return ran
   }).catch(($, e, next) => next(e))
 
-  // A background task finished: when its result is the review workflow's return, it becomes the
-  // Review board. A noted launch only stamps the run id and the stream it launched on; an id
-  // match alone never makes a board. The prompt always passes on unchanged; never dropped.
+  // A background task finished: when its result decodes as the review workflow's return, it
+  // becomes the Review board. A noted launch only stamps the run id and the stream it launched
+  // on; an id match alone never makes a board. The prompt always passes on unchanged; never dropped.
   on('prompt.submit', { origin: { kind: 'task-notification' } }, async ($, e, next) => {
-    if (!hasSurface) return next(e) // nothing to draw (claude -p, the SDK)
+    if (!(await isDrawing($))) return next(e) // nothing to draw (claude -p, the SDK)
     const note = parseTaskNotification(e.text)
     if (note === null || note.status === 'failed' || note.status === 'killed') return next(e)
     // the engine cuts a long result in the notification text: the output file holds it whole
-    const result = isReviewReturn(note.result) ? note.result : await reviewReturnFromOutput($, note.outputFile)
-    if (isReviewReturn(result)) {
-      const launch = launchFor(note.toolUseId)
-      const stream = launch?.stream ?? (await read($, position))?.stream ?? null
-      const at = new Date(await $.clock.now()).toISOString()
-      const board = toReviewBoard(result, launch?.runId ?? null, stream, at)
-      // the newest round opens; older rounds, their marks and the ticks stay
-      await update($, review, s => {
-        const state = reviewStateOf(s)
-        const boards = pushBoard(state.boards, board)
-        return { boards, marks: pruneMarks(state.marks, boards), ticks: state.ticks, open: null }
-      })
-    }
+    const inline = decodeReviewReturn(note.result)
+    const ret = inline.ok ? inline.value : await reviewReturnFromOutput($, note.outputFile)
+    if (ret !== null) await captureBoard($, ret, note.toolUseId)
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const current = await read($, position)
-    if (e.props.hasSurvey || current === null || !(await read($, isJournaled))) return next(e)
-    const ui = $.ui.resolve(e) as unknown as Ui
-    const drawn = await read($, review)
-    return bandOf(ui, current, actionsOf($, current, drawn), e.props.bodyColumns, drawn)
+    if (e.props.hasSurvey) return next(e)
+    const shown = await read($, view)
+    const drawn = decodeReviewState(await read($, review))
+    return bandOf(uiOf($, e), shown, actionsOf($, shown, drawn), e.props.bodyColumns, drawn) ?? next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
-    const ui = $.ui.resolve(e) as unknown as Ui
-    const current = await read($, position)
-    const state = {
+    const shown = await read($, view)
+    const state: PaneState = {
       tab: await read($, tab),
       designOpen: await read($, designOpen),
-      lastError: await read($, lastError),
       columns: e.props.bodyColumns,
-      review: await read($, review),
+      review: decodeReviewState(await read($, review)),
     }
-    return paneOf(ui, current, state, actionsOf($, current, state.review))
+    return paneOf(uiOf($, e), shown, state, actionsOf($, shown, state.review))
   })
 }

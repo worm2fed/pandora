@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { GRID_CELL_LIMIT, GRID_LEG_LIMIT, GRID_NODE_LIMIT, cut, flowchartGrid, flowchartSvg, flowchartText, layoutFlowchart, parseFlowchart, splitFences } from '../hooks/diagram'
-import type { FlowGrid, Flowchart } from '../hooks/diagram'
+import type { Direction, EdgeStyle, FlowGrid, Flowchart, NodeShape } from '../hooks/diagram'
+import { type Gen, bool, forAll, int, listOf, pick, stringOf } from './arbitrary'
 
 const count = (text: string, needle: string): number => text.split(needle).length - 1
 
@@ -246,16 +247,16 @@ const chartOf = (source: string): Flowchart => {
 
 /** The grid for a source, or a thrown error when the grid is skipped. */
 const gridFor = (source: string, direction?: Flowchart['direction']): FlowGrid => {
-  const grid = flowchartGrid(chartOf(source), direction)
-  if ('skip' in grid) throw new Error(`no grid (${grid.skip}): ${source}`)
-  return grid
+  const result = flowchartGrid(chartOf(source), direction)
+  if (result.kind === 'skip') throw new Error(`no grid (${result.reason.kind}): ${source}`)
+  return result.grid
 }
 
 /** The grid's rows for a source, or a thrown error when the grid is skipped. */
-const gridOf = (source: string, direction?: Flowchart['direction']): string[] => gridFor(source, direction).rows
+const gridOf = (source: string, direction?: Flowchart['direction']): readonly string[] => gridFor(source, direction).rows
 
 /** Expected rows as drawn, each padded to the widest one: the grid's rows all have its width. */
-const padded = (rows: string[]): string[] => {
+const padded = (rows: readonly string[]): readonly string[] => {
   const width = Math.max(...rows.map(r => [...r].length))
   return rows.map(r => r + ' '.repeat(width - [...r].length))
 }
@@ -395,7 +396,7 @@ describe('flowchartGrid', () => {
   test('more than 60 nodes is the nodes skip; 60 draws', async () => {
     const chain = (n: number) => `flowchart LR\n${Array.from({ length: n - 1 }, (_, i) => `  n${i} --> n${i + 1}`).join('\n')}`
     expect(GRID_NODE_LIMIT).toBe(60)
-    expect(flowchartGrid(chartOf(chain(61)))).toEqual({ skip: 'nodes', nodes: 61 })
+    expect(flowchartGrid(chartOf(chain(61)))).toEqual({ kind: 'skip', reason: { kind: 'nodes', nodes: 61 } })
     expect(gridFor(chain(60)).rows.length).toBe(3)
   })
 
@@ -403,7 +404,7 @@ describe('flowchartGrid', () => {
     // 25 nodes, an edge from each node to every later one: a layer each, 2600 legs
     const edges = Array.from({ length: 24 }, (_, i) => Array.from({ length: 24 - i }, (_, j) => `  n${i} --> n${i + j + 1}`)).flat()
     expect(GRID_LEG_LIMIT).toBe(200)
-    expect(flowchartGrid(chartOf(`flowchart LR\n${edges.join('\n')}`))).toEqual({ skip: 'legs', legs: 2600 })
+    expect(flowchartGrid(chartOf(`flowchart LR\n${edges.join('\n')}`))).toEqual({ kind: 'skip', reason: { kind: 'legs', legs: 2600 } })
   })
 
   test('a grid over 40,000 cells is the size skip', async () => {
@@ -411,7 +412,7 @@ describe('flowchartGrid', () => {
     const pad = (i: number) => String(i).padStart(4, '0')
     const fan = Array.from({ length: 59 }, (_, i) => `  a -->|label number ${pad(i)} xx| b${i}[node label ${pad(i)} xxxxxx]`)
     expect(GRID_CELL_LIMIT).toBe(40000)
-    expect(flowchartGrid(chartOf(`flowchart TD\n${fan.join('\n')}`))).toEqual({ skip: 'size', width: 1592, height: 70 })
+    expect(flowchartGrid(chartOf(`flowchart TD\n${fan.join('\n')}`))).toEqual({ kind: 'skip', reason: { kind: 'size', width: 1592, height: 70 } })
   })
 
   test('an identical edge twice draws one line and counts its legs once', async () => {
@@ -428,5 +429,29 @@ describe('flowchartGrid', () => {
     expect(gridFor('flowchart LR\n a["x\u001b[2Jy"] -->|p\u0007q| b').rows[1]).toBe('│ xy │───pq──►│ b │')
     expect(flowchartText(chart)).toContain('[xy] ──pq──► [b]')
     for (const line of flowchartText(chart).split('\n')) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/)
+  })
+
+  test('grid law: for any flowchart, every row is exactly the grid width, or the grid is skipped; never a throw', async () => {
+    const SHAPES: readonly [NodeShape, ...NodeShape[]] = ['rect', 'round', 'diamond', 'circle']
+    const STYLES: readonly [EdgeStyle, ...EdgeStyle[]] = ['solid', 'dotted', 'thick', 'open']
+    const DIRECTIONS: readonly [Direction, ...Direction[]] = ['LR', 'RL', 'TD', 'TB', 'BT']
+    const LABEL = 'abcdefghij klmnop ünï 界 ─│'
+    const chart: Gen<Flowchart> = rng => {
+      const count = int(1, 14)(rng)
+      const ids = Array.from({ length: count }, (_, i) => `n${i}`)
+      const nodes = ids.map(id => ({ id, label: bool(rng) ? id : stringOf(LABEL, 1, 30)(rng), shape: pick(SHAPES)(rng) }))
+      const node: Gen<string> = r => ids[int(0, count - 1)(r)] ?? 'n0'
+      const edges = listOf(r => ({ from: node(r), to: node(r), label: bool(r) ? '' : stringOf(LABEL, 1, 30)(r), style: pick(STYLES)(r) }), 0, 24)(rng)
+      return { direction: pick(DIRECTIONS)(rng), nodes, edges }
+    }
+    const directions: readonly Direction[] = ['LR', 'RL', 'TD', 'TB', 'BT']
+    forAll(20261020, 500, chart, input => {
+      for (const direction of directions) {
+        const result = flowchartGrid(input, direction)
+        if (result.kind === 'skip') continue
+        expect(result.grid.rows.length).toBeGreaterThan(0)
+        for (const row of result.grid.rows) expect([...row].length).toBe(result.grid.width)
+      }
+    })
   })
 })
