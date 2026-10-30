@@ -33,6 +33,10 @@ a placeholder, or `plain`, write them as before.
 
 1. **Take the next task** in dependency order from the Build Plan. Respect `[P]` only as a
    signal that tasks are independent. Do not start a task whose prerequisites are unchecked.
+   Keep each task line in the form the worklog template's Build Plan rule gives: a
+   bullet, a box, then the id `T` and digits, bare or bold (`- [x] T001 — title`,
+   `- [x] **T001**: title`). A line in any other form drops out of the HUD's Plan tab and
+   of the Stop gate's ticked-box check.
 
 2. **Reuse before writing.** Grep the codebase for an existing utility, helper, or pattern
    that already does this. When you integrate a dependency, **read its API surface first**.

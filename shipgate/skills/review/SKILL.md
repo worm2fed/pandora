@@ -418,8 +418,27 @@ one when it happens:
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type review-verdict \
-  --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3}}'
+  --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3},
+           "criteria":{"SC-001":"met","SC-002":"met"},
+           "dispositions":{"src/api.py:42":"fixed","src/db.py:?":"rejected"}}'
 ```
+
+Write two more keys with the verdict. The HUD's Review tab draws them, and without them it
+shows every criterion unticked and every finding open:
+- `criteria` maps each PRD success criterion you checked in Step 4 to `met` or `unmet`.
+  The key is the criterion's PRD id (`SC-001`). The HUD draws only `SC-` ids, so when the
+  issue has no PRD, leave `criteria` out.
+- `dispositions` maps each finding you reported to what happened to it: `fixed`,
+  `rejected` or `deferred`. The key is `<path>:<line>`, or `<path>:?` when the finding has
+  no line. A finding with no disposition counts as open.
+
+Keep the keys compact. For the path, use the last segments of the path the review reported,
+at most three, and enough to be unique (`skills/review/SKILL.md`, not
+`/home/.../skills/review/SKILL.md`). The HUD matches such a tail against the finding's full
+path. The whole payload must stay under the journal's 1 KB cap on a work stream, or the
+append is refused. With many findings, keep the dispositions and drop the `findings`
+counts first.
+`journal.py vocab --shape review-verdict` lists both keys and the values each one accepts.
 
 The stream may not exist yet (a commit reviewed on the integration branch). Then opening it
 and recording the verdict is one `--batch` (JSONL on stdin; stdin form: see `verify`):

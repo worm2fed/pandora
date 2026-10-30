@@ -5,7 +5,7 @@ created: 2026-09-02
 updated: 2026-09-02
 tags:
   - adr
-status: accepted (label default amended by 0005)
+status: accepted (label default amended by 0005; event_session amended by 0010)
 date: 2026-09-02
 issue: "none / ad-hoc"
 related: ["../prd/journal-cost-and-workflows.md", "0001-sqlite-flow-journal.md"]
@@ -34,7 +34,9 @@ Two facts, one field: `role@label`. Roles are a closed set, validated by `append
 error otherwise); `orchestrator` is the default. The label is free text; when absent,
 `append` reads `meta.current_session` — written by `session_start.py` on every
 startup/resume — and suffixes it. `event_session()` returns `data.session` when present,
-else the part after `@`. Hook-written events keep `actor=hook` and carry `data.session`
+else the part after `@`. *Amended by ADR 0010:* a `user` row's session is its
+`data.recorded_by`, and the label of a `user` or `watcher` actor is never read as a
+session. Hook-written events keep `actor=hook` and carry `data.session`
 as today. Two roles never receive the session suffix (`SESSIONLESS_ROLES`): `watcher` is a
 machine actor with no session, and `user` names a person — a bare `user` stays `user`, and
 `stats` does not count `user@<label>` values as sessions.

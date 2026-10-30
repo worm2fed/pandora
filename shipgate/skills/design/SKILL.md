@@ -149,7 +149,10 @@ project config declares. The worklog has two sections with different lifecycles:
   consumes this list. Anything not on it counts as an unauthorized behavioral difference.
 - **Build Plan** — ordered tasks, **with tests as tasks** (never a separate doc). Mark a task
   `[P]` when it's independent of its siblings and could be done in parallel. Each task names
-  the file(s) it touches and what "done" means. This section is *living*: implementation
+  the file(s) it touches and what "done" means. Write each task line as the worklog
+  template's Build Plan rule says: a bullet, a box, then the id `T` and digits, bare or
+  bold (`- [ ] T001 — title`, `- [ ] **T001**: title`). The journal skips a line in any
+  other form. This section is *living*: implementation
   ticks the boxes and logs deviations here. A slice can **introduce new domain shapes**
   (entities, value objects, error unions, command/handler signatures). Then plan a
   **declarations task** ahead of that slice's body tasks. It holds types and signatures only,

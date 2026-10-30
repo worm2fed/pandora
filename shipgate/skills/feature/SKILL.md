@@ -307,7 +307,10 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
     raised or corrected the point. Use `orchestrator` when you asked it or decided it
     yourself. Pass `--actor user` for a decision the user made, and `--actor orchestrator`
     (or nothing) otherwise. A worker that appends passes `--actor worker`. The form is
-    `role[@label]`; if you omit the label, `append` fills in the current session.
+    `role[@label]`. If you omit the label, `append` fills in the current session, except
+    for the sessionless roles `user` and `watcher`. Their label is never a session id. A
+    `user` event records the session that wrote it under `data.recorded_by` instead, so
+    the user's decisions still bind this session to the stream.
 
   Hooks capture what the harness can see: artifact writes, session start and end. The Stop
   hook blocks a session that did one of three things:

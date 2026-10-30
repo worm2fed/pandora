@@ -5,7 +5,7 @@ created: 2026-10-08
 updated: 2026-10-08
 tags:
   - adr
-status: accepted
+status: accepted (decisions 1 and 2 amended by 0010)
 date: 2026-10-08
 issue: "none / ad-hoc"
 related: ["0003-session-attribution-via-current-session.md", "../../../shipgate-hud/docs/adr/0001-sibling-plugin-fed-by-the-journal-cli.md"]
@@ -33,12 +33,15 @@ that dispatched it.
 
 1. **Label source.** Explicit `role@label` first, then `data.session` (hook events keep the bare
    role), then `CLAUDE_CODE_SESSION_ID`, then `meta.current_session`. `SESSIONLESS_ROLES` are
-   unchanged.
+   unchanged. *Amended by ADR 0010:* a `user` row stays unlabelled and records the same
+   session as `data.recorded_by` instead.
 2. **The session's position.** `status --session ID` finds the newest event whose
    `event_session()` is `ID` and whose role is not `hook`, across work streams; its stream is the
    session's unless that stream is finished, in which case nothing matches and the branch
    decides. Hook events are excluded because the hook files an artifact write under the
    checked-out branch's stream: that says where a file landed, not what the session drives.
+   *Amended by ADR 0010:* `event_session()` reads a `user` row's `data.recorded_by`, and
+   never reads the label of a `user` or `watcher` actor.
 3. **Policy in journal.py.** The HUD passes its own `$.session.id()` and picks `session_match`,
    then `branch_match` — as with `--nested-branch`, a consumer holds no policy.
 

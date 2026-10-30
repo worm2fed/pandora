@@ -2,6 +2,65 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.19.0 — a user decision binds its session, bold task ids, and a complete review verdict.
+
+**A session whose writes are all `--actor user` binds to its stream (#9, ADR 0010).** The
+`feature` skill records the user's decisions with `--actor user`. `user` is a sessionless
+role, so those rows named no session. In an umbrella whose nested branches name two live
+streams, the branch rule binds nothing, and the session's own writes are the last signal. A
+session that had written only user decisions had none, so the HUD said "This session drives
+no stream". The Stop gate had the same gap: a session that wrote a PRD and recorded only
+user gate decisions was blocked for "no gate-decision this session".
+- `append` keeps the actor `user` and writes the appending session into the payload as
+  `data.recorded_by`. The source is `CLAUDE_CODE_SESSION_ID`, else `meta.current_session`,
+  as for a machine label. The journal owns the key: `append` drops any value the caller
+  passed, so a payload cannot name another session. An append with no session writes no
+  key. The implied `phase-entered` row gets the same value.
+- The key is added after the 1 KB check, so it never refuses a payload inside the cap.
+- `event_session` reads `data.session`, then `data.recorded_by` on a `user` row, then the
+  label of a machine role. So `status --session` (`session_match`), `check --session` and
+  `stats` count the session that recorded a user decision.
+- `event_session` never reads the label of a `user` or `watcher` actor. A `user@` or
+  `watcher@` label no longer binds a session in `status --session`, and `stats` no longer
+  counts a `watcher@` label as a session.
+- The Stop gate reads the session's `user` rows too. Rule B accepts a user gate decision
+  the session recorded. Rule C checks a `task-done` the session recorded for the user: a
+  forced one with no passing `verify-run` before it blocks the stop.
+- `watcher` stays sessionless and gets no key.
+- Rows written before 0.19.0 carry no key and stay sessionless.
+- The `feature` skill no longer says that `append` labels every role. It names the two
+  sessionless roles and says what a `user` event records instead.
+
+**For shipgate-hud.** No HUD change is needed for the binding. The HUD already passes
+`--session` to `status --json` and binds on `session_match`, which journal.py now computes
+with `recorded_by`. The binding works only against shipgate 0.19.0 or later. The HUD may
+raise its `shipgate` range to `>=0.19.0` in a follow-up, so that a HUD user gets the fix
+with it. A HUD view that prints raw event `data` now shows `recorded_by` on `user` rows.
+The golden contract does not yet cover either new behaviour. A HUD change that regenerates
+`fixtures.journal.ts` can add a bold task id to the golden worklog and a `--actor user` row
+written from the golden session.
+
+**Bold task ids in the Build Plan (#4).** The task-line grammar accepted only a bare id:
+`- [x] T1 - title`. A worklog that bolded the id (`- [x] **T1** title`, or
+`- [x] **T001**: title`) showed "No Build Plan found" in the HUD's Plan tab. The grammar
+now accepts an optional `**` around the id (`**T001**`, or `**T001:**` with the colon
+inside), and a colon as well as a dash after it. The closing `**` must follow the digits
+or that colon, so `**T001a**` is still not a task. A `[P]` marker after the dash or the
+colon no longer stays in the title. `position` (the
+Plan tab) and `check` (the Stop gate's rule A) share this one grammar. So the Stop gate now
+also sees a ticked bold task: a ticked `**T001**` with no `task-done` blocks a stop, as a
+ticked `T001` always did. The worklog template and the `design` and `implement` skills
+name the accepted forms.
+
+**The review skill writes `criteria` and `dispositions` (#2).** 0.18.0 added both keys to
+the `review-verdict` shape. The `review` skill now writes them in **Record the outcome**:
+`criteria` maps each PRD success criterion (`SC-001`) to `met` or `unmet`, and is left
+out when the issue has no PRD, because the HUD draws only `SC-` ids. `dispositions` maps
+each finding (`<path>:<line>`, or `<path>:?`) to `fixed`, `rejected` or `deferred`. The
+path is the reported path's last segments, at most three, which the HUD matches against
+the full path. The keys stay compact, and the whole payload stays under the 1 KB cap.
+Without them, the HUD's Review tab shows every criterion unticked and every finding open.
+
 v0.18.0 — who wrote an artifact, and the facts the HUD draws.
 
 **Attribution (ADR 0008).** Every session's FileChanged hook fires on the same write. The hook

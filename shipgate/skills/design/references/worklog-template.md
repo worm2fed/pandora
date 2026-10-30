@@ -67,6 +67,10 @@ behavioral difference. Delete this section when the work isn't a port or migrati
 
 Tasks are ordered by dependency. `[P]` = independent of its siblings (parallelizable).
 Tests are tasks, not a separate phase. Tick boxes as you go; log deviations inline.
+A task line is a `-` or `*` bullet, a box, then the id: `T` and digits, bare (`T001`) or
+bold (`**T001**` or `**T001:**`). The title follows, after an optional dash or colon:
+`- [ ] T001 — title`, `- [ ] **T001** title`, `- [ ] **T001**: title`. A line in any other
+form is not a task, so the HUD's Plan tab and the Stop gate both skip it.
 
 ## Setup / foundations
 - [ ] T001 — <task> — file(s): `...` — done when: <...>

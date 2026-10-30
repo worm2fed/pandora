@@ -656,6 +656,93 @@ class TestActorCanon(JournalTestCase):
         self.append_event("feature/x", "flow-suspended", None, "--actor", "user")
         self.assertEqual(self.actor_of(), "user")
 
+    # Issue #9, ADR 0010: the actor stays `user`, and the payload names the session that
+    # wrote the row, so `status --session`, `check` and `stats` can count it.
+    def data_of(self, stream="feature/x"):
+        return self.events(stream)[-1]["data"]
+
+    def test_a_user_row_records_the_writing_session(self):
+        self.append_from_session("S1", "--actor", "user")
+        self.assertEqual(self.actor_of(), "user")
+        self.assertEqual(self.data_of()["recorded_by"], "S1")
+
+    def test_a_user_row_falls_back_to_the_current_session(self):
+        self.set_session("S1")
+        self.append_event("feature/x", "flow-suspended", None, "--actor", "user")
+        self.assertEqual(self.actor_of(), "user")
+        self.assertEqual(self.data_of()["recorded_by"], "S1")
+
+    def test_a_labelled_user_row_still_records_the_writing_session(self):
+        """The label names a person; the writing session is a separate fact."""
+        self.append_from_session("S1", "--actor", "user@alice")
+        self.assertEqual(self.actor_of(), "user@alice")
+        self.assertEqual(self.data_of()["recorded_by"], "S1")
+
+    def test_a_user_row_outside_any_session_records_nothing(self):
+        self.append_event("feature/x", "flow-suspended", None, "--actor", "user")
+        self.assertNotIn("recorded_by", self.data_of())
+
+    def test_a_given_recorded_by_is_replaced_by_the_appending_session(self):
+        """The journal owns the key, so a payload cannot name another session."""
+        for given in ("S7", 5, "", None):
+            with self.subTest(given=given):
+                self.append_from_session(
+                    "S1", "--actor", "user", "--data", json.dumps({"recorded_by": given})
+                )
+                self.assertEqual(self.data_of()["recorded_by"], "S1")
+
+    def test_a_given_recorded_by_is_dropped_outside_any_session(self):
+        for actor in ("user", "orchestrator", "watcher"):
+            with self.subTest(actor=actor):
+                self.append_event("feature/x", "flow-suspended", {"recorded_by": 5},
+                                  "--actor", actor)
+                self.assertNotIn("recorded_by", self.data_of())
+
+    def test_only_a_user_row_records_the_writing_session(self):
+        """The watcher stays sessionless; a machine role carries the label instead."""
+        self.set_session("S1")
+        self.append_event(
+            "watch/group-project!42", "baseline", {"iid": 42}, "--actor", "watcher"
+        )
+        self.assertNotIn("recorded_by", self.data_of("watch/group-project!42"))
+        for role in ("orchestrator", "worker"):
+            with self.subTest(role=role):
+                self.append_from_session("S1", "--actor", role)
+                self.assertNotIn("recorded_by", self.data_of())
+
+    def test_the_implied_phase_row_records_the_writing_session_too(self):
+        self.journal(
+            "--db", self.db, "append", "--stream", "feature/x", "--type", "verify-run",
+            "--data", json.dumps({"outcome": "pass", "task_ids": ["T001"]}),
+            "--actor", "user", rc=OK, session_env="S1",
+        )
+        rows = self.events("feature/x")
+        self.assertEqual([r["type"] for r in rows], ["phase-entered", "verify-run"])
+        self.assertEqual([r["data"].get("recorded_by") for r in rows], ["S1", "S1"])
+
+    def event_of(self, actor, data):
+        module = load_journal_module()
+        event = module.Event(
+            seq=1, stream="feature/x", version=1, type="gate-decision",
+            data=data, ts="2026-09-02T10:00:00+00:00", actor=actor,
+        )
+        return module.event_session(event)
+
+    def test_event_session_reads_recorded_by(self):
+        self.assertEqual(self.event_of("user", {"recorded_by": "S1"}), "S1")
+        self.assertEqual(self.event_of("user@alice", {"recorded_by": "S1"}), "S1")
+
+    def test_event_session_never_reads_a_sessionless_label(self):
+        """`user@alice` names a person and `watcher@babysit` a watcher, not a session."""
+        self.assertIsNone(self.event_of("user@alice", {}))
+        self.assertIsNone(self.event_of("watcher@babysit", {}))
+
+    def test_event_session_reads_recorded_by_on_a_user_row_only(self):
+        self.assertIsNone(self.event_of("watcher", {"recorded_by": "S1"}))
+        self.assertEqual(
+            self.event_of("orchestrator@S2", {"recorded_by": "S1"}), "S2"
+        )
+
     def test_session_get_reads_what_set_wrote(self):
         self.set_session("S1")
         out = self.journal("--db", self.db, "session", "--get", "--json", rc=OK).stdout
@@ -1682,6 +1769,15 @@ class TestPayloadCap(JournalTestCase):
         self.assertIn("refs", combined)
         self.assertIn("--force", combined)
 
+    def test_recorded_by_does_not_push_a_payload_at_the_cap_over_it(self):
+        """The key is the journal's own bookkeeping, not prose the caller wrote."""
+        self.journal(
+            "--db", self.db, "append", "--stream", "feature/x", "--type", "deviation",
+            "--data", json.dumps(self.payload_of(1024)), "--actor", "user",
+            rc=OK, session_env="S1",
+        )
+        self.assertEqual(self.events("feature/x")[-1]["data"]["recorded_by"], "S1")
+
     def test_force_waives_the_cap_and_stores_the_payload(self):
         note = self.payload_of(2000)["note"]
         self.append_event(
@@ -2380,6 +2476,38 @@ class TestSessionMatch(JournalTestCase):
         self.write_as("A", "epic-1")
         self.assertIsNone(self.status_json()["session_match"])
 
+    def test_a_session_whose_writes_are_all_user_rows_binds(self):
+        """Issue #9: two live streams named by nested branches bind none, so the
+        session's own writes decide, and here every one of them is `--actor user`."""
+        self.write_as("B", "fix/1-b")
+        self.write_as("C", "fix/2-c")
+        batch = "\n".join(json.dumps(r) for r in [
+            {"type": "flow-started", "data": {"request": "x"}},
+            {"type": "gate-decision", "data": {
+                "gate": "scope", "question": "q", "decision": "d",
+                "mode": "executive", "raised_by": "user"}},
+        ])
+        proc = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
+             "--stream", "feat/1-x", "--batch", "--actor", "user"],
+            input=batch, capture_output=True, text=True, cwd=str(self.root),
+            env={**{k: v for k, v in os.environ.items() if k != SESSION_ENV},
+                 SESSION_ENV: "A"},
+        )
+        self.assertEqual(proc.returncode, OK, msg=proc.stderr)
+        self.assertEqual({e["actor"] for e in self.events("feat/1-x")}, {"user"})
+        payload = self.status_json("--session", "A", "--branch", "main",
+                                   "--nested-branch", "fix/1-b",
+                                   "--nested-branch", "fix/2-c")
+        self.assertIsNone(payload["branch_match"])
+        self.assertEqual(payload["session_match"], "feat/1-x")
+
+    def test_a_user_label_alone_never_binds_a_session(self):
+        """A legacy `user` row with no `recorded_by` still belongs to no session."""
+        self.append_event("feat/1-x", "flow-started", {"request": "x"},
+                          "--actor", "user")
+        self.assertIsNone(self.status_json("--session", "A")["session_match"])
+
     def test_the_sessions_stream_renders_first_in_the_brief(self):
         self.write_as("A", "epic-1")
         self.write_as("B", "fix/1-b")
@@ -2787,6 +2915,33 @@ class TestCheck(JournalTestCase):
         self.artifact_written("docs/prd/demo.md")
         self.check(rc=OK)
 
+    def test_prd_with_a_user_gate_decision_from_this_session_passes(self):
+        """Issue #9: the user's own decision, recorded by this session, satisfies rule B."""
+        self.write("docs/prd/demo.md", "# PRD\n")
+        self.append_event("feature/demo", "phase-entered", {"phase": "workspace"})
+        self.append_event("feature/demo", "phase-entered", {
+            "phase": "clarify", "skipped": ["route-and-map", "explore"],
+        })
+        self.journal(
+            "--db", self.db, "append", "--stream", "feature/demo",
+            "--type", "gate-decision", "--actor", "user",
+            "--data", json.dumps({"gate": "clarify", "question": "q", "decision": "d",
+                                  "mode": "ask", "raised_by": "user"}),
+            rc=OK, session_env=self.SESSION,
+        )
+        self.artifact_written("docs/prd/demo.md")
+        self.check(rc=OK)
+
+    def test_a_forced_user_task_done_without_verify_blocks_its_session(self):
+        """Rule C reads the session's rows, and a user row now names its session."""
+        self.journal(
+            "--db", self.db, "append", "--stream", "feature/demo", "--type", "task-done",
+            "--data", json.dumps({"task_id": "T001"}), "--actor", "user",
+            "--force", "--force-reason", "test", rc=OK, session_env=self.SESSION,
+        )
+        findings = json.loads(self.check(rc=CHECK).stdout)["findings"]
+        self.assertEqual([f["missing"] for f in findings], ["verify-run"])
+
     def test_task_done_without_verify_run_blocks(self):
         self.append_event("feature/demo", "task-done", {"task_id": "T001"},
                           "--force", "--actor", "orchestrator@" + self.SESSION)
@@ -2873,6 +3028,11 @@ class TestParseTickedTasks(unittest.TestCase):
     def test_a_star_bullet_is_a_task_line(self):
         """audit D9: the Stop gate reads `* [x]`, so the HUD must list it too."""
         text = WORKLOG_TEMPLATE.format(tasks="- [x] T001 — a\n* [x] T002 — b")
+        self.assertEqual(self.journal.parse_ticked_tasks(text), ["T001", "T002"])
+
+    def test_the_stop_gate_reads_a_bold_id(self):
+        """Issue #4: one grammar, so rule A sees what the Plan tab lists."""
+        text = WORKLOG_TEMPLATE.format(tasks="- [x] **T001** a\n- [x] **T002**: b")
         self.assertEqual(self.journal.parse_ticked_tasks(text), ["T001", "T002"])
 
     # parse_ticked_tasks now derives from parse_build_plan; this is its grammar before
@@ -3015,6 +3175,34 @@ class TestParseBuildPlan(unittest.TestCase):
 
     def test_an_id_must_end_at_a_word_boundary(self):
         self.assertEqual(self.parse("- [x] T001a — x\n- [x] Tx — y\n"), [])
+
+    def test_a_bold_id_and_a_colon_are_task_lines_too(self):
+        """Issue #4: worklogs bold the id and put a colon after it."""
+        text = ("# Build Plan\n- [x] **T1** title one\n- [x] **T001**: title two\n"
+                "- [x] T1 - title three\n- [ ] T002: title four\n"
+                "- [ ] **T003** [P] — title five — file(s): `a.py`\n")
+        self.assertEqual(self.parse(text), [
+            self.task("T1", "title one", ticked=True),
+            self.task("T001", "title two", ticked=True),
+            self.task("T1", "title three", ticked=True),
+            self.task("T002", "title four"),
+            self.task("T003", "title five"),
+        ])
+
+    def test_a_parallel_marker_after_the_separator_is_not_title(self):
+        for line in ("- [ ] **T1**: [P] title", "- [ ] T1 — [P] title",
+                     "- [ ] **T1** [P]: title"):
+            with self.subTest(line=line):
+                self.assertEqual(self.parse(line)[0]["title"], "title")
+
+    def test_a_colon_inside_the_bold_is_a_task_line_too(self):
+        self.assertEqual(self.parse("- [x] **T001:** title\n"),
+                         [self.task("T001", "title", ticked=True)])
+
+    def test_a_bold_id_must_close_right_after_its_digits(self):
+        text = ("- [x] **T001a** x\n- [x] **T002 y\n- [x] **Tx** z\n- [x] T003** w\n"
+                "- [x] **T004::** v\n")
+        self.assertEqual([t["id"] for t in self.parse(text)], ["T003"])
 
     def test_a_repeated_id_gives_one_entry_per_line(self):
         self.assertEqual(self.parse("- [ ] T001 — a\n- [x] T001 — b\n"), [
@@ -3870,6 +4058,21 @@ class TestStats(JournalTestCase):
                           "--actor", "user")
         self.append_event("feature/x", "deviation", {"note": "c"},
                           "--actor", "worker")
+        self.assertEqual(self.row()["sessions"], 1)
+        self.assertEqual(self.stats()["totals"]["sessions"], 1)
+
+    def test_a_watcher_label_is_not_a_session(self):
+        self.append_event("feature/x", "deviation", {"note": "a"},
+                          "--actor", "watcher@babysit")
+        self.assertEqual(self.row()["sessions"], 0)
+
+    def test_a_session_that_wrote_only_user_rows_is_counted(self):
+        """Issue #9: `recorded_by` is a session id, unlike the `user@` label."""
+        self.journal(
+            "--db", self.db, "append", "--stream", "feature/x", "--type", "deviation",
+            "--data", json.dumps({"note": "a"}), "--actor", "user@alice",
+            rc=OK, session_env="session-9",
+        )
         self.assertEqual(self.row()["sessions"], 1)
         self.assertEqual(self.stats()["totals"]["sessions"], 1)
 

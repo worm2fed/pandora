@@ -167,7 +167,10 @@ takes `met` or `unmet`, and its optional `dispositions` map takes `fixed`, `reje
 `deferred`. `status --json` prints the same publish rule per stream as `publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's shell
-carries its parent's), else the session that started last (ADR 0005). A stream ends with `flow-completed` and leaves the status brief.
+carries its parent's), else the session that started last (ADR 0005). `user` and `watcher` never
+take a session label. A `user` event records the appending session as `data.recorded_by`
+instead, so `status --session`, `check` and `stats` count the session that recorded the user's
+decision (ADR 0010). A stream ends with `flow-completed` and leaves the status brief.
 
 Each phase skill names its stream before it works — the branch the work takes, per the
 config's **Branching** pattern, opened with `flow-started` by whichever skill runs first when

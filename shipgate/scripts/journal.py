@@ -300,9 +300,16 @@ REVIVING_TYPES = frozenset(
 
 # Roles whose label is never a session id. The watcher runs outside any Claude session,
 # so `meta.current_session` would attribute its events to whoever started a session last;
-# a `user` label names a person, which is why `stats` drops the role from its session
+# a `user` label names a person, which is why `stats` drops the label from its session
 # count — defaulting a session id in would put it back and inflate that count.
 SESSIONLESS_ROLES = frozenset({"watcher", "user"})
+
+# A `user` row still runs in some session: the one that recorded the user's decision.
+# `append` writes that session into the payload under this key (ADR 0010), apart from the
+# actor, so `event_session` can bind the session to the stream without the label ever
+# naming one. The watcher has no session to record.
+RECORDED_BY_KEY = "recorded_by"
+RECORDED_BY_ROLES = frozenset({"user"})
 
 # Claude Code sets this in every shell it starts, subagents' included (they get the
 # parent's id). It names the session that is appending, where `meta.current_session`
@@ -348,8 +355,12 @@ DEFAULT_LEDGER = "docs/ledger.md"
 # The knowledge-base skill's own threshold for nudging about an un-triaged ledger.
 LEDGER_NUDGE_THRESHOLD = 15
 
-# A Build Plan task line: the box, the id, then the rest of the line (`parse_build_plan`).
-_PLAN_TASK_RE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s*(T\d+)\b([^\n]*)", re.MULTILINE)
+# A Build Plan task line: the box, the id (bare, or bold as `**T001**` or `**T001:**`),
+# then the rest of the line (`parse_build_plan`). Groups: 1 the box, 2 a bold id, 3 a bare
+# id, 4 the rest.
+_PLAN_TASK_RE = re.compile(
+    r"^\s*[-*]\s*\[([ xX])\]\s*(?:\*\*(T\d+):?\*\*|(T\d+)\b)([^\n]*)", re.MULTILINE
+)
 _PLAN_HEADING_RE = re.compile(r"^#+[ \t]+(\S[^\n]*?)[ \t]*$", re.MULTILINE)
 _BUILD_PLAN_RE = re.compile(r"^(#+)\s*Build Plan\s*$", re.MULTILINE | re.IGNORECASE)
 
@@ -652,8 +663,26 @@ def parse_actor(
             return role
         if "observed_by" in data:
             return role
-    session_id = os.environ.get(SESSION_ENV, "").strip() or current_session(conn)
+    session_id = appending_session(conn)
     return f"{role}@{session_id}" if session_id else role
+
+
+def appending_session(conn: sqlite3.Connection) -> Optional[str]:
+    """The session running this append (ADR 0005): the shell's ``CLAUDE_CODE_SESSION_ID``,
+    else ``meta.current_session``, else None."""
+    return os.environ.get(SESSION_ENV, "").strip() or current_session(conn)
+
+
+def recorded_by_for(conn: sqlite3.Connection, actor: str) -> Optional[str]:
+    """The session to record under ``recorded_by`` for this append, or None (ADR 0010).
+
+    Only a ``user`` row gets one, whatever its label: the label names a person, and the
+    writing session is a separate fact. The journal owns the key: ``append_event`` drops
+    any value the caller passed, so a payload cannot name another session.
+    """
+    if actor.partition("@")[0] not in RECORDED_BY_ROLES:
+        return None
+    return appending_session(conn)
 
 
 def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
@@ -1351,6 +1380,13 @@ def append_event(
     # so `--force` does not waive it.
     payload = normalize_payload(event_type, payload)
     check_payload_size(stream, payload, force, force_reason)
+    # After the cap check: the key is the journal's bookkeeping, not prose the caller
+    # wrote, so it must not refuse a payload the caller kept inside the cap. The journal
+    # owns it, so a caller's own value never survives (ADR 0010).
+    payload.pop(RECORDED_BY_KEY, None)
+    recorded_by = recorded_by_for(conn, canonical_actor)
+    if recorded_by:
+        payload[RECORDED_BY_KEY] = recorded_by
 
     for attempt in range(2):
         conn.execute("BEGIN IMMEDIATE")
@@ -1377,9 +1413,13 @@ def append_event(
                 if previous == implied_phase:
                     implied_phase = None
                 else:
+                    implied = _implied_phase_payload(
+                        previous, implied_phase, event_type
+                    )
+                    if recorded_by:
+                        implied[RECORDED_BY_KEY] = recorded_by
                     _insert_event(
-                        conn, stream, version, "phase-entered",
-                        _implied_phase_payload(previous, implied_phase, event_type),
+                        conn, stream, version, "phase-entered", implied,
                         canonical_actor,
                     )
                     version += 1
@@ -2034,16 +2074,18 @@ def _build_plan_region(text: str) -> str:
 
 
 def _plan_task_title(rest: str) -> Optional[str]:
-    """The title in what follows a task id: past ``[P]`` and a dash, up to the next
-    spaced em or en dash. None when nothing is left."""
+    """The title in what follows a task id: past a dash or a colon and a ``[P]`` marker on
+    either side of it, up to the next spaced em or en dash. None when nothing is left."""
     lead = re.sub(r"^\[P\]\s*", "", rest.strip())
-    lead = re.sub(r"^[—–-]+\s*", "", lead)
+    lead = re.sub(r"^(?:[—–-]+|:)\s*", "", lead)
+    lead = re.sub(r"^\[P\]\s*", "", lead)
     title = re.split(r"\s+[—–](?:\s+|$)", lead, maxsplit=1)[0].strip()
     return title or None
 
 
 class PlanTask(TypedDict):
-    """One task line of a worklog's Build Plan: ``- [x] T013 — title — file(s): ...``."""
+    """One task line of a worklog's Build Plan: ``- [x] T013 — title — file(s): ...``,
+    or with a bold id and a colon, ``- [x] **T013**: title``."""
 
     id: str
     title: Optional[str]
@@ -2061,12 +2103,15 @@ def parse_build_plan(text: str) -> List[PlanTask]:
       ends at the next heading of the same or a higher level. With no such heading the
       whole document is the region.
     - A task line is a ``-`` or ``*`` bullet, a ``[ ]``, ``[x]`` or ``[X]`` box, then an
-      id: ``T`` and digits, ending at a word boundary (``T001``, never ``T001a``).
-      ``ticked`` is the box's state.
-    - ``title`` is the text after the id, an optional ``[P]`` marker and the dash after
-      them, up to the next spaced em or en dash (`` — file(s): ...``). It is kept as
-      written, backticks included: display work stays in the HUD. None when the line
-      has no title, never ''.
+      id: ``T`` and digits, ending at a word boundary (``T001``, never ``T001a``). The id
+      may be bold, ``**T001**`` or ``**T001:**``; the closing ``**`` must follow the
+      digits or that colon. ``ticked`` is the box's state. So ``- [x] T1 - title``,
+      ``- [x] **T1** title``, ``- [x] **T001**: title`` and ``- [x] **T001:** title`` are
+      all task lines.
+    - ``title`` is the text after the id, an optional ``[P]`` marker and the dash or the
+      colon after them, up to the next spaced em or en dash (`` — file(s): ...``). It is
+      kept as written, backticks included: display work stays in the HUD. None when the
+      line has no title, never ''.
     - ``section`` is the nearest heading above the line inside the region; None when
       there is none.
     A repeated id gives one entry per line, so ``parse_ticked_tasks`` keeps its current
@@ -2083,8 +2128,8 @@ def parse_build_plan(text: str) -> List[PlanTask]:
                 break
             section = heading
         tasks.append({
-            "id": match.group(2),
-            "title": _plan_task_title(match.group(3)),
+            "id": match.group(2) or match.group(3),
+            "title": _plan_task_title(match.group(4)),
             "section": section,
             "ticked": match.group(1) in ("x", "X"),
         })
@@ -2094,9 +2139,11 @@ def parse_build_plan(text: str) -> List[PlanTask]:
 def event_session(event: Event) -> Optional[str]:
     """Which session an event belongs to.
 
-    Hook-written events carry ``data.session``; skill-written events carry it as the
-    ``role@label`` suffix `append` fills in from ``meta.current_session``. Both are
-    honored; an actor with no label belongs to no particular session.
+    Hook-written events carry ``data.session``; a ``user`` row carries
+    ``data.recorded_by`` (ADR 0010); a machine role's row carries it as the ``role@label``
+    suffix `append` fills in from the appending session. They are read in that order. The
+    label of a sessionless role (``user``, ``watcher``) names a person or a watcher, never
+    a session, so it is not read; an actor with no label belongs to no particular session.
 
     Who wrote an artifact is a different question: an ``artifact-written`` row may name
     only the session that saw the write, so its author comes from ``artifact_authors``.
@@ -2104,6 +2151,13 @@ def event_session(event: Event) -> Optional[str]:
     session = event.data.get("session")
     if isinstance(session, str) and session:
         return session
+    role = _actor_role(event)
+    if role in RECORDED_BY_ROLES:
+        recorded_by = event.data.get(RECORDED_BY_KEY)
+        if isinstance(recorded_by, str) and recorded_by:
+            return recorded_by
+    if role in SESSIONLESS_ROLES:
+        return None
     if event.actor and "@" in event.actor:
         return event.actor.split("@", 1)[1] or None
     return None
@@ -2942,9 +2996,11 @@ def _actor_role(event: Event) -> str:
 def _counted_sessions(events: Iterable[Event]) -> Set[str]:
     """The sessions that touched these events.
 
-    Events actored `user@…` are excluded: that label is a person's name, not a session
-    id (ADR 0003 only defaults the label to `meta.current_session` for machine roles),
-    so counting them would inflate "sessions" by one per human who ever appeared.
+    The label of an event actored `user@…` or `watcher@…` is not counted: it names a
+    person or a watcher, not a session (ADR 0003 only defaults the label to
+    `meta.current_session` for machine roles), so counting it would inflate "sessions" by
+    one per human who ever appeared. `event_session` already skips those labels, and it
+    counts the session that recorded a `user` row (`recorded_by`, ADR 0010).
     An artifact write counts only its author from the fold (ADR 0008): a session that
     merely saw the file change did not touch the stream.
     """
@@ -2957,7 +3013,7 @@ def _counted_sessions(events: Iterable[Event]) -> Set[str]:
         for session in (
             event_session(event)
             for event in events
-            if event.type != "artifact-written" and _actor_role(event) != "user"
+            if event.type != "artifact-written"
         )
         if session
     )
@@ -3471,7 +3527,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_db_flag(p_check)
     p_check.add_argument("--session", required=True, metavar="ID",
-                         help="session id (matched against data.session or actor)")
+                         help="session id (matched against data.session, a user row's "
+                              "data.recorded_by, or a machine role's actor label)")
     p_check.add_argument("--json", action="store_true", help="machine-readable output")
 
     p_log = subparsers.add_parser("log", help="raw events, newest last")
