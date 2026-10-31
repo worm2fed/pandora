@@ -24,7 +24,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 32,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -57,7 +57,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 30,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -108,7 +108,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 26,
+          "seq": 28,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -128,7 +128,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 26
+          "seq": 28
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -153,7 +153,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 9,
+          "seq": 11,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -189,7 +189,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 6,
+          "seq": 8,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -209,6 +209,45 @@ export const STATUS_GOLDEN = {
         "version": 1
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": null,
+        "dormant": false,
+        "feature": "golden-user",
+        "gate_decision_count": 1,
+        "gate_decisions": [
+          {
+            "decision": "one",
+            "gate": "scope",
+            "mode": "ask",
+            "question": "one stream or two?",
+            "raised_by": "user",
+            "recorded_by": "session-golden-user",
+            "ts": "2026-10-01T11:29:00+00:00"
+          }
+        ],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 2,
+          "ts": "2026-10-01T11:29:00+00:00",
+          "type": "gate-decision"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": null,
+        "phase_entered_at": null,
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-user",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -222,7 +261,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 4,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -255,7 +294,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 5,
+          "seq": 7,
           "ts": "2026-10-01T11:34:00+00:00",
           "type": "flow-completed"
         },
@@ -320,7 +359,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 26,
+          "seq": 28,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -340,7 +379,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 26
+          "seq": 28
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -365,7 +404,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 32,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -398,7 +437,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 30,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -431,7 +470,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 9,
+          "seq": 11,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -467,7 +506,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 6,
+          "seq": 8,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -487,6 +526,45 @@ export const STATUS_GOLDEN = {
         "version": 1
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": null,
+        "dormant": false,
+        "feature": "golden-user",
+        "gate_decision_count": 1,
+        "gate_decisions": [
+          {
+            "decision": "one",
+            "gate": "scope",
+            "mode": "ask",
+            "question": "one stream or two?",
+            "raised_by": "user",
+            "recorded_by": "session-golden-user",
+            "ts": "2026-10-01T11:29:00+00:00"
+          }
+        ],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 2,
+          "ts": "2026-10-01T11:29:00+00:00",
+          "type": "gate-decision"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": null,
+        "phase_entered_at": null,
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-user",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -500,7 +578,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 4,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -547,7 +625,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 30,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -580,7 +658,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 32,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -631,7 +709,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 26,
+          "seq": 28,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -651,7 +729,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 26
+          "seq": 28
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -676,7 +754,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 9,
+          "seq": 11,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -712,7 +790,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 6,
+          "seq": 8,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -732,6 +810,45 @@ export const STATUS_GOLDEN = {
         "version": 1
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": null,
+        "dormant": false,
+        "feature": "golden-user",
+        "gate_decision_count": 1,
+        "gate_decisions": [
+          {
+            "decision": "one",
+            "gate": "scope",
+            "mode": "ask",
+            "question": "one stream or two?",
+            "raised_by": "user",
+            "recorded_by": "session-golden-user",
+            "ts": "2026-10-01T11:29:00+00:00"
+          }
+        ],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 2,
+          "ts": "2026-10-01T11:29:00+00:00",
+          "type": "gate-decision"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": null,
+        "phase_entered_at": null,
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-user",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -745,7 +862,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 4,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -794,7 +911,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 32,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -827,7 +944,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 30,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -878,7 +995,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 26,
+          "seq": 28,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -898,7 +1015,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 26
+          "seq": 28
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -923,7 +1040,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 9,
+          "seq": 11,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -959,7 +1076,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 6,
+          "seq": 8,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -979,6 +1096,45 @@ export const STATUS_GOLDEN = {
         "version": 1
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": null,
+        "dormant": false,
+        "feature": "golden-user",
+        "gate_decision_count": 1,
+        "gate_decisions": [
+          {
+            "decision": "one",
+            "gate": "scope",
+            "mode": "ask",
+            "question": "one stream or two?",
+            "raised_by": "user",
+            "recorded_by": "session-golden-user",
+            "ts": "2026-10-01T11:29:00+00:00"
+          }
+        ],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 2,
+          "ts": "2026-10-01T11:29:00+00:00",
+          "type": "gate-decision"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": null,
+        "phase_entered_at": null,
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-user",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -992,7 +1148,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 4,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -1042,7 +1198,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 32,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -1075,7 +1231,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 30,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -1126,7 +1282,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 26,
+          "seq": 28,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -1146,7 +1302,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 26
+          "seq": 28
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -1171,7 +1327,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 9,
+          "seq": 11,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -1207,7 +1363,330 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 6,
+          "seq": 8,
+          "ts": "2026-10-01T11:35:00+00:00",
+          "type": "flow-started"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": null,
+        "phase_entered_at": null,
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-started",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 1
+      },
+      {
+        "age_days": 0,
+        "branch_match": false,
+        "current": null,
+        "dormant": false,
+        "feature": "golden-user",
+        "gate_decision_count": 1,
+        "gate_decisions": [
+          {
+            "decision": "one",
+            "gate": "scope",
+            "mode": "ask",
+            "question": "one stream or two?",
+            "raised_by": "user",
+            "recorded_by": "session-golden-user",
+            "ts": "2026-10-01T11:29:00+00:00"
+          }
+        ],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 2,
+          "ts": "2026-10-01T11:29:00+00:00",
+          "type": "gate-decision"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": null,
+        "phase_entered_at": null,
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-user",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
+        "age_days": 10,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-09-21T11:31:00+00:00",
+          "implied": false,
+          "phase": "workspace"
+        },
+        "dormant": true,
+        "feature": "golden-dormant",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 4,
+          "ts": "2026-09-21T11:31:00+00:00",
+          "type": "phase-entered"
+        },
+        "last_verify": null,
+        "lifecycle": "dormant",
+        "open_designs": [],
+        "phase": "workspace",
+        "phase_entered_at": "2026-09-21T11:31:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-dormant",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      }
+    ],
+    "hidden_terminal": 1,
+    "ledger": {
+      "entries": 0,
+      "exists": false,
+      "nudge": false,
+      "path": "docs/ledger.md"
+    },
+    "nested_matches": [],
+    "session_match": "epic-golden"
+  },
+  "session_user": {
+    "branch_match": null,
+    "features": [
+      {
+        "age_days": 0,
+        "branch_match": false,
+        "current": null,
+        "dormant": false,
+        "feature": "golden-user",
+        "gate_decision_count": 1,
+        "gate_decisions": [
+          {
+            "decision": "one",
+            "gate": "scope",
+            "mode": "ask",
+            "question": "one stream or two?",
+            "raised_by": "user",
+            "recorded_by": "session-golden-user",
+            "ts": "2026-10-01T11:29:00+00:00"
+          }
+        ],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 2,
+          "ts": "2026-10-01T11:29:00+00:00",
+          "type": "gate-decision"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": null,
+        "phase_entered_at": null,
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": true,
+        "stream": "feature/golden-user",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:59:00+00:00",
+          "implied": false,
+          "phase": "workspace"
+        },
+        "dormant": false,
+        "feature": "epic-golden",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 32,
+          "ts": "2026-10-01T11:59:00+00:00",
+          "type": "phase-entered"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "workspace",
+        "phase_entered_at": "2026-10-01T11:59:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "epic-golden",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:57:00+00:00",
+          "implied": false,
+          "phase": "workspace"
+        },
+        "dormant": false,
+        "feature": "fix/7-golden-nested",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 30,
+          "ts": "2026-10-01T11:57:00+00:00",
+          "type": "phase-entered"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "workspace",
+        "phase_entered_at": "2026-10-01T11:57:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "fix/7-golden-nested",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 2
+      },
+      {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:53:00+00:00",
+          "implied": false,
+          "phase": "implement"
+        },
+        "dormant": false,
+        "feature": "golden-flow",
+        "gate_decision_count": 2,
+        "gate_decisions": [
+          {
+            "decision": "two",
+            "gate": "clarify",
+            "mode": "executive",
+            "question": "one widget or two?",
+            "raised_by": "orchestrator",
+            "rationale": "the PRD asks for both",
+            "ts": "2026-10-01T11:42:00+00:00"
+          },
+          {
+            "decision": "publish",
+            "gate": "publish",
+            "mode": "ask",
+            "question": "open the MR before the second review?",
+            "raised_by": "user",
+            "ts": "2026-10-01T11:55:00+00:00"
+          }
+        ],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 28,
+          "ts": "2026-10-01T11:55:00+00:00",
+          "type": "gate-decision"
+        },
+        "last_verify": {
+          "outcome": "fail",
+          "scope": null,
+          "task_ids": [
+            "T002"
+          ],
+          "ts": "2026-10-01T11:54:00+00:00"
+        },
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "implement",
+        "phase_entered_at": "2026-10-01T11:53:00+00:00",
+        "publish": {
+          "at": "2026-10-01T11:55:00+00:00",
+          "by": "gate-decision",
+          "kind": "authorized",
+          "seq": 28
+        },
+        "session_match": false,
+        "stream": "feature/golden-flow",
+        "task_ids": [
+          "T001"
+        ],
+        "tasks_done": 1,
+        "terminal": false,
+        "version": 17
+      },
+      {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:37:00+00:00",
+          "implied": true,
+          "phase": "implement"
+        },
+        "dormant": false,
+        "feature": "golden-named",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": true,
+        "last_event": {
+          "seq": 11,
+          "ts": "2026-10-01T11:38:00+00:00",
+          "type": "verify-run"
+        },
+        "last_verify": {
+          "outcome": "pass",
+          "scope": "unit",
+          "task_ids": [
+            "T001"
+          ],
+          "ts": "2026-10-01T11:38:00+00:00"
+        },
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "implement",
+        "phase_entered_at": "2026-10-01T11:37:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-named",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 3
+      },
+      {
+        "age_days": 0,
+        "branch_match": false,
+        "current": null,
+        "dormant": false,
+        "feature": "golden-started",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": false,
+        "last_event": {
+          "seq": 8,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -1240,7 +1719,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 4,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -1268,7 +1747,7 @@ export const STATUS_GOLDEN = {
       "path": "docs/ledger.md"
     },
     "nested_matches": [],
-    "session_match": "epic-golden"
+    "session_match": "feature/golden-user"
   }
 } as const
 
@@ -1396,7 +1875,7 @@ export const POSITION_GOLDEN = {
         "mode": "executive",
         "question": "one widget or two?",
         "raised_by": "orchestrator",
-        "seq": 13
+        "seq": 15
       },
       {
         "at": "2026-10-01T11:55:00+00:00",
@@ -1405,7 +1884,7 @@ export const POSITION_GOLDEN = {
         "mode": "ask",
         "question": "open the MR before the second review?",
         "raised_by": "user",
-        "seq": 26
+        "seq": 28
       }
     ],
     "last_verify": {
@@ -1430,7 +1909,7 @@ export const POSITION_GOLDEN = {
       "at": "2026-10-01T11:55:00+00:00",
       "by": "gate-decision",
       "kind": "authorized",
-      "seq": 26
+      "seq": 28
     },
     "stream": "feature/golden-flow",
     "tasks": [
@@ -1483,7 +1962,7 @@ export const POSITION_GOLDEN = {
         "src/golden.py:12": "fixed",
         "src/other.py:?": "deferred"
       },
-      "seq": 23,
+      "seq": 25,
       "verdict": "not-ready"
     },
     "version": 17
@@ -1534,6 +2013,14 @@ export const POSITION_GOLDEN = {
         "section": null,
         "ticked": true,
         "title": "found by its name, not by an event"
+      },
+      {
+        "done": false,
+        "id": "T002",
+        "last_verify": null,
+        "section": null,
+        "ticked": true,
+        "title": "a bold id"
       }
     ],
     "verdict": null,
@@ -1600,5 +2087,44 @@ export const POSITION_GOLDEN = {
     "tasks": null,
     "verdict": null,
     "version": 1
+  },
+  "user": {
+    "artifacts": {
+      "adrs": [],
+      "prd": null,
+      "worklog": null,
+      "worklog_from": null
+    },
+    "current": null,
+    "decisions": [
+      {
+        "at": "2026-10-01T11:29:00+00:00",
+        "decision": "one",
+        "gate": "scope",
+        "mode": "ask",
+        "question": "one stream or two?",
+        "raised_by": "user",
+        "seq": 2
+      }
+    ],
+    "last_verify": null,
+    "lifecycle": "live",
+    "phases": {
+      "capture": "todo",
+      "clarify": "todo",
+      "design": "todo",
+      "explore": "todo",
+      "implement": "todo",
+      "review": "todo",
+      "route-and-map": "todo",
+      "workspace": "todo"
+    },
+    "publish": {
+      "kind": "held"
+    },
+    "stream": "feature/golden-user",
+    "tasks": null,
+    "verdict": null,
+    "version": 2
   }
 } as const

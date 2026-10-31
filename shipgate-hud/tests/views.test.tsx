@@ -115,7 +115,7 @@ const at = (iso: string): string => clock(must(isoTime(iso)))
 describe('views: the band', () => {
   test('the summary: stream, phase, tasks, verify and the veto count', async () => {
     expect(summaryOf(FLOW)).toBe(`feature/golden-flow · implement · tasks 1/4 · verify fail ${at('2026-10-01T11:54:00+00:00')} · 1 to veto`)
-    expect(summaryOf(NAMED)).toBe(`feature/golden-named · implement · tasks 0/1 · verify pass ${at('2026-10-01T11:38:00+00:00')}`)
+    expect(summaryOf(NAMED)).toBe(`feature/golden-named · implement · tasks 0/2 · verify pass ${at('2026-10-01T11:38:00+00:00')}`)
     expect(summaryOf(DORMANT)).toBe('feature/golden-dormant · workspace · dormant · no plan · no verify')
   })
 
@@ -477,11 +477,11 @@ describe('views: the tabs', () => {
     expect(decisions.map(d => d.text)).toEqual(['▎ publish', '▎ clarify'])
     expect(decisions.map(d => d.props.color)).toEqual(['warning', 'claude'])
     expect((await ui.find({ type: 'Text', text: 'open the MR before the second review?' }))?.props.wrap).toBe('wrap')
-    // seq 13: the orchestrator in executive mode; seq 26: the user's own decision
-    expect((await ui.find({ key: 'veto-13' }))?.props.plain).toBeUndefined()
-    expect(await ui.find({ key: 'veto-26' })).toBeUndefined()
-    await ui.press({ key: 'veto-13' })
-    expect(pressed).toEqual(['veto 13'])
+    // seq 15: the orchestrator in executive mode; seq 28: the user's own decision
+    expect((await ui.find({ key: 'veto-15' }))?.props.plain).toBeUndefined()
+    expect(await ui.find({ key: 'veto-28' })).toBeUndefined()
+    await ui.press({ key: 'veto-15' })
+    expect(pressed).toEqual(['veto 15'])
     await ui.unmount()
   })
 
@@ -516,7 +516,17 @@ describe('views: the tabs', () => {
     drawPane(on, bound(NAMED), { ...FRESH, tab: 'plan' })
     const ui = await mountOwn($, PANE_DRAW)
     expect(await ui.find({ type: 'Text', text: 'docs/prd/golden-named.worklog.md · found by its name' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '0/1 done · 1 unrecorded' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '0/2 done · 2 unrecorded' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  // issue #4: a worklog that bolds the id (`- [x] **T002**: title`) still lists its task
+  test('Plan tab: a task whose id the worklog bolds is listed, with its title', async ($, on) => {
+    drawPane(on, bound(NAMED), { ...FRESH, tab: 'plan' })
+    const ui = await mountOwn($, PANE_DRAW)
+    expect(await ui.find({ type: 'Text', text: '◐ T002' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'a bold id' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'No Build Plan found in the worklog.' })).toBeUndefined()
     await ui.unmount()
   })
 

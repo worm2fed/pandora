@@ -65,7 +65,7 @@ describe('journal: decodeStatus', () => {
       lifecycle: 'live',
       current: { phase: 'implement', enteredAt: '2026-10-01T11:53:00+00:00', isImplied: false },
       lastEventAt: '2026-10-01T11:55:00+00:00',
-      publish: { kind: 'authorized', by: 'gate-decision', seq: 26, at: '2026-10-01T11:55:00+00:00' },
+      publish: { kind: 'authorized', by: 'gate-decision', seq: 28, at: '2026-10-01T11:55:00+00:00' },
     })
     expect(byStream.get('feature/golden-started')?.current).toBeNull()
     expect(byStream.get('feature/golden-named')?.current?.isImplied).toBe(true)
@@ -78,6 +78,8 @@ describe('journal: decodeStatus', () => {
 
   test('the top-level matches: the session, the branch, the one live nested stream, two nested streams binding none', async () => {
     expect(statusOf(STATUS_GOLDEN.session).sessionMatch).toBe('epic-golden')
+    // shipgate 0.19.0: a session whose only write is a `--actor user` row binds through its `recorded_by`
+    expect(statusOf(STATUS_GOLDEN.session_user)).toMatchObject({ sessionMatch: 'feature/golden-user', branchMatch: null })
     expect(statusOf(STATUS_GOLDEN.branch).branchMatch).toBe('feature/golden-flow')
     expect(statusOf(STATUS_GOLDEN.nested_one)).toMatchObject({ branchMatch: 'fix/7-golden-nested', nestedMatches: ['fix/7-golden-nested'] })
     expect(statusOf(STATUS_GOLDEN.nested_two)).toMatchObject({ branchMatch: null, nestedMatches: ['fix/7-golden-nested', 'feature/golden-flow'] })
@@ -187,7 +189,7 @@ describe('journal: decodePosition', () => {
   test('the flow position: every field as journal.py printed it, camelCase', async () => {
     const doc = positionOf(FLOW)
     expect(doc.current).toEqual({ phase: 'implement', enteredAt: '2026-10-01T11:53:00+00:00', isImplied: false })
-    expect(doc.publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 26, at: '2026-10-01T11:55:00+00:00' })
+    expect(doc.publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 28, at: '2026-10-01T11:55:00+00:00' })
     expect(doc.phases['route-and-map']).toBe('skipped')
     expect(doc.phases.review).toBe('revisited')
     expect(doc.artifacts).toEqual({
@@ -204,12 +206,12 @@ describe('journal: decodePosition', () => {
     ])
     // oldest first, as printed, each with its real seq
     expect(doc.decisions).toEqual([
-      { seq: 13, gate: 'clarify', question: 'one widget or two?', decision: 'two', raisedBy: 'orchestrator', mode: 'executive', at: '2026-10-01T11:42:00+00:00' },
-      { seq: 26, gate: 'publish', question: 'open the MR before the second review?', decision: 'publish', raisedBy: 'user', mode: 'ask', at: '2026-10-01T11:55:00+00:00' },
+      { seq: 15, gate: 'clarify', question: 'one widget or two?', decision: 'two', raisedBy: 'orchestrator', mode: 'executive', at: '2026-10-01T11:42:00+00:00' },
+      { seq: 28, gate: 'publish', question: 'open the MR before the second review?', decision: 'publish', raisedBy: 'user', mode: 'ask', at: '2026-10-01T11:55:00+00:00' },
     ])
     expect(doc.lastVerify).toEqual({ outcome: 'fail', taskIds: ['T002'], at: '2026-10-01T11:54:00+00:00' })
     expect(doc.verdict).toEqual({
-      seq: 23,
+      seq: 25,
       at: '2026-10-01T11:52:00+00:00',
       verdict: 'not-ready',
       criteria: { 'SC-001': 'met', 'SC-002': 'unmet' },

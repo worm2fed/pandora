@@ -61,7 +61,7 @@ describe('position: toPosition', () => {
     expect(position.lifecycle).toBe('live')
     expect(position.current).toEqual(FLOW_DOC.current)
     expect(position.phases).toEqual(FLOW_DOC.phases)
-    expect(position.decisions.map(decision => decision.seq)).toEqual([26, 13])
+    expect(position.decisions.map(decision => decision.seq)).toEqual([28, 15])
     expect(position.decisions.map(isVetoable)).toEqual([false, true])
     expect(position.lastVerify).toEqual({ outcome: 'fail', taskIds: ['T002'], at: '2026-10-01T11:54:00+00:00' })
     expect(position.lastVerdict).toEqual(FLOW_DOC.verdict)
@@ -69,7 +69,7 @@ describe('position: toPosition', () => {
 
   // D6: the publish rule is the journal's, never re-derived from events
   test('D6: publish is the document\'s, the authorizing event named by its seq', async () => {
-    expect(toPosition(FLOW_INPUTS).publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 26, at: '2026-10-01T11:55:00+00:00' })
+    expect(toPosition(FLOW_INPUTS).publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 28, at: '2026-10-01T11:55:00+00:00' })
     expect(toPosition(bare(docOf(POSITION_GOLDEN.named))).publish).toEqual({ kind: 'held' })
   })
 
@@ -87,8 +87,11 @@ describe('position: toPosition', () => {
     const named = docOf(POSITION_GOLDEN.named)
     const plan = toPosition({ ...bare(named), worklog: { path: pathOf('docs/prd/golden-named.worklog.md'), text: WORKLOG } }).plan
     expect(plan?.from).toBe('name')
-    // ticked, no task-done, a passing verify: debt, its last verify kept
-    expect(plan?.tasks).toEqual([{ id: 'T001', title: 'found by its name, not by an event', section: null, state: 'debt', lastVerifyAt: '2026-10-01T11:38:00+00:00' }])
+    // ticked, no task-done, a passing verify: debt, its last verify kept; a bold id (`**T002**:`, issue #4) is a task too
+    expect(plan?.tasks).toEqual([
+      { id: 'T001', title: 'found by its name, not by an event', section: null, state: 'debt', lastVerifyAt: '2026-10-01T11:38:00+00:00' },
+      { id: 'T002', title: 'a bold id', section: null, state: 'debt', lastVerifyAt: null },
+    ])
   })
 
   // D9: the Build Plan grammar is the journal's (check's), not a TypeScript copy

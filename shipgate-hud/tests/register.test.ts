@@ -4,6 +4,7 @@ import type { CommandRunInput, On, PromptSubmitInput, RenderSurface } from 'clau
 
 import { AUTHORIZED, EXAMPLE_FEATURE, EXAMPLE_POSITION, EXAMPLE_STREAM, SIDECAR, featureOf, olderStatus } from './fixtures'
 import type { FeatureJson, PositionJson } from './fixtures'
+import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
 import {
   BAND,
   CUT_RUN,
@@ -215,6 +216,31 @@ describe('register', () => {
       await band.unmount()
     })
   }
+
+  // shipgate 0.19.0 (its ADR 0010): a session whose only write is the user's own decision
+  // (`--actor user`) binds through the row's `recorded_by`. journal.py computes that binding,
+  // and test_hud_contract.py proves it; here the HUD draws journal.py's golden answer for that
+  // session, asked with that session's id, and binds the stream it names.
+  test('the stream journal.py names for a session whose only write is a user row is bound', async ($, on) => {
+    const USER_SESSION = 'session-golden-user'
+    const USER_STREAM = 'feature/golden-user'
+    engineWorld(on, { sessionId: USER_SESSION })
+    const { runs } = journaledWorld(on, {
+      // journal.py's answers per --session: this session's, else one that names no session
+      status: argv => (flagValues(argv, 'session').includes(USER_SESSION) ? STATUS_GOLDEN.session_user : STATUS_GOLDEN.all),
+      position: stream => (stream === USER_STREAM ? POSITION_GOLDEN.user : null),
+    })
+    await $.session.start(START)
+    expect(statusRuns(runs).length).toBe(1)
+    expect(statusRuns(runs)[0]).toContain(`--session=${USER_SESSION}`)
+    expect(positionRuns(runs).map(streamAsked)).toEqual([USER_STREAM])
+    const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+    expect(await band.find({ type: 'Text', text: /feature\/golden-user/ })).toBeDefined()
+    await band.unmount()
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: /drives no stream/ })).toBeUndefined()
+    await pane.unmount()
+  })
 
   test('a status call that fails for another reason shows the error, not a fallback', async ($, on) => {
     engineWorld(on)

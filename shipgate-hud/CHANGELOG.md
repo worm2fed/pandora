@@ -2,6 +2,29 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.6.2 — needs shipgate 0.19.0, and the golden contract covers what 0.19.0 changed.
+- **The dependency.** `plugin.json` declares shipgate `>=0.19.0`. shipgate 0.19.0 binds a
+  session whose only writes are the user's own decisions (`--actor user`): such a row records
+  the writing session as `data.recorded_by`, and `status --session` counts it (shipgate ADR
+  0010). Before, the pane said "This session drives no stream" for that session. Installing
+  or updating the HUD now brings that shipgate.
+- **The read floor stays 0.18.0.** 0.19.0 prints no new key, so the HUD cannot tell it from
+  0.18.0. A lagging 0.18.0 `journal.py` is still read in full, without the new binding. The
+  Outdated notice still names 0.18.0, the oldest `journal.py` the HUD can read.
+- **The golden contract.** shipgate's contract test adds two scenarios to
+  `tests/fixtures.journal.ts`:
+  - a stream, `feature/golden-user`, whose session wrote only one `--actor user` gate
+    decision. Its `status --session` answer binds through `recorded_by`;
+  - a Build Plan task with a bold id, `- [x] **T002**: a bold id`, in the golden worklog
+    found by name (shipgate issue #4).
+
+  The new rows come first in the script, so no event time moves. Every seq after them moves
+  up by two.
+- **New tests.** No HUD code changed: journal.py computes the binding, and the contract test
+  proves it. The register suite draws journal.py's golden answer for a session whose only
+  write is the user row, asked with that session's id, and binds the stream it names. The
+  Plan tab lists the bold task with its title. The decoder test reads the new status answer.
+
 v0.6.1 — an older shipgate is a known state, not a read failure. 0.6.0 reads its facts from
 shipgate 0.18.0. Beside an older shipgate (a project install that lags behind), the publish
 gate read the mismatch as an unreadable journal and held every push. Now:

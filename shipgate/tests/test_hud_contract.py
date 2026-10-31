@@ -27,8 +27,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
-from test_journal import run_journal
+from test_journal import SESSION_ENV, run_journal
 
 TESTS_DIR = Path(__file__).resolve().parent
 HUD = TESTS_DIR.parent.parent / "shipgate-hud"
@@ -50,6 +51,10 @@ DONE = "feature/golden-done"
 NESTED = "fix/7-golden-nested"
 EPIC = "epic-golden"
 SESSION = "session-golden-1"
+# A session whose only write is a `--actor user` row (shipgate 0.19.0, ADR 0010): it binds
+# to its stream through the row's `data.recorded_by`.
+USER = "feature/golden-user"
+USER_SESSION = "session-golden-user"
 
 FILES = {
     "docs/prd/golden-flow.md": """---
@@ -95,6 +100,7 @@ A scripted flow for the HUD contract. Prose that mentions - [x] T999 is no task.
 # Build Plan
 
 - [x] T001 — found by its name, not by an event
+- [x] **T002**: a bold id
 """,
     "docs/adr/0001-golden-choice.md": """---
 title: "0001. A golden choice"
@@ -112,9 +118,17 @@ status: proposed
 """,
 }
 
-# (stream, type, data, actor). Appended in this order; the order sets the seqs, and the
-# seqs set the times. `None` as actor leaves the role bare (no session in the env).
+# (stream, type, data, actor[, session]). Appended in this order; the order sets the seqs,
+# and the seqs set the times. `None` as actor leaves the role bare. The env has no session
+# unless a fifth item names the one the append runs in (`CLAUDE_CODE_SESSION_ID`); a
+# `user` row records it as `recorded_by`, a machine role takes it as its label. An event's age
+# counts back from the last one, so a row added at the top moves no other event's time.
 SCRIPT = [
+    (USER, "flow-started", {"request": "a flow the user steers"}, None),
+    (USER, "gate-decision", {
+        "gate": "scope", "question": "one stream or two?", "decision": "one",
+        "mode": "ask", "raised_by": "user",
+    }, "user", USER_SESSION),
     (DORMANT, "flow-started", {"request": "an old flow", "branch": DORMANT}, None),
     (DORMANT, "phase-entered", {"phase": "workspace"}, None),
     (DONE, "flow-started", {"request": "a finished flow"}, None),
@@ -165,6 +179,8 @@ STATUS_RUNS = {
     "all": ["--all"],
     "branch": ["--branch", FLOW],
     "session": ["--session", SESSION, "--branch", "main"],
+    # The session's only write is a user row: `recorded_by` binds it.
+    "session_user": ["--session", USER_SESSION, "--branch", "main"],
     # One live nested match beside a dormant one binds the live one.
     "nested_one": ["--branch", "main", "--nested-branch", NESTED,
                    "--nested-branch", DORMANT],
@@ -181,11 +197,16 @@ POSITION_RUNS = {
     "done": DONE,
     "nested": NESTED,
     "epic": EPIC,
+    "user": USER,
 }
 
 
-def _journal(root: Path, *args: str) -> str:
-    proc = run_journal(["--db", root / "shipgate.db", *args], cwd=root)
+def _journal(root: Path, *args: str, session: Optional[str] = None) -> str:
+    env = None
+    if session is not None:
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env[SESSION_ENV] = session
+    proc = run_journal(["--db", root / "shipgate.db", *args], cwd=root, env=env)
     if proc.returncode != 0:
         raise AssertionError(
             f"journal.py {' '.join(args)} exited {proc.returncode}: {proc.stderr}"
@@ -237,12 +258,12 @@ def build_golden() -> tuple:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
         _journal(root, "init")
-        for stream, event_type, data, actor in SCRIPT:
+        for stream, event_type, data, actor, *session in SCRIPT:
             argv = ["append", "--stream", stream, "--type", event_type,
                     "--data", json.dumps(data)]
             if actor is not None:
                 argv += ["--actor", actor]
-            _journal(root, *argv)
+            _journal(root, *argv, session=session[0] if session else None)
         stamps = _set_times(root)
         roots = sorted({str(root), str(root.resolve())}, key=len, reverse=True)
         status = {
@@ -315,6 +336,16 @@ class TestHudContract(unittest.TestCase):
     def test_the_status_runs_cover_every_binding(self):
         self.assertEqual(self.status["branch"]["branch_match"], FLOW)
         self.assertEqual(self.status["session"]["session_match"], EPIC)
+        self.assertEqual(self.status["session_user"]["session_match"], USER)
+        self.assertIsNone(self.status["session_user"]["branch_match"])
+        # It binds through `recorded_by` alone: the stream's one decision is a bare `user`
+        # row that names the session, and no other row of the script runs in that session.
+        user = next(f for f in self.status["all"]["features"] if f["stream"] == USER)
+        self.assertEqual([(d["raised_by"], d["recorded_by"]) for d in user["gate_decisions"]],
+                         [("user", USER_SESSION)])
+        self.assertEqual([row[4:] for row in SCRIPT if len(row) > 4],
+                         [(USER_SESSION,)])
+        self.assertEqual([row[3] for row in SCRIPT if len(row) > 4], ["user"])
         self.assertIsNone(self.status["session"]["branch_match"])
         self.assertEqual(self.status["nested_one"]["branch_match"], NESTED)
         self.assertEqual(self.status["nested_one"]["nested_matches"], [NESTED])
@@ -353,6 +384,14 @@ class TestHudContract(unittest.TestCase):
         self.assertIsNone(started["tasks"])
         self.assertIsNone(started["verdict"])
         self.assertEqual(self.position["named"]["artifacts"]["worklog_from"], "name")
+        self.assertEqual(
+            [(t["id"], t["title"]) for t in self.position["named"]["tasks"]],
+            [("T001", "found by its name, not by an event"), ("T002", "a bold id")],
+        )
+        self.assertEqual(
+            [(d["raised_by"], d["gate"]) for d in self.position["user"]["decisions"]],
+            [("user", "scope")],
+        )
         self.assertEqual(self.position["dormant"]["lifecycle"], "dormant")
         self.assertEqual(self.position["done"]["lifecycle"], "terminal")
 
