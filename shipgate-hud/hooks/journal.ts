@@ -1,5 +1,5 @@
-// The one boundary for journal.py's JSON: the decoded shapes of `status --json` and
-// `position --stream <s> --json`, the sidecar's homes, the smart constructors of the brands,
+// The one boundary for journal.py's JSON: the decoded shapes of `status --json`,
+// `position --stream <s> --json` and `log --stream <s> --json` (the trace, HUD ADR 0007), the sidecar's homes, the smart constructors of the brands,
 // the 0.18 marker that tells an older journal.py, and the text of a journal run's failure
 // (RunFailure itself is in the contract, because HudView stores it). journal.py prints snake_case keys; the decoded shapes are camelCase. Pure: no `$` here, so the decoders run in tests on the golden file.
 // Never stored in $.state: register.tsx maps a decoded value into the stored view.
@@ -22,11 +22,18 @@ import type {
   ProjectPath,
   PublishAuthorization,
   RaisedBy,
+  RankedFile,
+  Ranking,
   ReadFailure,
+  RecordedRanking,
   RunFailure,
   ShapeError,
+  SignalLabel,
+  SignalSource,
+  SignalsGap,
   StreamName,
   TaskId,
+  Trace,
   Verdict,
   VerdictValue,
   Verify,
@@ -741,6 +748,130 @@ function decodeDoc(raw: unknown): Result<JournalShapeError, PositionDoc> {
     verdict: verdict.value,
   })
 }
+
+// ---------------------------------------------------------------------------------------
+// `log --stream <s> --json`: the trace (HUD ADR 0007)
+// ---------------------------------------------------------------------------------------
+
+/** One event of the stream's log: what the trace reads of it. `data` is the payload as recorded. */
+export interface LogEvent {
+  readonly seq: EventSeq
+  readonly type: string
+  readonly at: IsoTime
+  readonly data: JsonRecord
+}
+
+const SIGNAL_LABELS: Readonly<Record<SignalLabel, true>> = { low: true, mid: true, high: true, top: true }
+const SIGNAL_SOURCES: Readonly<Record<SignalSource, true>> = { graph: true, regex: true, none: true }
+
+/** The deviation kind `append` writes for a route-and-map entry without `signals` (shipgate ADR 0011). */
+export const SIGNALS_MISSING = 'signals-missing'
+
+const decodeLogEvent: Decoder<LogEvent> = (value, path) => {
+  const raw = decodeRecord(value, path)
+  if (!raw.ok) return raw
+  const seq = fieldOf(raw.value, path, 'seq', decodeSeq)
+  if (!seq.ok) return seq
+  const type = fieldOf(raw.value, path, 'type', decodeText)
+  if (!type.ok) return type
+  const at = fieldOf(raw.value, path, 'ts', decodeTime)
+  if (!at.ok) return at
+  const data = fieldOf(raw.value, path, 'data', decodeRecord)
+  if (!data.ok) return data
+  return ok({ seq: seq.value, type: type.value, at: at.value, data: data.value })
+}
+
+/**
+ * The stream's events from `log --stream <s> --json`, in seq order. The envelope is strict
+ * (a missing or mistyped key is a `BadShape`); the payloads stay raw, because the trace reads
+ * a recorded value only where it finds one (`traceOf`).
+ */
+export function decodeLog(raw: unknown): Result<BadShape, readonly LogEvent[]> {
+  const log = decodeRecord(raw, '$')
+  if (!log.ok) return asBadShape(log)
+  return asBadShape(fieldOf(log.value, '$', 'events', listing(decodeLogEvent)))
+}
+
+/**
+ * The record's value at `key` decoded, or null when the key is absent: journal.py validates a
+ * ranking's optional keys only when they are there (its `objects` rule kind), so an absent key
+ * is as valid as null. A present key that does not decode is still the decoder's failure.
+ */
+const optionalFieldOf = <A>(raw: JsonRecord, path: string, key: string, decode: Decoder<A>): Decoded<A | null> =>
+  field(raw, key) === undefined ? ok(null) : fieldOf(raw, path, key, nullable(decode))
+
+const decodeLabel = member(SIGNAL_LABELS, "'low', 'mid', 'high' or 'top'")
+
+/** One ranked file, to journal.py's contract: `path` required, each label optional, null or one of the four. */
+const decodeRankedFile: Decoder<RankedFile> = (value, path) => {
+  const raw = decodeRecord(value, path)
+  if (!raw.ok) return raw
+  const filePath = fieldOf(raw.value, path, 'path', decodeTitle)
+  if (!filePath.ok) return filePath
+  const fix = optionalFieldOf(raw.value, path, 'fix', decodeLabel)
+  if (!fix.ok) return fix
+  const churn = optionalFieldOf(raw.value, path, 'churn', decodeLabel)
+  if (!churn.ok) return churn
+  const fanIn = optionalFieldOf(raw.value, path, 'fan_in', decodeLabel)
+  if (!fanIn.ok) return fanIn
+  return ok({ path: filePath.value, fix: fix.value, churn: churn.value, fanIn: fanIn.value })
+}
+
+/**
+ * A ranking to journal.py's contract (shipgate ADR 0013): `source` required; `unavailable`
+ * (a reason) marks signals that were not computed; `files` optional, an empty list when absent.
+ */
+const decodeRanking: Decoder<Exclude<Ranking, { readonly kind: 'Unreadable' }>> = (value, path) => {
+  const raw = decodeRecord(value, path)
+  if (!raw.ok) return raw
+  const source = fieldOf(raw.value, path, 'source', member(SIGNAL_SOURCES, "'graph', 'regex' or 'none'"))
+  if (!source.ok) return source
+  const unavailable = optionalFieldOf(raw.value, path, 'unavailable', decodeText)
+  if (!unavailable.ok) return unavailable
+  if (unavailable.value !== null) return ok({ kind: 'Unavailable', reason: unavailable.value })
+  const files = optionalFieldOf(raw.value, path, 'files', listing(decodeRankedFile))
+  if (!files.ok) return files
+  return ok({ kind: 'Ranked', source: source.value, files: files.value ?? [] })
+}
+
+/**
+ * A recorded `ranking` as the HUD draws it: decoded to journal.py's contract, or `Unreadable`
+ * when it breaks that contract (a row written before shipgate 0.20.0 validated it). Never a
+ * failed refresh: the value is history, not the journal's answer.
+ */
+export function rankingOf(value: unknown): Ranking {
+  const decoded = decodeRanking(value, '$.ranking')
+  return decoded.ok ? decoded.value : { kind: 'Unreadable' }
+}
+
+/** The newest event of `type` whose payload carries `ranking`, with its ranking; null when none does. */
+const newestRanking = (events: readonly LogEvent[], type: string): RecordedRanking | null => {
+  const carrier = events.filter(event => event.type === type && Object.hasOwn(event.data, 'ranking')).at(-1)
+  return carrier === undefined ? null : { seq: carrier.seq, at: carrier.at, ranking: rankingOf(field(carrier.data, 'ranking')) }
+}
+
+/**
+ * The trace a stream's log records (HUD ADR 0007): values picked as recorded, no rule
+ * computed. The newest `review-verdict` and `design-committed` that carry `ranking`, and
+ * every `deviation` of kind `signals-missing`, oldest first.
+ */
+export function traceOf(events: readonly LogEvent[]): Trace {
+  const signalsGaps = events
+    .filter(event => event.type === 'deviation' && stringOf(field(event.data, 'kind')) === SIGNALS_MISSING)
+    .map((event): SignalsGap => ({ seq: event.seq, at: event.at }))
+  return {
+    reviewRanking: newestRanking(events, 'review-verdict'),
+    designRanking: newestRanking(events, 'design-committed'),
+    signalsGaps,
+    isLogCut: false,
+  }
+}
+
+/** The trace of a stream with no event that records one. */
+export const EMPTY_TRACE: Trace = { reviewRanking: null, designRanking: null, signalsGaps: [], isLogCut: false }
+
+/** The trace when the engine cut the log's output: nothing read, and the cut said. */
+export const CUT_LOG_TRACE: Trace = { ...EMPTY_TRACE, isLogCut: true }
 
 /**
  * The homes from the sidecar's JSON, over DEFAULT_HOMES: a sidecar with no `artifact_homes`

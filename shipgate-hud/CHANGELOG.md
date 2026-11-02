@@ -2,6 +2,65 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.7.0 — draws what shipgate 0.20.0 records: the risk ranking, the canon lens and a skipped signals block.
+
+**The trace is read from the event log (ADR 0007).** shipgate 0.20.0 records a risk ranking on
+`design-committed` and `review-verdict`, and writes a `deviation` with `kind: signals-missing`
+beside a route-and-map entry that carried no signals. `position --json` prints none of these.
+So a bound refresh now runs one more journal command, `log --stream <s> --json`, after
+`position`. The HUD decodes the envelope strictly and picks three recorded values, verbatim:
+- the newest `review-verdict` that carries `ranking`;
+- the newest `design-committed` that carries `ranking`;
+- every `deviation` of kind `signals-missing`.
+
+A `ranking` is decoded to journal.py's contract: `source` required, `files` and each label
+optional. One that breaks the contract (a row written before shipgate validated it) is drawn
+as "ranking unreadable", never as a failed refresh. When the engine cuts the log's output (a
+long stream), the position is still drawn, and the Flow and Review tabs say that the trace
+was not read. Any other failed `log` run, or an envelope with another shape, is a failed
+refresh the pane shows, as for any other run. The follow-up is in
+ADR 0007: once `position` prints these values, the `log` call goes.
+
+**Review tab.**
+- A **READ FIRST** block comes before the rounds, and before "No review captured" when there
+  is no board. Its head line names the source and the verdict's seq
+  (`READ FIRST · graph · seq N`). Then each file comes in risk order:
+  `1. src/golden.py · fix top · churn high · fan-in top`. A label with no value is `-`.
+  Unavailable signals read `READ FIRST · signals unavailable (shallow) · seq N`. A ranking
+  from a verdict older than the last one (a fix round that copied none) ends with
+  `· from an earlier verdict`.
+- A finding the **canon lens** reported carries a `canon` tag after its severity. The tag
+  says the finding breaks a rule of the style canon, which is why it is held at MEDIUM or
+  above (shipgate ADR 0012). A killed canon finding says `canon` in its head line. A round
+  with no board has no lens information, so nothing is tagged there.
+
+**Design tab.** The design's ranking is drawn the same way under the ADRs, as
+`RISK RANKING · <source> · seq N`.
+
+**Flow tab.** A route-and-map entry without signals shows one warning line under the header:
+`route-and-map: no risk signals recorded · signals-missing deviation seq N`.
+
+**The dependency.** `plugin.json` declares shipgate `>=0.20.0`. **The read floor stays
+0.18.0.** A 0.18.0 or 0.19.0 `journal.py` prints the same `log` envelope, and its events
+carry no ranking and no such deviation, so the new blocks stay empty.
+
+**The stored view.** The view's shape tag moves to `shipgate-hud.view-v4`, because `Position`
+gains `trace`. A stored v3 view reads as absent, and the next refresh derives it again.
+
+**The golden contract.** shipgate's contract test adds a stream, `feature/golden-signals`,
+at the top of the script: a route-and-map entry without signals (so `append` writes the
+deviation), a `design-committed` with a regex ranking, and a `review-verdict` with a graph
+ranking. The test also prints `log --stream <s> --json` for that stream and for
+`feature/golden-flow`, as `LOG_GOLDEN` in `tests/fixtures.journal.ts`. The new rows come
+first, so no event time moves; every seq after them moves up by seven.
+
+**Tests.** There are new decoder tests for `decodeLog`, `traceOf` and `rankingOf`, including
+the pre-0.20.0 object shape. The register tests cover the `log` run order, the trace reaching
+the pane, and a failed or malformed `log` read. The view tests cover READ FIRST (ranked,
+unavailable, unreadable, absent), the canon tag at 100 and at 40 columns, the Design ranking
+and the Flow line. A hand-written review return with a canon lens, `REVIEW_RETURN_CANON`,
+joins `tests/fixtures.review.ts`.
+
 v0.6.2 — needs shipgate 0.19.0, and the golden contract covers what 0.19.0 changed.
 - **The dependency.** `plugin.json` declares shipgate `>=0.19.0`. shipgate 0.19.0 binds a
   session whose only writes are the user's own decisions (`--actor user`): such a row records

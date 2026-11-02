@@ -4,7 +4,7 @@ import type { CommandRunInput, On, PromptSubmitInput, RenderSurface } from 'clau
 
 import { AUTHORIZED, EXAMPLE_FEATURE, EXAMPLE_POSITION, EXAMPLE_STREAM, SIDECAR, featureOf, olderStatus } from './fixtures'
 import type { FeatureJson, PositionJson } from './fixtures'
-import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
+import { LOG_GOLDEN, POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
 import {
   BAND,
   CUT_RUN,
@@ -148,6 +148,60 @@ describe('register', () => {
     await band.unmount()
     const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
     expect(await pane.find({ type: 'Text', text: EXAMPLE_PLAN })).toBeDefined()
+    await pane.unmount()
+  })
+
+  // HUD ADR 0007: the trace is read from `log`, for the bound stream, after its position
+  test('a bound refresh runs log --stream for the bound stream, after position', async ($, on) => {
+    engineWorld(on)
+    const { runs } = journaledWorld(on)
+    await $.session.start(START)
+    const journalRuns = runs.filter(argv => argv[0] === 'python3').map(argv => argv.slice(2))
+    expect(journalRuns.map(argv => argv[0])).toEqual(['status', 'position', 'log'])
+    expect(journalRuns[2]).toEqual(['log', '--stream', EXAMPLE_STREAM, '--json'])
+  })
+
+  test('the log\'s trace reaches the pane: a skipped signals block in Flow, the verdict\'s ranking in Review', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, { log: () => LOG_GOLDEN.signals })
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    await pane.press({ key: 'tab-flow' })
+    expect(await pane.find({ type: 'Text', text: /^route-and-map: no risk signals recorded · signals-missing deviation seq \d+$/ })).toBeDefined()
+    await pane.press({ key: 'tab-review' })
+    expect(await pane.find({ type: 'Text', text: /^READ FIRST · graph · seq \d+$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '1. src/golden.py · fix top · churn high · fan-in top' })).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('a log run that fails is a failed refresh the pane shows, never an empty trace', async ($, on) => {
+    engineWorld(on)
+    journalFaults(on, argv => (argv[2] === 'log' ? exits(exited(1, 'journal database is locked')) : null))
+    journaledWorld(on)
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: /journal database is locked/ })).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('a log the engine cut (a long stream) keeps the position and says the trace was not read', async ($, on) => {
+    engineWorld(on)
+    journalFaults(on, argv => (argv[2] === 'log' ? exits({ ...printed('{"events": ['), isStdoutTruncated: true }) : null))
+    journaledWorld(on)
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: EXAMPLE_PLAN })).toBeDefined()
+    await pane.press({ key: 'tab-flow' })
+    expect(await pane.find({ type: 'Text', text: 'trace not read: the stream log was longer than one journal answer' })).toBeDefined()
+    await pane.unmount()
+  })
+
+  test('a log whose envelope has another shape is a BadShape the pane shows', async ($, on) => {
+    engineWorld(on)
+    journaledWorld(on, { log: () => ({ events: [{ seq: 1, type: 'deviation', ts: 'yesterday', data: {} }] }) })
+    await $.session.start(START)
+    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    expect(await pane.find({ type: 'Text', text: /\$\.events\[0\]\.ts/ })).toBeDefined()
     await pane.unmount()
   })
 
@@ -331,7 +385,8 @@ describe('register', () => {
     // the sidecar was looked for in the session directory first, then upward
     expect(asked.filter(p => p.endsWith('/.claude/shipgate.json'))).toEqual([`${nested}/.claude/shipgate.json`, `${START.cwd}/source/.claude/shipgate.json`, `${START.cwd}/.claude/shipgate.json`])
     // journal.py ran in the project root, git in the session root (here the nested repo)
-    expect(ran().filter(r => r.argv[0] === 'python3').map(r => r.cwd)).toEqual([START.cwd, START.cwd])
+    // status, position, then log (HUD ADR 0007): every journal run in the umbrella root
+    expect(ran().filter(r => r.argv[0] === 'python3').map(r => r.cwd)).toEqual([START.cwd, START.cwd, START.cwd])
     expect(ran().find(r => r.argv[0] === 'git')?.cwd).toBe(nested)
     // every artifact was read under the project root, none under the nested repo
     expect(reads.every(p => p.startsWith(`${START.cwd}/`) && !p.startsWith(`${nested}/`))).toBe(true)

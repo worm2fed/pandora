@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { EngineInterface, On, ResolveInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { MIN_SHIPGATE_VERSION, type PositionDoc, criterionId, decodePosition, eventSeq, isoTime, projectPath, streamName, taskId } from '../hooks/journal'
+import { EMPTY_TRACE, MIN_SHIPGATE_VERSION, type PositionDoc, decodeLog, traceOf, criterionId, decodePosition, eventSeq, isoTime, projectPath, streamName, taskId } from '../hooks/journal'
 import { clock, parseAdr, toPosition } from '../hooks/position'
 import { EMPTY_REVIEW, decodeReviewReturn, markSurvivor, roundId, toReviewBoard } from '../hooks/review'
 import {
@@ -18,17 +18,19 @@ import {
   openFindings,
   packSegments,
   paneOf,
+  rankedFileText,
   reviewCountSegments,
   reviewCounts,
   reviewSegment,
+  signalsGapText,
   summaryOf,
   summarySegments,
 } from '../hooks/views'
 import type { Decision, HudView, IsoTime, OpenRound, Phase, PhaseMark, Position, ReviewBoard, ReviewState, StreamName, Task } from '../types'
 import { type Gen, bool, forAll, int, listOf, orNull, pick, stringOf } from './arbitrary'
 import { ADR, WORKLOG, WORKLOG_WITH_DIAGRAMS } from './fixtures'
-import { POSITION_GOLDEN } from './fixtures.journal'
-import { PRD_WITH_CRITERIA, REVIEW_POSITION, REVIEW_RETURN, REVIEW_RETURN_ABORTED, REVIEW_STREAM, must, withVerdict } from './fixtures.review'
+import { LOG_GOLDEN, POSITION_GOLDEN } from './fixtures.journal'
+import { PRD_WITH_CRITERIA, REVIEW_POSITION, REVIEW_RETURN, REVIEW_RETURN_ABORTED, REVIEW_RETURN_CANON, REVIEW_STREAM, must, withVerdict } from './fixtures.review'
 import { PANE } from './world'
 
 // The band and the pane drawn by hooks of the test's own (the plugin under test answers only
@@ -99,6 +101,7 @@ const positionOf = (raw: unknown, worklog: string = WORKLOG): Position => {
     worklog: doc.artifacts.worklog === null ? null : { path: doc.artifacts.worklog.path, text: worklog },
     adrs: doc.artifacts.adrs.map(path => parseAdr(path, ADR)),
     prd: doc.artifacts.prd === null ? null : { path: doc.artifacts.prd, text: PRD_WITH_CRITERIA },
+    trace: EMPTY_TRACE,
   })
 }
 
@@ -249,6 +252,7 @@ const positionGen: Gen<Position> = rng => ({
   publish: { kind: 'held' },
   criteria: [],
   lastVerdict: null,
+  trace: EMPTY_TRACE,
 })
 
 interface BandCase {
@@ -363,7 +367,7 @@ describe('views: the audit defects, drawn from golden documents', () => {
   test('D13: the Design tab lists an ADR from a custom home', async ($, on) => {
     const custom = 'notes/decisions/0003-golden-custom.md'
     const doc = docOf({ ...POSITION_GOLDEN.flow, artifacts: { ...POSITION_GOLDEN.flow.artifacts, adrs: [custom] } })
-    const position = toPosition({ doc, worklog: null, adrs: [parseAdr(pathOf(custom), '---\ntitle: "0003. A custom home"\nstatus: proposed\n---\n')], prd: null })
+    const position = toPosition({ doc, worklog: null, adrs: [parseAdr(pathOf(custom), '---\ntitle: "0003. A custom home"\nstatus: proposed\n---\n')], prd: null, trace: EMPTY_TRACE })
     drawPane(on, bound(position), { ...FRESH, tab: 'design' })
     const ui = await mountOwn($, PANE_DRAW)
     expect(await ui.find({ type: 'Text', text: /0003\. A custom home/ })).toBeDefined()
@@ -477,11 +481,11 @@ describe('views: the tabs', () => {
     expect(decisions.map(d => d.text)).toEqual(['▎ publish', '▎ clarify'])
     expect(decisions.map(d => d.props.color)).toEqual(['warning', 'claude'])
     expect((await ui.find({ type: 'Text', text: 'open the MR before the second review?' }))?.props.wrap).toBe('wrap')
-    // seq 15: the orchestrator in executive mode; seq 28: the user's own decision
-    expect((await ui.find({ key: 'veto-15' }))?.props.plain).toBeUndefined()
-    expect(await ui.find({ key: 'veto-28' })).toBeUndefined()
-    await ui.press({ key: 'veto-15' })
-    expect(pressed).toEqual(['veto 15'])
+    // seq 22: the orchestrator in executive mode; seq 35: the user's own decision
+    expect((await ui.find({ key: 'veto-22' }))?.props.plain).toBeUndefined()
+    expect(await ui.find({ key: 'veto-35' })).toBeUndefined()
+    await ui.press({ key: 'veto-22' })
+    expect(pressed).toEqual(['veto 22'])
     await ui.unmount()
   })
 
@@ -1079,5 +1083,142 @@ describe('review: the band segment and the counts', () => {
       'refuters ?/?',
       'unverified 1',
     ])
+  })
+})
+
+/** The golden signals stream (shipgate 0.20.0): its position, with the trace its log records. */
+const SIGNALS = (() => {
+  const log = decodeLog(LOG_GOLDEN.signals)
+  if (!log.ok) throw new Error(`fixture: log does not decode at ${log.error.error.path}`)
+  return { ...positionOf(POSITION_GOLDEN.signals), trace: traceOf(log.value) }
+})()
+
+/** The seq of the golden signals stream's first event of `type`. */
+const signalsSeq = (type: string): number => LOG_GOLDEN.signals.events.find(event => event.type === type)?.seq ?? -1
+
+describe('the trace (HUD ADR 0007)', () => {
+  reviewTest('Review tab: READ FIRST lists the verdict\'s ranking in order, with its source and seq, above the rounds', SIGNALS, stateOf([boardOf(1, SIGNALS.stream)]), async $ => {
+    const ui = await mountReview($)
+    const head = `READ FIRST · graph · seq ${signalsSeq('review-verdict')}`
+    expect((await ui.find({ type: 'Text', text: head }))?.props.dimColor).toBe(true)
+    expect(await ui.find({ type: 'Text', text: '1. src/golden.py · fix top · churn high · fan-in top' })).toBeDefined()
+    const texts = (await ui.findAll({ type: 'Text', text: /^(READ FIRST|▾ round)/ })).map(t => t.text)
+    expect(texts[0]).toBe(head)
+    await ui.unmount()
+  })
+
+  reviewTest('Review tab: with no board yet, READ FIRST still shows', SIGNALS, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    expect(await ui.find({ type: 'Text', text: /^READ FIRST · graph/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^No review captured/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  const at = must(isoTime('2026-10-01T11:00:00+00:00'))
+  const seq = must(eventSeq(9))
+  reviewTest(
+    'Review tab: unavailable signals say why; an unreadable ranking says so; a label with no value is -',
+    { ...REVIEW_POSITION, trace: { ...EMPTY_TRACE, reviewRanking: { seq, at, ranking: { kind: 'Unavailable', reason: 'shallow' } } } },
+    EMPTY_REVIEW,
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: 'READ FIRST · signals unavailable (shallow) · seq 9' })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+  reviewTest('Review tab: an unreadable ranking is named, with no file', { ...REVIEW_POSITION, trace: { ...EMPTY_TRACE, reviewRanking: { seq, at, ranking: { kind: 'Unreadable' } } } }, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    expect(await ui.find({ type: 'Text', text: 'READ FIRST · ranking unreadable · seq 9' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^1\. / })).toBeUndefined()
+    await ui.unmount()
+  })
+  reviewTest('Review tab: no ranking recorded, no READ FIRST line', REVIEW_POSITION, stateOf([boardOf()]), async $ => {
+    const ui = await mountReview($)
+    expect(await ui.find({ type: 'Text', text: /^READ FIRST/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  reviewTest(
+    'Review tab: a ranking from a verdict older than the last one is marked as earlier',
+    withVerdict({ ...REVIEW_POSITION, trace: { ...EMPTY_TRACE, reviewRanking: { seq, at, ranking: { kind: 'Ranked', source: 'graph', files: [] } } } }, { seq: 12, at }),
+    EMPTY_REVIEW,
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: 'READ FIRST · graph · seq 9 · from an earlier verdict' })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+  reviewTest('Review tab: an empty unavailable reason draws no empty brackets', { ...REVIEW_POSITION, trace: { ...EMPTY_TRACE, reviewRanking: { seq, at, ranking: { kind: 'Unavailable', reason: '' } } } }, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    expect(await ui.find({ type: 'Text', text: 'READ FIRST · signals unavailable · seq 9' })).toBeDefined()
+    await ui.unmount()
+  })
+  reviewTest('Review tab: a cut log says the trace was not read, in place of READ FIRST', { ...REVIEW_POSITION, trace: { ...EMPTY_TRACE, isLogCut: true } }, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    expect(await ui.find({ type: 'Text', text: 'trace not read: the stream log was longer than one journal answer' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^READ FIRST/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('Flow tab: a cut log is one dim line', async ($, on) => {
+    drawPane(on, bound({ ...FLOW, trace: { ...EMPTY_TRACE, isLogCut: true } }), { ...FRESH, tab: 'flow' })
+    const ui = await mountOwn($, PANE_DRAW)
+    expect((await ui.find({ type: 'Text', text: 'trace not read: the stream log was longer than one journal answer' }))?.props.dimColor).toBe(true)
+    await ui.unmount()
+  })
+
+  test('rankedFileText: a label with no value is drawn as -', async () => {
+    expect(rankedFileText({ path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: null }, 0)).toBe('1. src/golden.py · fix top · churn high · fan-in -')
+  })
+
+  reviewTest('Review tab: a canon finding carries the canon tag; a correctness one does not; a killed canon finding says canon', REVIEW_POSITION, stateOf([boardOf(1, REVIEW_STREAM, REVIEW_RETURN_CANON)]), async $ => {
+    const ui = await mountReview($)
+    const tags = await ui.findAll({ type: 'Text', text: /^canon$/ })
+    expect(tags.length).toBe(1)
+    expect(tags[0]?.props.color).toBe('suggestion')
+    expect(await ui.find({ type: 'Text', text: '92% · not-targeted 0/0 · canon' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '90% · held 0/2 · correctness' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'MEDIUM · canon · q=2/2' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  reviewTest('Review tab: at 40 columns a canon card keeps its severity, its tag and both buttons on one row', REVIEW_POSITION, stateOf([boardOf(1, REVIEW_STREAM, REVIEW_RETURN_CANON)]), async $ => {
+    const ui = await mountReview($, 'terminal', 40)
+    expect(await ui.find({ type: 'Text', text: /^canon$/ })).toBeDefined()
+    expect(await ui.find({ key: 'accept-1' })).toBeDefined()
+    expect(await ui.find({ key: 'kill-1' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('Design tab: the design\'s ranking under its ADRs', async ($, on) => {
+    drawPane(on, bound(SIGNALS), { ...FRESH, tab: 'design' })
+    const ui = await mountOwn($, PANE_DRAW)
+    expect(await ui.find({ type: 'Text', text: `RISK RANKING · regex · seq ${signalsSeq('design-committed')}` })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1. src/golden.py · fix top · churn high · fan-in -' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '2. src/other.py · fix low · churn low · fan-in mid' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('Design tab: no ranking recorded, no ranking block', async ($, on) => {
+    drawPane(on, bound(FLOW), { ...FRESH, tab: 'design' })
+    const ui = await mountOwn($, PANE_DRAW)
+    expect(await ui.find({ type: 'Text', text: /^RISK RANKING/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('Flow tab: a map that skipped its risk signals is one warning line, with the deviation\'s seq', async ($, on) => {
+    drawPane(on, bound(SIGNALS), { ...FRESH, tab: 'flow' })
+    const ui = await mountOwn($, PANE_DRAW)
+    const line = await ui.find({ type: 'Text', text: `route-and-map: no risk signals recorded · signals-missing deviation seq ${signalsSeq('deviation')}` })
+    expect(line?.props.color).toBe('warning')
+    await ui.unmount()
+  })
+
+  test('Flow tab: no gap, no line; two gaps name both seqs', async ($, on) => {
+    drawPane(on, bound(FLOW), { ...FRESH, tab: 'flow' })
+    const ui = await mountOwn($, PANE_DRAW)
+    expect(await ui.find({ type: 'Text', text: /^route-and-map: no risk signals/ })).toBeUndefined()
+    await ui.unmount()
+    expect(signalsGapText([{ seq: must(eventSeq(3)), at }, { seq: must(eventSeq(8)), at }])).toBe('route-and-map: no risk signals recorded · signals-missing deviations seq 3, 8')
   })
 })

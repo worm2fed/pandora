@@ -4,7 +4,7 @@
 // status, the worklog's Design sections) and the refresh trigger's glob. No `$` here, so the
 // tests run it without a process or a file system.
 
-import type { Adr, Decision, DesignSection, IsoTime, Phase, Plan, Position, ProjectPath, Task, TaskLine } from '../types'
+import type { Adr, Decision, DesignSection, IsoTime, Phase, Plan, Position, ProjectPath, Task, TaskLine, Trace } from '../types'
 import type { PositionDoc, PositionTask } from './journal'
 import { parseCriteria } from './review'
 
@@ -137,6 +137,8 @@ export interface PositionInputs {
   /** The ADRs `doc.artifacts.adrs` names that could be read, parsed. */
   readonly adrs: readonly Adr[]
   readonly prd: MarkdownFile | null
+  /** The trace read from the stream's log (HUD ADR 0007). */
+  readonly trace: Trace
 }
 
 /**
@@ -146,7 +148,7 @@ export interface PositionInputs {
  * the PRD.
  */
 export function toPosition(inputs: PositionInputs): Position {
-  const { doc, worklog, adrs, prd } = inputs
+  const { doc, worklog, adrs, prd, trace } = inputs
   return {
     stream: doc.stream,
     version: doc.version,
@@ -160,6 +162,7 @@ export function toPosition(inputs: PositionInputs): Position {
     publish: doc.publish,
     criteria: prd === null ? [] : parseCriteria(prd.text),
     lastVerdict: doc.verdict,
+    trace,
   }
 }
 

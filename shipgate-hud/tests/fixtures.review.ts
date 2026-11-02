@@ -4,7 +4,7 @@
 // the decoder in review.ts), so a fixture cannot invent a key or a label the workflow never emits.
 
 import type { WorkflowReturn } from '../hooks/review'
-import { criterionId, eventSeq, isoTime, streamName } from '../hooks/journal'
+import { EMPTY_TRACE, criterionId, eventSeq, isoTime, streamName } from '../hooks/journal'
 import type { Phase, PhaseMark, Position, Verdict } from '../types'
 
 /**
@@ -114,6 +114,68 @@ export const REVIEW_RETURN = {
   counts: { found: 9, deduped: 7, candidates: 5, refuters: 6, unverified: 1, survivors: 4, killed: 1 },
   coverage: { verify: 'high-only', refutersRequested: 6, refutersReported: 5, unverified: 3, riskOrdered: true },
   lensesRun: ['correctness', 'conventions+design', 'simplicity+security'],
+} satisfies WorkflowReturn
+
+/**
+ * A run with the canon lens (shipgate ADR 0012): the config's Style section named a style
+ * skill, so a fourth finder loaded it. One MEDIUM survivor is a canon rule break; one
+ * correctness HIGH beside it is not; one canon finding was killed by a full quorum.
+ */
+export const REVIEW_RETURN_CANON = {
+  survivors: [
+    {
+      severity: 'HIGH',
+      confidence: 90,
+      file: 'src/orders/cancel.ts',
+      line: 4,
+      summary: 'An order id that does not match is compared as text.',
+      why: 'The request id is a plain string.',
+      fix: 'Compare the branded ids.',
+      lenses: ['correctness'],
+      alsoReported: [],
+      verification: 'held',
+      quorum: '0/2',
+      refuters: [],
+    },
+    {
+      severity: 'MEDIUM',
+      confidence: 92,
+      file: 'src/orders/cancel.ts',
+      line: 8,
+      summary: 'A switch over the closed status union, where the canon requires the exhaustive match.',
+      why: 'Canon rule 2: branch on a closed union with match.',
+      fix: 'Use match from src/shared/match.ts.',
+      lenses: ['canon'],
+      alsoReported: [],
+      verification: 'not-targeted',
+      quorum: '0/0',
+      refuters: [],
+    },
+  ],
+  killed: [
+    {
+      finding: {
+        severity: 'MEDIUM',
+        confidence: 75,
+        file: 'src/orders/types.ts',
+        line: 3,
+        summary: 'An interface where the canon asks for a type.',
+        why: 'Canon rule 5.',
+        fix: 'Keep the interface.',
+        lenses: ['canon'],
+        alsoReported: [],
+      },
+      quorum: '2/2',
+      reasons: [
+        { reason: 'Rule 5 asks for an interface for an object shape.', evidence: '.claude/skills/typed-canon/SKILL.md:20' },
+        { reason: 'The shape is an object.', evidence: 'src/orders/types.ts:3' },
+      ],
+    },
+  ],
+  belowFloor: [],
+  counts: { found: 3, deduped: 3, candidates: 3, refuters: 4, unverified: 0, survivors: 2, killed: 1 },
+  coverage: { verify: 'high-only', refutersRequested: 4, refutersReported: 4, unverified: 1 },
+  lensesRun: ['correctness', 'canon'],
 } satisfies WorkflowReturn
 
 /** The return of a run whose every lens finder died, exactly as review-workflow.js builds it. */
@@ -233,6 +295,7 @@ export const REVIEW_POSITION: Position = {
     { id: must(criterionId('SC-002')), text: 'The parser keeps an empty field.' },
   ],
   lastVerdict: null,
+  trace: EMPTY_TRACE,
 }
 
 /** The review position with a last verdict: `seq`, its time, and its criteria and dispositions. */

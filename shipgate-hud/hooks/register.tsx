@@ -28,10 +28,12 @@ import type {
   RunFailure,
   StreamName,
   Tab,
+  Trace,
 } from '../types'
 import { type Result, absurd, err, ok, parseJson, recordOf, stringOf } from './json'
 import {
   type BadShape,
+  CUT_LOG_TRACE,
   DEFAULT_HOMES,
   type DecodeFailure,
   type PositionDoc,
@@ -39,10 +41,12 @@ import {
   type StatusBrief,
   type StatusFeature,
   branchName,
+  decodeLog,
   decodePosition,
   decodeSidecarHomes,
   decodeStatus,
   isoTime,
+  traceOf,
 } from './journal'
 import { type MarkdownFile, type PositionInputs, matchesHome, parseAdr, toPosition } from './position'
 import {
@@ -666,22 +670,38 @@ async function adrsAt($: Engine, paths: readonly MarkdownFile['path'][]): Promis
   }, Promise.resolve(ok([])))
 }
 
-/** What `toPosition` maps: the decoded position and the worklog, ADRs and PRD it names, read. */
-async function positionInputsOf($: Engine, doc: PositionDoc): Promise<Run<PositionInputs>> {
+/** What `toPosition` maps: the decoded position, the worklog, ADRs and PRD it names, read, and the trace. */
+async function positionInputsOf($: Engine, doc: PositionDoc, trace: Trace): Promise<Run<PositionInputs>> {
   const worklog = doc.artifacts.worklog === null ? ok(null) : await markdownAt($, doc.artifacts.worklog.path)
   if (!worklog.ok) return worklog
   const adrs = await adrsAt($, doc.artifacts.adrs)
   if (!adrs.ok) return adrs
   const prd = doc.artifacts.prd === null ? ok(null) : await markdownAt($, doc.artifacts.prd)
   if (!prd.ok) return prd
-  return ok({ doc, worklog: worklog.value, adrs: adrs.value, prd: prd.value })
+  return ok({ doc, worklog: worklog.value, adrs: adrs.value, prd: prd.value, trace })
 }
 
-/** The bound stream's position: `position --stream <s> --json`, then the artifacts it names. */
+/**
+ * The trace from `log --stream <s> --json` (HUD ADR 0007). A cut output (a long stream's log
+ * past the engine's limit) is a trace marked cut, so the position is still drawn; any other
+ * failure is a failed run, as for every journal read.
+ */
+async function traceRun($: Engine, script: string, stream: StreamName): Promise<Run<Trace>> {
+  const log = await runJournal($, script, ['log', '--stream', stream, '--json'], decodeLog)
+  if (log.ok) return ok(traceOf(log.value))
+  return log.error.kind === 'Truncated' ? ok(CUT_LOG_TRACE) : log
+}
+
+/**
+ * The bound stream's position: `position --stream <s> --json`, then the trace (`traceRun`),
+ * then the artifacts the position names.
+ */
 async function boundRefresh($: Engine, script: string, via: BindingVia, stream: StreamName): Promise<Refreshed> {
   const doc = await runJournal($, script, ['position', '--stream', stream, '--json'], decodePosition)
   if (!doc.ok) return refreshedOf(doc.error)
-  const inputs = await positionInputsOf($, doc.value)
+  const trace = await traceRun($, script, stream)
+  if (!trace.ok) return refreshedOf(trace.error)
+  const inputs = await positionInputsOf($, doc.value, trace.value)
   return inputs.ok ? { kind: 'Bound', via, position: toPosition(inputs.value) } : refreshedOf(inputs.error)
 }
 
@@ -736,7 +756,7 @@ const boundStreamOf = (shown: HudView): StreamName | null => (shown.kind === 'Bo
 /** The view before the first refresh, and after a project loses its sidecar. */
 const OFF: HudView = { kind: 'Off' }
 
-const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v3' })
+const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v4' })
 const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null)
 const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null)
 const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, EMPTY_REVIEW, { shape: 'shipgate-hud.review-v2' })

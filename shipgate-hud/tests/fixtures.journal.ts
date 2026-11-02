@@ -24,7 +24,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 32,
+          "seq": 39,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -57,7 +57,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 37,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -108,7 +108,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 35,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -128,7 +128,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 28
+          "seq": 35
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -153,7 +153,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 11,
+          "seq": 18,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -189,7 +189,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 8,
+          "seq": 15,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -228,7 +228,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 9,
           "ts": "2026-10-01T11:29:00+00:00",
           "type": "gate-decision"
         },
@@ -248,6 +248,39 @@ export const STATUS_GOLDEN = {
         "version": 2
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:26:00+00:00",
+          "implied": true,
+          "phase": "review"
+        },
+        "dormant": false,
+        "feature": "golden-signals",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": true,
+        "last_event": {
+          "seq": 7,
+          "ts": "2026-10-01T11:27:00+00:00",
+          "type": "review-verdict"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "review",
+        "phase_entered_at": "2026-10-01T11:26:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-signals",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 7
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -261,7 +294,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 4,
+          "seq": 11,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -294,7 +327,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 7,
+          "seq": 14,
           "ts": "2026-10-01T11:34:00+00:00",
           "type": "flow-completed"
         },
@@ -359,7 +392,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 35,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -379,7 +412,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 28
+          "seq": 35
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -404,7 +437,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 32,
+          "seq": 39,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -437,7 +470,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 37,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -470,7 +503,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 11,
+          "seq": 18,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -506,7 +539,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 8,
+          "seq": 15,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -545,7 +578,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 9,
           "ts": "2026-10-01T11:29:00+00:00",
           "type": "gate-decision"
         },
@@ -565,6 +598,39 @@ export const STATUS_GOLDEN = {
         "version": 2
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:26:00+00:00",
+          "implied": true,
+          "phase": "review"
+        },
+        "dormant": false,
+        "feature": "golden-signals",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": true,
+        "last_event": {
+          "seq": 7,
+          "ts": "2026-10-01T11:27:00+00:00",
+          "type": "review-verdict"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "review",
+        "phase_entered_at": "2026-10-01T11:26:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-signals",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 7
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -578,7 +644,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 4,
+          "seq": 11,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -625,7 +691,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 37,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -658,7 +724,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 32,
+          "seq": 39,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -709,7 +775,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 35,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -729,7 +795,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 28
+          "seq": 35
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -754,7 +820,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 11,
+          "seq": 18,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -790,7 +856,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 8,
+          "seq": 15,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -829,7 +895,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 9,
           "ts": "2026-10-01T11:29:00+00:00",
           "type": "gate-decision"
         },
@@ -849,6 +915,39 @@ export const STATUS_GOLDEN = {
         "version": 2
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:26:00+00:00",
+          "implied": true,
+          "phase": "review"
+        },
+        "dormant": false,
+        "feature": "golden-signals",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": true,
+        "last_event": {
+          "seq": 7,
+          "ts": "2026-10-01T11:27:00+00:00",
+          "type": "review-verdict"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "review",
+        "phase_entered_at": "2026-10-01T11:26:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-signals",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 7
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -862,7 +961,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 4,
+          "seq": 11,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -911,7 +1010,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 32,
+          "seq": 39,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -944,7 +1043,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 37,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -995,7 +1094,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 35,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -1015,7 +1114,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 28
+          "seq": 35
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -1040,7 +1139,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 11,
+          "seq": 18,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -1076,7 +1175,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 8,
+          "seq": 15,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -1115,7 +1214,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 9,
           "ts": "2026-10-01T11:29:00+00:00",
           "type": "gate-decision"
         },
@@ -1135,6 +1234,39 @@ export const STATUS_GOLDEN = {
         "version": 2
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:26:00+00:00",
+          "implied": true,
+          "phase": "review"
+        },
+        "dormant": false,
+        "feature": "golden-signals",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": true,
+        "last_event": {
+          "seq": 7,
+          "ts": "2026-10-01T11:27:00+00:00",
+          "type": "review-verdict"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "review",
+        "phase_entered_at": "2026-10-01T11:26:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-signals",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 7
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -1148,7 +1280,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 4,
+          "seq": 11,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -1198,7 +1330,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 32,
+          "seq": 39,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -1231,7 +1363,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 37,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -1282,7 +1414,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 35,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -1302,7 +1434,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 28
+          "seq": 35
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -1327,7 +1459,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 11,
+          "seq": 18,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -1363,7 +1495,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 8,
+          "seq": 15,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -1402,7 +1534,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 9,
           "ts": "2026-10-01T11:29:00+00:00",
           "type": "gate-decision"
         },
@@ -1422,6 +1554,39 @@ export const STATUS_GOLDEN = {
         "version": 2
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:26:00+00:00",
+          "implied": true,
+          "phase": "review"
+        },
+        "dormant": false,
+        "feature": "golden-signals",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": true,
+        "last_event": {
+          "seq": 7,
+          "ts": "2026-10-01T11:27:00+00:00",
+          "type": "review-verdict"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "review",
+        "phase_entered_at": "2026-10-01T11:26:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-signals",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 7
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -1435,7 +1600,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 4,
+          "seq": 11,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -1488,7 +1653,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 2,
+          "seq": 9,
           "ts": "2026-10-01T11:29:00+00:00",
           "type": "gate-decision"
         },
@@ -1521,7 +1686,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 32,
+          "seq": 39,
           "ts": "2026-10-01T11:59:00+00:00",
           "type": "phase-entered"
         },
@@ -1554,7 +1719,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 30,
+          "seq": 37,
           "ts": "2026-10-01T11:57:00+00:00",
           "type": "phase-entered"
         },
@@ -1605,7 +1770,7 @@ export const STATUS_GOLDEN = {
         ],
         "implied_phase": false,
         "last_event": {
-          "seq": 28,
+          "seq": 35,
           "ts": "2026-10-01T11:55:00+00:00",
           "type": "gate-decision"
         },
@@ -1625,7 +1790,7 @@ export const STATUS_GOLDEN = {
           "at": "2026-10-01T11:55:00+00:00",
           "by": "gate-decision",
           "kind": "authorized",
-          "seq": 28
+          "seq": 35
         },
         "session_match": false,
         "stream": "feature/golden-flow",
@@ -1650,7 +1815,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": true,
         "last_event": {
-          "seq": 11,
+          "seq": 18,
           "ts": "2026-10-01T11:38:00+00:00",
           "type": "verify-run"
         },
@@ -1686,7 +1851,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 8,
+          "seq": 15,
           "ts": "2026-10-01T11:35:00+00:00",
           "type": "flow-started"
         },
@@ -1706,6 +1871,39 @@ export const STATUS_GOLDEN = {
         "version": 1
       },
       {
+        "age_days": 0,
+        "branch_match": false,
+        "current": {
+          "entered_at": "2026-10-01T11:26:00+00:00",
+          "implied": true,
+          "phase": "review"
+        },
+        "dormant": false,
+        "feature": "golden-signals",
+        "gate_decision_count": 0,
+        "gate_decisions": [],
+        "implied_phase": true,
+        "last_event": {
+          "seq": 7,
+          "ts": "2026-10-01T11:27:00+00:00",
+          "type": "review-verdict"
+        },
+        "last_verify": null,
+        "lifecycle": "live",
+        "open_designs": [],
+        "phase": "review",
+        "phase_entered_at": "2026-10-01T11:26:00+00:00",
+        "publish": {
+          "kind": "held"
+        },
+        "session_match": false,
+        "stream": "feature/golden-signals",
+        "task_ids": [],
+        "tasks_done": 0,
+        "terminal": false,
+        "version": 7
+      },
+      {
         "age_days": 10,
         "branch_match": false,
         "current": {
@@ -1719,7 +1917,7 @@ export const STATUS_GOLDEN = {
         "gate_decisions": [],
         "implied_phase": false,
         "last_event": {
-          "seq": 4,
+          "seq": 11,
           "ts": "2026-09-21T11:31:00+00:00",
           "type": "phase-entered"
         },
@@ -1875,7 +2073,7 @@ export const POSITION_GOLDEN = {
         "mode": "executive",
         "question": "one widget or two?",
         "raised_by": "orchestrator",
-        "seq": 15
+        "seq": 22
       },
       {
         "at": "2026-10-01T11:55:00+00:00",
@@ -1884,7 +2082,7 @@ export const POSITION_GOLDEN = {
         "mode": "ask",
         "question": "open the MR before the second review?",
         "raised_by": "user",
-        "seq": 28
+        "seq": 35
       }
     ],
     "last_verify": {
@@ -1909,7 +2107,7 @@ export const POSITION_GOLDEN = {
       "at": "2026-10-01T11:55:00+00:00",
       "by": "gate-decision",
       "kind": "authorized",
-      "seq": 28
+      "seq": 35
     },
     "stream": "feature/golden-flow",
     "tasks": [
@@ -1962,7 +2160,7 @@ export const POSITION_GOLDEN = {
         "src/golden.py:12": "fixed",
         "src/other.py:?": "deferred"
       },
-      "seq": 25,
+      "seq": 32,
       "verdict": "not-ready"
     },
     "version": 17
@@ -2059,6 +2257,45 @@ export const POSITION_GOLDEN = {
     "verdict": null,
     "version": 2
   },
+  "signals": {
+    "artifacts": {
+      "adrs": [],
+      "prd": null,
+      "worklog": "docs/prd/golden-signals.worklog.md",
+      "worklog_from": "event"
+    },
+    "current": {
+      "entered_at": "2026-10-01T11:26:00+00:00",
+      "implied": true,
+      "phase": "review"
+    },
+    "decisions": [],
+    "last_verify": null,
+    "lifecycle": "live",
+    "phases": {
+      "capture": "todo",
+      "clarify": "skipped",
+      "design": "done",
+      "explore": "skipped",
+      "implement": "skipped",
+      "review": "current",
+      "route-and-map": "done",
+      "workspace": "skipped"
+    },
+    "publish": {
+      "kind": "held"
+    },
+    "stream": "feature/golden-signals",
+    "tasks": null,
+    "verdict": {
+      "at": "2026-10-01T11:27:00+00:00",
+      "criteria": {},
+      "dispositions": {},
+      "seq": 7,
+      "verdict": "not-ready"
+    },
+    "version": 7
+  },
   "started": {
     "artifacts": {
       "adrs": [],
@@ -2104,7 +2341,7 @@ export const POSITION_GOLDEN = {
         "mode": "ask",
         "question": "one stream or two?",
         "raised_by": "user",
-        "seq": 2
+        "seq": 9
       }
     ],
     "last_verify": null,
@@ -2126,5 +2363,372 @@ export const POSITION_GOLDEN = {
     "tasks": null,
     "verdict": null,
     "version": 2
+  }
+} as const
+
+/** `log --stream <s> --json`, by scenario: the trace the HUD reads (HUD ADR 0007). */
+export const LOG_GOLDEN = {
+  "flow": {
+    "events": [
+      {
+        "actor": "orchestrator",
+        "data": {
+          "branch": "feature/golden-flow",
+          "request": "the full flow"
+        },
+        "seq": 19,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:39:00+00:00",
+        "type": "flow-started",
+        "version": 1
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "phase": "workspace"
+        },
+        "seq": 20,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:40:00+00:00",
+        "type": "phase-entered",
+        "version": 2
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "phase": "explore",
+          "skipped": [
+            "route-and-map"
+          ]
+        },
+        "seq": 21,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:41:00+00:00",
+        "type": "phase-entered",
+        "version": 3
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "decision": "two",
+          "gate": "clarify",
+          "mode": "executive",
+          "question": "one widget or two?",
+          "raised_by": "orchestrator",
+          "rationale": "the PRD asks for both"
+        },
+        "seq": 22,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:42:00+00:00",
+        "type": "gate-decision",
+        "version": 4
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "implied": true,
+          "implied_by": "clarify-passed",
+          "phase": "clarify"
+        },
+        "seq": 23,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:43:00+00:00",
+        "type": "phase-entered",
+        "version": 5
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "prd": "docs/prd/golden-flow.md"
+        },
+        "seq": 24,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:44:00+00:00",
+        "type": "clarify-passed",
+        "version": 6
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "implied": true,
+          "implied_by": "design-committed",
+          "phase": "design"
+        },
+        "seq": 25,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:45:00+00:00",
+        "type": "phase-entered",
+        "version": 7
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "adrs": [
+            "docs/adr/0001-golden-choice.md"
+          ],
+          "refs": [
+            "docs/adr/0002-golden-other.md#context",
+            "/etc/unsafe.md"
+          ],
+          "worklog": "docs/prd/golden-flow.worklog.md"
+        },
+        "seq": 26,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:46:00+00:00",
+        "type": "design-committed",
+        "version": 8
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "implied": true,
+          "implied_by": "verify-run",
+          "phase": "implement"
+        },
+        "seq": 27,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:47:00+00:00",
+        "type": "phase-entered",
+        "version": 9
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "outcome": "pass",
+          "scope": "unit",
+          "task_ids": [
+            "T001"
+          ]
+        },
+        "seq": 28,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:48:00+00:00",
+        "type": "verify-run",
+        "version": 10
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "task_id": "T001"
+        },
+        "seq": 29,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:49:00+00:00",
+        "type": "task-done",
+        "version": 11
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "outcome": "pass",
+          "task_ids": [
+            "T001",
+            "T002"
+          ]
+        },
+        "seq": 30,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:50:00+00:00",
+        "type": "verify-run",
+        "version": 12
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "implied": true,
+          "implied_by": "review-verdict",
+          "phase": "review"
+        },
+        "seq": 31,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:51:00+00:00",
+        "type": "phase-entered",
+        "version": 13
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "criteria": {
+            "SC-001": "met",
+            "SC-002": "unmet"
+          },
+          "dispositions": {
+            "./src/golden.py:12": "fixed",
+            "src/other.py:?": "deferred"
+          },
+          "verdict": "not-ready"
+        },
+        "seq": 32,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:52:00+00:00",
+        "type": "review-verdict",
+        "version": 14
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "phase": "implement"
+        },
+        "seq": 33,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:53:00+00:00",
+        "type": "phase-entered",
+        "version": 15
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "outcome": "fail",
+          "task_ids": [
+            "T002"
+          ]
+        },
+        "seq": 34,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:54:00+00:00",
+        "type": "verify-run",
+        "version": 16
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "decision": "publish",
+          "gate": "publish",
+          "mode": "ask",
+          "question": "open the MR before the second review?",
+          "raised_by": "user"
+        },
+        "seq": 35,
+        "stream": "feature/golden-flow",
+        "ts": "2026-10-01T11:55:00+00:00",
+        "type": "gate-decision",
+        "version": 17
+      }
+    ]
+  },
+  "signals": {
+    "events": [
+      {
+        "actor": "orchestrator",
+        "data": {
+          "request": "a flow that skipped its signals"
+        },
+        "seq": 1,
+        "stream": "feature/golden-signals",
+        "ts": "2026-10-01T11:21:00+00:00",
+        "type": "flow-started",
+        "version": 1
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "phase": "route-and-map",
+          "skipped": [
+            "workspace"
+          ]
+        },
+        "seq": 2,
+        "stream": "feature/golden-signals",
+        "ts": "2026-10-01T11:22:00+00:00",
+        "type": "phase-entered",
+        "version": 2
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "auto": true,
+          "kind": "signals-missing",
+          "note": "route-and-map entered without a signals block: the map's risk signals were not recorded (route-and-map step 3)"
+        },
+        "seq": 3,
+        "stream": "feature/golden-signals",
+        "ts": "2026-10-01T11:23:00+00:00",
+        "type": "deviation",
+        "version": 3
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "implied": true,
+          "implied_by": "design-committed",
+          "phase": "design",
+          "skipped": [
+            "explore",
+            "clarify"
+          ]
+        },
+        "seq": 4,
+        "stream": "feature/golden-signals",
+        "ts": "2026-10-01T11:24:00+00:00",
+        "type": "phase-entered",
+        "version": 4
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "ranking": {
+            "files": [
+              {
+                "churn": "high",
+                "fan_in": null,
+                "fix": "top",
+                "path": "src/golden.py"
+              },
+              {
+                "churn": "low",
+                "fan_in": "mid",
+                "fix": "low",
+                "path": "src/other.py"
+              }
+            ],
+            "source": "regex"
+          },
+          "worklog": "docs/prd/golden-signals.worklog.md"
+        },
+        "seq": 5,
+        "stream": "feature/golden-signals",
+        "ts": "2026-10-01T11:25:00+00:00",
+        "type": "design-committed",
+        "version": 5
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "implied": true,
+          "implied_by": "review-verdict",
+          "phase": "review",
+          "skipped": [
+            "implement"
+          ]
+        },
+        "seq": 6,
+        "stream": "feature/golden-signals",
+        "ts": "2026-10-01T11:26:00+00:00",
+        "type": "phase-entered",
+        "version": 6
+      },
+      {
+        "actor": "orchestrator",
+        "data": {
+          "ranking": {
+            "files": [
+              {
+                "churn": "high",
+                "fan_in": "top",
+                "fix": "top",
+                "path": "src/golden.py"
+              }
+            ],
+            "source": "graph"
+          },
+          "verdict": "not-ready"
+        },
+        "seq": 7,
+        "stream": "feature/golden-signals",
+        "ts": "2026-10-01T11:27:00+00:00",
+        "type": "review-verdict",
+        "version": 7
+      }
+    ]
   }
 } as const

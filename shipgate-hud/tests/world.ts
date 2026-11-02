@@ -138,12 +138,22 @@ export const statusOver =
     }
   }
 
+/** `log --stream <s> --json` as journal.py prints it: the stream's events, raw. */
+export interface LogJson {
+  readonly events: readonly unknown[]
+}
+
+/** A stream whose log records no trace value. */
+export const EMPTY_LOG: LogJson = { events: [] }
+
 /** The journal a journaled world answers from. */
 export interface JournalWorld {
   /** `status --json`'s answer to a run with this argv. */
   readonly status: (argv: readonly string[]) => StatusJson
   /** `position --stream <s> --json`'s answer; null: journal.py has no such stream (exit 1). */
   readonly position: (stream: string) => PositionJson | null
+  /** `log --stream <s> --json`'s answer (HUD ADR 0007): the stream's events, in seq order. */
+  readonly log: (stream: string) => LogJson
   /** The branch `git rev-parse --abbrev-ref HEAD` prints in `dir` (`git -C <dir>`; null: the session root); `HEAD` when detached. */
   readonly branch: (dir: string | null) => string
   /** The text the example worklog reads as. */
@@ -156,6 +166,7 @@ export interface JournalWorld {
 export const EXAMPLE_JOURNAL: JournalWorld = {
   status: statusOver([EXAMPLE_FEATURE]),
   position: stream => ({ ...EXAMPLE_POSITION, stream }),
+  log: () => EMPTY_LOG,
   branch: () => EXAMPLE_STREAM,
   worklog: WORKLOG,
   sidecarDir: null,
@@ -203,6 +214,7 @@ export function journaledWorld(on: On, given: Partial<JournalWorld> = {}): Journ
       const doc = journal.position(argv[argv.indexOf('--stream') + 1] ?? '')
       return doc === null ? { value: exited(1, 'error: no such stream') } : ok(JSON.stringify(doc))
     }
+    if (argv[2] === 'log') return ok(JSON.stringify(journal.log(argv[argv.indexOf('--stream') + 1] ?? '')))
     return ok('')
   })
   return record

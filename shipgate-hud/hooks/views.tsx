@@ -20,11 +20,15 @@ import type {
   Phase,
   PhaseMark,
   Position,
+  RankedFile,
+  RecordedRanking,
   ReviewBoard,
   ReviewMark,
   ReviewState,
   RoundId,
   Severity,
+  SignalLabel,
+  SignalsGap,
   StreamName,
   Tab,
   Task,
@@ -441,10 +445,19 @@ function flowTab(ui: Ui, position: Position, actions: Actions): El {
             : `${count} gate ${count === 1 ? 'decision' : 'decisions'}, newest first${toVeto > 0 ? ` · ${toVeto} open to veto` : ''}`}
         </Text>
       </Box>
+      {position.trace.signalsGaps.length === 0 ? null : <Text color="warning">{signalsGapText(position.trace.signalsGaps)}</Text>}
+      {position.trace.isLogCut ? <Text dimColor>{LOG_CUT_TEXT}</Text> : null}
       {position.decisions.map(decision => decisionOf(ui, decision, actions))}
     </Box>
   )
 }
+
+/** The line a tab shows when the engine cut the stream's log, so the trace was not read (HUD ADR 0007). */
+export const LOG_CUT_TEXT = 'trace not read: the stream log was longer than one journal answer'
+
+/** The Flow tab's line for the route-and-map entries that recorded no risk signals (shipgate ADR 0011): each deviation by its seq. */
+export const signalsGapText = (gaps: readonly SignalsGap[]): string =>
+  `route-and-map: no risk signals recorded · signals-missing ${gaps.length === 1 ? 'deviation' : 'deviations'} seq ${gaps.map(gap => String(gap.seq)).join(', ')}`
 
 /** A task's glyph and colour (null: drawn dim), for each state. */
 export interface TaskView {
@@ -677,7 +690,51 @@ function sectionChunksOf(ui: Ui, slug: string, title: string, markdown: string, 
   })
 }
 
-/** The Design tab: the committed ADRs with their status, then the Design sections folded, one open. */
+/** A label as drawn: the label, or `-` for a file with no value. */
+const labelText = (label: SignalLabel | null): string => label ?? '-'
+
+/** One ranked file's line: its place, its path, and its three labels. */
+export const rankedFileText = (file: RankedFile, index: number): string =>
+  `${index + 1}. ${file.path} · fix ${labelText(file.fix)} · churn ${labelText(file.churn)} · fan-in ${labelText(file.fanIn)}`
+
+/** The head line of a recorded ranking: the title, what was recorded, and the event that recorded it. */
+export function rankingHead(title: string, recorded: RecordedRanking): string {
+  const { ranking } = recorded
+  switch (ranking.kind) {
+    case 'Ranked':
+      return `${title} · ${ranking.source} · seq ${recorded.seq}`
+    case 'Unavailable':
+      return `${title} · signals unavailable${ranking.reason === '' ? '' : ` (${ranking.reason})`} · seq ${recorded.seq}`
+    case 'Unreadable':
+      return `${title} · ranking unreadable · seq ${recorded.seq}`
+    default:
+      return absurd(ranking)
+  }
+}
+
+/**
+ * A recorded risk ranking (shipgate ADR 0013, HUD ADR 0007): its head line, dim, with `note`
+ * after it when one is given, then its files in order; nothing when none was recorded.
+ */
+function rankingBlockOf(ui: Ui, title: string, recorded: RecordedRanking | null, note: string | null, width: number): El | null {
+  const { Box, Text } = ui
+  if (recorded === null) return null
+  const files = recorded.ranking.kind === 'Ranked' ? recorded.ranking.files : []
+  return (
+    <Box key={`ranking-${title}`} flexDirection="column">
+      <Text dimColor wrap="truncate-end">
+        {fit(`${rankingHead(title, recorded)}${note === null ? '' : ` · ${note}`}`, width)}
+      </Text>
+      {files.map((file, index) => (
+        <Text key={`ranked-${title}-${index}`} wrap="truncate-end">
+          {fit(rankedFileText(file, index), width)}
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
+/** The Design tab: the committed ADRs with their status, the design's risk ranking when it recorded one, then the Design sections folded, one open. */
 function designTab(ui: Ui, position: Position, open: string | null, actions: Actions, columns: number): El {
   const { Box, Text, Button } = ui
   const sections = position.design.sections
@@ -696,6 +753,8 @@ function designTab(ui: Ui, position: Position, open: string | null, actions: Act
           </Text>
         ))
       )}
+      {position.trace.designRanking === null ? null : <Text> </Text>}
+      {rankingBlockOf(ui, 'RISK RANKING', position.trace.designRanking, null, width)}
       <Text> </Text>
       {sections.length === 0 ? (
         <Text dimColor>{position.plan === null ? 'No worklog committed yet.' : 'The worklog has no Design section yet.'}</Text>
@@ -716,6 +775,16 @@ function designTab(ui: Ui, position: Position, open: string | null, actions: Act
     </Box>
   )
 }
+
+/** The review lens that holds the style canon (shipgate ADR 0012): its findings break a rule, they are not taste. */
+export const CANON_LENS = 'canon'
+
+/** The tag a canon finding carries, and the cell it takes. */
+const CANON_TAG = 'canon'
+const CANON_CELL = CANON_TAG.length + 1
+
+/** Did the canon lens report this finding? */
+const isCanon = (lenses: readonly string[]): boolean => lenses.includes(CANON_LENS)
 
 /** A known severity's colour; another label is drawn in `text`. */
 export const SEVERITY_COLOR: Readonly<Record<Severity, ThemeKey>> = { BLOCKER: 'error', HIGH: 'error', MEDIUM: 'warning', LOW: 'text' }
@@ -803,8 +872,9 @@ function findingCardOf(ui: Ui, survivor: BoardSurvivor, id: RoundId, index: numb
       <Text color={dispositionColor}>{shown}</Text>
     )
   const stateWidth = mark !== null ? MARK_VIEW[mark].text.length : disposition === null ? BUTTONS_WIDTH : shown.length
-  // the meta gives way: cut to what the row leaves, so the severity and the state stay on one line
-  const metaRoom = Math.max(4, width - SEVERITY_CELL - stateWidth - 2)
+  const hasCanon = isCanon(finding.lenses)
+  // the meta gives way: cut to what the row leaves, so the severity, the canon tag and the state stay on one line
+  const metaRoom = Math.max(4, width - SEVERITY_CELL - (hasCanon ? CANON_CELL : 0) - stateWidth - 2)
   return (
     <Box key={`finding-${index}`} flexDirection="column">
       <Box flexDirection="row">
@@ -813,6 +883,13 @@ function findingCardOf(ui: Ui, survivor: BoardSurvivor, id: RoundId, index: numb
             {`▎ ${severityLabel(finding.severity)}`}
           </Text>
         </Box>
+        {hasCanon ? (
+          <Box width={CANON_CELL} flexShrink={0}>
+            <Text bold color="suggestion">
+              {CANON_TAG}
+            </Text>
+          </Box>
+        ) : null}
         <Box flexGrow={1} flexShrink={1}>
           <Text wrap="truncate-end" dimColor>
             {fit(meta, metaRoom)}
@@ -913,7 +990,7 @@ function boardBodyOf(ui: Ui, position: Position, board: ReviewBoard, actions: Ac
       {board.killed.length > 0 ? (
         <Box flexDirection="column">
           <Text dimColor>{`KILLED (${board.killed.length})`}</Text>
-          {board.killed.map((finding, index) => entry(`killed-${index}`, `${severityLabel(finding.severity)} · q=${quorumText(finding)}`, finding))}
+          {board.killed.map((finding, index) => entry(`killed-${index}`, `${severityLabel(finding.severity)}${isCanon(finding.lenses) ? ` · ${CANON_TAG}` : ''} · q=${quorumText(finding)}`, finding))}
         </Box>
       ) : null}
       {board.belowFloor.length > 0 ? (
@@ -924,6 +1001,22 @@ function boardBodyOf(ui: Ui, position: Position, board: ReviewBoard, actions: Ac
       ) : null}
     </Box>
   )
+}
+
+/** The note on READ FIRST when its ranking came from a verdict older than the last one `position` names. */
+export const EARLIER_VERDICT_NOTE = 'from an earlier verdict'
+
+/**
+ * The Review tab's READ FIRST block: the newest verdict ranking, marked when the last verdict
+ * recorded none (a re-review that copied no ranking), or the log-cut line.
+ */
+function readFirstOf(ui: Ui, position: Position, width: number): El | null {
+  const { Text } = ui
+  const { trace, lastVerdict } = position
+  if (trace.isLogCut) return <Text dimColor>{fit(LOG_CUT_TEXT, width)}</Text>
+  const recorded = trace.reviewRanking
+  const isEarlier = recorded !== null && lastVerdict !== null && recorded.seq !== lastVerdict.seq
+  return rankingBlockOf(ui, 'READ FIRST', recorded, isEarlier ? EARLIER_VERDICT_NOTE : null, width)
 }
 
 /** The round `open` names among the stream's rounds: the newest, none (all folded), or the named one (the newest when it names none of them). */
@@ -952,6 +1045,7 @@ function reviewTab(ui: Ui, position: Position, review: ReviewState, actions: Act
     const phase = position.current === null ? 'no phase entered' : `phase ${position.current.phase}`
     return (
       <Box flexDirection="column" rowGap={1}>
+        {readFirstOf(ui, position, width)}
         <Text dimColor>{`No review captured for ${position.stream} yet (${phase}).`}</Text>
         {criteriaOf(ui, position, review.ticks, actions)}
       </Box>
@@ -961,6 +1055,7 @@ function reviewTab(ui: Ui, position: Position, review: ReviewState, actions: Act
   const title = (board: ReviewBoard): string => `round ${board.round} · run ${board.runId ?? '?'} · ${clock(board.at)}`
   return (
     <Box flexDirection="column" rowGap={1}>
+      {readFirstOf(ui, position, width)}
       {rounds.map(board =>
         board === open ? (
           <Box key={`round-open-${roundId(board)}`} flexDirection="column">

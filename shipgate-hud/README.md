@@ -10,6 +10,8 @@ interface, from the journal shipgate already keeps.
   `WS ✓ MAP ✓ EXP ↷ CLR ✓ DSN ✓ IMP ● REV · CAP ·` (`✓` done, `↷` skipped, `●` current, `↺`
   entered again after a move back, `·` to do; journal.py computes the marks) and four tabs:
   - **Flow** — the stream's gate decisions, newest first, with who raised each one. A
+    route-and-map entry that recorded no risk signals shows one warning line above them
+    (`route-and-map: no risk signals recorded · signals-missing deviation seq N`). A
     decision the orchestrator took on its own (`raised_by: orchestrator`, `mode: executive`)
     carries a **Veto** button; pressing it submits a prompt that names that decision (stream,
     gate, timestamp) and asks the orchestrator to read it from the journal and revisit it.
@@ -19,8 +21,9 @@ interface, from the journal shipgate already keeps.
     `✗` when the last verify that covered it failed, `✓` done with a `task-done` event, `◐`
     ticked in the worklog but never recorded (what the Stop hook will block on), `○` to do.
     So the counts add up.
-  - **Design** — the ADRs the design committed to, one line each, and the worklog's Design
-    section as collapsible `##` sections, one open at a time (prose reflowed to the pane's width).
+  - **Design** — the ADRs the design committed to, one line each, then the design's risk
+    ranking when it recorded one (`RISK RANKING · <source> · seq N`, one line per file), and
+    the worklog's Design section as collapsible `##` sections, one open at a time (prose reflowed to the pane's width).
     **Diagrams:** a fenced `svg` block is drawn as a picture on desktop, mobile and vscode, and
     as `xml` code in the terminal. The HUD lays out a fenced `mermaid` flowchart itself (the
     `flowchart` / `graph` subset of ADR 0002). It draws the chart as a picture on those
@@ -38,9 +41,12 @@ interface, from the journal shipgate already keeps.
   - **Review** — up to five rounds of the review workflow's return for this stream. The HUD
     reads each from the task-notification prompt and never changes that prompt. A long return
     that the engine cuts there is read from the task's output file (`…/tasks/*.output`, at most
-    4 MiB). A counts line comes first. Then
+    4 MiB). A **READ FIRST** block comes before the rounds when the last verdict that carries
+    a risk ranking recorded one: its source and seq, then the files in risk order with their
+    `fix`, `churn` and `fan-in` labels. A counts line comes first in each round. Then
     the survivors, grouped by severity, each with confidence, verification, quorum, lenses
-    and a short `file:line`. **Accept** and **Kill** submit a plain prompt that names the
+    and a short `file:line`. A finding the canon lens reported carries a `canon` tag: it breaks
+    a rule of the project's style canon, so it is not a matter of taste. **Accept** and **Kill** submit a plain prompt that names the
     finding by its position, never by its text. The killed and below-floor findings follow,
     one line each. The tab ends with the success criteria of the stream's PRD, as ticks you
     set by hand. The last `review-verdict` gives ticks from the journal:
@@ -110,12 +116,14 @@ otherwise. A request that arrives during a refresh queues one trailing refresh.
 ## What it needs
 
 - Claude Code **2.1.290 or newer** (the mods API; early access, so a release may move it).
-- **shipgate 0.19.0 or newer.** The HUD's `plugin.json` declares it as a dependency
-  (`>=0.19.0`), so installing or updating the HUD brings a matching shipgate. A shipgate
+- **shipgate 0.20.0 or newer.** The HUD's `plugin.json` declares it as a dependency
+  (`>=0.20.0`), so installing or updating the HUD brings a matching shipgate. A shipgate
   outside the range keeps the HUD disabled, and `claude plugin list` names the requirement.
-  0.19.0 binds a session whose only writes are the user's own decisions (`--actor user`).
+  0.20.0 records the risk rankings and the `signals-missing` deviation the HUD draws; 0.19.0
+  binds a session whose only writes are the user's own decisions (`--actor user`).
 - **A `journal.py` that lags behind** (a lagging project install, a `journalScript` option,
-  a `--plugin-dir` copy) is read the same way down to 0.18.0, without that binding. One
+  a `--plugin-dir` copy) is read the same way down to 0.18.0, without that binding and with
+  no ranking or signals line to draw. One
   older than 0.18.0 (no `position`) makes the band say so: the pane names the minimum
   version it can read (0.18.0), and the publish gate is off until shipgate is updated. A
   failed read of a current shipgate still holds.
@@ -141,8 +149,12 @@ Or, for development, from a checkout: `claude --plugin-dir ./shipgate-hud`.
 
 The hooks module runs with no Node and no SQLite, so it never opens the journal database. It
 runs shipgate's own CLI, and journal.py computes every fact the HUD draws (shipgate ADR 0009).
-The HUD decodes that JSON strictly. A missing or mistyped key is an error the pane shows,
-never a default.
+The HUD computes no rule of its own. The one exception is the trace (step 3, ADR 0007): the
+HUD picks recorded values from the event log, because `position` does not print them yet.
+The HUD decodes the CLI's JSON strictly. A missing or mistyped key is an error the pane
+shows, never a default. Inside the trace, one recorded `ranking` that breaks journal.py's
+contract (a row written before shipgate validated it) is drawn as "ranking unreadable", not
+as a failed read.
 
 One refresh does these steps:
 1. **Binding** (ADR 0004). `journal.py status --json --session=<id> --branch=<root branch>`
@@ -165,7 +177,15 @@ One refresh does these steps:
    - the last verify and the last verdict;
    - whether the stream may publish;
    - its artifacts. When no event names a worklog, journal.py finds it by name.
-3. **Files.** The HUD reads only the worklog, the ADRs and the PRD that `position` names, to
+3. **Trace** (ADR 0007). `journal.py log --stream <s> --json` gives the stream's events. The
+   HUD picks three recorded values from them, as recorded: the newest `review-verdict` and
+   `design-committed` that carry a `ranking`, and every `deviation` of kind
+   `signals-missing`. `position` does not print these yet. When the ranking comes from a
+   verdict older than the last one, READ FIRST says `from an earlier verdict`. When the
+   engine cuts the log's output (a long stream), the position is still drawn, and the Flow
+   and Review tabs say that the trace was not read. Any other failed `log` run is a failed
+   refresh.
+4. **Files.** The HUD reads only the worklog, the ADRs and the PRD that `position` names, to
    draw the design sections and the criteria. It reads only relative paths inside the
    project.
 
@@ -213,6 +233,15 @@ shipgate-hud/
 
 `claude plugin validate shipgate-hud` and `claude plugin test shipgate-hud` are the checks.
 The code follows astrolabe, adapted to a mod with no dependencies (ADR 0006).
+
+Two traps in those checks:
+- **`claude plugin test` does not type-check.** A `Position` built without a required key
+  still passes. Run `tsc` as well, with a tsconfig that includes the engine's declarations
+  in `.claude-plugin/types/`. The engine writes that directory into a plugin checkout it has
+  loaded; a fresh git worktree lacks it, so point the tsconfig at the main checkout's copy.
+- **A text query matches a substring.** `ui.find({ type: 'Text', text: 'canon' })` also
+  finds every line that contains the word. Anchor a tag or a short label with a regex
+  (`/^canon$/`).
 
 ## Roadmap
 

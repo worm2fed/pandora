@@ -148,6 +148,61 @@ export type Verdict = {
 }
 
 // ---------------------------------------------------------------------------------------
+// The trace: what shipgate 0.20.0 records about the style canon and the code signals (HUD ADR 0007)
+// ---------------------------------------------------------------------------------------
+
+/** A `signals.py` label: a quartile over the repository. */
+export type SignalLabel = 'low' | 'mid' | 'high' | 'top'
+
+/** Where the structure half of the signals came from: the code graph, the regex scanner, or nothing. */
+export type SignalSource = 'graph' | 'regex' | 'none'
+
+/** One file of a risk ranking, in the ranking's order. A label is null when it has no value. */
+export type RankedFile = {
+  readonly path: string
+  readonly fix: SignalLabel | null
+  readonly churn: SignalLabel | null
+  readonly fanIn: SignalLabel | null
+}
+
+/**
+ * A recorded risk ranking (shipgate ADR 0013). `Ranked`: the files in risk order, and the
+ * structure source. `Unavailable`: the signals were not computed, for `reason`
+ * (`no-git`, `shallow`). `Unreadable`: the event's `ranking` has another shape (a row
+ * written before shipgate 0.20.0 validated it), so nothing is drawn but the fact.
+ */
+export type Ranking =
+  | { readonly kind: 'Ranked'; readonly source: SignalSource; readonly files: readonly RankedFile[] }
+  | { readonly kind: 'Unavailable'; readonly reason: string }
+  | { readonly kind: 'Unreadable' }
+
+/** A ranking with the event that recorded it. */
+export type RecordedRanking = {
+  readonly seq: EventSeq
+  readonly at: IsoTime
+  readonly ranking: Ranking
+}
+
+/** A `deviation` that `append` wrote because a route-and-map entry carried no `signals` (shipgate ADR 0011). */
+export type SignalsGap = {
+  readonly seq: EventSeq
+  readonly at: IsoTime
+}
+
+/**
+ * The trace values read from the stream's event log (HUD ADR 0007): the newest
+ * `review-verdict` and `design-committed` that carry a `ranking` (null: none does), and every
+ * `signals-missing` deviation, oldest first. `isLogCut`: the engine cut the log's output (a
+ * long stream), so nothing was read; the position is still drawn.
+ */
+export type Trace = {
+  readonly reviewRanking: RecordedRanking | null
+  readonly designRanking: RecordedRanking | null
+  readonly signalsGaps: readonly SignalsGap[]
+  readonly isLogCut: boolean
+}
+
+// ---------------------------------------------------------------------------------------
 // A journal run's failure (stored by HudView.Failed and HudView.Outdated, so declared here)
 // ---------------------------------------------------------------------------------------
 
@@ -276,6 +331,8 @@ export type Position = {
   readonly publish: PublishAuthorization
   readonly criteria: readonly Criterion[]
   readonly lastVerdict: Verdict | null
+  /** The ranking and signals values read from the event log (HUD ADR 0007). */
+  readonly trace: Trace
 }
 
 /** How the session is bound to its stream: it wrote to it (`Session`), or a checkout's branch names it (`Branch`). */
@@ -291,8 +348,9 @@ export type BindingVia = 'Session' | 'Branch'
  * needs, so the HUD reads nothing and the publish gate is off; `sign` is how the last
  * refresh showed it, drawn as the pane's detail line (`outdatedText`).
  *
- * Stored under the shape tag `shipgate-hud.view-v3`: v2's `Failed` could hold the removed
- * `Unsupported` failure, which no drawing code knows, so a v2 value reads as absent.
+ * Stored under the shape tag `shipgate-hud.view-v4`: v3's `Position` has no `trace`, so a v3
+ * value reads as absent and the next refresh derives it again (v2's `Failed` could hold the
+ * removed `Unsupported` failure).
  */
 export type HudView =
   | { readonly kind: 'Off' }

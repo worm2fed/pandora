@@ -2,19 +2,26 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   DEFAULT_HOMES,
+  EMPTY_TRACE,
+  type LogEvent,
   MIN_SHIPGATE_VERSION,
   type PositionDoc,
   type StatusBrief,
+  decodeLog,
   decodePosition,
   decodeSidecarHomes,
   decodeStatus,
+  eventSeq,
   failureText,
   hasStatusMarker,
+  isoTime,
   outdatedText,
+  rankingOf,
+  traceOf,
 } from '../hooks/journal'
 import type { ReadFailure, ShapeError } from '../types'
 import { SIDECAR, olderStatus } from './fixtures'
-import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
+import { LOG_GOLDEN, POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
 
 /** A golden document decoded; a thrown error naming the path when it does not decode (the test fails there). */
 const statusOf = (raw: unknown): StatusBrief => {
@@ -65,7 +72,7 @@ describe('journal: decodeStatus', () => {
       lifecycle: 'live',
       current: { phase: 'implement', enteredAt: '2026-10-01T11:53:00+00:00', isImplied: false },
       lastEventAt: '2026-10-01T11:55:00+00:00',
-      publish: { kind: 'authorized', by: 'gate-decision', seq: 28, at: '2026-10-01T11:55:00+00:00' },
+      publish: { kind: 'authorized', by: 'gate-decision', seq: 35, at: '2026-10-01T11:55:00+00:00' },
     })
     expect(byStream.get('feature/golden-started')?.current).toBeNull()
     expect(byStream.get('feature/golden-named')?.current?.isImplied).toBe(true)
@@ -189,7 +196,7 @@ describe('journal: decodePosition', () => {
   test('the flow position: every field as journal.py printed it, camelCase', async () => {
     const doc = positionOf(FLOW)
     expect(doc.current).toEqual({ phase: 'implement', enteredAt: '2026-10-01T11:53:00+00:00', isImplied: false })
-    expect(doc.publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 28, at: '2026-10-01T11:55:00+00:00' })
+    expect(doc.publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 35, at: '2026-10-01T11:55:00+00:00' })
     expect(doc.phases['route-and-map']).toBe('skipped')
     expect(doc.phases.review).toBe('revisited')
     expect(doc.artifacts).toEqual({
@@ -206,12 +213,12 @@ describe('journal: decodePosition', () => {
     ])
     // oldest first, as printed, each with its real seq
     expect(doc.decisions).toEqual([
-      { seq: 15, gate: 'clarify', question: 'one widget or two?', decision: 'two', raisedBy: 'orchestrator', mode: 'executive', at: '2026-10-01T11:42:00+00:00' },
-      { seq: 28, gate: 'publish', question: 'open the MR before the second review?', decision: 'publish', raisedBy: 'user', mode: 'ask', at: '2026-10-01T11:55:00+00:00' },
+      { seq: 22, gate: 'clarify', question: 'one widget or two?', decision: 'two', raisedBy: 'orchestrator', mode: 'executive', at: '2026-10-01T11:42:00+00:00' },
+      { seq: 35, gate: 'publish', question: 'open the MR before the second review?', decision: 'publish', raisedBy: 'user', mode: 'ask', at: '2026-10-01T11:55:00+00:00' },
     ])
     expect(doc.lastVerify).toEqual({ outcome: 'fail', taskIds: ['T002'], at: '2026-10-01T11:54:00+00:00' })
     expect(doc.verdict).toEqual({
-      seq: 25,
+      seq: 32,
       at: '2026-10-01T11:52:00+00:00',
       verdict: 'not-ready',
       criteria: { 'SC-001': 'met', 'SC-002': 'unmet' },
@@ -341,5 +348,114 @@ describe('journal: outdatedText', () => {
     const line = outdatedText({ kind: 'UnknownArgument', argument: `x\n\u0007${'y'.repeat(5000)}` })
     expect(line).not.toMatch(/[\n\r\u0000-\u001f]/)
     expect(line.length).toBeLessThanOrEqual(240)
+  })
+})
+
+/** A golden log decoded; a thrown error naming the path when it does not decode. */
+const logOf = (raw: unknown): readonly LogEvent[] => {
+  const decoded = decodeLog(raw)
+  if (!decoded.ok) throw new Error(`log does not decode at ${decoded.error.error.path}: expected ${decoded.error.error.expected}`)
+  return decoded.value
+}
+
+/** One raw event, as `log --json` prints it. */
+const rawEvent = (seq: number, type: string, data: Record<string, unknown>): Record<string, unknown> => ({
+  actor: 'orchestrator',
+  data,
+  seq,
+  stream: 'feat/x',
+  ts: '2026-10-01T11:00:00+00:00',
+  type,
+  version: seq,
+})
+
+const SEQ = (n: number) => {
+  const seq = eventSeq(n)
+  if (seq === null) throw new Error(`no seq ${n}`)
+  return seq
+}
+const AT = isoTime('2026-10-01T11:00:00+00:00')
+
+describe('journal: decodeLog and the trace (HUD ADR 0007)', () => {
+  for (const [scenario, raw] of Object.entries(LOG_GOLDEN)) {
+    test(`the golden ${scenario} log decodes, every event in seq order`, async () => {
+      const events = logOf(raw)
+      expect(events.map(event => event.seq)).toEqual(raw.events.map(event => event.seq))
+      expect(events.map(event => event.type)).toEqual(raw.events.map(event => event.type))
+    })
+  }
+
+  test('the golden signals stream: the auto deviation, the design ranking, the review ranking', async () => {
+    const trace = traceOf(logOf(LOG_GOLDEN.signals))
+    const deviation = LOG_GOLDEN.signals.events.find(event => event.type === 'deviation')
+    expect(trace.signalsGaps).toEqual([{ seq: deviation?.seq, at: deviation?.ts }])
+    expect(trace.designRanking?.ranking).toEqual({
+      kind: 'Ranked',
+      source: 'regex',
+      files: [
+        { path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: null },
+        { path: 'src/other.py', fix: 'low', churn: 'low', fanIn: 'mid' },
+      ],
+    })
+    expect(trace.reviewRanking?.ranking).toEqual({ kind: 'Ranked', source: 'graph', files: [{ path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: 'top' }] })
+    const verdict = LOG_GOLDEN.signals.events.find(event => event.type === 'review-verdict')
+    expect(trace.reviewRanking?.seq).toBe(verdict?.seq)
+  })
+
+  test('a stream that records no trace value: the empty trace', async () => {
+    expect(traceOf(logOf(LOG_GOLDEN.flow))).toEqual(EMPTY_TRACE)
+  })
+
+  test('the newest event that carries a ranking wins; a newer one without the key does not hide it', async () => {
+    const graph = { source: 'graph', files: [{ path: 'a.py', fix: 'top', churn: 'top', fan_in: 'low' }] }
+    const events = logOf({
+      events: [
+        rawEvent(1, 'review-verdict', { verdict: 'not-ready', ranking: { source: 'regex', files: [] } }),
+        rawEvent(2, 'review-verdict', { verdict: 'not-ready', ranking: graph }),
+        rawEvent(3, 'review-verdict', { verdict: 'ready' }),
+      ],
+    })
+    expect(traceOf(events).reviewRanking).toEqual({ seq: SEQ(2), at: AT, ranking: { kind: 'Ranked', source: 'graph', files: [{ path: 'a.py', fix: 'top', churn: 'top', fanIn: 'low' }] } })
+  })
+
+  test('only a deviation of kind signals-missing is a signals gap', async () => {
+    const events = logOf({
+      events: [rawEvent(4, 'deviation', { note: 'n', kind: 'style-missing' }), rawEvent(5, 'deviation', { note: 'n' }), rawEvent(6, 'deviation', { note: 'n', kind: 'signals-missing', auto: true })],
+    })
+    expect(traceOf(events).signalsGaps).toEqual([{ seq: SEQ(6), at: AT }])
+  })
+
+  test('rankingOf decodes to journal.py\'s contract: source required, unavailable a reason, files and labels optional', async () => {
+    expect(rankingOf({ source: 'none', unavailable: 'shallow' })).toEqual({ kind: 'Unavailable', reason: 'shallow' })
+    expect(rankingOf({ source: 'none', files: [] })).toEqual({ kind: 'Ranked', source: 'none', files: [] })
+    // journal.py accepts these: `files` and each label are optional, and checked only when present
+    expect(rankingOf({ source: 'graph' })).toEqual({ kind: 'Ranked', source: 'graph', files: [] })
+    expect(rankingOf({ source: 'graph', files: [{ path: 'a.py', fix: 'top' }] })).toEqual({ kind: 'Ranked', source: 'graph', files: [{ path: 'a.py', fix: 'top', churn: null, fanIn: null }] })
+    for (const [label, value] of [
+      ['an object keyed by path (a row from before 0.20.0)', { source: 'graph', files: { 'a.py': { fix: 'top' } } }],
+      ['an unknown source', { source: 'codegraph', files: [] }],
+      ['no source', { files: [] }],
+      ['unavailable with no source', { unavailable: 'shallow' }],
+      ['a label outside the four', { source: 'graph', files: [{ path: 'a.py', fix: 'hot', churn: null, fan_in: null }] }],
+      ['a file with no path', { source: 'graph', files: [{ fix: 'top', churn: null, fan_in: null }] }],
+      ['an unavailable reason that is no text', { source: 'none', unavailable: ['shallow'] }],
+      ['not an object', 'graph'],
+      ['null', null],
+    ] as const) {
+      expect([label, rankingOf(value)]).toEqual([label, { kind: 'Unreadable' }])
+    }
+  })
+
+  test('the envelope is strict: no events list, or an event without its seq, type, ts or data, is a BadShape', async () => {
+    const errorOf = (raw: unknown): string | null => {
+      const decoded = decodeLog(raw)
+      return decoded.ok ? null : decoded.error.error.path
+    }
+    expect(errorOf({})).toBe('$.events')
+    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), seq: undefined }] })).toBe('$.events[0].seq')
+    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), type: 3 }] })).toBe('$.events[0].type')
+    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), ts: 'yesterday' }] })).toBe('$.events[0].ts')
+    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), data: [] }] })).toBe('$.events[0].data')
+    expect(errorOf([])).toBe('$')
   })
 })
