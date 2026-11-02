@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { EMPTY_TRACE, type PositionDoc, type PositionTask, decodePosition, isoTime, projectPath, taskId } from '../hooks/journal'
+import { type PositionDoc, type PositionTask, decodePosition, isoTime, projectPath, taskId } from '../hooks/journal'
 import {
   type PositionInputs,
   clock,
@@ -23,7 +23,7 @@ import { PRD_WITH_CRITERIA, must } from './fixtures.review'
 /** A golden position decoded; a thrown error naming the path when it does not decode. */
 const docOf = (raw: unknown): PositionDoc => {
   const decoded = decodePosition(raw)
-  if (!decoded.ok) throw new Error(`fixture: position does not decode at ${decoded.error.error.path}`)
+  if (!decoded.ok) throw new Error(`fixture: position does not decode: ${decoded.error.kind === 'BadShape' ? decoded.error.error.path : decoded.error.kind}`)
   return decoded.value
 }
 
@@ -37,11 +37,10 @@ const FLOW_INPUTS: PositionInputs = {
   worklog: { path: pathOf('docs/prd/golden-flow.worklog.md'), text: WORKLOG },
   adrs: [parseAdr(pathOf('docs/adr/0001-golden-choice.md'), ADR)],
   prd: { path: pathOf('docs/prd/golden-flow.md'), text: PRD_WITH_CRITERIA },
-  trace: EMPTY_TRACE,
 }
 
 /** A golden stream with nothing read beside its document. */
-const bare = (doc: PositionDoc): PositionInputs => ({ doc, worklog: null, adrs: [], prd: null, trace: EMPTY_TRACE })
+const bare = (doc: PositionDoc): PositionInputs => ({ doc, worklog: null, adrs: [], prd: null })
 
 const ALL_MARKS = (mark: PhaseMark): Readonly<Record<Phase, PhaseMark>> => ({
   workspace: mark,
@@ -62,15 +61,23 @@ describe('position: toPosition', () => {
     expect(position.lifecycle).toBe('live')
     expect(position.current).toEqual(FLOW_DOC.current)
     expect(position.phases).toEqual(FLOW_DOC.phases)
-    expect(position.decisions.map(decision => decision.seq)).toEqual([35, 22])
+    expect(position.decisions.map(decision => decision.seq)).toEqual([42, 29])
     expect(position.decisions.map(isVetoable)).toEqual([false, true])
     expect(position.lastVerify).toEqual({ outcome: 'fail', taskIds: ['T002'], at: '2026-10-01T11:54:00+00:00' })
     expect(position.lastVerdict).toEqual(FLOW_DOC.verdict)
   })
 
+  test('the trace and the folded dispositions are the document\'s, read from position, no other run', async () => {
+    const signals = docOf(POSITION_GOLDEN.signals)
+    expect(toPosition(bare(signals)).trace).toEqual(signals.trace)
+    const dispositions = docOf(POSITION_GOLDEN.dispositions)
+    expect(toPosition(bare(dispositions)).dispositions).toEqual(dispositions.dispositions)
+    expect(Object.keys(toPosition(bare(dispositions)).dispositions)).toEqual(['src/golden.py:12', 'src/golden.py:30', 'src/other.py:?'])
+  })
+
   // D6: the publish rule is the journal's, never re-derived from events
   test('D6: publish is the document\'s, the authorizing event named by its seq', async () => {
-    expect(toPosition(FLOW_INPUTS).publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 35, at: '2026-10-01T11:55:00+00:00' })
+    expect(toPosition(FLOW_INPUTS).publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 42, at: '2026-10-01T11:55:00+00:00' })
     expect(toPosition(bare(docOf(POSITION_GOLDEN.named))).publish).toEqual({ kind: 'held' })
   })
 

@@ -1,10 +1,12 @@
 // The world beneath the plugin, answered from memory: a journaled project whose journal.py
-// answers `status` and `position` from the raw shapes in fixtures.ts. `claude plugin test`
+// answers `status` and `position` from the raw shapes in fixtures.ts (no `log`: the HUD runs
+// none since 0.8.0). `claude plugin test`
 // runs with no fs, process or network, so a test that drives session.start hooks these calls
 // itself. Generic names only — public repository.
 
 import { mock } from 'claude-code/testing'
 import type { On, ProcessRunResult, RenderSurface } from 'claude-code'
+import type { MockClock } from 'claude-code/testing'
 
 import { ADR, EXAMPLE_FEATURE, EXAMPLE_POSITION, EXAMPLE_STREAM, PRD, SIDECAR, WORKLOG } from './fixtures'
 import type { FeatureJson, PositionJson, StatusJson } from './fixtures'
@@ -58,20 +60,21 @@ export interface EngineWorld {
 /**
  * What every session needs answered beneath the plugin, journaled or not. The root is
  * START's, the shell is the root, the id is SESSION_ID and the session draws on the
- * terminal, unless `given` says otherwise.
+ * terminal, unless `given` says otherwise. `moveSession` changes the id the engine answers
+ * from then on, as `/clear`, `/resume` and `/branch` do; `clock` is the session's clock.
  */
 export function engineWorld(
   on: On,
   given: Partial<EngineWorld> = {},
-): { commands: string[]; opened: string[]; submitted: string[]; prompts: Record<string, unknown>[] } {
+): { commands: string[]; opened: string[]; submitted: string[]; prompts: Record<string, unknown>[]; moveSession: (id: string) => void; clock: MockClock } {
   const root = given.root ?? START.cwd
-  const world: EngineWorld = { root, shell: given.shell ?? root, sessionId: given.sessionId ?? SESSION_ID, surfaces: given.surfaces ?? ['terminal'] }
+  let world: EngineWorld = { root, shell: given.shell ?? root, sessionId: given.sessionId ?? SESSION_ID, surfaces: given.surfaces ?? ['terminal'] }
   const commands: string[] = []
   const opened: string[] = []
   const submitted: string[] = []
   // every prompt.submit event that reached the engine, whole (origin, asUser, …)
   const prompts: Record<string, unknown>[] = []
-  mock.clock(on)
+  const clock = mock.clock(on)
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('session.cwd', async () => ({ value: world.shell }))
   on('session.root', async () => ({ value: world.root }))
@@ -95,7 +98,26 @@ export function engineWorld(
     prompts.push({ ...e })
     return { text: e.text }
   })
-  return { commands, opened, submitted, prompts }
+  const moveSession = (id: string): void => {
+    world = { ...world, sessionId: id }
+  }
+  return { commands, opened, submitted, prompts, moveSession, clock }
+}
+
+/**
+ * `$.state` answered from memory, beneath the plugin: `reset()` empties it, as the engine does
+ * on `/clear`, `/resume` and `/branch` (a value never written reads `undefined` at version 0).
+ */
+export function stateWorld(on: On): { reset: () => void } {
+  const store = new Map<string, { readonly value: unknown; readonly version: number }>()
+  const keyOf = (e: { readonly plugin: string; readonly key: string; readonly id?: string }): string => JSON.stringify([e.plugin, e.key, e.id ?? null])
+  on('state.get', async (_$, e) => ({ value: store.get(keyOf(e)) ?? { value: undefined, version: 0 } }))
+  on('state.set', async (_$, e) => {
+    const version = (store.get(keyOf(e))?.version ?? 0) + 1
+    store.set(keyOf(e), { value: e.value, version })
+    return { value: { isSet: true as const, version } }
+  })
+  return { reset: () => store.clear() }
 }
 
 /** A project with no sidecar: every path is missing, every process run is recorded. */
@@ -138,22 +160,12 @@ export const statusOver =
     }
   }
 
-/** `log --stream <s> --json` as journal.py prints it: the stream's events, raw. */
-export interface LogJson {
-  readonly events: readonly unknown[]
-}
-
-/** A stream whose log records no trace value. */
-export const EMPTY_LOG: LogJson = { events: [] }
-
 /** The journal a journaled world answers from. */
 export interface JournalWorld {
   /** `status --json`'s answer to a run with this argv. */
   readonly status: (argv: readonly string[]) => StatusJson
   /** `position --stream <s> --json`'s answer; null: journal.py has no such stream (exit 1). */
   readonly position: (stream: string) => PositionJson | null
-  /** `log --stream <s> --json`'s answer (HUD ADR 0007): the stream's events, in seq order. */
-  readonly log: (stream: string) => LogJson
   /** The branch `git rev-parse --abbrev-ref HEAD` prints in `dir` (`git -C <dir>`; null: the session root); `HEAD` when detached. */
   readonly branch: (dir: string | null) => string
   /** The text the example worklog reads as. */
@@ -166,7 +178,6 @@ export interface JournalWorld {
 export const EXAMPLE_JOURNAL: JournalWorld = {
   status: statusOver([EXAMPLE_FEATURE]),
   position: stream => ({ ...EXAMPLE_POSITION, stream }),
-  log: () => EMPTY_LOG,
   branch: () => EXAMPLE_STREAM,
   worklog: WORKLOG,
   sidecarDir: null,
@@ -214,7 +225,6 @@ export function journaledWorld(on: On, given: Partial<JournalWorld> = {}): Journ
       const doc = journal.position(argv[argv.indexOf('--stream') + 1] ?? '')
       return doc === null ? { value: exited(1, 'error: no such stream') } : ok(JSON.stringify(doc))
     }
-    if (argv[2] === 'log') return ok(JSON.stringify(journal.log(argv[argv.indexOf('--stream') + 1] ?? '')))
     return ok('')
   })
   return record

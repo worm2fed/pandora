@@ -5,7 +5,7 @@
 
 import type { WorkflowReturn } from '../hooks/review'
 import { EMPTY_TRACE, criterionId, eventSeq, isoTime, streamName } from '../hooks/journal'
-import type { Phase, PhaseMark, Position, Verdict } from '../types'
+import type { FindingState, FoldedDisposition, Phase, PhaseMark, Position, Verdict } from '../types'
 
 /**
  * A finished run in `high-only` mode, internally consistent as review-workflow.js computes it
@@ -295,20 +295,42 @@ export const REVIEW_POSITION: Position = {
     { id: must(criterionId('SC-002')), text: 'The parser keeps an empty field.' },
   ],
   lastVerdict: null,
+  dispositions: {},
   trace: EMPTY_TRACE,
 }
 
-/** The review position with a last verdict: `seq`, its time, and its criteria and dispositions. */
+/** The review position with a last verdict: `seq`, its time, its criteria and dispositions, its note (default none) and round (default 1). */
 export const withVerdict = (
   position: Position,
-  verdict: { readonly seq: number; readonly at: string; readonly criteria?: Verdict['criteria']; readonly dispositions?: Verdict['dispositions'] },
+  verdict: {
+    readonly seq: number
+    readonly at: string
+    readonly verdict?: Verdict['verdict']
+    readonly criteria?: Verdict['criteria']
+    readonly dispositions?: Verdict['dispositions']
+    readonly note?: string | null
+    readonly round?: number
+  },
 ): Position => ({
   ...position,
   lastVerdict: {
     seq: must(eventSeq(verdict.seq)),
     at: must(isoTime(verdict.at)),
-    verdict: 'ready',
+    verdict: verdict.verdict ?? 'ready',
     criteria: verdict.criteria ?? {},
     dispositions: verdict.dispositions ?? {},
+    note: verdict.note ?? null,
+    round: verdict.round ?? 1,
   },
+})
+
+/** The review position with folded dispositions (`position.dispositions`): each key's state, recorded by the event at `seq`, at `at`. */
+export const withDispositions = (
+  position: Position,
+  folded: Readonly<Record<string, { readonly state: FindingState; readonly seq: number; readonly at: string }>>,
+): Position => ({
+  ...position,
+  dispositions: Object.fromEntries(
+    Object.entries(folded).map(([key, entry]): [string, FoldedDisposition] => [key, { state: entry.state, seq: must(eventSeq(entry.seq)), at: must(isoTime(entry.at)) }]),
+  ),
 })

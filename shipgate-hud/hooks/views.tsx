@@ -10,9 +10,10 @@ import type {
   CriterionId,
   CriterionStatus,
   Decision,
-  Disposition,
   FindingCore,
   FindingSeverity,
+  FindingState,
+  FoldedDisposition,
   HudView,
   Lifecycle,
   OpenRound,
@@ -57,7 +58,7 @@ import {
 import { absurd } from './json'
 import { MIN_SHIPGATE_VERSION, failureText, outdatedText } from './journal'
 import { PHASES, PHASE_SHORT, clock, isVetoable } from './position'
-import { boardsFor, criterionGlyph, dispositionIn, groupBySeverity, roundId, severityLabel, shortLocation, tickOf } from './review'
+import { boardsFor, criterionGlyph, dispositionsFor, dispositionsSince, groupBySeverity, roundId, severityLabel, shortLocation, tickOf } from './review'
 
 /** The surface's element table, as `uiOf` (register.tsx) narrows `$.ui.resolve(e)`. */
 export interface Ui {
@@ -130,27 +131,50 @@ export function boardFor(position: Position, review: ReviewState): ReviewBoard |
   return boardsFor(review.boards, position.stream)[0] ?? null
 }
 
-/** `review N open` (N = survivors of the newest round with neither a mark nor a disposition) while a board for the stream is held; else null. */
+/**
+ * The folded `fixing` entries still live with no board: those recorded after the last verdict
+ * (all of them with no verdict). The verdict is the round's final word, so a `fixing` it did
+ * not close under the same key is stale, not open.
+ */
+const liveFixing = (position: Position): number => {
+  const verdict = position.lastVerdict
+  return Object.values(position.dispositions).filter(entry => entry.state === 'fixing' && (verdict === null || entry.seq > verdict.seq)).length
+}
+
+/**
+ * The band's review segment. With a board for the stream: `review N open` (N = survivors of
+ * the newest round still open, `openFindings`), or `review aborted`. With no board (a review
+ * run as an agent fan): `review N open` when N folded findings are `fixing` after the last
+ * verdict (`liveFixing`); else null, as with no review at all.
+ */
 export function reviewSegment(position: Position, review: ReviewState): string | null {
   const board = boardFor(position, review)
-  if (board === null) return null
+  if (board === null) {
+    const fixing = liveFixing(position)
+    return fixing === 0 ? null : `review ${fixing} open`
+  }
   return board.aborted !== null ? 'review aborted' : `review ${openFindings(position, board)} open`
 }
 
 /**
- * The orchestrator's disposition of a finding: the last verdict's map looked up by the full
- * `file:line`, then the short one; null when none. A board captured after that verdict ignores
- * the map: the verdict judged an earlier round.
+ * Each survivor's folded state on one board, in the survivors' order (null: none), by the
+ * tolerant key match (`dispositionsFor`, HUD ADR 0008). A state recorded before the board was
+ * captured is not drawn on it: it judged an earlier round.
  */
-function dispositionOf(position: Position, board: ReviewBoard, finding: FindingCore): Disposition | null {
-  const verdict = position.lastVerdict
-  if (verdict === null || Date.parse(board.at) > Date.parse(verdict.at)) return null
-  return dispositionIn(verdict.dispositions, finding)
+export function boardStates(position: Position, board: ReviewBoard): readonly (FoldedDisposition | null)[] {
+  return dispositionsFor(
+    dispositionsSince(position.dispositions, board.at),
+    board.survivors.map(survivor => survivor.finding),
+  )
 }
 
-/** Survivors still open: neither the user's mark nor the orchestrator's disposition. */
+/** Is a finding with this state still open? No state, or `fixing` (a fix in progress). */
+const isOpenState = (state: FoldedDisposition | null): boolean => state === null || state.state === 'fixing'
+
+/** Survivors still open: no user's mark, and no folded state or a `fixing` one. */
 export function openFindings(position: Position, board: ReviewBoard): number {
-  return board.survivors.filter(survivor => survivor.mark === null && dispositionOf(position, board, survivor.finding) === null).length
+  const states = boardStates(position, board)
+  return board.survivors.filter((survivor, index) => survivor.mark === null && isOpenState(states[index] ?? null)).length
 }
 
 /** A lifecycle's mark: its word and colour where the band and the pane name it. */
@@ -446,14 +470,10 @@ function flowTab(ui: Ui, position: Position, actions: Actions): El {
         </Text>
       </Box>
       {position.trace.signalsGaps.length === 0 ? null : <Text color="warning">{signalsGapText(position.trace.signalsGaps)}</Text>}
-      {position.trace.isLogCut ? <Text dimColor>{LOG_CUT_TEXT}</Text> : null}
       {position.decisions.map(decision => decisionOf(ui, decision, actions))}
     </Box>
   )
 }
-
-/** The line a tab shows when the engine cut the stream's log, so the trace was not read (HUD ADR 0007). */
-export const LOG_CUT_TEXT = 'trace not read: the stream log was longer than one journal answer'
 
 /** The Flow tab's line for the route-and-map entries that recorded no risk signals (shipgate ADR 0011): each deviation by its seq. */
 export const signalsGapText = (gaps: readonly SignalsGap[]): string =>
@@ -693,43 +713,94 @@ function sectionChunksOf(ui: Ui, slug: string, title: string, markdown: string, 
 /** A label as drawn: the label, or `-` for a file with no value. */
 const labelText = (label: SignalLabel | null): string => label ?? '-'
 
-/** One ranked file's line: its place, its path, and its three labels. */
-export const rankedFileText = (file: RankedFile, index: number): string =>
-  `${index + 1}. ${file.path} · fix ${labelText(file.fix)} · churn ${labelText(file.churn)} · fan-in ${labelText(file.fanIn)}`
+/** The ranking's legend, said once in its head line: the order of the three buckets on each file line. */
+export const RANKING_LEGEND = 'fix · churn · fan-in'
 
-/** The head line of a recorded ranking: the title, what was recorded, and the event that recorded it. */
-export function rankingHead(title: string, recorded: RecordedRanking): string {
+/** The gap between a path (or a key) and what follows it on its line: two spaces. */
+const PATH_GAP = '  '
+
+/** A file's three buckets as bare tokens, in the legend's order: `top · high · -`. */
+export const bucketsText = (file: RankedFile): string => `${labelText(file.fix)} · ${labelText(file.churn)} · ${labelText(file.fanIn)}`
+
+/** Text length in code points, as `fit` counts it. */
+const cells = (text: string): number => [...text].length
+
+/**
+ * A path cut at its head to `width` cells, its tail kept: the most whole trailing segments
+ * behind `…/` (`…/hooks/register.tsx`); when even the last segment does not fit, `…` and the
+ * end of that segment. Untouched when it fits.
+ */
+export function cutHead(path: string, width: number): string {
+  if (cells(path) <= width) return path
+  if (width <= 1) return width === 1 ? '…' : ''
+  const segments = path.split('/')
+  const tails = segments.map((_, start) => `…/${segments.slice(start + 1).join('/')}`).filter(tail => tail !== '…/')
+  const whole = tails.find(tail => cells(tail) <= width)
+  if (whole !== undefined) return whole
+  const last = [...(segments.at(-1) ?? path)]
+  return `…${last.slice(Math.max(0, last.length - (width - 1))).join('')}`
+}
+
+/** The narrowest path a one-line file line keeps: `…/` and the last segment. Narrower than that, the buckets go to a second line. */
+const minimalPath = (path: string): string => {
+  const last = path.split('/').at(-1) ?? path
+  return last === path ? path : `…/${last}`
+}
+
+/**
+ * One ranked file as drawn into `width` cells: `<n>. <path>  <buckets>` on one line, the path
+ * cut at its head (`cutHead`) when the line is too wide; when even the minimal path
+ * (`minimalPath`) and the buckets do not fit, the path alone, then the buckets on a second
+ * line, indented under the path. The buckets are never cut.
+ */
+export function rankedFileLines(file: RankedFile, index: number, width: number): readonly string[] {
+  const place = `${index + 1}. `
+  const buckets = bucketsText(file)
+  const room = width - cells(place) - cells(PATH_GAP) - cells(buckets)
+  if (room >= Math.min(cells(file.path), cells(minimalPath(file.path)))) return [`${place}${cutHead(file.path, room)}${PATH_GAP}${buckets}`]
+  const indent = ' '.repeat(cells(place))
+  return [`${place}${cutHead(file.path, width - cells(place))}`, `${indent}${buckets}`]
+}
+
+/** The head line's segments of a recorded ranking: the title, what was recorded, the event that recorded it, and the legend when files are listed. */
+export function rankingHeadSegments(title: string, recorded: RecordedRanking): readonly string[] {
   const { ranking } = recorded
   switch (ranking.kind) {
     case 'Ranked':
-      return `${title} · ${ranking.source} · seq ${recorded.seq}`
+      return [title, ranking.source, `seq ${recorded.seq}`, RANKING_LEGEND]
     case 'Unavailable':
-      return `${title} · signals unavailable${ranking.reason === '' ? '' : ` (${ranking.reason})`} · seq ${recorded.seq}`
+      return [title, `signals unavailable${ranking.reason === '' ? '' : ` (${ranking.reason})`}`, `seq ${recorded.seq}`]
     case 'Unreadable':
-      return `${title} · ranking unreadable · seq ${recorded.seq}`
+      return [title, 'ranking unreadable', `seq ${recorded.seq}`]
     default:
       return absurd(ranking)
   }
 }
 
 /**
- * A recorded risk ranking (shipgate ADR 0013, HUD ADR 0007): its head line, dim, with `note`
- * after it when one is given, then its files in order; nothing when none was recorded.
+ * A recorded risk ranking (shipgate ADR 0013, HUD ADR 0007): its head, dim, with `note` after
+ * it when one is given, packed into lines at the ` · ` separators; then its files in order,
+ * each as `rankedFileLines` draws it into `width`; nothing when none was recorded.
  */
 function rankingBlockOf(ui: Ui, title: string, recorded: RecordedRanking | null, note: string | null, width: number): El | null {
   const { Box, Text } = ui
   if (recorded === null) return null
   const files = recorded.ranking.kind === 'Ranked' ? recorded.ranking.files : []
+  const head = packSegments([...rankingHeadSegments(title, recorded), ...(note === null ? [] : [note])], width)
   return (
     <Box key={`ranking-${title}`} flexDirection="column">
-      <Text dimColor wrap="truncate-end">
-        {fit(`${rankingHead(title, recorded)}${note === null ? '' : ` · ${note}`}`, width)}
-      </Text>
-      {files.map((file, index) => (
-        <Text key={`ranked-${title}-${index}`} wrap="truncate-end">
-          {fit(rankedFileText(file, index), width)}
-        </Text>
+      {head.map((line, index) => (
+        <Box key={`ranking-head-${title}-${index}`}>
+          <Text dimColor>{line}</Text>
+        </Box>
       ))}
+      {files.flatMap((file, index) =>
+        rankedFileLines(file, index, width).map((line, part) => (
+          <Box key={`ranked-${title}-${index}-${part}`}>
+            <Text>{line}</Text>
+          </Box>
+        )),
+      )}
     </Box>
   )
 }
@@ -820,7 +891,7 @@ const SEVERITY_CELL = 10
 /** The chrome a non-plain Button draws around its label in the terminal: `[ ` and ` ]`. */
 const BUTTON_CHROME = 4
 
-/** The terminal width of `[ Accept ] [ Kill ]`, the state cell of a card with no mark and no disposition: both buttons and the gap between them. */
+/** The terminal width of `[ Accept ] [ Kill ]`, the state cell of a card with no mark and no folded state: both buttons and the gap between them. */
 const BUTTONS_WIDTH = 'Accept'.length + BUTTON_CHROME + 1 + 'Kill'.length + BUTTON_CHROME
 
 /** A finding's severity colour: a known severity's, `text` for another label. */
@@ -832,8 +903,15 @@ const quorumText = (finding: { readonly quorum: { readonly refuting: number; rea
 /** A finding's confidence as drawn: the number, `?` when the return carried none. */
 const confidenceText = (finding: FindingCore): string => `${finding.confidence === null ? '?' : String(finding.confidence)}%`
 
-/** A disposition's colour; null: drawn dim. */
-const DISPOSITION_COLOR: Readonly<Record<Disposition, ThemeKey | null>> = { fixed: 'success', rejected: 'error', deferred: null }
+/** A folded state's colour, on a card and on a verdict-only round; null: drawn dim. */
+const DISPOSITION_COLOR: Readonly<Record<FindingState, ThemeKey | null>> = { fixing: 'warning', fixed: 'success', rejected: 'error', deferred: null }
+
+/** A folded state as drawn: its word, in its colour (`DISPOSITION_COLOR`), dim when it has none. */
+function stateTextOf(ui: Ui, state: FindingState): El {
+  const { Text } = ui
+  const color = DISPOSITION_COLOR[state]
+  return color === null ? <Text dimColor>{state}</Text> : <Text color={color}>{state}</Text>
+}
 
 /** A mark's text and colour in a card's state cell. */
 export interface MarkView {
@@ -850,28 +928,25 @@ export const MARK_VIEW: Readonly<Record<ReviewMark, MarkView>> = {
 /**
  * One survivor. Header, one line, three cells: the severity in a fixed cell, the meta (confidence,
  * verification and quorum, lenses) truncated to the room left, then the state: the user's mark,
- * else the orchestrator's disposition, else Accept / Kill. Then `file:line` beside the wrapped summary.
+ * else the folded state from `position` (`fixing`, `fixed`, `rejected` or `deferred`), else
+ * Accept / Kill. Then `file:line` beside the wrapped summary.
  */
-function findingCardOf(ui: Ui, survivor: BoardSurvivor, id: RoundId, index: number, disposition: Disposition | null, actions: Actions, width: number): El {
+function findingCardOf(ui: Ui, survivor: BoardSurvivor, id: RoundId, index: number, folded: FindingState | null, actions: Actions, width: number): El {
   const { Box, Text, Button } = ui
   const { finding, mark } = survivor
   const meta = `${confidenceText(finding)} · ${finding.verification} ${quorumText(finding)} · ${finding.lenses.join('+') || '?'}`
-  const shown = disposition === null ? '' : fit(disposition, 12)
-  const dispositionColor = disposition === null ? null : DISPOSITION_COLOR[disposition]
   const state =
     mark !== null ? (
       <Text color={MARK_VIEW[mark].color}>{MARK_VIEW[mark].text}</Text>
-    ) : disposition === null ? (
+    ) : folded === null ? (
       <Box flexDirection="row" columnGap={1}>
         <Button key={`accept-${index}`} label="Accept" dimColor onPress={() => actions.accept(id, index)} />
         <Button key={`kill-${index}`} label="Kill" dimColor onPress={() => actions.kill(id, index)} />
       </Box>
-    ) : dispositionColor === null ? (
-      <Text dimColor>{shown}</Text>
     ) : (
-      <Text color={dispositionColor}>{shown}</Text>
+      stateTextOf(ui, folded)
     )
-  const stateWidth = mark !== null ? MARK_VIEW[mark].text.length : disposition === null ? BUTTONS_WIDTH : shown.length
+  const stateWidth = mark !== null ? MARK_VIEW[mark].text.length : folded === null ? BUTTONS_WIDTH : folded.length
   const hasCanon = isCanon(finding.lenses)
   // the meta gives way: cut to what the row leaves, so the severity, the canon tag and the state stay on one line
   const metaRoom = Math.max(4, width - SEVERITY_CELL - (hasCanon ? CANON_CELL : 0) - stateWidth - 2)
@@ -968,6 +1043,7 @@ function boardBodyOf(ui: Ui, position: Position, board: ReviewBoard, actions: Ac
   )
   // the counts packed into lines at the ` · ` separators, so no line starts with one
   const countLines = packSegments(reviewCountSegments(board, openFindings(position, board)), width)
+  const states = boardStates(position, board)
   return (
     <Box flexDirection="column" rowGap={1}>
       <Box flexDirection="column">
@@ -983,7 +1059,7 @@ function boardBodyOf(ui: Ui, position: Position, board: ReviewBoard, actions: Ac
           <Text dimColor>{`  ${severityLabel(group.severity)} (${group.indexes.length})`}</Text>
           {group.indexes.map(index => {
             const survivor = board.survivors[index]
-            return survivor === undefined ? null : findingCardOf(ui, survivor, id, index, dispositionOf(position, board, survivor.finding), actions, width)
+            return survivor === undefined ? null : findingCardOf(ui, survivor, id, index, states[index]?.state ?? null, actions, width)
           })}
         </Box>
       ))}
@@ -1008,15 +1084,52 @@ export const EARLIER_VERDICT_NOTE = 'from an earlier verdict'
 
 /**
  * The Review tab's READ FIRST block: the newest verdict ranking, marked when the last verdict
- * recorded none (a re-review that copied no ranking), or the log-cut line.
+ * recorded none (a re-review that copied no ranking).
  */
 function readFirstOf(ui: Ui, position: Position, width: number): El | null {
-  const { Text } = ui
   const { trace, lastVerdict } = position
-  if (trace.isLogCut) return <Text dimColor>{fit(LOG_CUT_TEXT, width)}</Text>
   const recorded = trace.reviewRanking
   const isEarlier = recorded !== null && lastVerdict !== null && recorded.seq !== lastVerdict.seq
   return rankingBlockOf(ui, 'READ FIRST', recorded, isEarlier ? EARLIER_VERDICT_NOTE : null, width)
+}
+
+/** The header of a round drawn from the verdict: `round N · verdict <v> · <time>`, or `round 1 · in progress` before the first verdict. */
+export function verdictRoundTitle(position: Position): string {
+  const verdict = position.lastVerdict
+  return verdict === null ? 'round 1 · in progress' : `round ${verdict.round} · verdict ${verdict.verdict} · ${clock(verdict.at)}`
+}
+
+/**
+ * A review round with no board (a review run as an agent fan, #5; HUD ADR 0008): the header
+ * (`verdictRoundTitle`), the verdict's note when it has one, then one line per folded key in
+ * key order, the key cut to the room its state leaves (the state is never cut). Null with
+ * neither a verdict nor a folded disposition.
+ */
+function verdictRoundOf(ui: Ui, position: Position, width: number): El | null {
+  const { Box, Text } = ui
+  const verdict = position.lastVerdict
+  const keys = Object.keys(position.dispositions).sort()
+  if (verdict === null && keys.length === 0) return null
+  const note = verdict === null || verdict.note === null ? null : verdict.note.replace(/\s+/g, ' ').trim()
+  return (
+    <Box flexDirection="column">
+      <Text bold>{fit(verdictRoundTitle(position), width)}</Text>
+      {note === null || note === '' ? null : <Text wrap="wrap">{note}</Text>}
+      {keys.map(key => {
+        const entry = Object.hasOwn(position.dispositions, key) ? position.dispositions[key] : undefined
+        return entry === undefined ? null : (
+          <Box key={`folded-${key}`} flexDirection="row">
+            <Box flexShrink={1}>
+              <Text>{cutHead(key, Math.max(4, width - entry.state.length - cells(PATH_GAP)))}</Text>
+            </Box>
+            <Box flexShrink={0} paddingLeft={2}>
+              {stateTextOf(ui, entry.state)}
+            </Box>
+          </Box>
+        )
+      })}
+    </Box>
+  )
 }
 
 /** The round `open` names among the stream's rounds: the newest, none (all folded), or the named one (the newest when it names none of them). */
@@ -1036,6 +1149,8 @@ function openBoardOf(rounds: readonly ReviewBoard[], open: OpenRound): ReviewBoa
 /**
  * The Review tab: each review round of this stream, newest first, folded as the Design tab folds
  * its sections (one open at a time, as `review.open` says), then the PRD's SC checklist once.
+ * With no board for the stream, the round the verdict and the folded dispositions give
+ * (`verdictRoundOf`), else the empty-state line. A board, when held, wins.
  */
 function reviewTab(ui: Ui, position: Position, review: ReviewState, actions: Actions, columns: number): El {
   const { Box, Text, Button } = ui
@@ -1046,7 +1161,7 @@ function reviewTab(ui: Ui, position: Position, review: ReviewState, actions: Act
     return (
       <Box flexDirection="column" rowGap={1}>
         {readFirstOf(ui, position, width)}
-        <Text dimColor>{`No review captured for ${position.stream} yet (${phase}).`}</Text>
+        {verdictRoundOf(ui, position, width) ?? <Text dimColor>{`No review captured for ${position.stream} yet (${phase}).`}</Text>}
         {criteriaOf(ui, position, review.ticks, actions)}
       </Box>
     )

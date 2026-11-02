@@ -4,7 +4,7 @@ import type { CommandRunInput, On, PromptSubmitInput, RenderSurface } from 'clau
 
 import { AUTHORIZED, EXAMPLE_FEATURE, EXAMPLE_POSITION, EXAMPLE_STREAM, SIDECAR, featureOf, olderStatus } from './fixtures'
 import type { FeatureJson, PositionJson } from './fixtures'
-import { LOG_GOLDEN, POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
+import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
 import {
   BAND,
   CUT_RUN,
@@ -21,6 +21,7 @@ import {
   ok,
   printed,
   rejects,
+  stateWorld,
   statusOver,
   usageError,
 } from './world'
@@ -151,57 +152,37 @@ describe('register', () => {
     await pane.unmount()
   })
 
-  // HUD ADR 0007: the trace is read from `log`, for the bound stream, after its position
-  test('a bound refresh runs log --stream for the bound stream, after position', async ($, on) => {
+  // SC-005: the trace comes from position (HUD ADR 0007, amended): a bound refresh runs no `log`
+  test('a bound refresh runs status and position only: no log run', async ($, on) => {
     engineWorld(on)
     const { runs } = journaledWorld(on)
+    appendWorld(on)
     await $.session.start(START)
-    const journalRuns = runs.filter(argv => argv[0] === 'python3').map(argv => argv.slice(2))
-    expect(journalRuns.map(argv => argv[0])).toEqual(['status', 'position', 'log'])
-    expect(journalRuns[2]).toEqual(['log', '--stream', EXAMPLE_STREAM, '--json'])
+    await refreshByAppend($)
+    const journalRuns = runs.filter(argv => argv[0] === 'python3').map(argv => argv[2])
+    expect(journalRuns).toEqual(['status', 'position', 'status', 'position'])
+    expect(runs.some(argv => argv.includes('log'))).toBe(false)
   })
 
-  test('the log\'s trace reaches the pane: a skipped signals block in Flow, the verdict\'s ranking in Review', async ($, on) => {
+  test('position\'s trace reaches the pane: a skipped signals block in Flow, the verdict\'s ranking in Review', async ($, on) => {
     engineWorld(on)
-    journaledWorld(on, { log: () => LOG_GOLDEN.signals })
+    journaledWorld(on, { position: stream => ({ ...POSITION_GOLDEN.signals, stream }) })
     await $.session.start(START)
     const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
     await pane.press({ key: 'tab-flow' })
     expect(await pane.find({ type: 'Text', text: /^route-and-map: no risk signals recorded · signals-missing deviation seq \d+$/ })).toBeDefined()
     await pane.press({ key: 'tab-review' })
-    expect(await pane.find({ type: 'Text', text: /^READ FIRST · graph · seq \d+$/ })).toBeDefined()
-    expect(await pane.find({ type: 'Text', text: '1. src/golden.py · fix top · churn high · fan-in top' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /^READ FIRST · graph · seq \d+ · fix · churn · fan-in$/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: '1. src/golden.py  top · high · top' })).toBeDefined()
     await pane.unmount()
   })
 
-  test('a log run that fails is a failed refresh the pane shows, never an empty trace', async ($, on) => {
+  test('a position whose trace has another shape is a BadShape the pane shows, never an empty trace', async ($, on) => {
     engineWorld(on)
-    journalFaults(on, argv => (argv[2] === 'log' ? exits(exited(1, 'journal database is locked')) : null))
-    journaledWorld(on)
+    journaledWorld(on, { position: stream => ({ ...EXAMPLE_POSITION, stream, trace: { ...EXAMPLE_POSITION.trace, signals_missing: [{ seq: 1, at: 'yesterday' }] } }) })
     await $.session.start(START)
     const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
-    expect(await pane.find({ type: 'Text', text: /journal database is locked/ })).toBeDefined()
-    await pane.unmount()
-  })
-
-  test('a log the engine cut (a long stream) keeps the position and says the trace was not read', async ($, on) => {
-    engineWorld(on)
-    journalFaults(on, argv => (argv[2] === 'log' ? exits({ ...printed('{"events": ['), isStdoutTruncated: true }) : null))
-    journaledWorld(on)
-    await $.session.start(START)
-    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
-    expect(await pane.find({ type: 'Text', text: EXAMPLE_PLAN })).toBeDefined()
-    await pane.press({ key: 'tab-flow' })
-    expect(await pane.find({ type: 'Text', text: 'trace not read: the stream log was longer than one journal answer' })).toBeDefined()
-    await pane.unmount()
-  })
-
-  test('a log whose envelope has another shape is a BadShape the pane shows', async ($, on) => {
-    engineWorld(on)
-    journaledWorld(on, { log: () => ({ events: [{ seq: 1, type: 'deviation', ts: 'yesterday', data: {} }] }) })
-    await $.session.start(START)
-    const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
-    expect(await pane.find({ type: 'Text', text: /\$\.events\[0\]\.ts/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /\$\.trace\.signals_missing\[0\]\.at/ })).toBeDefined()
     await pane.unmount()
   })
 
@@ -385,8 +366,8 @@ describe('register', () => {
     // the sidecar was looked for in the session directory first, then upward
     expect(asked.filter(p => p.endsWith('/.claude/shipgate.json'))).toEqual([`${nested}/.claude/shipgate.json`, `${START.cwd}/source/.claude/shipgate.json`, `${START.cwd}/.claude/shipgate.json`])
     // journal.py ran in the project root, git in the session root (here the nested repo)
-    // status, position, then log (HUD ADR 0007): every journal run in the umbrella root
-    expect(ran().filter(r => r.argv[0] === 'python3').map(r => r.cwd)).toEqual([START.cwd, START.cwd, START.cwd])
+    // status, then position: every journal run in the umbrella root
+    expect(ran().filter(r => r.argv[0] === 'python3').map(r => r.cwd)).toEqual([START.cwd, START.cwd])
     expect(ran().find(r => r.argv[0] === 'git')?.cwd).toBe(nested)
     // every artifact was read under the project root, none under the nested repo
     expect(reads.every(p => p.startsWith(`${START.cwd}/`) && !p.startsWith(`${nested}/`))).toBe(true)
@@ -693,6 +674,299 @@ describe('register', () => {
     expect(statusRuns(runs).length).toBe(before + 1)
   })
 
+  // #8, SC-004: an org-managed session skips classic.* hooks for user mods; after /clear the
+  // session id moves and $.state resets, and the next tick, tool call or prompt detects again
+  describe('a session change with no classic.SessionStart (#8)', () => {
+    const MOVED = 'session-b'
+
+    /** A prompt the person typed in the composer. */
+    const typed = (text: string): PromptSubmitInput => ({ text, origin: { kind: 'composer' }, wait: false })
+
+    /** Is the example stream drawn in the band? */
+    const isStreamShown = async ($: Engine): Promise<boolean> => {
+      const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+      const shown = (await band.find({ type: 'Text', text: /feat\/example-stream/ })) !== undefined
+      await band.unmount()
+      return shown
+    }
+
+    /**
+     * A journaled session started as SESSION_ID, then moved to another id with $.state reset,
+     * as /clear does: no classic.SessionStart is raised (each one that would reach the world is
+     * recorded). The band draws nothing until the HUD detects again.
+     */
+    const clearedSession = async ($: Engine, on: On) => {
+      const { moveSession, clock, prompts } = engineWorld(on)
+      const { reset } = stateWorld(on)
+      const classic: unknown[] = []
+      on('classic.SessionStart', async (_$, e) => {
+        classic.push(e)
+        return {}
+      })
+      const record = journaledWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      expect(await isStreamShown($)).toBe(true)
+      moveSession(MOVED)
+      reset()
+      expect(await isStreamShown($)).toBe(false)
+      return { ...record, classic, clock, prompts, before: statusRuns(record.runs).length }
+    }
+
+    test('the next tool call detects again, off its path: the call returns first, then the stream draws; a second one runs nothing more', async ($, on) => {
+      const { runs, classic, clock, before } = await clearedSession($, on)
+      const result = await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      // the call's own result came back, and no journal.py ran on its path
+      expect(JSON.stringify(result)).toContain('appended')
+      expect(statusRuns(runs).length).toBe(before)
+      await clock.settle()
+      expect(statusRuns(runs).length).toBe(before + 1)
+      expect(await isStreamShown($)).toBe(true)
+      expect(classic).toEqual([])
+      // the same session id: no process, nothing more
+      const ran = runs.length
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-2', command: 'ls' })
+      await $.prompt.submit(typed('next'))
+      await clock.settle()
+      expect(runs.length).toBe(ran)
+    })
+
+    test('the tool runs before the detection: the beneath tool answers while no status run has started', async ($, on) => {
+      const { moveSession, clock } = engineWorld(on)
+      const { reset } = stateWorld(on)
+      const order: string[] = []
+      on('tool.call', { tool: 'Bash' }, async () => {
+        order.push('tool')
+        return { result: { stdout: 'listed', stderr: '' } }
+      })
+      on('process.run', { argv: ['python3'] }, async (_$, e, next) => {
+        if (e.argv.includes('status')) order.push('status')
+        return next(e)
+      })
+      journaledWorld(on)
+      await $.session.start(START)
+      moveSession(MOVED)
+      reset()
+      order.length = 0
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      expect(order).toEqual(['tool'])
+      await clock.settle()
+      expect(order).toEqual(['tool', 'status'])
+    })
+
+    test('the next prompt detects again, off its path; the prompt passes on unchanged and first', async ($, on) => {
+      const { runs, classic, prompts, clock, before } = await clearedSession($, on)
+      await $.prompt.submit(typed('go on'))
+      expect(prompts.map(prompt => prompt['text'])).toEqual(['go on'])
+      expect(statusRuns(runs).length).toBe(before)
+      await clock.settle()
+      expect(statusRuns(runs).length).toBe(before + 1)
+      expect(await isStreamShown($)).toBe(true)
+      expect(classic).toEqual([])
+      const ran = runs.length
+      await $.prompt.submit(typed('and again'))
+      await clock.settle()
+      expect(runs.length).toBe(ran)
+    })
+
+    test('the next clock tick detects again and draws the stream, one refresh for the tick', async ($, on) => {
+      const { runs, classic, clock, before } = await clearedSession($, on)
+      await clock.advance(60_000)
+      expect(statusRuns(runs).length).toBe(before + 1)
+      expect(await isStreamShown($)).toBe(true)
+      expect(classic).toEqual([])
+    })
+
+    /**
+     * A journaled session whose $.state is reset while its session id stays SESSION_ID (a
+     * /clear the engine did not give a new id): no classic.SessionStart, the band empty.
+     */
+    const resetSameSession = async ($: Engine, on: On) => {
+      const { clock } = engineWorld(on)
+      const { reset } = stateWorld(on)
+      const classic: unknown[] = []
+      on('classic.SessionStart', async (_$, e) => {
+        classic.push(e)
+        return {}
+      })
+      const record = journaledWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      expect(await isStreamShown($)).toBe(true)
+      reset()
+      expect(await isStreamShown($)).toBe(false)
+      return { ...record, classic, clock, before: statusRuns(record.runs).length, looked: record.asked.length }
+    }
+
+    test('a reset under the same id: the next tool call detects once, off its path, and a second one runs nothing more', async ($, on) => {
+      const { runs, classic, clock, before } = await resetSameSession($, on)
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      expect(statusRuns(runs).length).toBe(before)
+      await clock.settle()
+      expect(statusRuns(runs).length).toBe(before + 1)
+      expect(await isStreamShown($)).toBe(true)
+      expect(classic).toEqual([])
+      const ran = runs.length
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-2', command: 'ls' })
+      await clock.settle()
+      expect(runs.length).toBe(ran)
+    })
+
+    test('a reset under the same id: the next prompt detects once and passes on first', async ($, on) => {
+      const { runs, classic, clock, before } = await resetSameSession($, on)
+      await $.prompt.submit(typed('go on'))
+      expect(statusRuns(runs).length).toBe(before)
+      await clock.settle()
+      expect(statusRuns(runs).length).toBe(before + 1)
+      expect(await isStreamShown($)).toBe(true)
+      expect(classic).toEqual([])
+      const ran = runs.length
+      await $.prompt.submit(typed('and again'))
+      await clock.settle()
+      expect(runs.length).toBe(ran)
+    })
+
+    test('a reset under the same id: the next clock tick detects once, one refresh for the tick', async ($, on) => {
+      const { runs, classic, clock, before } = await resetSameSession($, on)
+      await clock.advance(60_000)
+      expect(statusRuns(runs).length).toBe(before + 1)
+      expect(await isStreamShown($)).toBe(true)
+      expect(classic).toEqual([])
+    })
+
+    test('two events after a reset under the same id schedule one detection', async ($, on) => {
+      const { runs, clock, before } = await resetSameSession($, on)
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      await $.prompt.submit(typed('go on'))
+      await clock.settle()
+      expect(statusRuns(runs).length).toBe(before + 1)
+    })
+
+    test('a project with no sidecar, state reset under the same id: no walk and no process on a tool call, a prompt or a tick', async ($, on) => {
+      const { clock } = engineWorld(on)
+      const { reset } = stateWorld(on)
+      const asked: string[] = []
+      // every existence check, recorded above the bare world (which answers the same: missing)
+      on('fs.exists', { path: /^\// }, async (_$, e) => {
+        asked.push(e.path)
+        return { value: false }
+      })
+      const { runs } = bareWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      const atStart = asked.length
+      reset()
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      await $.prompt.submit(typed('go on'))
+      await clock.advance(60_000)
+      expect(asked.length).toBe(atStart)
+      expect(runs).toEqual([])
+    })
+
+    test('an id that moves with the view still bound (no state reset): the id is noted, no process runs', async ($, on) => {
+      const { moveSession, clock } = engineWorld(on)
+      const { runs, asked } = journaledWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      const ran = runs.length
+      const looked = asked.length
+      moveSession(MOVED)
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      await $.prompt.submit(typed('go on'))
+      await clock.settle()
+      expect(runs.length).toBe(ran)
+      expect(asked.length).toBe(looked)
+      expect(await isStreamShown($)).toBe(true)
+    })
+
+    test('the clock runs once per module load: /hud and a classic SessionStart start no second one', async ($, on) => {
+      const { clock } = engineWorld(on)
+      on('classic.SessionStart', async () => ({}))
+      const { runs } = journaledWorld(on)
+      await $.session.start(START)
+      await $.classic.SessionStart({ source: 'clear' })
+      await $.command.run(HUD_COMMAND)
+      const before = statusRuns(runs).length
+      await clock.advance(60_000)
+      expect(statusRuns(runs).length).toBe(before + 1)
+    })
+
+    test('a project with no sidecar: after the id moves, a tool call and a prompt run no process', async ($, on) => {
+      const { moveSession, clock } = engineWorld(on)
+      stateWorld(on)
+      const { runs } = bareWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      moveSession(MOVED)
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      await $.prompt.submit(typed('go on'))
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-2', command: 'ls' })
+      await clock.settle()
+      expect(runs).toEqual([])
+    })
+
+    test('a project with no sidecar looks for it once per session id, not on every event', async ($, on) => {
+      const { moveSession, clock } = engineWorld(on)
+      const asked: string[] = []
+      // every existence check, recorded above the bare world (which answers the same: missing)
+      on('fs.exists', { path: /^\// }, async (_$, e) => {
+        asked.push(e.path)
+        return { value: false }
+      })
+      bareWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      const atStart = asked.length
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      await clock.settle()
+      expect(asked.length).toBe(atStart)
+      moveSession(MOVED)
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-2', command: 'ls' })
+      await clock.settle()
+      const once = asked.length
+      expect(once).toBeGreaterThan(atStart)
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-3', command: 'ls' })
+      await $.prompt.submit(typed('go on'))
+      await clock.settle()
+      expect(asked.length).toBe(once)
+    })
+
+    test('a session with no surface: a tool call and a prompt run nothing', async ($, on) => {
+      const { moveSession, clock } = engineWorld(on, { surfaces: [] })
+      const { reset } = stateWorld(on)
+      const { runs, asked } = journaledWorld(on)
+      appendWorld(on)
+      await $.session.start({ ...START, surface: null })
+      moveSession(MOVED)
+      reset()
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      await $.prompt.submit(typed('go on'))
+      await clock.settle()
+      expect(runs).toEqual([])
+      expect(asked).toEqual([])
+    })
+
+    test('a session the engine cannot name is detected once, not on every event', async ($, on) => {
+      const { moveSession, clock } = engineWorld(on)
+      const { reset } = stateWorld(on)
+      const { runs } = journaledWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      const before = statusRuns(runs).length
+      // an empty id reads as unknown (null)
+      moveSession('')
+      reset()
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-1', command: 'ls' })
+      await clock.settle()
+      const once = statusRuns(runs).length
+      expect(once).toBe(before + 1)
+      await $.tool.call({ tool: 'Bash', tool_use_id: 'ls-2', command: 'ls' })
+      await $.prompt.submit(typed('go on'))
+      await clock.settle()
+      expect(statusRuns(runs).length).toBe(once)
+    })
+  })
+
   test('journal.py found in the plugin cache: newest version wins', async ($, on) => {
     engineWorld(on)
     on('fs.exists', { path: /journal\.py$/ }, async (_$, e) => ({ value: e.path.endsWith('/shipgate/0.14.1/scripts/journal.py') }))
@@ -824,7 +1098,7 @@ describe('register', () => {
 
     const check = ($: Engine, command: string) => $.tool.check({ tool: 'Bash', input: { command } })
 
-    describe('an older shipgate (journal.py before 0.18.0)', () => {
+    describe('an older shipgate (journal.py before 0.18.0, or before 0.21.0 for position)', () => {
       const ARGPARSE_POSITION = usageError("argument COMMAND: invalid choice: 'position' (choose from 'init', 'append', 'status')")
       const OUTDATED_WARNING = `shipgate-hud: shipgate is older than ${MIN_SHIPGATE_VERSION} — the HUD reads nothing and the publish gate is off.`
       const NOTICE = `shipgate is older than ${MIN_SHIPGATE_VERSION} · publish gate off`
@@ -880,6 +1154,26 @@ describe('register', () => {
         await $.session.start(START)
         expect(positionRuns(runs)).toEqual([])
         await expectOutdated($, 'journal.py status --json printed no nested_matches key')
+        expect(await check($, 'git push')).toMatchObject(BENEATH)
+        expect(asked).toEqual([])
+      })
+
+      // FR-014: a journal.py older than 0.21.0 prints no trace in position: Outdated, naming 0.21.0
+      test('a pre-0.21 position (no trace key): Outdated in the pane and the band, the lookup cleared, a push passes with no dialog', async ($, on) => {
+        engineWorld(on)
+        const { trace: _trace, dispositions: _dispositions, ...older } = EXAMPLE_POSITION
+        journalFaults(on, argv => (argv.includes('position') ? exits(printed(JSON.stringify({ ...older, stream: EXAMPLE_STREAM }))) : null))
+        const { runs, asked: paths } = journaledWorld(on)
+        const { asked } = gateWorld(on)
+        appendWorld(on)
+        await $.session.start(START)
+        expect(MIN_SHIPGATE_VERSION).toBe('0.21.0')
+        await expectOutdated($, 'journal.py position --json printed no trace key')
+        // the lookup was cleared: the next refresh searches for journal.py again
+        const searched = paths.filter(path => path.endsWith('/journal.py')).length
+        await refreshByAppend($)
+        expect(paths.filter(path => path.endsWith('/journal.py')).length).toBeGreaterThan(searched)
+        expect(statusRuns(runs).length).toBe(2)
         expect(await check($, 'git push')).toMatchObject(BENEATH)
         expect(asked).toEqual([])
       })
@@ -1762,7 +2056,7 @@ describe('register', () => {
       expect((await pane.find({ key: 'sc-SC-001' }))?.props.label).toBe('☑')
       await pane.unmount()
       // the journal records a newer verdict: `position --json` names it
-      verdict = { seq: 60, at: '2026-10-01T11:00:00+00:00', verdict: 'not-ready', criteria: { 'SC-001': 'unmet' }, dispositions: {} }
+      verdict = { seq: 60, at: '2026-10-01T11:00:00+00:00', verdict: 'not-ready', criteria: { 'SC-001': 'unmet' }, dispositions: {}, note: null, round: 1 }
       await refreshByAppend($)
       const again = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
       expect((await again.find({ key: 'sc-SC-001' }))?.props.label).toBe('☒')

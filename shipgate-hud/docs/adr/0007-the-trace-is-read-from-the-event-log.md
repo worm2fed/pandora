@@ -6,7 +6,7 @@ updated: 2026-11-02
 tags:
   - adr
   - shipgate-hud
-status: accepted
+status: accepted (decision amended by shipgate ADR 0014)
 date: 2026-11-02
 issue: "#10, #11"
 related:
@@ -20,6 +20,17 @@ related:
 > For a bound stream, one refresh also runs `journal.py log --stream <s> --json`. The HUD
 > takes three recorded values from it, verbatim: the newest `review-verdict.ranking`, the
 > newest `design-committed.ranking`, and the `deviation` rows of `kind: signals-missing`.
+
+> **Amended by shipgate ADR 0014 (2026-11-02, shipgate 0.21.0, shipgate-hud 0.8.0):** the follow-up below is
+> done. `position --json` prints the three values as `trace.review_ranking`,
+> `trace.design_ranking` and `trace.signals_missing` (shipgate ADR 0014). The HUD reads them
+> from `position` and runs no `log` call; `decodeLog`, `traceOf` and the cut-log trace are
+> gone. The selection rule stays as written here, and journal.py now computes it. The
+> ranking is still decoded to journal.py's contract and drawn as "ranking unreadable" when
+> it breaks it. **The read floor moves to 0.21.0:** a `journal.py` whose `position --json`
+> has no `trace` key cannot give the trace, so the HUD treats it as outdated and names
+> 0.21.0, as it names the floor for one older than 0.18.0. The dependency is shipgate
+> `>=0.21.0`.
 
 ## Context
 

@@ -8,7 +8,8 @@ import {
   criterionGlyph,
   decodeReviewReturn,
   decodeReviewState,
-  dispositionIn,
+  dispositionsFor,
+  dispositionsSince,
   findingPrompt,
   groupBySeverity,
   isReviewLaunch,
@@ -28,7 +29,7 @@ import {
   toReviewBoard,
 } from '../hooks/review'
 import { criterionId, eventSeq, isoTime, streamName } from '../hooks/journal'
-import type { CriterionId, CriterionStatus, EventSeq, ReviewBoard, StreamName, TickEntry } from '../types'
+import type { CriterionId, CriterionStatus, EventSeq, FindingState, FoldedDisposition, ReviewBoard, StreamName, TickEntry } from '../types'
 import { type Gen, forAll, int, listOf, orNull, pick } from './arbitrary'
 import {
   PRD_WITH_CRITERIA,
@@ -380,24 +381,103 @@ describe('review: the prompt', () => {
   })
 })
 
-describe('review: dispositions', () => {
-  test('dispositionIn: exact keys, then a repo-relative path that ends the absolute file on the same line', async () => {
-    const finding = { file: '/abs/root/plugin/hooks/register.tsx', line: 573 }
-    expect(dispositionIn({ 'hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
-    expect(dispositionIn({ './hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
-    expect(dispositionIn({ 'register.tsx:573': 'rejected' }, finding)).toBe('rejected')
-    expect(dispositionIn({ 'other/register.tsx:573': 'fixed' }, finding)).toBeNull()
-    expect(dispositionIn({ 'hooks/register.tsx:574': 'fixed' }, finding)).toBeNull()
-    expect(dispositionIn({ 'gister.tsx:573': 'fixed' }, finding)).toBeNull() // a suffix must start at a segment
-    // exact keys first; among suffixes the longest path wins
-    expect(dispositionIn({ '/abs/root/plugin/hooks/register.tsx:573': 'fixed', 'register.tsx:573': 'rejected' }, finding)).toBe('fixed')
-    expect(dispositionIn({ 'register.tsx:573': 'rejected', 'plugin/hooks/register.tsx:573': 'deferred' }, finding)).toBe('deferred')
-    expect(dispositionIn({ 'register.tsx:573': 'rejected', 'root/plugin/hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
-    // a finding with no line matches `:?`
-    expect(dispositionIn({ 'hooks/register.tsx:?': 'deferred' }, { ...finding, line: null })).toBe('deferred')
-    // a key that names an Object method is no disposition
-    expect(dispositionIn({}, { file: 'constructor', line: null })).toBeNull()
-    expect(dispositionIn({}, finding)).toBeNull()
+describe('review: dispositions (HUD ADR 0008)', () => {
+  const atOf = (raw: string) => must(isoTime(raw))
+  const FOLD_AT = atOf('2026-10-01T11:00:00+00:00')
+
+  /** A folded map from `key → state`, every entry recorded at FOLD_AT by the event at seq 1. */
+  const folded = (states: Readonly<Record<string, FindingState>>): Readonly<Record<string, FoldedDisposition>> =>
+    Object.fromEntries(Object.entries(states).map(([key, state]) => [key, { state, seq: seq(1), at: FOLD_AT }]))
+
+  /** The states `dispositionsFor` gives each finding (null: none). */
+  const statesOf = (states: Readonly<Record<string, FindingState>>, findings: readonly { readonly file: string; readonly line: number | null }[]) =>
+    dispositionsFor(folded(states), findings).map(entry => (entry === null ? null : entry.state))
+
+  /** The state of one finding alone on its board. */
+  const stateOf = (states: Readonly<Record<string, FindingState>>, finding: { readonly file: string; readonly line: number | null }) => statesOf(states, [finding])[0]
+
+  const finding = { file: '/abs/root/plugin/hooks/register.tsx', line: 573 }
+
+  test('pass 1: the exact key, the short location, then a path tail on the same line (longest wins)', async () => {
+    expect(stateOf({ '/abs/root/plugin/hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
+    expect(stateOf({ 'plugin/hooks/register.tsx:573': 'rejected' }, finding)).toBe('rejected') // the short location
+    expect(stateOf({ 'hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed') // a path tail
+    expect(stateOf({ './hooks/register.tsx:573': 'fixing' }, finding)).toBe('fixing') // ./ dropped
+    expect(stateOf({ 'register.tsx:573': 'rejected' }, finding)).toBe('rejected')
+    expect(stateOf({ 'other/register.tsx:573': 'fixed' }, finding)).toBeNull()
+    expect(stateOf({ 'gister.tsx:573': 'fixed' }, finding)).toBeNull() // a tail must start at a segment
+    // the order: an exact key first; among tails the longest path wins
+    expect(stateOf({ 'register.tsx:573': 'rejected', '/abs/root/plugin/hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
+    expect(stateOf({ 'register.tsx:573': 'rejected', 'root/plugin/hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
+    // for a card with a line, <file>:? is a pass-2 key: a tail on the same line comes first
+    expect(stateOf({ '/abs/root/plugin/hooks/register.tsx:?': 'deferred', 'hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
+    // a finding with no line matches `:?`, by its file or a tail of it
+    expect(stateOf({ 'hooks/register.tsx:?': 'deferred' }, { ...finding, line: null })).toBe('deferred')
+    expect(stateOf({}, finding)).toBeNull()
+  })
+
+  test('pass 2: a key on another line of the same file reaches the card (a moved line)', async () => {
+    expect(stateOf({ 'hooks/register.tsx:574': 'fixed' }, finding)).toBe('fixed')
+    expect(stateOf({ 'hooks/register.tsx:?': 'fixing' }, finding)).toBe('fixing')
+    // another file never matches
+    expect(stateOf({ 'hooks/views.tsx:573': 'fixed' }, finding)).toBeNull()
+  })
+
+  test('pass 2: the longest path first, then the nearest line, ties to the first key in map order', async () => {
+    expect(stateOf({ 'register.tsx:574': 'rejected', 'hooks/register.tsx:600': 'fixed' }, finding)).toBe('fixed')
+    expect(stateOf({ 'hooks/register.tsx:600': 'deferred', 'hooks/register.tsx:570': 'fixed' }, finding)).toBe('fixed')
+    // a `?` line counts as the farthest
+    expect(stateOf({ 'hooks/register.tsx:?': 'deferred', 'hooks/register.tsx:900': 'fixed' }, finding)).toBe('fixed')
+    // the same distance on both sides: the first key in map order
+    expect(stateOf({ 'hooks/register.tsx:575': 'rejected', 'hooks/register.tsx:571': 'fixed' }, finding)).toBe('rejected')
+  })
+
+  test('a key one card took exactly is never reused for another card of the same file', async () => {
+    const other = { ...finding, line: 40 }
+    expect(statesOf({ 'hooks/register.tsx:573': 'fixed' }, [finding, other])).toEqual(['fixed', null])
+    // the free key goes to the card without a state, the taken one stays with its card
+    expect(statesOf({ 'hooks/register.tsx:573': 'fixed', 'hooks/register.tsx:44': 'deferred' }, [finding, other])).toEqual(['fixed', 'deferred'])
+  })
+
+  test('a pass-2 key reaches one card only: the nearest one', async () => {
+    const far = { ...finding, line: 10 }
+    const near = { ...finding, line: 570 }
+    expect(statesOf({ 'hooks/register.tsx:572': 'fixed' }, [far, near])).toEqual([null, 'fixed'])
+  })
+
+  test('<file>:? labels one card of the file, not every card: for a card with a line it is a pass-2 key', async () => {
+    const other = { ...finding, line: 40 }
+    // two cards with lines, one `?` key: one card takes it, the other stays without a state
+    expect(statesOf({ '/abs/root/plugin/hooks/register.tsx:?': 'deferred' }, [finding, other])).toEqual(['deferred', null])
+    // alone, a card with a line still takes it, as its last choice
+    expect(stateOf({ '/abs/root/plugin/hooks/register.tsx:?': 'deferred' }, finding)).toBe('deferred')
+  })
+
+  test('a card with no line matches <file>:? exactly in pass 1; a card of the same file with a line does not share it', async () => {
+    const noLine = { ...finding, line: null }
+    expect(statesOf({ '/abs/root/plugin/hooks/register.tsx:?': 'fixing' }, [finding, noLine])).toEqual([null, 'fixing'])
+  })
+
+  test('two cards at one place share the key that names it', async () => {
+    expect(statesOf({ 'hooks/register.tsx:573': 'fixing' }, [finding, finding])).toEqual(['fixing', 'fixing'])
+  })
+
+  test('own keys only: a key named like an Object member is an ordinary key, never a hit by itself', async () => {
+    expect(stateOf({}, { file: 'constructor', line: null })).toBeNull()
+    expect(stateOf({}, { file: '__proto__', line: null })).toBeNull()
+    expect(stateOf({ 'toString:?': 'fixed' }, { file: 'toString', line: null })).toBe('fixed')
+    expect(stateOf({ 'toString:?': 'fixed' }, { file: 'constructor', line: null })).toBeNull()
+    // a key with no line or no path is not a tail
+    expect(stateOf({ 'register.tsx': 'fixed', ':573': 'fixed', 'hooks/register.tsx:x': 'fixed' }, finding)).toBeNull()
+  })
+
+  test('dispositionsSince keeps entries recorded at or after a time', async () => {
+    const map = {
+      'a.ts:1': { state: 'fixed' as const, seq: seq(1), at: atOf('2026-10-01T10:00:00+00:00') },
+      'a.ts:2': { state: 'fixing' as const, seq: seq(2), at: atOf('2026-10-01T11:00:00+00:00') },
+      'a.ts:3': { state: 'deferred' as const, seq: seq(3), at: atOf('2026-10-01T12:00:00+00:00') },
+    }
+    expect(Object.keys(dispositionsSince(map, atOf('2026-10-01T11:00:00+00:00')))).toEqual(['a.ts:2', 'a.ts:3'])
   })
 })
 

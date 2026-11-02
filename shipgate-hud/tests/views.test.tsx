@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import type { EngineInterface, On, ResolveInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { EMPTY_TRACE, MIN_SHIPGATE_VERSION, type PositionDoc, decodeLog, traceOf, criterionId, decodePosition, eventSeq, isoTime, projectPath, streamName, taskId } from '../hooks/journal'
+import { EMPTY_TRACE, MIN_SHIPGATE_VERSION, type PositionDoc, criterionId, decodePosition, eventSeq, isoTime, projectPath, streamName, taskId } from '../hooks/journal'
 import { clock, parseAdr, toPosition } from '../hooks/position'
 import { EMPTY_REVIEW, decodeReviewReturn, markSurvivor, roundId, toReviewBoard } from '../hooks/review'
 import {
@@ -18,7 +18,9 @@ import {
   openFindings,
   packSegments,
   paneOf,
-  rankedFileText,
+  bucketsText,
+  cutHead,
+  rankedFileLines,
   reviewCountSegments,
   reviewCounts,
   reviewSegment,
@@ -29,8 +31,8 @@ import {
 import type { Decision, HudView, IsoTime, OpenRound, Phase, PhaseMark, Position, ReviewBoard, ReviewState, StreamName, Task } from '../types'
 import { type Gen, bool, forAll, int, listOf, orNull, pick, stringOf } from './arbitrary'
 import { ADR, WORKLOG, WORKLOG_WITH_DIAGRAMS } from './fixtures'
-import { LOG_GOLDEN, POSITION_GOLDEN } from './fixtures.journal'
-import { PRD_WITH_CRITERIA, REVIEW_POSITION, REVIEW_RETURN, REVIEW_RETURN_ABORTED, REVIEW_RETURN_CANON, REVIEW_STREAM, must, withVerdict } from './fixtures.review'
+import { POSITION_GOLDEN } from './fixtures.journal'
+import { PRD_WITH_CRITERIA, REVIEW_POSITION, REVIEW_RETURN, REVIEW_RETURN_ABORTED, REVIEW_RETURN_CANON, REVIEW_STREAM, must, withDispositions, withVerdict } from './fixtures.review'
 import { PANE } from './world'
 
 // The band and the pane drawn by hooks of the test's own (the plugin under test answers only
@@ -87,7 +89,7 @@ const mountOwn = ($: Engine, requestId: string, surface: 'terminal' | 'desktop' 
 /** A golden position decoded; a thrown error naming the path when it does not decode. */
 const docOf = (raw: unknown): PositionDoc => {
   const decoded = decodePosition(raw)
-  if (!decoded.ok) throw new Error(`fixture: position does not decode at ${decoded.error.error.path}`)
+  if (!decoded.ok) throw new Error(`fixture: position does not decode: ${JSON.stringify(decoded.error)}`)
   return decoded.value
 }
 
@@ -101,7 +103,6 @@ const positionOf = (raw: unknown, worklog: string = WORKLOG): Position => {
     worklog: doc.artifacts.worklog === null ? null : { path: doc.artifacts.worklog.path, text: worklog },
     adrs: doc.artifacts.adrs.map(path => parseAdr(path, ADR)),
     prd: doc.artifacts.prd === null ? null : { path: doc.artifacts.prd, text: PRD_WITH_CRITERIA },
-    trace: EMPTY_TRACE,
   })
 }
 
@@ -252,6 +253,7 @@ const positionGen: Gen<Position> = rng => ({
   publish: { kind: 'held' },
   criteria: [],
   lastVerdict: null,
+  dispositions: {},
   trace: EMPTY_TRACE,
 })
 
@@ -367,7 +369,7 @@ describe('views: the audit defects, drawn from golden documents', () => {
   test('D13: the Design tab lists an ADR from a custom home', async ($, on) => {
     const custom = 'notes/decisions/0003-golden-custom.md'
     const doc = docOf({ ...POSITION_GOLDEN.flow, artifacts: { ...POSITION_GOLDEN.flow.artifacts, adrs: [custom] } })
-    const position = toPosition({ doc, worklog: null, adrs: [parseAdr(pathOf(custom), '---\ntitle: "0003. A custom home"\nstatus: proposed\n---\n')], prd: null, trace: EMPTY_TRACE })
+    const position = toPosition({ doc, worklog: null, adrs: [parseAdr(pathOf(custom), '---\ntitle: "0003. A custom home"\nstatus: proposed\n---\n')], prd: null })
     drawPane(on, bound(position), { ...FRESH, tab: 'design' })
     const ui = await mountOwn($, PANE_DRAW)
     expect(await ui.find({ type: 'Text', text: /0003\. A custom home/ })).toBeDefined()
@@ -415,6 +417,7 @@ describe('views: the pane, by view', () => {
   for (const [name, sign, detail] of [
     ['an argument argparse refused', { kind: 'UnknownArgument', argument: 'position' }, 'journal.py does not know position'],
     ['a missing marker', { kind: 'MissingMarker' }, 'journal.py status --json printed no nested_matches key'],
+    ['a missing trace', { kind: 'MissingTrace' }, 'journal.py position --json printed no trace key'],
   ] as const) {
     test(`Outdated by ${name}: the minimum version, the gate off, how to update, the sign; no tabs`, async ($, on) => {
       drawPane(on, { kind: 'Outdated', sign }, FRESH)
@@ -481,11 +484,11 @@ describe('views: the tabs', () => {
     expect(decisions.map(d => d.text)).toEqual(['▎ publish', '▎ clarify'])
     expect(decisions.map(d => d.props.color)).toEqual(['warning', 'claude'])
     expect((await ui.find({ type: 'Text', text: 'open the MR before the second review?' }))?.props.wrap).toBe('wrap')
-    // seq 22: the orchestrator in executive mode; seq 35: the user's own decision
-    expect((await ui.find({ key: 'veto-22' }))?.props.plain).toBeUndefined()
-    expect(await ui.find({ key: 'veto-35' })).toBeUndefined()
-    await ui.press({ key: 'veto-22' })
-    expect(pressed).toEqual(['veto 22'])
+    // seq 29: the orchestrator in executive mode; seq 42: the user's own decision
+    expect((await ui.find({ key: 'veto-29' }))?.props.plain).toBeUndefined()
+    expect(await ui.find({ key: 'veto-42' })).toBeUndefined()
+    await ui.press({ key: 'veto-29' })
+    expect(pressed).toEqual(['veto 29'])
     await ui.unmount()
   })
 
@@ -851,6 +854,114 @@ describe('review tab', () => {
     await ui.unmount()
   })
 
+  /** The golden dispositions stream (a verdict, no board, three folded keys) with the review position's two PRD criteria. */
+  const VERDICT_ONLY: Position = { ...positionOf(POSITION_GOLDEN.dispositions), criteria: REVIEW_POSITION.criteria }
+
+  reviewTest('#5: no board, a verdict: the round the verdict gives, its note, each folded key with its state, then the criteria', VERDICT_ONLY, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    const header = `round 1 · verdict ready · ${at('2026-10-01T11:20:00+00:00')}`
+    expect((await ui.find({ type: 'Text', text: header }))?.props.bold).toBe(true)
+    expect(await ui.find({ type: 'Text', text: 'the round closes' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^No review captured/ })).toBeUndefined()
+    // one line per folded key, in key order, each state in its colour
+    const keys = await ui.findAll({ type: 'Text', text: /^src\/(golden|other)\.py:/ })
+    expect(keys.map(key => key.text)).toEqual(['src/golden.py:12', 'src/golden.py:30', 'src/other.py:?'])
+    expect((await ui.find({ type: 'Text', text: /^fixed$/ }))?.props.color).toBe('success')
+    expect((await ui.find({ type: 'Text', text: /^deferred$/ }))?.props.dimColor).toBe(true)
+    expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+    // no card, so no buttons; then the SC checklist
+    expect(await ui.find({ key: 'accept-0' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'SUCCESS CRITERIA' })).toBeDefined()
+    expect(await ui.find({ key: 'sc-SC-001' })).toBeDefined()
+    const order = (await ui.findAll({ type: 'Text', text: /^(round 1 ·|the round closes|src\/other\.py:\?|SUCCESS CRITERIA)/ })).map(t => t.text)
+    expect(order).toEqual([header, 'the round closes', 'src/other.py:?', 'SUCCESS CRITERIA'])
+    await ui.unmount()
+  })
+
+  reviewTest(
+    '#5: no board and no verdict yet, but a folded disposition: round 1 in progress, no note',
+    withDispositions(REVIEW_POSITION, { 'src/a.ts:3': { state: 'fixing', seq: 4, at: VERDICT_BEFORE } }),
+    EMPTY_REVIEW,
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: 'round 1 · in progress' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'src/a.ts:3' })).toBeDefined()
+      expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+      expect(await ui.find({ type: 'Text', text: /^No review captured/ })).toBeUndefined()
+      await ui.unmount()
+    },
+  )
+
+  reviewTest(
+    '#5: a verdict with a later round number and no note: its round, no note line',
+    withVerdict(REVIEW_POSITION, { seq: 60, at: VERDICT_AFTER, verdict: 'not-ready', round: 3 }),
+    EMPTY_REVIEW,
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: `round 3 · verdict not-ready · ${at(VERDICT_AFTER)}` })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  /** A position with long folded keys, each in a state whose word is long. */
+  const LONG_KEYS = withDispositions(REVIEW_POSITION, {
+    [`${'deep/'.repeat(30)}file.ts:7`]: { state: 'deferred', seq: 4, at: VERDICT_BEFORE },
+    'shipgate-hud/hooks/register.tsx:1406': { state: 'fixing', seq: 5, at: VERDICT_BEFORE },
+  })
+
+  reviewTest('#5 at 40 columns: a long key\'s head is cut, its line and file kept; the state is never cut', LONG_KEYS, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($, 'terminal', 40)
+    const deep = await ui.find({ type: 'Text', text: /^….*file\.ts:7$/ })
+    expect(deep?.text).toBe('…/deep/deep/deep/file.ts:7')
+    expect([...(deep?.text ?? '')].length).toBeLessThanOrEqual(40 - 'deferred'.length - 2)
+    expect(await ui.find({ type: 'Text', text: '…/hooks/register.tsx:1406' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^deferred$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^fixing$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  reviewTest('#5 at 120 columns: a key that fits is drawn whole beside its state', LONG_KEYS, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($, 'terminal', 120)
+    expect(await ui.find({ type: 'Text', text: 'shipgate-hud/hooks/register.tsx:1406' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^fixing$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const columns of [40, 120]) {
+    reviewTest(
+      `a card's state at ${columns} columns is drawn whole in a cell that does not shrink; the meta gives way`,
+      withDispositions(REVIEW_POSITION, {
+        'src/orders/cancel.ts:4': { state: 'deferred', seq: 52, at: VERDICT_AFTER },
+        'src/orders/cancel.ts:8': { state: 'fixing', seq: 52, at: VERDICT_AFTER },
+      }),
+      stateOf([boardOf(1, REVIEW_STREAM, REVIEW_RETURN_CANON)]),
+      async $ => {
+        const ui = await mountReview($, 'terminal', columns)
+        for (const state of [/^deferred$/, /^fixing$/]) {
+          const text = await ui.find({ type: 'Text', text: state })
+          expect(text).toBeDefined()
+        }
+        // every state cell holds its whole word and never shrinks
+        const cellsOfState = (await ui.findAll({ type: 'Box', text: /^(deferred|fixing)$/ })).filter(box => box.props.flexShrink === 0)
+        expect(cellsOfState.length).toBeGreaterThanOrEqual(2)
+        // the meta is cut to the room the severity, the canon tag and the state leave
+        const metas = await ui.findAll({ type: 'Text', text: /^\d+% · / })
+        expect(metas.length).toBe(2)
+        expect(metas.every(meta => [...meta.text].length <= columns - 10 - 'fixing'.length - 2)).toBe(true)
+        if (columns === 40) expect(metas.some(meta => meta.text.endsWith('…'))).toBe(true)
+        await ui.unmount()
+      },
+    )
+  }
+
+  reviewTest('#5: a board, when held, wins over the round the verdict gives', { ...VERDICT_ONLY, stream: REVIEW_STREAM }, stateOf([boardOf()]), async $ => {
+    const ui = await mountReview($)
+    expect(await ui.find({ type: 'Text', text: COUNTS })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^round 1 · verdict/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'the round closes' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   reviewTest('a board held for another stream is not drawn; the criteria still list', REVIEW_POSITION, stateOf([boardOf(1, OTHER_STREAM)]), async $ => {
     const ui = await mountReview($)
     expect(await ui.find({ type: 'Text', text: COUNTS })).toBeUndefined()
@@ -939,11 +1050,11 @@ describe('review tab', () => {
   )
 
   reviewTest(
-    'a finding the last verdict disposed of shows the disposition, not the buttons, and is not open',
-    withVerdict(REVIEW_POSITION, {
-      seq: 52,
-      at: VERDICT_AFTER,
-      dispositions: { 'src/api/handler.ts:42': 'fixed', './pkg/src/util/format.ts:?': 'rejected', 'cache/index.ts:9': 'deferred' },
+    'a finding with a folded state shows the state, not the buttons, and is not open',
+    withDispositions(REVIEW_POSITION, {
+      'src/api/handler.ts:42': { state: 'fixed', seq: 52, at: VERDICT_AFTER },
+      './pkg/src/util/format.ts:?': { state: 'rejected', seq: 52, at: VERDICT_AFTER },
+      'cache/index.ts:9': { state: 'deferred', seq: 52, at: VERDICT_AFTER },
     }),
     stateOf([boardOf(1, REVIEW_STREAM, ABSOLUTE_RETURN)]),
     async $ => {
@@ -956,7 +1067,7 @@ describe('review tab', () => {
       expect(await ui.find({ key: 'accept-0' })).toBeUndefined()
       expect(await ui.find({ key: 'kill-2' })).toBeUndefined()
       expect(await ui.find({ key: 'kill-3' })).toBeUndefined()
-      // the refuters-died HIGH has neither a mark nor a disposition: its buttons stay
+      // the refuters-died HIGH has neither a mark nor a state: its buttons stay
       expect(await ui.find({ key: 'accept-1' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: 'unverified 1 · open 1' })).toBeDefined()
       await ui.unmount()
@@ -964,12 +1075,57 @@ describe('review tab', () => {
   )
 
   reviewTest(
-    'a board captured after the verdict ignores its dispositions',
-    withVerdict(REVIEW_POSITION, { seq: 50, at: VERDICT_BEFORE, dispositions: { 'src/api/handler.ts:42': 'fixed' } }),
+    'a card shows fixing in the warning colour in place of the buttons, and a fixing finding stays open',
+    withDispositions(REVIEW_POSITION, {
+      'src/api/handler.ts:42': { state: 'fixing', seq: 52, at: VERDICT_AFTER },
+      'src/app.ts:126': { state: 'fixed', seq: 53, at: VERDICT_AFTER },
+    }),
     stateOf([boardOf()]),
     async $ => {
       const ui = await mountReview($)
-      expect(await ui.find({ type: 'Text', text: 'fixed' })).toBeUndefined()
+      expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+      expect((await ui.find({ type: 'Text', text: /^fixed$/ }))?.props.color).toBe('success')
+      expect(await ui.find({ key: 'accept-0' })).toBeUndefined()
+      expect(await ui.find({ key: 'accept-1' })).toBeUndefined()
+      // fixing is open; fixed is not: two untouched cards and the fixing one
+      expect(await ui.find({ type: 'Text', text: 'unverified 1 · open 3' })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  reviewTest(
+    'a disposition keyed on another line of the same file reaches the card',
+    withDispositions(REVIEW_POSITION, { 'src/app.ts:131': { state: 'deferred', seq: 52, at: VERDICT_AFTER } }),
+    stateOf([boardOf()]),
+    async $ => {
+      const ui = await mountReview($)
+      expect((await ui.find({ type: 'Text', text: /^deferred$/ }))?.props.dimColor).toBe(true)
+      expect(await ui.find({ key: 'accept-1' })).toBeUndefined()
+      expect(await ui.find({ key: 'accept-0' })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  reviewTest(
+    'a state recorded before the board was captured is not drawn on it',
+    withDispositions(REVIEW_POSITION, { 'src/api/handler.ts:42': { state: 'fixed', seq: 50, at: VERDICT_BEFORE } }),
+    stateOf([boardOf()]),
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: /^fixed$/ })).toBeUndefined()
+      expect(await ui.find({ key: 'accept-0' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'unverified 1 · open 4' })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  reviewTest(
+    'the cards read the folded state, not the verdict\'s own map',
+    withVerdict(REVIEW_POSITION, { seq: 52, at: VERDICT_AFTER, dispositions: { 'src/api/handler.ts:42': 'fixed' } }),
+    stateOf([boardOf()]),
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: /^fixed$/ })).toBeUndefined()
       expect(await ui.find({ key: 'accept-0' })).toBeDefined()
       await ui.unmount()
     },
@@ -1057,15 +1213,37 @@ describe('review: the band segment and the counts', () => {
 
   test('reviewSegment: `review N open` for the newest round, `review aborted`, else null', async () => {
     expect(reviewSegment(REVIEW_POSITION, EMPTY_REVIEW)).toBeNull()
+    // a fixing finding is open
+    const fixing = withDispositions(REVIEW_POSITION, { 'src/api/handler.ts:42': { state: 'fixing', seq: 52, at: VERDICT_AFTER } })
+    expect(reviewSegment(fixing, stateOf([boardOf()]))).toBe('review 4 open')
     expect(reviewSegment(REVIEW_POSITION, stateOf([boardOf()]))).toBe('review 4 open')
     expect(reviewSegment(REVIEW_POSITION, stateOf([markSurvivor(boardOf(2), 0, 'killed'), boardOf(1)]))).toBe('review 3 open')
     expect(reviewSegment(REVIEW_POSITION, stateOf([boardOf(1, REVIEW_STREAM, REVIEW_RETURN_ABORTED)]))).toBe('review aborted')
   })
 
-  test('openFindings: neither the user\'s mark nor the orchestrator\'s disposition', async () => {
-    const position = withVerdict(REVIEW_POSITION, { seq: 52, at: VERDICT_AFTER, dispositions: { 'src/app.ts:126': 'fixed' } })
+  test('openFindings: neither the user\'s mark nor a closed folded state; fixing stays open', async () => {
+    const position = withDispositions(REVIEW_POSITION, { 'src/app.ts:126': { state: 'fixed', seq: 52, at: VERDICT_AFTER } })
     expect(openFindings(REVIEW_POSITION, boardOf())).toBe(4)
     expect(openFindings(position, markSurvivor(boardOf(), 0, 'accepted'))).toBe(2)
+    const fixing = withDispositions(REVIEW_POSITION, { 'src/app.ts:126': { state: 'fixing', seq: 52, at: VERDICT_AFTER } })
+    expect(openFindings(fixing, markSurvivor(boardOf(), 0, 'accepted'))).toBe(3)
+  })
+
+  test('reviewSegment with no board: `review N open` only while N folded findings are fixing after the last verdict; else none', async () => {
+    const golden = positionOf(POSITION_GOLDEN.dispositions)
+    // the golden fixing (seq 3) predates the verdict (seq 7), which did not close it: stale, not open
+    expect(golden.dispositions['src/other.py:?']?.state).toBe('fixing')
+    expect(reviewSegment(golden, EMPTY_REVIEW)).toBeNull()
+    // a fixing recorded after the verdict is open
+    const later = withDispositions(golden, { ...POSITION_GOLDEN.dispositions.dispositions, 'src/new.py:4': { state: 'fixing', seq: 9, at: '2026-10-01T11:30:00+00:00' } })
+    expect(reviewSegment(later, EMPTY_REVIEW)).toBe('review 1 open')
+    expect(summarySegments(later, EMPTY_REVIEW).at(-1)).toBe('review 1 open')
+    // no verdict yet: every fixing counts
+    expect(reviewSegment({ ...golden, lastVerdict: null }, EMPTY_REVIEW)).toBe('review 1 open')
+    // a verdict and closed states only: no segment
+    expect(reviewSegment(positionOf(POSITION_GOLDEN.flow), EMPTY_REVIEW)).toBeNull()
+    // a board wins: the count is the board's
+    expect(reviewSegment({ ...golden, stream: REVIEW_STREAM }, stateOf([boardOf()]))).toBe('review 4 open')
   })
 
   test('reviewCounts: the producer\'s counts in order, `?` for a count the return lacked, `open N` last when given', async () => {
@@ -1086,31 +1264,34 @@ describe('review: the band segment and the counts', () => {
   })
 })
 
-/** The golden signals stream (shipgate 0.20.0): its position, with the trace its log records. */
-const SIGNALS = (() => {
-  const log = decodeLog(LOG_GOLDEN.signals)
-  if (!log.ok) throw new Error(`fixture: log does not decode at ${log.error.error.path}`)
-  return { ...positionOf(POSITION_GOLDEN.signals), trace: traceOf(log.value) }
-})()
+/** The golden signals stream: its position, with the trace `position` prints. */
+const SIGNALS = positionOf(POSITION_GOLDEN.signals)
 
-/** The seq of the golden signals stream's first event of `type`. */
-const signalsSeq = (type: string): number => LOG_GOLDEN.signals.events.find(event => event.type === type)?.seq ?? -1
+/** The seqs the golden signals trace names: the verdict ranking's, the design ranking's, the deviation's. */
+const SIGNALS_SEQ = {
+  review: POSITION_GOLDEN.signals.trace.review_ranking.seq,
+  design: POSITION_GOLDEN.signals.trace.design_ranking.seq,
+  gap: POSITION_GOLDEN.signals.trace.signals_missing[0].seq,
+}
 
 describe('the trace (HUD ADR 0007)', () => {
   reviewTest('Review tab: READ FIRST lists the verdict\'s ranking in order, with its source and seq, above the rounds', SIGNALS, stateOf([boardOf(1, SIGNALS.stream)]), async $ => {
     const ui = await mountReview($)
-    const head = `READ FIRST · graph · seq ${signalsSeq('review-verdict')}`
+    const head = `READ FIRST · graph · seq ${SIGNALS_SEQ.review} · fix · churn · fan-in`
     expect((await ui.find({ type: 'Text', text: head }))?.props.dimColor).toBe(true)
-    expect(await ui.find({ type: 'Text', text: '1. src/golden.py · fix top · churn high · fan-in top' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1. src/golden.py  top · high · top' })).toBeDefined()
     const texts = (await ui.findAll({ type: 'Text', text: /^(READ FIRST|▾ round)/ })).map(t => t.text)
     expect(texts[0]).toBe(head)
     await ui.unmount()
   })
 
-  reviewTest('Review tab: with no board yet, READ FIRST still shows', SIGNALS, EMPTY_REVIEW, async $ => {
+  reviewTest('Review tab: with no board yet, READ FIRST still shows, above the round the verdict gives', SIGNALS, EMPTY_REVIEW, async $ => {
     const ui = await mountReview($)
     expect(await ui.find({ type: 'Text', text: /^READ FIRST · graph/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^No review captured/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^round 1 · verdict not-ready · \d\d:\d\d$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^No review captured/ })).toBeUndefined()
+    const texts = (await ui.findAll({ type: 'Text', text: /^(READ FIRST|round 1)/ })).map(t => t.text)
+    expect(texts[0]).toMatch(/^READ FIRST/)
     await ui.unmount()
   })
 
@@ -1144,7 +1325,7 @@ describe('the trace (HUD ADR 0007)', () => {
     EMPTY_REVIEW,
     async $ => {
       const ui = await mountReview($)
-      expect(await ui.find({ type: 'Text', text: 'READ FIRST · graph · seq 9 · from an earlier verdict' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'READ FIRST · graph · seq 9 · fix · churn · fan-in · from an earlier verdict' })).toBeDefined()
       await ui.unmount()
     },
   )
@@ -1153,23 +1334,100 @@ describe('the trace (HUD ADR 0007)', () => {
     expect(await ui.find({ type: 'Text', text: 'READ FIRST · signals unavailable · seq 9' })).toBeDefined()
     await ui.unmount()
   })
-  reviewTest('Review tab: a cut log says the trace was not read, in place of READ FIRST', { ...REVIEW_POSITION, trace: { ...EMPTY_TRACE, isLogCut: true } }, EMPTY_REVIEW, async $ => {
-    const ui = await mountReview($)
-    expect(await ui.find({ type: 'Text', text: 'trace not read: the stream log was longer than one journal answer' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^READ FIRST/ })).toBeUndefined()
+  test('bucketsText: the three buckets bare, in the legend\'s order; a label with no value is -', async () => {
+    expect(bucketsText({ path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: null })).toBe('top · high · -')
+  })
+
+  test('cutHead: the tail kept, `…` at the front; whole segments first, then the end of the last one', async () => {
+    expect(cutHead('shipgate-hud/hooks/register.tsx', 40)).toBe('shipgate-hud/hooks/register.tsx')
+    expect(cutHead('shipgate-hud/hooks/register.tsx', 20)).toBe('…/hooks/register.tsx')
+    expect(cutHead('shipgate-hud/hooks/register.tsx', 14)).toBe('…/register.tsx')
+    expect(cutHead('shipgate-hud/hooks/register.tsx', 13)).toBe('…register.tsx')
+    expect(cutHead('shipgate-hud/hooks/register.tsx', 8)).toBe('…ter.tsx')
+    expect(cutHead('src/golden.py:12', 10)).toBe('…den.py:12')
+    expect(cutHead('abc', 1)).toBe('…')
+    expect(cutHead('abc', 0)).toBe('')
+  })
+
+  /** Three bucket tokens at a line's end, each whole. */
+  const BUCKETS_AT_END = /(?:top|high|mid|low|-) · (?:top|high|mid|low|-) · (?:top|high|mid|low|-)$/
+
+  /** Long paths, as a real ranking holds them, and one whose last segment alone is too wide for 40 columns. */
+  const LONG_FILES = [
+    { path: 'shipgate-hud/hooks/register.tsx', fix: 'top', churn: 'top', fanIn: 'low' },
+    { path: 'shipgate/scripts/journal.py', fix: 'top', churn: 'top', fanIn: null },
+    { path: 'src/components/an-extremely-long-component-file-name.tsx', fix: 'high', churn: 'high', fanIn: 'high' },
+  ] as const
+
+  test('rankedFileLines: one line at 120; at 40 the path\'s head is cut first; the buckets wrap, never cut', async () => {
+    expect(LONG_FILES.map((file, index) => rankedFileLines(file, index, 120))).toEqual([
+      ['1. shipgate-hud/hooks/register.tsx  top · top · low'],
+      ['2. shipgate/scripts/journal.py  top · top · -'],
+      ['3. src/components/an-extremely-long-component-file-name.tsx  high · high · high'],
+    ])
+    expect(LONG_FILES.map((file, index) => rankedFileLines(file, index, 40))).toEqual([
+      ['1. …/hooks/register.tsx  top · top · low'],
+      ['2. …/scripts/journal.py  top · top · -'],
+      ['3. …tremely-long-component-file-name.tsx', '   high · high · high'],
+    ])
+    for (const width of [40, 60, 80, 120]) {
+      for (const [index, file] of LONG_FILES.entries()) {
+        const lines = rankedFileLines(file, index, width)
+        expect(lines.every(line => [...line].length <= width)).toBe(true)
+        expect(lines.at(-1)).toMatch(BUCKETS_AT_END)
+        expect(lines.at(-1)?.endsWith(bucketsText(file))).toBe(true)
+      }
+    }
+  })
+
+  const LONG_RANKING = { seq: must(eventSeq(1172)), at, ranking: { kind: 'Ranked' as const, source: 'graph' as const, files: LONG_FILES } }
+  const LONG_POSITION: Position = { ...REVIEW_POSITION, trace: { ...EMPTY_TRACE, reviewRanking: LONG_RANKING, designRanking: { ...LONG_RANKING, ranking: { ...LONG_RANKING.ranking, source: 'regex' as const } } } }
+
+  /** The ranking block's lines as drawn: its head lines, then each numbered file line and its bucket line. */
+  const rankingLines = async (ui: { findAll: (query: { type: 'Text'; text: RegExp }) => Promise<readonly { readonly text: string }[]> }, title: RegExp) =>
+    (await ui.findAll({ type: 'Text', text: new RegExp(`${title.source}|^\\d+\\. |^ {3}(?:top|high|mid|low|-) · `) })).map(t => t.text)
+
+  reviewTest('Review tab at 120 columns: the legend once in the head, each file on one line with bare buckets', LONG_POSITION, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($, 'terminal', 120)
+    expect(await rankingLines(ui, /^READ FIRST/)).toEqual([
+      'READ FIRST · graph · seq 1172 · fix · churn · fan-in',
+      '1. shipgate-hud/hooks/register.tsx  top · top · low',
+      '2. shipgate/scripts/journal.py  top · top · -',
+      '3. src/components/an-extremely-long-component-file-name.tsx  high · high · high',
+    ])
     await ui.unmount()
   })
 
-  test('Flow tab: a cut log is one dim line', async ($, on) => {
-    drawPane(on, bound({ ...FLOW, trace: { ...EMPTY_TRACE, isLogCut: true } }), { ...FRESH, tab: 'flow' })
-    const ui = await mountOwn($, PANE_DRAW)
-    expect((await ui.find({ type: 'Text', text: 'trace not read: the stream log was longer than one journal answer' }))?.props.dimColor).toBe(true)
+  reviewTest('Review tab at 40 columns: the head packs at its separators, the path\'s head is cut, the buckets wrap, none is cut', LONG_POSITION, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($, 'terminal', 40)
+    const lines = await rankingLines(ui, /^(READ FIRST|fix · churn · fan-in$)/)
+    expect(lines).toEqual([
+      'READ FIRST · graph · seq 1172',
+      'fix · churn · fan-in',
+      '1. …/hooks/register.tsx  top · top · low',
+      '2. …/scripts/journal.py  top · top · -',
+      '3. …tremely-long-component-file-name.tsx',
+      '   high · high · high',
+    ])
+    expect(lines.every(line => [...line].length <= 40)).toBe(true)
+    // no bucket is ever cut: no line ends in `…` after a bucket, every bucket line ends whole
+    expect(lines.filter(line => / · /.test(line) && line.endsWith('…'))).toEqual([])
     await ui.unmount()
   })
 
-  test('rankedFileText: a label with no value is drawn as -', async () => {
-    expect(rankedFileText({ path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: null }, 0)).toBe('1. src/golden.py · fix top · churn high · fan-in -')
-  })
+  for (const [columns, expected] of [
+    [120, ['RISK RANKING · regex · seq 1172 · fix · churn · fan-in', '1. shipgate-hud/hooks/register.tsx  top · top · low']],
+    [40, ['RISK RANKING · regex · seq 1172', 'fix · churn · fan-in', '1. …/hooks/register.tsx  top · top · low']],
+  ] as const) {
+    test(`Design tab at ${columns} columns: RISK RANKING draws the same way as READ FIRST`, async ($, on) => {
+      drawPane(on, bound(LONG_POSITION), { ...FRESH, tab: 'design' })
+      const ui = await mountOwn($, PANE_DRAW, 'terminal', columns)
+      const lines = await rankingLines(ui, /^(RISK RANKING|fix · churn · fan-in$)/)
+      expect(lines.slice(0, expected.length)).toEqual([...expected])
+      expect(lines.at(-1)).toMatch(BUCKETS_AT_END)
+      await ui.unmount()
+    })
+  }
 
   reviewTest('Review tab: a canon finding carries the canon tag; a correctness one does not; a killed canon finding says canon', REVIEW_POSITION, stateOf([boardOf(1, REVIEW_STREAM, REVIEW_RETURN_CANON)]), async $ => {
     const ui = await mountReview($)
@@ -1193,9 +1451,9 @@ describe('the trace (HUD ADR 0007)', () => {
   test('Design tab: the design\'s ranking under its ADRs', async ($, on) => {
     drawPane(on, bound(SIGNALS), { ...FRESH, tab: 'design' })
     const ui = await mountOwn($, PANE_DRAW)
-    expect(await ui.find({ type: 'Text', text: `RISK RANKING · regex · seq ${signalsSeq('design-committed')}` })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '1. src/golden.py · fix top · churn high · fan-in -' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '2. src/other.py · fix low · churn low · fan-in mid' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: `RISK RANKING · regex · seq ${SIGNALS_SEQ.design} · fix · churn · fan-in` })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '1. src/golden.py  top · high · -' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '2. src/other.py  low · low · mid' })).toBeDefined()
     await ui.unmount()
   })
 
@@ -1209,7 +1467,7 @@ describe('the trace (HUD ADR 0007)', () => {
   test('Flow tab: a map that skipped its risk signals is one warning line, with the deviation\'s seq', async ($, on) => {
     drawPane(on, bound(SIGNALS), { ...FRESH, tab: 'flow' })
     const ui = await mountOwn($, PANE_DRAW)
-    const line = await ui.find({ type: 'Text', text: `route-and-map: no risk signals recorded · signals-missing deviation seq ${signalsSeq('deviation')}` })
+    const line = await ui.find({ type: 'Text', text: `route-and-map: no risk signals recorded · signals-missing deviation seq ${SIGNALS_SEQ.gap}` })
     expect(line?.props.color).toBe('warning')
     await ui.unmount()
   })

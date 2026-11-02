@@ -22,7 +22,8 @@ interface, from the journal shipgate already keeps.
     ticked in the worklog but never recorded (what the Stop hook will block on), `○` to do.
     So the counts add up.
   - **Design** — the ADRs the design committed to, one line each, then the design's risk
-    ranking when it recorded one (`RISK RANKING · <source> · seq N`, one line per file), and
+    ranking when it recorded one (`RISK RANKING · <source> · seq N · fix · churn · fan-in`,
+    then one line per file, drawn as READ FIRST draws it), and
     the worklog's Design section as collapsible `##` sections, one open at a time (prose reflowed to the pane's width).
     **Diagrams:** a fenced `svg` block is drawn as a picture on desktop, mobile and vscode, and
     as `xml` code in the terminal. The HUD lays out a fenced `mermaid` flowchart itself (the
@@ -42,8 +43,14 @@ interface, from the journal shipgate already keeps.
     reads each from the task-notification prompt and never changes that prompt. A long return
     that the engine cuts there is read from the task's output file (`…/tasks/*.output`, at most
     4 MiB). A **READ FIRST** block comes before the rounds when the last verdict that carries
-    a risk ranking recorded one: its source and seq, then the files in risk order with their
-    `fix`, `churn` and `fan-in` labels. A counts line comes first in each round. Then
+    a risk ranking recorded one. Its head line names the source, the seq and the legend once:
+    `READ FIRST · graph · seq N · fix · churn · fan-in`. Then the files come in risk order,
+    one line each: the path, two spaces, and the three labels as bare words in the legend's
+    order (`1. src/a.ts  top · high · -`; `-` is a label with no value). The labels are never
+    cut. When a line is too wide for the pane, the HUD cuts the head of the path first
+    (`1. …/hooks/register.tsx  top · top · low`). When even `…/` and the file name do not
+    fit, the labels go on a second, indented line. A head line that is too wide breaks at
+    its ` · ` separators. A counts line comes first in each round. Then
     the survivors, grouped by severity, each with confidence, verification, quorum, lenses
     and a short `file:line`. A finding the canon lens reported carries a `canon` tag: it breaks
     a rule of the project's style canon, so it is not a matter of taste. **Accept** and **Kill** submit a plain prompt that names the
@@ -51,12 +58,42 @@ interface, from the journal shipgate already keeps.
     one line each. The tab ends with the success criteria of the stream's PRD, as ticks you
     set by hand. The last `review-verdict` gives ticks from the journal:
     `"criteria":{"SC-001":"met"}` shows `☑`, and `unmet` shows `☒`. A press sets your own tick
-    over the journal's, until a newer verdict. The same verdict's
-    `"dispositions":{"src/a.ts:42":"fixed"}` shows on that card in place of the buttons. The
-    band shows `review N open` while findings have neither a mark nor a disposition. Each
-    return is a new round. The newest round opens first, and its header folds it. Up to four
-    older rounds fold behind a one-line summary, with their marks kept. A board for another
-    stream is not drawn.
+    over the journal's, until a newer verdict.
+
+    **Finding states.** A card shows the finding's current state in place of the buttons:
+    `fixing` (a fix is in progress), `fixed`, `rejected` or `deferred`. The state comes from
+    `position`'s folded `dispositions` (HUD ADR 0008). shipgate's review skill records each
+    state with a `review-disposition` event as soon as it decides it, and the verdict's map
+    is the final word. journal.py folds them per finding key, and the latest event wins. A
+    state recorded before the board was captured is not drawn on that board: it judged an
+    earlier round. Your own Accept or Kill mark comes before the state.
+
+    **The key match.** A key is `<path>:<line>` or `<path>:?`. The match runs over the whole
+    board, in two passes. Pass 1 gives each card the first of: the exact `file:line`, the
+    short `file:line`, then a key whose path ends the card's file on the same line (the
+    longest path wins). A `file:?` key matches in pass 1 only a card with no line. Pass 2 is
+    **line-agnostic**: a card with no state yet takes a key whose path ends its file on **any
+    line**, from the keys no card took in pass 1. The longest path wins, then the nearest
+    line; a `?` key is the farthest, so it is the last choice. So a fix that moved the line
+    still reaches its card. A key that named one card exactly never labels another card of
+    the same file, and a pass-2 key labels one card only.
+
+    **A round without a board.** A review run as an agent fan (`review: agents`) produces no
+    board. With no board for the stream and a verdict or a folded state, the tab draws the
+    round from the journal: `round N · verdict <ready|not-ready> · <time>` (or `round 1 · in
+    progress` before the first verdict), the verdict's note, one line per folded key with its
+    state, then the success criteria. The state is never cut: a key that is too wide loses its
+    head first (`…/hooks/register.tsx:12  fixing`). A card's state cell keeps its whole word
+    too, and the card's meta text gives way. A board, when held, wins.
+
+    The band shows `review N open` while findings have no mark and no state, or the state
+    `fixing`: a finding that is being fixed is still open. With no board, the band shows
+    `review N open` only while N folded findings are `fixing` and were recorded after the
+    last verdict (all of them before the first verdict). A `fixing` the newest verdict did
+    not close is stale, because the verdict is the round's final word; the round's lines
+    still show it. Each return is a new round. The
+    newest round opens first, and its header folds it. Up to four older rounds fold behind a
+    one-line summary, with their marks kept. A board for another stream is not drawn.
 - The pane opens on the tab that matches the phase: Plan in `implement`, Design in `design`,
   Review in `review`, Flow otherwise. The active tab and the current phase are drawn inverted.
   Hotkeys `1` `2` `3` `4` switch, `r` refreshes, while the pane has focus. Long text is
@@ -110,23 +147,31 @@ interface, from the journal shipgate already keeps.
   repository's push settings publish other branches as well.
 
 The position refreshes when the orchestrator appends to the journal, when a file in one of
-the sidecar's artifact homes is written, after `/clear` or `/resume`, and once a minute
-otherwise. A request that arrives during a refresh queues one trailing refresh.
+the sidecar's artifact homes is written, and once a minute otherwise. A request that arrives
+during a refresh queues one trailing refresh. `/clear`, `/resume` and `/branch` move the
+session to a new id and reset the HUD's state. The HUD then detects the project again on the
+next clock tick, tool call or prompt, when the HUD's state holds no project (the view is
+`Off`). The check compares the session id first, so it costs one call when nothing changed.
+A reset that keeps the session id is caught too: when the last detection found a project and
+the view now reads `Off`, the HUD detects again, once.
+The detection runs after the tool call or the prompt has passed on, never in its way. This
+also works where organization-managed settings skip `classic.*` hooks for user mods. In a
+project with no sidecar, that detection is one directory walk per session id, and it runs
+no process.
 
 ## What it needs
 
 - Claude Code **2.1.290 or newer** (the mods API; early access, so a release may move it).
-- **shipgate 0.20.0 or newer.** The HUD's `plugin.json` declares it as a dependency
-  (`>=0.20.0`), so installing or updating the HUD brings a matching shipgate. A shipgate
+- **shipgate 0.21.0 or newer.** The HUD's `plugin.json` declares it as a dependency
+  (`>=0.21.0`), so installing or updating the HUD brings a matching shipgate. A shipgate
   outside the range keeps the HUD disabled, and `claude plugin list` names the requirement.
-  0.20.0 records the risk rankings and the `signals-missing` deviation the HUD draws; 0.19.0
-  binds a session whose only writes are the user's own decisions (`--actor user`).
-- **A `journal.py` that lags behind** (a lagging project install, a `journalScript` option,
-  a `--plugin-dir` copy) is read the same way down to 0.18.0, without that binding and with
-  no ranking or signals line to draw. One
-  older than 0.18.0 (no `position`) makes the band say so: the pane names the minimum
-  version it can read (0.18.0), and the publish gate is off until shipgate is updated. A
-  failed read of a current shipgate still holds.
+  0.21.0 prints the trace and the folded finding states in `position --json`, and records a
+  finding's state when the review decides it.
+- **The read floor is 0.21.0.** A `journal.py` that lags behind (a lagging project install,
+  a `journalScript` option, a `--plugin-dir` copy) and prints no `trace` key in
+  `position --json` is outdated. The band says so, the pane names 0.21.0, and the publish
+  gate is off until shipgate is updated. A `journal.py` older than 0.18.0 (no `position`)
+  gets the same notice. A failed read of a current shipgate still holds.
 - A project that ran `/shipgate:setup`
   with a journal: the HUD keys off the `.claude/shipgate.json` sidecar, in the session's
   project root (where it started; a shell `cd` does not move it) or any directory above it
@@ -148,13 +193,15 @@ Or, for development, from a checkout: `claude --plugin-dir ./shipgate-hud`.
 ## How it reads the position
 
 The hooks module runs with no Node and no SQLite, so it never opens the journal database. It
-runs shipgate's own CLI, and journal.py computes every fact the HUD draws (shipgate ADR 0009).
-The HUD computes no rule of its own. The one exception is the trace (step 3, ADR 0007): the
-HUD picks recorded values from the event log, because `position` does not print them yet.
-The HUD decodes the CLI's JSON strictly. A missing or mistyped key is an error the pane
-shows, never a default. Inside the trace, one recorded `ranking` that breaks journal.py's
-contract (a row written before shipgate validated it) is drawn as "ranking unreadable", not
-as a failed read.
+runs shipgate's own CLI, and journal.py computes every fact of the flow the HUD draws
+(shipgate ADR 0009): the phases, the binding, the publish rule, the trace, and the folded
+finding states. The HUD computes no flow rule of its own. It does three things on the Review
+tab only (HUD ADR 0008): it matches a recorded finding key to a card, it leaves out a state
+recorded before a board was captured, and it counts the open findings. The HUD decodes the
+CLI's JSON strictly. A missing or
+mistyped key is an error the pane shows, never a default. Inside the trace, one recorded
+`ranking` that breaks journal.py's contract (a row written before shipgate validated it) is
+drawn as "ranking unreadable", not as a failed read.
 
 One refresh does these steps:
 1. **Binding** (ADR 0004). `journal.py status --json --session=<id> --branch=<root branch>`
@@ -176,16 +223,15 @@ One refresh does these steps:
    - the decisions with their `seq`;
    - the last verify and the last verdict;
    - whether the stream may publish;
-   - its artifacts. When no event names a worklog, journal.py finds it by name.
-3. **Trace** (ADR 0007). `journal.py log --stream <s> --json` gives the stream's events. The
-   HUD picks three recorded values from them, as recorded: the newest `review-verdict` and
-   `design-committed` that carry a `ranking`, and every `deviation` of kind
-   `signals-missing`. `position` does not print these yet. When the ranking comes from a
-   verdict older than the last one, READ FIRST says `from an earlier verdict`. When the
-   engine cuts the log's output (a long stream), the position is still drawn, and the Flow
-   and Review tabs say that the trace was not read. Any other failed `log` run is a failed
-   refresh.
-4. **Files.** The HUD reads only the worklog, the ADRs and the PRD that `position` names, to
+   - its artifacts. When no event names a worklog, journal.py finds it by name;
+   - the trace (ADR 0007, amended): the newest `review-verdict` and `design-committed` that
+     carry a `ranking`, and every `deviation` of kind `signals-missing`. When the ranking
+     comes from a verdict older than the last one, READ FIRST says `from an earlier
+     verdict`;
+   - the folded finding states (`dispositions`), and the last verdict's note and round.
+
+   The HUD runs no `log` command. A bound refresh runs `status` and `position` only.
+3. **Files.** The HUD reads only the worklog, the ADRs and the PRD that `position` names, to
    draw the design sections and the criteria. It reads only relative paths inside the
    project.
 
@@ -194,8 +240,8 @@ What the pane shows:
   and names the live streams the checkout's branches name.
 - **A failed read:** a failed `journal.py` run never reads as "no stream". The pane shows the
   failure, and the last position read, marked as stale.
-- **An older shipgate:** a `journal.py` that does not know `position` gets a pane that names
-  the minimum shipgate version (0.18.0).
+- **An older shipgate:** a `journal.py` that does not know `position`, or whose `position`
+  prints no `trace` key, gets a pane that names the minimum shipgate version (0.21.0).
 
 The HUD writes nothing. A veto goes through the prompt, and the orchestrator records the
 outcome.

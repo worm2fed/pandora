@@ -8,10 +8,10 @@ import type {
   Criterion,
   CriterionId,
   CriterionStatus,
-  Disposition,
   EventSeq,
   FindingCore,
   FindingSeverity,
+  FoldedDisposition,
   IsoTime,
   KilledFinding,
   Quorum,
@@ -578,29 +578,110 @@ const isBoardOf = (board: ReviewBoard, stream: StreamName | null): boolean => bo
 
 const stripDotSlash = (path: string): string => path.replace(/^(\.\/)+/, '')
 
-/** The map's own value at `key`; null when it has none (a key named like an Object method included). */
-const ownDisposition = (map: Readonly<Record<string, Disposition>>, key: string): Disposition | null => (Object.hasOwn(map, key) ? (map[key] ?? null) : null)
+/** A finding as the key match reads it: its file and its line. */
+type FindingPlace = Pick<FindingCore, 'file' | 'line'>
+
+/** A key of the folded map split at its last `:`: the key as written, its path (`./` dropped) and its line (null: `?`). */
+interface ParsedKey {
+  readonly key: string
+  readonly order: number
+  readonly path: string
+  readonly line: number | null
+}
+
+/** A key as `<path>:<line or ?>`, `./` dropped from the path; null when it has no path or its line is neither digits nor `?`. */
+const parseKey = (key: string, order: number): ParsedKey | null => {
+  const cut = key.lastIndexOf(':')
+  if (cut <= 0) return null
+  const path = stripDotSlash(key.slice(0, cut))
+  const tail = key.slice(cut + 1)
+  if (path === '') return null
+  if (tail === '?') return { key, order, path, line: null }
+  return /^\d+$/.test(tail) ? { key, order, path, line: Number(tail) } : null
+}
+
+/** Does a key's path name the finding's file: the same path, or a tail of it at a `/` (a workflow reports absolute paths, an orchestrator writes repo-relative ones)? */
+const isPathTail = (file: string, path: string): boolean => file === path || file.endsWith(`/${path}`)
+
+/** How far a key's line is from the finding's: a `?` on either side is the farthest. */
+const lineDistance = (finding: FindingPlace, key: ParsedKey): number =>
+  finding.line === null || key.line === null ? Number.POSITIVE_INFINITY : Math.abs(key.line - finding.line)
 
 /**
- * The orchestrator's disposition of a finding in a verdict's map; null when none. Exact keys
- * first: the full `file:line`, then the short one. Then by path suffix: a key `<path>:<line>`
- * matches when the line is the finding's and the finding's file is `<path>` or ends with
- * `/<path>` (a workflow reports absolute paths, an orchestrator writes repo-relative ones).
- * The longest matching path wins. A leading `./` is dropped on both sides.
+ * Pass 1 for one finding: the key it names, first hit of the exact `<file>:<line>`, the short
+ * location, then a path tail on the same line (the longest path wins, ties to the first key).
+ * A `?` key names only a finding with no line here; for a finding with a line it is a pass-2
+ * candidate. `exact` maps a key with `./` dropped to the first key that reads so.
  */
-export function dispositionIn(map: Readonly<Record<string, Disposition>>, finding: Pick<FindingCore, 'file' | 'line'>): Disposition | null {
+const namedKey = (finding: FindingPlace, exact: ReadonlyMap<string, string>, keys: readonly ParsedKey[]): string | null => {
   const file = stripDotSlash(finding.file)
   const line = finding.line === null ? '?' : String(finding.line)
-  const exact = ownDisposition(map, `${file}:${line}`) ?? ownDisposition(map, shortLocation(finding))
-  if (exact !== null) return exact
-  const best = Object.entries(map).reduce<{ readonly length: number; readonly disposition: Disposition } | null>((held, [key, disposition]) => {
-    const cut = key.lastIndexOf(':')
-    if (cut <= 0 || key.slice(cut + 1) !== line) return held
-    const path = stripDotSlash(key.slice(0, cut))
-    if (path === '' || !(file === path || file.endsWith(`/${path}`))) return held
-    return held === null || path.length > held.length ? { length: path.length, disposition } : held
-  }, null)
-  return best === null ? null : best.disposition
+  const direct = exact.get(`${file}:${line}`) ?? exact.get(stripDotSlash(shortLocation(finding)))
+  if (direct !== undefined) return direct
+  const tail = keys
+    .filter(key => key.line === finding.line && isPathTail(file, key.path))
+    .reduce<ParsedKey | null>((best, key) => (best === null || key.path.length > best.path.length ? key : best), null)
+  return tail === null ? null : tail.key
+}
+
+/** A pass-2 candidate: a card without a state, a free key on a path tail of its file, and how well they match. */
+interface LooseMatch {
+  readonly card: number
+  readonly key: ParsedKey
+  readonly distance: number
+}
+
+/** Two distances compared: two `?` distances (both the farthest) are equal. */
+const compareDistance = (a: number, b: number): number => (a === b ? 0 : a - b)
+
+/** Pass 2's order: the longest path first, then the nearest line, then the first card, then the first key in map order. */
+const byLooseRank = (a: LooseMatch, b: LooseMatch): number =>
+  b.key.path.length - a.key.path.length || compareDistance(a.distance, b.distance) || a.card - b.card || a.key.order - b.key.order
+
+/**
+ * The folded state of each finding of one board, in the findings' order (null: none), by the
+ * tolerant key match (HUD ADR 0008). Pass 1 gives each finding the key it names (`namedKey`);
+ * two findings at one place share it. Pass 2 gives a finding still without a key a path tail
+ * of its file on any line, over the keys pass 1 left free: the longest path first, then the
+ * nearest line (a `?` key is the farthest, so the last choice), ties to the first key in map
+ * order. Each pass-2 key reaches one finding only,
+ * so a moved line still matches, and one key never labels every finding of a file. A key
+ * taken in pass 1 is never reused in pass 2. Own keys only: a key named like an Object member
+ * is an ordinary key.
+ */
+export function dispositionsFor(
+  map: Readonly<Record<string, FoldedDisposition>>,
+  findings: readonly FindingPlace[],
+): readonly (FoldedDisposition | null)[] {
+  const entries = Object.entries(map)
+  const exact = entries.reduce((byKey, [key]) => (byKey.has(stripDotSlash(key)) ? byKey : byKey.set(stripDotSlash(key), key)), new Map<string, string>())
+  const keys = entries.flatMap(([key], order) => {
+    const parsed = parseKey(key, order)
+    return parsed === null ? [] : [parsed]
+  })
+  const named = findings.map(finding => namedKey(finding, exact, keys))
+  const taken = new Set(named.filter((key): key is string => key !== null))
+  const free = keys.filter(key => !taken.has(key.key))
+  const candidates = findings
+    .flatMap((finding, card): LooseMatch[] =>
+      named[card] !== null ? [] : free.filter(key => isPathTail(stripDotSlash(finding.file), key.path)).map(key => ({ card, key, distance: lineDistance(finding, key) })),
+    )
+    .sort(byLooseRank)
+  const loose = candidates.reduce<{ readonly byCard: ReadonlyMap<number, string>; readonly used: ReadonlySet<string> }>(
+    (held, match) =>
+      held.byCard.has(match.card) || held.used.has(match.key.key)
+        ? held
+        : { byCard: new Map(held.byCard).set(match.card, match.key.key), used: new Set(held.used).add(match.key.key) },
+    { byCard: new Map(), used: new Set() },
+  )
+  const stateOf = (key: string | null | undefined): FoldedDisposition | null => (key === null || key === undefined || !Object.hasOwn(map, key) ? null : (map[key] ?? null))
+  return findings.map((_, card) => stateOf(named[card] ?? loose.byCard.get(card)))
+}
+
+/** The folded dispositions recorded at or after `at` (a board's capture): one recorded before judged an earlier round. */
+export function dispositionsSince(map: Readonly<Record<string, FoldedDisposition>>, at: IsoTime): Readonly<Record<string, FoldedDisposition>> {
+  const since = Date.parse(at)
+  return Object.fromEntries(Object.entries(map).filter(([, entry]) => !(Date.parse(entry.at) < since)))
 }
 
 /** A round's identity across streams: `<stream or ?>:<round>`. The fold, `OpenRound` and the Accept / Kill actions use it. */

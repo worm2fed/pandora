@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """The golden contract between journal.py and shipgate-hud (shipgate ADR 0009).
 
-A scripted journal, built through the CLI, is read back with ``status --json``,
-``position --stream <s> --json`` and ``log --stream <s> --json`` (the trace, HUD ADR 0007). The output, with its timestamps and the temp path
-normalised, must equal ``shipgate-hud/tests/fixtures.journal.ts``, which the HUD's
-decoders read in their own tests. A key renamed on either side fails a build.
+A scripted journal, built through the CLI, is read back with ``status --json`` and
+``position --stream <s> --json``. ``position`` also prints the trace and the folded
+finding dispositions (shipgate ADR 0014), so the HUD runs no ``log``. The output, with
+its timestamps and the temp path normalised, must equal
+``shipgate-hud/tests/fixtures.journal.ts``, which the HUD's decoders read in their own
+tests. A key renamed on either side fails a build.
 
     SHIPGATE_REGEN_GOLDEN=1 python3 -m unittest discover -s shipgate/tests -k HudContract
 
@@ -57,7 +59,7 @@ USER = "feature/golden-user"
 USER_SESSION = "session-golden-user"
 # shipgate 0.20.0 (#10): a map without `signals`, so `append` writes the `signals-missing`
 # deviation itself (ADR 0011), and a design and a review that record their `ranking`
-# (ADR 0013). The HUD reads these from `log` (HUD ADR 0007).
+# (ADR 0013). `position` prints them as its `trace` (shipgate 0.21.0, ADR 0014).
 SIGNALS = "feature/golden-signals"
 DESIGN_RANKING = {
     "source": "regex",
@@ -70,6 +72,10 @@ REVIEW_RANKING = {
     "source": "graph",
     "files": [{"path": "src/golden.py", "fix": "top", "churn": "high", "fan_in": "top"}],
 }
+# shipgate 0.21.0 (ADR 0014): two interim `review-disposition` rows, then a verdict that
+# closes one finding. `position` folds them per key. The stream has a verdict and no
+# review board: the HUD's verdict-only round (#5).
+DISPOSITIONS = "feature/golden-dispositions"
 
 FILES = {
     "docs/prd/golden-flow.md": """---
@@ -139,6 +145,21 @@ status: proposed
 # `user` row records it as `recorded_by`, a machine role takes it as its label. An event's age
 # counts back from the last one, so a row added at the top moves no other event's time.
 SCRIPT = [
+    (DISPOSITIONS, "flow-started", {"request": "a review decided finding by finding"},
+     None),
+    (DISPOSITIONS, "review-disposition", {
+        "dispositions": {"src/golden.py:12": "fixing"}, "round": 1,
+    }, None),
+    (DISPOSITIONS, "review-disposition", {
+        "dispositions": {"./src/other.py:?": "fixing", "src/golden.py:30": "deferred"},
+        "round": 1, "note": "an interim note",
+    }, None),
+    # `ready` needs a passing run after the last task-done.
+    (DISPOSITIONS, "verify-run", {"outcome": "pass", "task_ids": ["T001"]}, None),
+    (DISPOSITIONS, "review-verdict", {
+        "verdict": "ready", "note": "the round closes",
+        "dispositions": {"src/golden.py:12": "fixed"},
+    }, None),
     (SIGNALS, "flow-started", {"request": "a flow that skipped its signals"}, None),
     (SIGNALS, "phase-entered", {"phase": "route-and-map", "skipped": ["workspace"]}, None),
     (SIGNALS, "design-committed", {"worklog": "docs/prd/golden-signals.worklog.md",
@@ -219,12 +240,7 @@ POSITION_RUNS = {
     "epic": EPIC,
     "user": USER,
     "signals": SIGNALS,
-}
-
-# `log --stream <s> --json`, by scenario: the trace the HUD reads (HUD ADR 0007).
-LOG_RUNS = {
-    "signals": SIGNALS,
-    "flow": FLOW,
+    "dispositions": DISPOSITIONS,
 }
 
 
@@ -276,8 +292,8 @@ def _normalise(value, stamps: dict, roots: list):
 
 
 def build_golden() -> tuple:
-    """The scripted journal's ``status``, ``position`` and ``log`` output, normalised,
-    and the placeholders the event times became."""
+    """The scripted journal's ``status`` and ``position`` output, normalised, and the
+    placeholders the event times became."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for relpath, text in FILES.items():
@@ -305,17 +321,10 @@ def build_golden() -> tuple:
             )
             for name, stream in POSITION_RUNS.items()
         }
-        log = {
-            name: _normalise(
-                json.loads(_journal(root, "log", "--stream", stream, "--json")),
-                stamps, roots,
-            )
-            for name, stream in LOG_RUNS.items()
-        }
-    return status, position, log, set(stamps.values())
+    return status, position, set(stamps.values())
 
 
-def render_golden(status: dict, position: dict, log: dict) -> str:
+def render_golden(status: dict, position: dict) -> str:
     def literal(value) -> str:
         return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)
 
@@ -334,9 +343,6 @@ def render_golden(status: dict, position: dict, log: dict) -> str:
         "/** `position --stream <s> --json`, by scenario. */",
         f"export const POSITION_GOLDEN = {literal(position)} as const",
         "",
-        "/** `log --stream <s> --json`, by scenario: the trace the HUD reads (HUD ADR 0007). */",
-        f"export const LOG_GOLDEN = {literal(log)} as const",
-        "",
     ])
 
 
@@ -346,10 +352,10 @@ class TestHudContract(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.status, cls.position, cls.log, cls.placeholders = build_golden()
+        cls.status, cls.position, cls.placeholders = build_golden()
 
     def test_the_golden_file_is_journal_py_output(self):
-        actual = render_golden(self.status, self.position, self.log)
+        actual = render_golden(self.status, self.position)
         if os.environ.get(REGEN_ENV) == "1":
             GOLDEN.write_text(actual, encoding="utf-8")
             return
@@ -432,23 +438,46 @@ class TestHudContract(unittest.TestCase):
         self.assertEqual(self.position["dormant"]["lifecycle"], "dormant")
         self.assertEqual(self.position["done"]["lifecycle"], "terminal")
 
-    def test_the_log_runs_cover_the_trace(self):
-        """The `signals` log holds what the HUD draws: the auto deviation, a design ranking
-        and a review ranking (shipgate 0.20.0). The `flow` log holds none of them."""
-        events = self.log["signals"]["events"]
-        deviation = [e for e in events if e["type"] == "deviation"]
-        self.assertEqual([(d["data"]["kind"], d["data"]["auto"]) for d in deviation],
-                         [("signals-missing", True)])
-        ranked = {e["type"]: e["data"]["ranking"] for e in events if "ranking" in e["data"]}
-        self.assertEqual(ranked, {"design-committed": DESIGN_RANKING,
-                                  "review-verdict": REVIEW_RANKING})
-        self.assertFalse(any("ranking" in e["data"] or e["data"].get("kind")
-                             for e in self.log["flow"]["events"]))
+    def test_the_position_runs_cover_the_trace(self):
+        """The `signals` position's trace holds what the HUD draws: a design ranking, a
+        review ranking and the auto deviation (shipgate 0.21.0, ADR 0014). The `flow`
+        position's trace holds none of them."""
+        trace = self.position["signals"]["trace"]
+        self.assertEqual(trace["design_ranking"]["ranking"], DESIGN_RANKING)
+        self.assertEqual(trace["review_ranking"]["ranking"], REVIEW_RANKING)
+        self.assertLess(trace["design_ranking"]["seq"], trace["review_ranking"]["seq"])
+        self.assertEqual(len(trace["signals_missing"]), 1)
+        self.assertEqual(self.position["flow"]["trace"], {
+            "review_ranking": None, "design_ranking": None, "signals_missing": [],
+        })
         self.assertEqual(self.position["signals"]["verdict"]["verdict"], "not-ready")
+
+    def test_the_position_runs_cover_the_dispositions(self):
+        """The fold (ADR 0014): the verdict closes one interim `fixing`, the other stays,
+        a deferred one keeps its interim row, and `./` is dropped. The `dispositions`
+        stream has a verdict and no board: the HUD's verdict-only round (#5)."""
+        position = self.position["dispositions"]
+        verdict = position["verdict"]
+        self.assertEqual((verdict["verdict"], verdict["note"], verdict["round"]),
+                         ("ready", "the round closes", 1))
+        states = {key: d["state"] for key, d in position["dispositions"].items()}
+        self.assertEqual(states, {"src/golden.py:12": "fixed",
+                                  "src/other.py:?": "fixing",
+                                  "src/golden.py:30": "deferred"})
+        folded = position["dispositions"]
+        self.assertEqual(folded["src/golden.py:12"]["seq"], verdict["seq"])
+        self.assertEqual(folded["src/other.py:?"]["seq"],
+                         folded["src/golden.py:30"]["seq"])
+        self.assertLess(folded["src/other.py:?"]["seq"], verdict["seq"])
+        # The `flow` stream's dispositions come from its only verdict.
+        self.assertEqual({k: d["state"] for k, d in
+                          self.position["flow"]["dispositions"].items()},
+                         {"src/golden.py:12": "fixed", "src/other.py:?": "deferred"})
+        self.assertEqual(self.position["started"]["dispositions"], {})
 
     def test_no_volatile_value_is_left(self):
         """Every timestamp is a placeholder, and no temp path is printed."""
-        text = render_golden(self.status, self.position, self.log)
+        text = render_golden(self.status, self.position)
         stamps = set(re.findall(r"\d{4}-\d{2}-\d{2}T[0-9:.]+[+-]\d{2}:\d{2}", text))
         self.assertTrue(stamps)
         self.assertLessEqual(stamps, self.placeholders | {GOLDEN_NOW.isoformat()})

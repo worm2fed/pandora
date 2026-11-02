@@ -2,6 +2,118 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.8.0 — position carries the trace, finding states are live, a review without a board draws a round, and the HUD recovers after `/clear` without `classic.*` hooks.
+
+**Detection after a session change (#8).** `/clear`, `/resume` and `/branch` move the session
+to a new id and reset `$.state`. Before, only the `classic.SessionStart` handler detected the
+project again. An organization-managed session skips `classic.*` hooks for user mods, so the
+band and the pane stayed stale or empty until `/hud`. Now the HUD keeps the session id of its
+last detection, and whether that detection found a project. On each clock tick, tool call
+and prompt, it compares that id with the current one first. When they are equal and the last
+detection found nothing (a project with no journal), it does nothing more: one
+`$.session.id()` call, no process, no directory walk, no state write. When they are equal,
+the last detection found a project, no refresh is running and the view now reads `Off`, the
+state was reset under the same id: the HUD detects the project again, once. When the id
+changed but the view is not `Off`
+(the state was not reset), it notes the new id and does nothing else. When the id changed
+and the view is `Off`, in a session that draws, it notes the id and detects the project
+again; when it finds one, it refreshes. On a tool call or a prompt that detection runs off
+the event's path (`$.clock.after(0, …)`): the event passes on at once, unchanged, and never
+waits for a directory walk or a journal.py run. A session with no surface does nothing. A session whose id the engine cannot give is detected
+once per module load. In a project with no sidecar, the detection is one directory walk per
+session id and runs no process. The 60 s clock starts once per module load, by the first
+detection that finds the project (session start, `/hud`, the publish gate or the lazy
+check). The `classic.SessionStart` handler stays as the fast path. The new `tool.call` and
+`prompt.submit` listeners always pass the event on, and a failure never blocks a tool call
+or a prompt.
+
+**The trace comes from `position` (HUD ADR 0007, amended).** shipgate 0.21.0 prints `trace`
+in `position --json`: the newest verdict ranking, the newest design ranking (each with its
+seq and time, the ranking verbatim) and the `signals-missing` deviations. The HUD decodes
+them from there and runs no `log` command. A bound refresh now runs `status` and `position`
+only. `decodeLog`, `traceOf`, `LogEvent`, the cut-log trace and the "trace not read" lines
+are gone, and `Trace` loses `isLogCut`. A ranking that breaks journal.py's contract is still
+drawn as "ranking unreadable".
+
+**Live finding states (HUD ADR 0008).** shipgate 0.21.0 records a finding's state with a
+`review-disposition` event as soon as the review decides it, and `position --json` prints
+the fold per finding key as `dispositions`. A card now reads that fold, not the last
+verdict's own map. It shows `fixing` (warning colour), `fixed`, `rejected` or `deferred` in
+place of Accept and Kill. Your own mark still comes first. A state recorded before the board
+was captured is not drawn on that board. The band counts a `fixing` finding as open.
+
+**A tolerant key match.** The match now runs over the whole board, in two passes. Pass 1
+gives each card the first of: the exact `file:line`, the short `file:line`, then a path tail
+on the same line (the longest path wins). A `file:?` key matches in pass 1 only a card with
+no line. Pass 2 is line-agnostic: a card with no state yet takes a path tail of its file on
+any line, from the keys pass 1 left free. The longest path wins, then the nearest line (a
+`?` key is the farthest, so the last choice), then the first key in map order. So a fix that
+moved the line still reaches its card. A key that named one card exactly never labels
+another card of the same file, and a pass-2 key labels one card only. `dispositionIn` is
+replaced by `dispositionsFor`.
+
+**A review round without a board (#5).** A project with `review: agents` never produces a
+board, so the Review tab said "No review captured" after a `ready` verdict. Now, with no
+board for the stream and a verdict or a folded state, the tab draws the round from the
+journal: READ FIRST as before, then `round N · verdict <ready|not-ready> · <time>` (or
+`round 1 · in progress` with no verdict yet), the verdict's note, one line per folded key
+in key order with its state, then the success criteria. A key is cut to the pane's width;
+its state is never cut. A board, when held, wins. With no board, the band shows
+`review N open` only while N folded findings are `fixing` and were recorded after the last
+verdict (all of them before the first verdict); otherwise it shows no review segment. A
+`fixing` the newest verdict did not close is stale: the verdict is the round's final word.
+The round's lines still show every folded key as it is.
+
+**Ranking lines are never cut.** In a real pane, READ FIRST lines were too wide: the path
+and three spelled-out labels did not fit, and the terminal cut the last label, which is the
+one the line exists to show. Now the head line says the legend once
+(`READ FIRST · graph · seq N · fix · churn · fan-in`, and the same for
+`RISK RANKING · <source> · seq N · fix · churn · fan-in`). A suffix such as
+`· from an earlier verdict` comes after it. The unavailable and unreadable head lines carry
+no legend. Each file line holds the path, two spaces and the three labels as bare words:
+`1. shipgate-hud/hooks/register.tsx  top · top · low`. When the line is too wide, the HUD
+cuts the head of the path first (`1. …/hooks/register.tsx  top · top · low`), with a new
+pure helper, `cutHead`. When even `…/` and the file name do not fit, the labels go on a
+second, indented line. A head line that is too wide breaks at its ` · ` separators. The
+labels are never cut. The same rule applies to a round without a board: a key loses its
+head first, and its state is never cut. A card's state cell keeps its whole word at the
+narrowest pane width (40 columns), and the meta text gives way. Tests draw each block at
+40 and 120 columns.
+
+**The dependency and the read floor.** `plugin.json` declares shipgate `>=0.21.0`. **The
+read floor moves to 0.21.0.** The HUD no longer runs `log`, so an older `journal.py` cannot
+give the trace. A `position --json` with no top-level `trace` key is `Outdated` with a new
+sign, `MissingTrace` (`journal.py position --json printed no trace key`). The marker is
+looked for before any other key, so the keys an older `position` lacks never read as a
+`BadShape`. As for the status marker, the pane names the floor (0.21.0), the publish gate
+is off, and the next refresh searches for `journal.py` again. The decoder also reads the
+verdict's `note` (text or null) and `round` (an integer, 1 or more), and the folded
+`dispositions` (a state outside the four is a `BadShape`).
+
+**The stored view.** The view's shape tag moves to `shipgate-hud.view-v5`, because
+`Position` gains `dispositions` and `Trace` loses `isLogCut`. A stored v4 view reads as
+absent, and the next refresh derives it again.
+
+**The golden contract.** shipgate's contract test regenerates `tests/fixtures.journal.ts`
+for 0.21.0. `POSITION_GOLDEN` gains a `dispositions` scenario (a verdict, no board, three
+folded keys, one of them `fixing`), and the `signals` scenario now carries its trace in
+`position`. `LOG_GOLDEN` is gone. The new rows come first in the script, so every seq after
+them moves up by seven.
+
+**Tests.** The decoder tests cover every golden position, the `signals` trace, the
+`dispositions` fold, the verdict's note and round, the `MissingTrace` sign, and the new
+`BadShape` cases. The register tests cover a bound refresh with no `log` run, the trace
+reaching the pane, a pre-0.21 `position`, and the session change with no
+`classic.SessionStart`: through a tool call, a prompt and the clock tick, the tool's result
+before the detection's status run, nothing more on the same id, no process for an id that
+moves with the view still bound, no process in a project with no sidecar, nothing with no
+surface, and one detection for an unknown id. The test world answers `$.state` from memory so a test can
+reset it, and can move the session id. The review tests cover each match rule, the
+line-agnostic fallback, a key taken by one card, a `file:?` key that labels one card only,
+the nearest line and own-property keys. The view tests cover each card state, a state
+recorded before the capture, the band count with `fixing` (a stale one left out with no
+board), and the round without a board.
+
 v0.7.0 — draws what shipgate 0.20.0 records: the risk ranking, the canon lens and a skipped signals block.
 
 **The trace is read from the event log (ADR 0007).** shipgate 0.20.0 records a risk ranking on

@@ -1,7 +1,10 @@
-// The one boundary for journal.py's JSON: the decoded shapes of `status --json`,
-// `position --stream <s> --json` and `log --stream <s> --json` (the trace, HUD ADR 0007), the sidecar's homes, the smart constructors of the brands,
-// the 0.18 marker that tells an older journal.py, and the text of a journal run's failure
-// (RunFailure itself is in the contract, because HudView stores it). journal.py prints snake_case keys; the decoded shapes are camelCase. Pure: no `$` here, so the decoders run in tests on the golden file.
+// The one boundary for journal.py's JSON: the decoded shapes of `status --json` and
+// `position --stream <s> --json` (the trace and the folded dispositions included, HUD ADR
+// 0007 amended, shipgate ADR 0014), the sidecar's homes, the smart constructors of the
+// brands, the markers that tell an older journal.py (0.18's `nested_matches`, 0.21's
+// `trace`), and the text of a journal run's failure (RunFailure itself is in the contract,
+// because HudView stores it). journal.py prints snake_case keys; the decoded shapes are
+// camelCase. Pure: no `$` here, so the decoders run in tests on the golden file.
 // Never stored in $.state: register.tsx maps a decoded value into the stored view.
 
 import type {
@@ -13,6 +16,8 @@ import type {
   Decision,
   Disposition,
   EventSeq,
+  FindingState,
+  FoldedDisposition,
   GateMode,
   IsoTime,
   Lifecycle,
@@ -208,6 +213,10 @@ export interface PositionDoc {
   readonly lastVerify: Verify | null
   /** The stream's last review verdict; null when none. */
   readonly verdict: Verdict | null
+  /** The rankings and the signals gaps `position` picked (HUD ADR 0007, amended). */
+  readonly trace: Trace
+  /** Each finding key's current state (shipgate ADR 0014); {} when none was recorded. */
+  readonly dispositions: Readonly<Record<string, FoldedDisposition>>
 }
 
 // ---------------------------------------------------------------------------------------
@@ -241,16 +250,19 @@ export type BadShape = Extract<RunFailure, { readonly kind: 'BadShape' }>
 
 /**
  * Why a journal command's JSON gave no value: journal.py is older than MIN_SHIPGATE_VERSION
- * (`Outdated`, the 0.18 marker missing), or the JSON has another shape (`BadShape`). The
- * decoders of journal.py's commands return it, so a run passes it on as it is.
+ * (`Outdated`, a marker missing: 0.18's in `status`, 0.21's in `position`), or the JSON has
+ * another shape (`BadShape`). The decoders of journal.py's commands return it, so a run
+ * passes it on as it is.
  */
 export type DecodeFailure = Extract<RunFailure, { readonly kind: 'Outdated' | 'BadShape' }>
 
 /**
- * The oldest shipgate whose journal.py prints what this HUD decodes (`position`, `nested_matches`, `publish`, `lifecycle`, `current`).
- * An older one is a known state (`Outdated`), told by one of two signs (`OutdatedSign`).
+ * The oldest shipgate whose journal.py prints what this HUD decodes (`position` with its
+ * `trace`, `dispositions` and the verdict's `round`, `nested_matches`, `publish`,
+ * `lifecycle`, `current`). An older one is a known state (`Outdated`), told by one of three
+ * signs (`OutdatedSign`).
  */
-export const MIN_SHIPGATE_VERSION = '0.18.0'
+export const MIN_SHIPGATE_VERSION = '0.21.0'
 
 /**
  * Does `status --json`'s JSON carry the 0.18 marker: an object with an own top-level
@@ -261,6 +273,17 @@ export const MIN_SHIPGATE_VERSION = '0.18.0'
 export function hasStatusMarker(raw: unknown): boolean {
   const record = recordOf(raw)
   return record === null || field(record, 'nested_matches') !== undefined
+}
+
+/**
+ * Does `position --json`'s JSON carry the 0.21 marker: an object with an own top-level `trace`
+ * key, whatever its value? From 0.21.0 on, journal.py always prints the key, so an object
+ * without it is an older journal.py, which cannot give the trace. Not an object: no answer
+ * about the version, so true here and a `BadShape` at `$` in `decodePosition`.
+ */
+export function hasPositionMarker(raw: unknown): boolean {
+  const record = recordOf(raw)
+  return record === null || field(record, 'trace') !== undefined
 }
 
 /** A shape decoder's failure as a journal run's: a `BadShape`. */
@@ -307,7 +330,7 @@ export function failureText(failure: ReadFailure): string {
 /**
  * How a run showed that journal.py is older than MIN_SHIPGATE_VERSION, as one line the pane's
  * `Outdated` notice shows under its message, built when drawn: the argument argparse refused
- * (cut to one line), or the missing `nested_matches` key.
+ * (cut to one line), the missing `nested_matches` key, or the missing `trace` key.
  */
 export function outdatedText(sign: OutdatedSign): string {
   switch (sign.kind) {
@@ -315,6 +338,8 @@ export function outdatedText(sign: OutdatedSign): string {
       return `journal.py does not know ${oneLine(sign.argument)}`
     case 'MissingMarker':
       return 'journal.py status --json printed no nested_matches key'
+    case 'MissingTrace':
+      return 'journal.py position --json printed no trace key'
     default:
       return absurd(sign)
   }
@@ -344,6 +369,7 @@ const VERIFY_OUTCOMES: Readonly<Record<VerifyOutcome, true>> = { pass: true, fai
 const VERDICT_VALUES: Readonly<Record<VerdictValue, true>> = { ready: true, 'not-ready': true }
 const CRITERION_STATUSES: Readonly<Record<CriterionStatus, true>> = { met: true, unmet: true }
 const DISPOSITIONS: Readonly<Record<Disposition, true>> = { fixed: true, rejected: true, deferred: true }
+const FINDING_STATES: Readonly<Record<FindingState, true>> = { fixing: true, fixed: true, rejected: true, deferred: true }
 
 /** The path of `key` under `path`: `.key` for a plain name, `["key"]` for any other text. */
 const keyPath = (path: string, key: string): string => (/^[A-Za-z_][A-Za-z0-9_-]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`)
@@ -679,6 +705,12 @@ const decodeDispositions: Decoder<Readonly<Record<string, Disposition>>> = (valu
   return entries.ok ? ok(Object.fromEntries(entries.value)) : entries
 }
 
+/** A verdict's round: how many verdicts the stream holds up to and including it, so 1 or more. */
+const decodeRound: Decoder<number> = (value, path) => {
+  const round = numberOf(value)
+  return round !== null && Number.isSafeInteger(round) && round >= 1 ? ok(round) : fail(path, 'a round (an integer, 1 or more)')
+}
+
 const decodeVerdict: Decoder<Verdict> = (value, path) => {
   const raw = decodeRecord(value, path)
   if (!raw.ok) return raw
@@ -692,15 +724,65 @@ const decodeVerdict: Decoder<Verdict> = (value, path) => {
   if (!criteria.ok) return criteria
   const dispositions = fieldOf(raw.value, path, 'dispositions', decodeDispositions)
   if (!dispositions.ok) return dispositions
-  return ok({ seq: seq.value, at: at.value, verdict: verdict.value, criteria: criteria.value, dispositions: dispositions.value })
+  const note = fieldOf(raw.value, path, 'note', nullable(decodeText))
+  if (!note.ok) return note
+  const round = fieldOf(raw.value, path, 'round', decodeRound)
+  if (!round.ok) return round
+  return ok({
+    seq: seq.value,
+    at: at.value,
+    verdict: verdict.value,
+    criteria: criteria.value,
+    dispositions: dispositions.value,
+    note: note.value,
+    round: round.value,
+  })
+}
+
+/** The event a value of `position` comes from: its `seq` and its time (`at`). */
+type Stamp = SignalsGap
+
+/**
+ * An object's event stamp: `seq` and `at`, both strict. The folded dispositions, the recorded
+ * rankings and the signals gaps are built on it; their other keys are their own.
+ */
+const decodeStamp: Decoder<Stamp> = (value, path) => {
+  const raw = decodeRecord(value, path)
+  if (!raw.ok) return raw
+  const seq = fieldOf(raw.value, path, 'seq', decodeSeq)
+  if (!seq.ok) return seq
+  const at = fieldOf(raw.value, path, 'at', decodeTime)
+  if (!at.ok) return at
+  return ok({ seq: seq.value, at: at.value })
+}
+
+/** One folded disposition: its state in the vocabulary, and the stamp of the event that decided it. */
+const decodeFoldedDisposition: Decoder<FoldedDisposition> = (value, path) => {
+  const raw = decodeRecord(value, path)
+  if (!raw.ok) return raw
+  const state = fieldOf(raw.value, path, 'state', member(FINDING_STATES, "'fixing', 'fixed', 'rejected' or 'deferred'"))
+  if (!state.ok) return state
+  const stamp = decodeStamp(raw.value, path)
+  return stamp.ok ? ok({ state: state.value, ...stamp.value }) : stamp
+}
+
+/** The folded dispositions: any key (`<path>:<line or ?>`), each value strict. journal.py drops an out-of-vocabulary state, so one that gets through is a shape error. */
+const decodeFoldedDispositions: Decoder<Readonly<Record<string, FoldedDisposition>>> = (value, path) => {
+  const entries = decodeEntries(value, path, decodeFoldedDisposition)
+  return entries.ok ? ok(Object.fromEntries(entries.value)) : entries
 }
 
 /**
- * The stream's position from `position --stream <s> --json`; a missing or mistyped key is a
- * `BadShape`, never a default. Never `Outdated`: an older journal.py has no `position`, and
- * argparse refuses it before any JSON is printed (`UnknownArgument`, read from the run).
+ * The stream's position from `position --stream <s> --json`. The 0.21 marker is looked for
+ * first (`hasPositionMarker`), before any other key is decoded: an older journal.py's
+ * position also lacks other keys this HUD reads (`dispositions`, the verdict's `round`),
+ * which must not report it as a `BadShape`. No marker is `Outdated` (`MissingTrace`); with
+ * the marker, a missing or mistyped key is a `BadShape`, never a default. A journal.py older
+ * than 0.18.0 has no `position`: argparse refuses it before any JSON is printed
+ * (`UnknownArgument`, read from the run).
  */
-export function decodePosition(raw: unknown): Result<BadShape, PositionDoc> {
+export function decodePosition(raw: unknown): Result<DecodeFailure, PositionDoc> {
+  if (!hasPositionMarker(raw)) return err({ kind: 'Outdated', sign: { kind: 'MissingTrace' } })
   return asBadShape(decodeDoc(raw))
 }
 
@@ -734,6 +816,10 @@ function decodeDoc(raw: unknown): Result<JournalShapeError, PositionDoc> {
   if (!lastVerify.ok) return lastVerify
   const verdict = fieldOf(doc.value, '$', 'verdict', nullable(decodeVerdict))
   if (!verdict.ok) return verdict
+  const trace = fieldOf(doc.value, '$', 'trace', decodeTrace)
+  if (!trace.ok) return trace
+  const dispositions = fieldOf(doc.value, '$', 'dispositions', decodeFoldedDispositions)
+  if (!dispositions.ok) return dispositions
   return ok({
     stream: stream.value,
     version: version.value,
@@ -746,51 +832,17 @@ function decodeDoc(raw: unknown): Result<JournalShapeError, PositionDoc> {
     decisions: decisions.value,
     lastVerify: lastVerify.value,
     verdict: verdict.value,
+    trace: trace.value,
+    dispositions: dispositions.value,
   })
 }
 
 // ---------------------------------------------------------------------------------------
-// `log --stream <s> --json`: the trace (HUD ADR 0007)
+// `position`'s `trace` (HUD ADR 0007, amended): the rankings and the signals gaps
 // ---------------------------------------------------------------------------------------
-
-/** One event of the stream's log: what the trace reads of it. `data` is the payload as recorded. */
-export interface LogEvent {
-  readonly seq: EventSeq
-  readonly type: string
-  readonly at: IsoTime
-  readonly data: JsonRecord
-}
 
 const SIGNAL_LABELS: Readonly<Record<SignalLabel, true>> = { low: true, mid: true, high: true, top: true }
 const SIGNAL_SOURCES: Readonly<Record<SignalSource, true>> = { graph: true, regex: true, none: true }
-
-/** The deviation kind `append` writes for a route-and-map entry without `signals` (shipgate ADR 0011). */
-export const SIGNALS_MISSING = 'signals-missing'
-
-const decodeLogEvent: Decoder<LogEvent> = (value, path) => {
-  const raw = decodeRecord(value, path)
-  if (!raw.ok) return raw
-  const seq = fieldOf(raw.value, path, 'seq', decodeSeq)
-  if (!seq.ok) return seq
-  const type = fieldOf(raw.value, path, 'type', decodeText)
-  if (!type.ok) return type
-  const at = fieldOf(raw.value, path, 'ts', decodeTime)
-  if (!at.ok) return at
-  const data = fieldOf(raw.value, path, 'data', decodeRecord)
-  if (!data.ok) return data
-  return ok({ seq: seq.value, type: type.value, at: at.value, data: data.value })
-}
-
-/**
- * The stream's events from `log --stream <s> --json`, in seq order. The envelope is strict
- * (a missing or mistyped key is a `BadShape`); the payloads stay raw, because the trace reads
- * a recorded value only where it finds one (`traceOf`).
- */
-export function decodeLog(raw: unknown): Result<BadShape, readonly LogEvent[]> {
-  const log = decodeRecord(raw, '$')
-  if (!log.ok) return asBadShape(log)
-  return asBadShape(fieldOf(log.value, '$', 'events', listing(decodeLogEvent)))
-}
 
 /**
  * The record's value at `key` decoded, or null when the key is absent: journal.py validates a
@@ -844,34 +896,43 @@ export function rankingOf(value: unknown): Ranking {
   return decoded.ok ? decoded.value : { kind: 'Unreadable' }
 }
 
-/** The newest event of `type` whose payload carries `ranking`, with its ranking; null when none does. */
-const newestRanking = (events: readonly LogEvent[], type: string): RecordedRanking | null => {
-  const carrier = events.filter(event => event.type === type && Object.hasOwn(event.data, 'ranking')).at(-1)
-  return carrier === undefined ? null : { seq: carrier.seq, at: carrier.at, ranking: rankingOf(field(carrier.data, 'ranking')) }
+/**
+ * A recorded ranking as `position` prints it: the envelope strict (`seq`, `at`, a `ranking`
+ * key), the ranking itself verbatim, decoded by `rankingOf` (Unreadable when it breaks the
+ * contract, never a failure).
+ */
+const decodeRecordedRanking: Decoder<RecordedRanking> = (value, path) => {
+  const stamp = decodeStamp(value, path)
+  if (!stamp.ok) return stamp
+  const raw = decodeRecord(value, path)
+  if (!raw.ok) return raw
+  const ranking = field(raw.value, 'ranking')
+  if (ranking === undefined) return fail(keyPath(path, 'ranking'), 'a recorded ranking')
+  return ok({ ...stamp.value, ranking: rankingOf(ranking) })
 }
 
+/** One `signals-missing` deviation: its stamp, nothing more. */
+const decodeSignalsGap: Decoder<SignalsGap> = decodeStamp
+
 /**
- * The trace a stream's log records (HUD ADR 0007): values picked as recorded, no rule
- * computed. The newest `review-verdict` and `design-committed` that carry `ranking`, and
- * every `deviation` of kind `signals-missing`, oldest first.
+ * `position`'s `trace`: values journal.py picked as recorded (HUD ADR 0007's rule, computed by
+ * journal.py since 0.21.0). The newest `review-verdict` and `design-committed` that carry
+ * `ranking` (null: none does), and every `signals-missing` deviation, oldest first.
  */
-export function traceOf(events: readonly LogEvent[]): Trace {
-  const signalsGaps = events
-    .filter(event => event.type === 'deviation' && stringOf(field(event.data, 'kind')) === SIGNALS_MISSING)
-    .map((event): SignalsGap => ({ seq: event.seq, at: event.at }))
-  return {
-    reviewRanking: newestRanking(events, 'review-verdict'),
-    designRanking: newestRanking(events, 'design-committed'),
-    signalsGaps,
-    isLogCut: false,
-  }
+const decodeTrace: Decoder<Trace> = (value, path) => {
+  const raw = decodeRecord(value, path)
+  if (!raw.ok) return raw
+  const reviewRanking = fieldOf(raw.value, path, 'review_ranking', nullable(decodeRecordedRanking))
+  if (!reviewRanking.ok) return reviewRanking
+  const designRanking = fieldOf(raw.value, path, 'design_ranking', nullable(decodeRecordedRanking))
+  if (!designRanking.ok) return designRanking
+  const signalsGaps = fieldOf(raw.value, path, 'signals_missing', listing(decodeSignalsGap))
+  if (!signalsGaps.ok) return signalsGaps
+  return ok({ reviewRanking: reviewRanking.value, designRanking: designRanking.value, signalsGaps: signalsGaps.value })
 }
 
 /** The trace of a stream with no event that records one. */
-export const EMPTY_TRACE: Trace = { reviewRanking: null, designRanking: null, signalsGaps: [], isLogCut: false }
-
-/** The trace when the engine cut the log's output: nothing read, and the cut said. */
-export const CUT_LOG_TRACE: Trace = { ...EMPTY_TRACE, isLogCut: true }
+export const EMPTY_TRACE: Trace = { reviewRanking: null, designRanking: null, signalsGaps: [] }
 
 /**
  * The homes from the sidecar's JSON, over DEFAULT_HOMES: a sidecar with no `artifact_homes`

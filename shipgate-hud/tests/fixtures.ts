@@ -3,7 +3,7 @@
 // golden file, fixtures.journal.ts) or a variant of it typed against the raw shapes below: a
 // variant cannot drop a key the decoders read, nor give it a value of another type.
 
-import type { AuthorizedBy, GateMode, Lifecycle, Phase, PhaseMark, RaisedBy, VerdictValue, VerifyOutcome, WorklogFrom } from '../types'
+import type { AuthorizedBy, FindingState, GateMode, Lifecycle, Phase, PhaseMark, RaisedBy, VerdictValue, VerifyOutcome, WorklogFrom } from '../types'
 import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
 
 // ---------------------------------------------------------------------------------------
@@ -60,6 +60,27 @@ export interface DecisionJson {
   readonly at: string
 }
 
+/** A recorded ranking in `position`'s `trace`: the event's seq and time, and the ranking verbatim (any value; the HUD decodes it). */
+export interface RecordedRankingJson {
+  readonly seq: number
+  readonly at: string
+  readonly ranking: unknown
+}
+
+/** `position`'s `trace` (shipgate 0.21.0). */
+export interface TraceJson {
+  readonly review_ranking: RecordedRankingJson | null
+  readonly design_ranking: RecordedRankingJson | null
+  readonly signals_missing: readonly { readonly seq: number; readonly at: string }[]
+}
+
+/** One folded disposition of `position`'s `dispositions` (shipgate 0.21.0). */
+export interface FoldedDispositionJson {
+  readonly state: FindingState
+  readonly seq: number
+  readonly at: string
+}
+
 /** `position --stream <s> --json`. */
 export interface PositionJson {
   readonly stream: string
@@ -83,7 +104,11 @@ export interface PositionJson {
     readonly verdict: VerdictValue
     readonly criteria: Readonly<Record<string, string>>
     readonly dispositions: Readonly<Record<string, string>>
+    readonly note: string | null
+    readonly round: number
   } | null
+  readonly trace: TraceJson
+  readonly dispositions: Readonly<Record<string, FoldedDispositionJson>>
 }
 
 /** journal.py's own output has the raw shapes: a key the golden file renames or drops is a compile error here. */
@@ -108,6 +133,7 @@ export const EXAMPLE_POSITION = {
   stream: EXAMPLE_STREAM,
   publish: { kind: 'held' },
   verdict: null,
+  dispositions: {},
   artifacts: {
     worklog: 'docs/prd/example.worklog.md',
     worklog_from: 'event',
@@ -243,7 +269,7 @@ sequenceDiagram
 - [ ] T001 — draw the diagrams — file(s): \`src/draw.ts\` — done when: tested
 `
 
-/** The PRD the LOG's clarify-passed event names (`docs/prd/example.md`): two success criteria. */
+/** The PRD the example position names (`docs/prd/example.md`): two success criteria. */
 export const PRD = `# PRD: Example
 
 ## Success criteria

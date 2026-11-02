@@ -88,6 +88,12 @@ export type CriterionStatus = 'met' | 'unmet'
 /** The orchestrator's word on a review finding in a verdict (`review-verdict.dispositions`). */
 export type Disposition = 'fixed' | 'rejected' | 'deferred'
 
+/**
+ * A finding's current state, as `position --json` folds it (shipgate ADR 0014): a verdict's
+ * closed word, or `fixing`, which only a `review-disposition` records (a fix is in progress).
+ */
+export type FindingState = Disposition | 'fixing'
+
 /** The event that authorized a publish. */
 export type AuthorizedBy = 'review-verdict' | 'gate-decision'
 
@@ -134,10 +140,11 @@ export type Verify = {
 
 /**
  * The stream's last review verdict. `criteria` maps an SC id to its status (a criterion the
- * verdict did not judge has no key). `dispositions` is keyed by text, `<path>:<line or ?>`
- * (full or short path, no leading `./`), because the orchestrator writes the key and a
- * finding is matched to it by path suffix. A board captured after `at` ignores the
- * dispositions; a tick made against another `seq` is ignored.
+ * verdict did not judge has no key). `dispositions` is the verdict's own map, keyed by text,
+ * `<path>:<line or ?>` (full or short path, no leading `./`); the cards read the folded
+ * `Position.dispositions`, not this map. `note` is the verdict's note (null: none). `round` is
+ * how many verdicts the stream holds up to and including this one (1 or more). A tick made
+ * against another `seq` is ignored.
  */
 export type Verdict = {
   readonly seq: EventSeq
@@ -145,10 +152,24 @@ export type Verdict = {
   readonly verdict: VerdictValue
   readonly criteria: Readonly<Partial<Record<CriterionId, CriterionStatus>>>
   readonly dispositions: Readonly<Record<string, Disposition>>
+  readonly note: string | null
+  readonly round: number
+}
+
+/**
+ * One finding key's current state, folded by journal.py from every `review-disposition` and
+ * the newest verdict's map (shipgate ADR 0014): the latest event wins, and `seq` and `at` are
+ * that event's. A board captured after `at` does not draw it: it judged an earlier round.
+ */
+export type FoldedDisposition = {
+  readonly state: FindingState
+  readonly seq: EventSeq
+  readonly at: IsoTime
 }
 
 // ---------------------------------------------------------------------------------------
-// The trace: what shipgate 0.20.0 records about the style canon and the code signals (HUD ADR 0007)
+// The trace: what shipgate 0.20.0 records about the style canon and the code signals (HUD ADR 0007),
+// as `position --json` prints it from shipgate 0.21.0 on
 // ---------------------------------------------------------------------------------------
 
 /** A `signals.py` label: a quartile over the repository. */
@@ -190,16 +211,14 @@ export type SignalsGap = {
 }
 
 /**
- * The trace values read from the stream's event log (HUD ADR 0007): the newest
+ * The trace values `position --json` prints (HUD ADR 0007, amended): the newest
  * `review-verdict` and `design-committed` that carry a `ranking` (null: none does), and every
- * `signals-missing` deviation, oldest first. `isLogCut`: the engine cut the log's output (a
- * long stream), so nothing was read; the position is still drawn.
+ * `signals-missing` deviation, oldest first.
  */
 export type Trace = {
   readonly reviewRanking: RecordedRanking | null
   readonly designRanking: RecordedRanking | null
   readonly signalsGaps: readonly SignalsGap[]
-  readonly isLogCut: boolean
 }
 
 // ---------------------------------------------------------------------------------------
@@ -219,11 +238,14 @@ export type ShapeError = {
  * (`position`, `--session`, `--nested-branch`); only that text makes an exit 2 a sign, as
  * python3 also exits 2 for a script it cannot open. `MissingMarker`: `status --json` printed
  * an object with no top-level `nested_matches` key, which every journal.py from 0.18.0 on
- * prints (shipgate ruling R3); a key that is present with a wrong value is no sign.
+ * prints (shipgate ruling R3). `MissingTrace`: `position --json` printed an object with no
+ * top-level `trace` key, which every journal.py from 0.21.0 on prints. A key that is present
+ * with a wrong value is no sign.
  */
 export type OutdatedSign =
   | { readonly kind: 'UnknownArgument'; readonly argument: string }
   | { readonly kind: 'MissingMarker' }
+  | { readonly kind: 'MissingTrace' }
 
 /**
  * Why a journal.py run gave no value. `Cut`: the person denied or interrupted the call the
@@ -331,7 +353,9 @@ export type Position = {
   readonly publish: PublishAuthorization
   readonly criteria: readonly Criterion[]
   readonly lastVerdict: Verdict | null
-  /** The ranking and signals values read from the event log (HUD ADR 0007). */
+  /** Each finding key's current state, folded by journal.py (shipgate ADR 0014); {} when none was recorded. */
+  readonly dispositions: Readonly<Record<string, FoldedDisposition>>
+  /** The ranking and signals values `position` prints (HUD ADR 0007, amended). */
   readonly trace: Trace
 }
 
@@ -348,9 +372,10 @@ export type BindingVia = 'Session' | 'Branch'
  * needs, so the HUD reads nothing and the publish gate is off; `sign` is how the last
  * refresh showed it, drawn as the pane's detail line (`outdatedText`).
  *
- * Stored under the shape tag `shipgate-hud.view-v4`: v3's `Position` has no `trace`, so a v3
- * value reads as absent and the next refresh derives it again (v2's `Failed` could hold the
- * removed `Unsupported` failure).
+ * Stored under the shape tag `shipgate-hud.view-v5`: v4's `Position` has no `dispositions`
+ * and its `Trace` carries `isLogCut`, so a v4 value reads as absent and the next refresh
+ * derives it again (v3's `Position` has no `trace`; v2's `Failed` could hold the removed
+ * `Unsupported` failure).
  */
 export type HudView =
   | { readonly kind: 'Off' }

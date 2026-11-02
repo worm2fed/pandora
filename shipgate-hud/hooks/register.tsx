@@ -28,12 +28,10 @@ import type {
   RunFailure,
   StreamName,
   Tab,
-  Trace,
 } from '../types'
 import { type Result, absurd, err, ok, parseJson, recordOf, stringOf } from './json'
 import {
   type BadShape,
-  CUT_LOG_TRACE,
   DEFAULT_HOMES,
   type DecodeFailure,
   type PositionDoc,
@@ -41,12 +39,10 @@ import {
   type StatusBrief,
   type StatusFeature,
   branchName,
-  decodeLog,
   decodePosition,
   decodeSidecarHomes,
   decodeStatus,
   isoTime,
-  traceOf,
 } from './journal'
 import { type MarkdownFile, type PositionInputs, matchesHome, parseAdr, toPosition } from './position'
 import {
@@ -165,7 +161,8 @@ function unknownArgumentOf(stderr: string): string | null {
 /**
  * A finished journal.py run as a value: its decoded stdout, or why there is none. An argument
  * argparse refused is `Outdated` (`UnknownArgument`); the decoder says `Outdated`
- * (`MissingMarker`) or `BadShape` for the JSON, passed on as it is.
+ * (`MissingMarker` for `status`, `MissingTrace` for `position`) or `BadShape` for the JSON,
+ * passed on as it is.
  */
 function outcomeOf<A>(ran: ProcessRunResult, decode: (raw: unknown) => Result<DecodeFailure, A>): Run<A> {
   if (ran.exitCode !== 0) {
@@ -670,38 +667,26 @@ async function adrsAt($: Engine, paths: readonly MarkdownFile['path'][]): Promis
   }, Promise.resolve(ok([])))
 }
 
-/** What `toPosition` maps: the decoded position, the worklog, ADRs and PRD it names, read, and the trace. */
-async function positionInputsOf($: Engine, doc: PositionDoc, trace: Trace): Promise<Run<PositionInputs>> {
+/** What `toPosition` maps: the decoded position (its trace and folded dispositions included), and the worklog, ADRs and PRD it names, read. */
+async function positionInputsOf($: Engine, doc: PositionDoc): Promise<Run<PositionInputs>> {
   const worklog = doc.artifacts.worklog === null ? ok(null) : await markdownAt($, doc.artifacts.worklog.path)
   if (!worklog.ok) return worklog
   const adrs = await adrsAt($, doc.artifacts.adrs)
   if (!adrs.ok) return adrs
   const prd = doc.artifacts.prd === null ? ok(null) : await markdownAt($, doc.artifacts.prd)
   if (!prd.ok) return prd
-  return ok({ doc, worklog: worklog.value, adrs: adrs.value, prd: prd.value, trace })
+  return ok({ doc, worklog: worklog.value, adrs: adrs.value, prd: prd.value })
 }
 
 /**
- * The trace from `log --stream <s> --json` (HUD ADR 0007). A cut output (a long stream's log
- * past the engine's limit) is a trace marked cut, so the position is still drawn; any other
- * failure is a failed run, as for every journal read.
- */
-async function traceRun($: Engine, script: string, stream: StreamName): Promise<Run<Trace>> {
-  const log = await runJournal($, script, ['log', '--stream', stream, '--json'], decodeLog)
-  if (log.ok) return ok(traceOf(log.value))
-  return log.error.kind === 'Truncated' ? ok(CUT_LOG_TRACE) : log
-}
-
-/**
- * The bound stream's position: `position --stream <s> --json`, then the trace (`traceRun`),
- * then the artifacts the position names.
+ * The bound stream's position: `position --stream <s> --json`, which carries the trace and the
+ * folded dispositions (HUD ADR 0007 amended, shipgate ADR 0014), then the artifacts it names.
+ * No `log` run: a position with no `trace` key is an older journal.py (`Outdated`).
  */
 async function boundRefresh($: Engine, script: string, via: BindingVia, stream: StreamName): Promise<Refreshed> {
   const doc = await runJournal($, script, ['position', '--stream', stream, '--json'], decodePosition)
   if (!doc.ok) return refreshedOf(doc.error)
-  const trace = await traceRun($, script, stream)
-  if (!trace.ok) return refreshedOf(trace.error)
-  const inputs = await positionInputsOf($, doc.value, trace.value)
+  const inputs = await positionInputsOf($, doc.value)
   return inputs.ok ? { kind: 'Bound', via, position: toPosition(inputs.value) } : refreshedOf(inputs.error)
 }
 
@@ -756,7 +741,7 @@ const boundStreamOf = (shown: HudView): StreamName | null => (shown.kind === 'Bo
 /** The view before the first refresh, and after a project loses its sidecar. */
 const OFF: HudView = { kind: 'Off' }
 
-const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v4' })
+const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v5' })
 const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null)
 const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null)
 const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, EMPTY_REVIEW, { shape: 'shipgate-hud.review-v2' })
@@ -810,6 +795,20 @@ const IDLE: RefreshSlot = { kind: 'Idle' }
 const NOT_SEARCHED: ScriptLookup = { kind: 'NotSearched' }
 const NOT_FOUND: ScriptLookup = { kind: 'NotFound' }
 
+/**
+ * Which session the last detection ran for (#8): none yet in this module load, or the session
+ * id `$.session.id()` gave then (null: the engine could not say), and whether it found a
+ * project. `/clear`, `/resume` and `/branch` move the process to another session id, the
+ * moment `$.state` resets; `found` also catches a reset that keeps the id. A detection under
+ * way, or one only due, is noted with `found: false`.
+ */
+type Detection = { readonly kind: 'Never' } | { readonly kind: 'Ran'; readonly sessionId: string | null; readonly found: boolean }
+
+const NEVER_DETECTED: Detection = { kind: 'Never' }
+
+/** The clock's period: the position is refreshed this often, and a session change is noticed by then at the latest. */
+const TICK_MS = 60_000
+
 // Module state: lost on a reload, which is fine: session.start runs again and refills it, and
 // each hook that needs it locates the project and journal.py again when it is empty.
 let journalScript = ''
@@ -817,6 +816,9 @@ let script: ScriptLookup = NOT_SEARCHED
 let homes: SidecarHomes | null = null
 let projectRoot: string | null = null
 let slot: RefreshSlot = IDLE
+let detection: Detection = NEVER_DETECTED
+// the 60 s clock: started once per module load, by the first detection that finds the project
+let isTicking = false
 
 /** Does the session draw anywhere? Read at each hook, never cached (D5): empty in a plain -p run. */
 const isDrawing = async ($: Engine): Promise<boolean> => (await $.session.surfaces()).length > 0
@@ -838,6 +840,111 @@ async function detect($: Engine): Promise<Result<Rejection, boolean>> {
   homes = null
   await update($, view, () => OFF)
   return ok(false)
+}
+
+/** Has a detection run for this session id? A null id (the engine cannot say) matches a detection that ran for null. */
+const isDetectedFor = (sessionId: string | null): boolean => detection.kind === 'Ran' && detection.sessionId === sessionId
+
+/** Did the last detection find a project? False before any, and while one is under way or due. */
+const hasFoundProject = (): boolean => detection.kind === 'Ran' && detection.found
+
+/**
+ * `detect`, noted for `sessionId` before it runs (`found: false`), so the lazy check
+ * (`detectionDue`) does not run it again for the same session, also while this one is under
+ * way; then noted with what it found. A cut detection is not noted: the next event tries again.
+ */
+async function detectFor($: Engine, sessionId: string | null): Promise<Result<Rejection, boolean>> {
+  const before = detection
+  detection = { kind: 'Ran', sessionId, found: false }
+  const project = await detect($)
+  detection = project.ok ? { kind: 'Ran', sessionId, found: project.value } : before
+  return project
+}
+
+/** `detectFor` the session this hook runs in. */
+async function detectSession($: Engine): Promise<Result<Rejection, boolean>> {
+  return detectFor($, await sessionIdOf($))
+}
+
+/** One clock period: a detection that is due (`detectionDue`) runs, with its refresh; else one refresh. */
+async function tick($: Engine): Promise<void> {
+  const due = await detectionDue($)
+  if (due.kind === 'Detect') await dueDetection($, due.sessionId)
+  else await refresh($)
+}
+
+/** Starts the 60 s clock, once per module load: a second call does nothing. */
+function startTicking($: Engine): void {
+  if (isTicking) return
+  isTicking = true
+  $.clock.every(TICK_MS, () => {
+    void settle(() => tick($))
+  })
+}
+
+/**
+ * The project detected again for `sessionId` (`detectFor`), and refreshed when found, starting
+ * the clock (`startTicking`).
+ */
+async function detectAndRefresh($: Engine, sessionId: string | null): Promise<Result<Rejection, boolean>> {
+  const project = await detectFor($, sessionId)
+  if (project.ok && project.value) {
+    await refresh($)
+    startTicking($)
+  }
+  return project
+}
+
+/** What the lazy check (`detectionDue`) decided: nothing to do, or a detection due for `sessionId`, already noted. */
+type Due = { readonly kind: 'None' } | { readonly kind: 'Detect'; readonly sessionId: string | null }
+
+const NOTHING_DUE: Due = { kind: 'None' }
+
+/**
+ * The lazy check (#8), cheap: is a detection due? An organization-managed session skips
+ * `classic.*` hooks for user mods, so after `/clear`, `/resume` or `/branch` the next clock
+ * tick, tool call or prompt asks this instead. The session id is compared first.
+ * - The same id as the last detection's: when that detection found nothing (a project with no
+ *   journal), nothing more (one `$.session.id()` call, no walk per event). When it found a
+ *   project, no refresh is running and the view now reads `Off`, `$.state` was reset under
+ *   the same id: a detection is due.
+ * - A new id with a view that is not `Off`: `$.state` was not reset (an id that moved with no
+ *   `/clear`), and the view shows a detected project; the id is noted, nothing else.
+ * - A new id with an `Off` view: a detection is due.
+ * A detection is due only in a session that draws, and it is noted at once (`found: false`),
+ * so a second event does not schedule another.
+ */
+async function detectionDue($: Engine): Promise<Due> {
+  const sessionId = await sessionIdOf($)
+  const isSameSession = isDetectedFor(sessionId)
+  if (isSameSession && (!hasFoundProject() || slot.kind !== 'Idle')) return NOTHING_DUE
+  if ((await read($, view)).kind !== 'Off') {
+    if (!isSameSession) detection = { kind: 'Ran', sessionId, found: true }
+    return NOTHING_DUE
+  }
+  if (!(await isDrawing($))) return NOTHING_DUE
+  detection = { kind: 'Ran', sessionId, found: false }
+  return { kind: 'Detect', sessionId }
+}
+
+/** A due detection run: the project detected and, when found, refreshed. A cut one is noted as never run, so the next event asks again. */
+async function dueDetection($: Engine, sessionId: string | null): Promise<void> {
+  const project = await detectAndRefresh($, sessionId)
+  if (!project.ok && isDetectedFor(sessionId)) detection = NEVER_DETECTED
+}
+
+/**
+ * The lazy check on an event's path (a tool call, a prompt): the check inline, and a due
+ * detection scheduled off the path (`$.clock.after(0, …)`), so the event passes on at once,
+ * never waiting for a directory walk or a journal.py run. Never rejects.
+ */
+async function scheduleDueDetection($: Engine): Promise<void> {
+  const due = await settle(() => detectionDue($))
+  if (!due.ok || due.value.kind !== 'Detect') return
+  const { sessionId } = due.value
+  $.clock.after(0, () => {
+    void settle(() => dueDetection($, sessionId))
+  })
 }
 
 /**
@@ -1221,11 +1328,12 @@ async function targetsOf(
  */
 async function publishInputsOf($: Engine, commands: PublishCommands): Promise<GateInputs> {
   if (!(await isDrawing($))) return { kind: 'NoSurface' }
-  const project = await detect($)
+  const project = await detectSession($)
   if (!project.ok) return unreadableTargets(commands, project.error)
   if (!project.value) return { kind: 'NoProject' }
   // the refresh this request covers: its value, never the atoms it wrote (D4)
   const refreshed = await refresh($)
+  startTicking($)
   if (refreshed.kind === 'NoProject') return { kind: 'NoProject' }
   if (refreshed.kind === 'NoJournalScript') return { kind: 'NoJournalScript' }
   if (refreshed.kind === 'Outdated') return { kind: 'Outdated' }
@@ -1289,34 +1397,41 @@ export const register: Register = (on, options) => {
       immediate: true,
     })
     // A session with no surface (claude -p, the SDK) draws nothing: run nothing either.
-    const project = e.surface === null ? ok(false) : await detect($)
-    if (project.ok && project.value) {
-      await refresh($)
-      void $.ui.open({ id: PANE_ID, title: 'shipgate' })
-      $.clock.every(60_000, () => {
-        void refresh($)
-      })
-    }
+    const project = e.surface === null ? ok(false) : await detectAndRefresh($, await sessionIdOf($))
+    if (project.ok && project.value) void $.ui.open({ id: PANE_ID, title: 'shipgate' })
     return next(e)
   })
 
-  // /clear, /resume and /branch reset $.state and fire no session.start: detect again.
+  // /clear, /resume and /branch reset $.state and fire no session.start: detect again. The
+  // fast path, where classic hooks reach user mods; the lazy listeners below cover the rest.
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
-    if (await isDrawing($)) {
-      const project = await detect($)
-      if (project.ok && project.value) await refresh($)
-    }
+    if (await isDrawing($)) await detectAndRefresh($, await sessionIdOf($))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // #8: any tool call or prompt after a session change detects the project again, also where
+  // org-managed settings skip classic.* hooks. The check is cheap and inline; a due detection
+  // runs off the event's path, so the event passes on at once, unchanged. A failure is
+  // swallowed, and the event always passes on.
+  on('tool.call', async ($, e, next) => {
+    await scheduleDueDetection($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('prompt.submit', async ($, e, next) => {
+    await scheduleDueDetection($)
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'hud' }, async $ => {
-    const project = await detect($)
+    const project = await detectSession($)
     if (!project.ok) return {} // cut by the person: nothing to open
     if (!project.value) {
       return { text: `shipgate-hud: no ${SIDECAR} in this project or any directory above it — run /shipgate:setup to create a flow journal.` }
     }
     await $.ui.open({ id: PANE_ID, title: 'shipgate', focus: true, closeOnEscape: true })
     await refresh($)
+    startTicking($)
     return {}
   })
 

@@ -3,25 +3,21 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   DEFAULT_HOMES,
   EMPTY_TRACE,
-  type LogEvent,
   MIN_SHIPGATE_VERSION,
   type PositionDoc,
   type StatusBrief,
-  decodeLog,
   decodePosition,
   decodeSidecarHomes,
   decodeStatus,
-  eventSeq,
   failureText,
+  hasPositionMarker,
   hasStatusMarker,
-  isoTime,
   outdatedText,
   rankingOf,
-  traceOf,
 } from '../hooks/journal'
 import type { ReadFailure, ShapeError } from '../types'
 import { SIDECAR, olderStatus } from './fixtures'
-import { LOG_GOLDEN, POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
+import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
 
 /** A golden document decoded; a thrown error naming the path when it does not decode (the test fails there). */
 const statusOf = (raw: unknown): StatusBrief => {
@@ -32,7 +28,7 @@ const statusOf = (raw: unknown): StatusBrief => {
 
 const positionOf = (raw: unknown): PositionDoc => {
   const decoded = decodePosition(raw)
-  if (!decoded.ok) throw new Error(`position does not decode at ${decoded.error.error.path}: expected ${decoded.error.error.expected}`)
+  if (!decoded.ok) throw new Error(`position does not decode: ${JSON.stringify(decoded.error)}`)
   return decoded.value
 }
 
@@ -44,7 +40,7 @@ const statusError = (raw: unknown): ShapeError | null => {
 
 const positionError = (raw: unknown): ShapeError | null => {
   const decoded = decodePosition(raw)
-  return decoded.ok ? null : decoded.error.error
+  return decoded.ok || decoded.error.kind !== 'BadShape' ? null : decoded.error.error
 }
 
 const ALL = STATUS_GOLDEN.all
@@ -72,7 +68,7 @@ describe('journal: decodeStatus', () => {
       lifecycle: 'live',
       current: { phase: 'implement', enteredAt: '2026-10-01T11:53:00+00:00', isImplied: false },
       lastEventAt: '2026-10-01T11:55:00+00:00',
-      publish: { kind: 'authorized', by: 'gate-decision', seq: 35, at: '2026-10-01T11:55:00+00:00' },
+      publish: { kind: 'authorized', by: 'gate-decision', seq: 42, at: '2026-10-01T11:55:00+00:00' },
     })
     expect(byStream.get('feature/golden-started')?.current).toBeNull()
     expect(byStream.get('feature/golden-named')?.current?.isImplied).toBe(true)
@@ -196,7 +192,7 @@ describe('journal: decodePosition', () => {
   test('the flow position: every field as journal.py printed it, camelCase', async () => {
     const doc = positionOf(FLOW)
     expect(doc.current).toEqual({ phase: 'implement', enteredAt: '2026-10-01T11:53:00+00:00', isImplied: false })
-    expect(doc.publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 35, at: '2026-10-01T11:55:00+00:00' })
+    expect(doc.publish).toEqual({ kind: 'authorized', by: 'gate-decision', seq: 42, at: '2026-10-01T11:55:00+00:00' })
     expect(doc.phases['route-and-map']).toBe('skipped')
     expect(doc.phases.review).toBe('revisited')
     expect(doc.artifacts).toEqual({
@@ -213,17 +209,66 @@ describe('journal: decodePosition', () => {
     ])
     // oldest first, as printed, each with its real seq
     expect(doc.decisions).toEqual([
-      { seq: 22, gate: 'clarify', question: 'one widget or two?', decision: 'two', raisedBy: 'orchestrator', mode: 'executive', at: '2026-10-01T11:42:00+00:00' },
-      { seq: 35, gate: 'publish', question: 'open the MR before the second review?', decision: 'publish', raisedBy: 'user', mode: 'ask', at: '2026-10-01T11:55:00+00:00' },
+      { seq: 29, gate: 'clarify', question: 'one widget or two?', decision: 'two', raisedBy: 'orchestrator', mode: 'executive', at: '2026-10-01T11:42:00+00:00' },
+      { seq: 42, gate: 'publish', question: 'open the MR before the second review?', decision: 'publish', raisedBy: 'user', mode: 'ask', at: '2026-10-01T11:55:00+00:00' },
     ])
     expect(doc.lastVerify).toEqual({ outcome: 'fail', taskIds: ['T002'], at: '2026-10-01T11:54:00+00:00' })
     expect(doc.verdict).toEqual({
-      seq: 32,
+      seq: 39,
       at: '2026-10-01T11:52:00+00:00',
       verdict: 'not-ready',
       criteria: { 'SC-001': 'met', 'SC-002': 'unmet' },
       dispositions: { 'src/golden.py:12': 'fixed', 'src/other.py:?': 'deferred' },
+      note: null,
+      round: 1,
     })
+  })
+
+  test('the signals position: the trace as journal.py picked it, both rankings decoded, one signals gap', async () => {
+    const raw = POSITION_GOLDEN.signals
+    const doc = positionOf(raw)
+    expect(doc.trace.signalsGaps).toEqual([{ seq: raw.trace.signals_missing[0]?.seq, at: raw.trace.signals_missing[0]?.at }])
+    expect(doc.trace.designRanking).toEqual({
+      seq: raw.trace.design_ranking.seq,
+      at: raw.trace.design_ranking.at,
+      ranking: {
+        kind: 'Ranked',
+        source: 'regex',
+        files: [
+          { path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: null },
+          { path: 'src/other.py', fix: 'low', churn: 'low', fanIn: 'mid' },
+        ],
+      },
+    })
+    expect(doc.trace.reviewRanking).toEqual({
+      seq: raw.trace.review_ranking.seq,
+      at: raw.trace.review_ranking.at,
+      ranking: { kind: 'Ranked', source: 'graph', files: [{ path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: 'top' }] },
+    })
+    // the review ranking rides on the verdict position names
+    expect(doc.trace.reviewRanking?.seq).toBe(doc.verdict?.seq)
+    expect(doc.dispositions).toEqual({})
+  })
+
+  test('a stream that records no trace value: the empty trace', async () => {
+    expect(positionOf(FLOW).trace).toEqual(EMPTY_TRACE)
+    expect(positionOf(POSITION_GOLDEN.started).trace).toEqual(EMPTY_TRACE)
+  })
+
+  test('the dispositions position: the fold per key, the verdict\'s note and round', async () => {
+    const doc = positionOf(POSITION_GOLDEN.dispositions)
+    expect(doc.dispositions).toEqual({
+      'src/golden.py:12': { state: 'fixed', seq: 7, at: '2026-10-01T11:20:00+00:00' },
+      'src/golden.py:30': { state: 'deferred', seq: 3, at: '2026-10-01T11:16:00+00:00' },
+      'src/other.py:?': { state: 'fixing', seq: 3, at: '2026-10-01T11:16:00+00:00' },
+    })
+    expect(Object.keys(doc.dispositions)).toHaveLength(3)
+    expect(doc.verdict).toMatchObject({ verdict: 'ready', note: 'the round closes', round: 1, dispositions: { 'src/golden.py:12': 'fixed' } })
+  })
+
+  test('a ranking that breaks the contract is Unreadable inside a strict envelope, never a failure', async () => {
+    const trace = { ...FLOW.trace, review_ranking: { seq: 4, at: '2026-10-01T11:00:00+00:00', ranking: { source: 'graph', files: { 'a.py': {} } } } }
+    expect(positionOf({ ...FLOW, trace }).trace.reviewRanking).toEqual({ seq: 4, at: '2026-10-01T11:00:00+00:00', ranking: { kind: 'Unreadable' } })
   })
 
   test('the other streams: a worklog found by its name, no phase yet, no worklog', async () => {
@@ -242,9 +287,28 @@ describe('journal: decodePosition', () => {
     expect(positionOf({ ...FLOW, last_verify: lastVerify }).lastVerify?.taskIds).toEqual(['T002'])
   })
 
+  test('0.21 marker: a position with no trace key is Outdated (MissingTrace), never a BadShape', async () => {
+    const { trace: _trace, ...older } = FLOW
+    const decoded = decodePosition(older)
+    expect(decoded.ok ? null : decoded.error).toEqual({ kind: 'Outdated', sign: { kind: 'MissingTrace' } })
+    // looked for first: a 0.20 position also lacks dispositions and the verdict's round
+    const { trace: _t, dispositions: _d, ...older020 } = POSITION_GOLDEN.dispositions
+    const verdict020 = { ...older020.verdict, note: undefined, round: undefined }
+    const decoded020 = decodePosition({ ...older020, verdict: verdict020 })
+    expect(decoded020.ok ? null : decoded020.error).toEqual({ kind: 'Outdated', sign: { kind: 'MissingTrace' } })
+    expect(hasPositionMarker(older)).toBe(false)
+    // a present key with a wrong value is no sign of an older journal.py: a BadShape
+    expect(hasPositionMarker({ ...FLOW, trace: null })).toBe(true)
+    expect(positionError({ ...FLOW, trace: null })?.path).toBe('$.trace')
+    // not an object: no answer about the version, so a BadShape at `$`
+    expect(hasPositionMarker('flow')).toBe(true)
+  })
+
   const artifacts = FLOW.artifacts
   const task = FLOW.tasks[0]
   const decision = FLOW.decisions[0]
+  const ranked = { seq: 4, at: '2026-10-01T11:00:00+00:00', ranking: { source: 'graph', files: [] } }
+  const folded = { state: 'fixing', seq: 9, at: '2026-10-01T11:00:00+00:00' }
   for (const [name, raw, path] of [
     ['not an object', 'flow', '$'],
     ['last_verify renamed', { ...FLOW, last_verify: undefined, lastVerify: FLOW.last_verify }, '$.last_verify'],
@@ -263,6 +327,30 @@ describe('journal: decodePosition', () => {
     ['a decision text of another type (journal.py prints null)', { ...FLOW, decisions: [{ ...decision, decision: ['publish'] }] }, '$.decisions[0].decision'],
     ['a verdict outside the vocabulary', { ...FLOW, verdict: { ...FLOW.verdict, verdict: 'ok' } }, '$.verdict.verdict'],
     ['a disposition outside the vocabulary', { ...FLOW, verdict: { ...FLOW.verdict, dispositions: { 'a.ts:1': 'ignored' } } }, '$.verdict.dispositions["a.ts:1"]'],
+    // `fixing` is a folded state only: a verdict's own map keeps its three closed states
+    ['fixing in the verdict\'s own map', { ...FLOW, verdict: { ...FLOW.verdict, dispositions: { 'a.ts:1': 'fixing' } } }, '$.verdict.dispositions["a.ts:1"]'],
+    ['a verdict with no note key (absent is not null)', { ...FLOW, verdict: { ...FLOW.verdict, note: undefined } }, '$.verdict.note'],
+    ['a verdict note of another type', { ...FLOW, verdict: { ...FLOW.verdict, note: 3 } }, '$.verdict.note'],
+    ['a verdict with no round', { ...FLOW, verdict: { ...FLOW.verdict, round: undefined } }, '$.verdict.round'],
+    ['a non-integer round', { ...FLOW, verdict: { ...FLOW.verdict, round: 1.5 } }, '$.verdict.round'],
+    ['a round of zero (a verdict counts itself)', { ...FLOW, verdict: { ...FLOW.verdict, round: 0 } }, '$.verdict.round'],
+    ['a round as text', { ...FLOW, verdict: { ...FLOW.verdict, round: '2' } }, '$.verdict.round'],
+    ['a round as a boolean', { ...FLOW, verdict: { ...FLOW.verdict, round: true } }, '$.verdict.round'],
+    ['dispositions missing', { ...FLOW, dispositions: undefined }, '$.dispositions'],
+    ['dispositions as a list', { ...FLOW, dispositions: [] }, '$.dispositions'],
+    ['a folded state outside the four', { ...FLOW, dispositions: { 'a.ts:1': { ...folded, state: 'done' } } }, '$.dispositions["a.ts:1"].state'],
+    ['a folded disposition with no seq', { ...FLOW, dispositions: { 'a.ts:1': { ...folded, seq: undefined } } }, '$.dispositions["a.ts:1"].seq'],
+    ['a folded disposition with a bad time', { ...FLOW, dispositions: { 'a.ts:1': { ...folded, at: 'yesterday' } } }, '$.dispositions["a.ts:1"].at'],
+    ['a folded disposition as bare text', { ...FLOW, dispositions: { 'a.ts:1': 'fixing' } }, '$.dispositions["a.ts:1"]'],
+    ['trace not an object', { ...FLOW, trace: [] }, '$.trace'],
+    ['a trace with no review_ranking key', { ...FLOW, trace: { ...FLOW.trace, review_ranking: undefined } }, '$.trace.review_ranking'],
+    ['a trace with no design_ranking key', { ...FLOW, trace: { ...FLOW.trace, design_ranking: undefined } }, '$.trace.design_ranking'],
+    ['a trace with no signals_missing list', { ...FLOW, trace: { ...FLOW.trace, signals_missing: null } }, '$.trace.signals_missing'],
+    ['a recorded ranking with no seq', { ...FLOW, trace: { ...FLOW.trace, review_ranking: { ...ranked, seq: undefined } } }, '$.trace.review_ranking.seq'],
+    ['a recorded ranking with a bad time', { ...FLOW, trace: { ...FLOW.trace, design_ranking: { ...ranked, at: 'later' } } }, '$.trace.design_ranking.at'],
+    ['a recorded ranking with no ranking key', { ...FLOW, trace: { ...FLOW.trace, review_ranking: { ...ranked, ranking: undefined } } }, '$.trace.review_ranking.ranking'],
+    ['a signals gap with no seq', { ...FLOW, trace: { ...FLOW.trace, signals_missing: [{ at: '2026-10-01T11:00:00+00:00' }] } }, '$.trace.signals_missing[0].seq'],
+    ['a signals gap with no time', { ...FLOW, trace: { ...FLOW.trace, signals_missing: [{ seq: 3 }] } }, '$.trace.signals_missing[0].at'],
     ['artifacts missing', { ...FLOW, artifacts: undefined }, '$.artifacts'],
     ['worklog_from missing beside a worklog', { ...FLOW, artifacts: { ...artifacts, worklog_from: null } }, '$.artifacts.worklog_from'],
     ['worklog_from beside no worklog', { ...FLOW, artifacts: { ...artifacts, worklog: null } }, '$.artifacts.worklog_from'],
@@ -344,6 +432,14 @@ describe('journal: outdatedText', () => {
     expect(outdatedText({ kind: 'MissingMarker' })).toBe('journal.py status --json printed no nested_matches key')
   })
 
+  test('a missing trace names the key position --json did not print', async () => {
+    expect(outdatedText({ kind: 'MissingTrace' })).toBe('journal.py position --json printed no trace key')
+  })
+
+  test('the read floor is 0.21.0: the first journal.py whose position prints the trace', async () => {
+    expect(MIN_SHIPGATE_VERSION).toBe('0.21.0')
+  })
+
   test('a refused argument is one line, cut, never a wall of text', async () => {
     const line = outdatedText({ kind: 'UnknownArgument', argument: `x\n\u0007${'y'.repeat(5000)}` })
     expect(line).not.toMatch(/[\n\r\u0000-\u001f]/)
@@ -351,80 +447,7 @@ describe('journal: outdatedText', () => {
   })
 })
 
-/** A golden log decoded; a thrown error naming the path when it does not decode. */
-const logOf = (raw: unknown): readonly LogEvent[] => {
-  const decoded = decodeLog(raw)
-  if (!decoded.ok) throw new Error(`log does not decode at ${decoded.error.error.path}: expected ${decoded.error.error.expected}`)
-  return decoded.value
-}
-
-/** One raw event, as `log --json` prints it. */
-const rawEvent = (seq: number, type: string, data: Record<string, unknown>): Record<string, unknown> => ({
-  actor: 'orchestrator',
-  data,
-  seq,
-  stream: 'feat/x',
-  ts: '2026-10-01T11:00:00+00:00',
-  type,
-  version: seq,
-})
-
-const SEQ = (n: number) => {
-  const seq = eventSeq(n)
-  if (seq === null) throw new Error(`no seq ${n}`)
-  return seq
-}
-const AT = isoTime('2026-10-01T11:00:00+00:00')
-
-describe('journal: decodeLog and the trace (HUD ADR 0007)', () => {
-  for (const [scenario, raw] of Object.entries(LOG_GOLDEN)) {
-    test(`the golden ${scenario} log decodes, every event in seq order`, async () => {
-      const events = logOf(raw)
-      expect(events.map(event => event.seq)).toEqual(raw.events.map(event => event.seq))
-      expect(events.map(event => event.type)).toEqual(raw.events.map(event => event.type))
-    })
-  }
-
-  test('the golden signals stream: the auto deviation, the design ranking, the review ranking', async () => {
-    const trace = traceOf(logOf(LOG_GOLDEN.signals))
-    const deviation = LOG_GOLDEN.signals.events.find(event => event.type === 'deviation')
-    expect(trace.signalsGaps).toEqual([{ seq: deviation?.seq, at: deviation?.ts }])
-    expect(trace.designRanking?.ranking).toEqual({
-      kind: 'Ranked',
-      source: 'regex',
-      files: [
-        { path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: null },
-        { path: 'src/other.py', fix: 'low', churn: 'low', fanIn: 'mid' },
-      ],
-    })
-    expect(trace.reviewRanking?.ranking).toEqual({ kind: 'Ranked', source: 'graph', files: [{ path: 'src/golden.py', fix: 'top', churn: 'high', fanIn: 'top' }] })
-    const verdict = LOG_GOLDEN.signals.events.find(event => event.type === 'review-verdict')
-    expect(trace.reviewRanking?.seq).toBe(verdict?.seq)
-  })
-
-  test('a stream that records no trace value: the empty trace', async () => {
-    expect(traceOf(logOf(LOG_GOLDEN.flow))).toEqual(EMPTY_TRACE)
-  })
-
-  test('the newest event that carries a ranking wins; a newer one without the key does not hide it', async () => {
-    const graph = { source: 'graph', files: [{ path: 'a.py', fix: 'top', churn: 'top', fan_in: 'low' }] }
-    const events = logOf({
-      events: [
-        rawEvent(1, 'review-verdict', { verdict: 'not-ready', ranking: { source: 'regex', files: [] } }),
-        rawEvent(2, 'review-verdict', { verdict: 'not-ready', ranking: graph }),
-        rawEvent(3, 'review-verdict', { verdict: 'ready' }),
-      ],
-    })
-    expect(traceOf(events).reviewRanking).toEqual({ seq: SEQ(2), at: AT, ranking: { kind: 'Ranked', source: 'graph', files: [{ path: 'a.py', fix: 'top', churn: 'top', fanIn: 'low' }] } })
-  })
-
-  test('only a deviation of kind signals-missing is a signals gap', async () => {
-    const events = logOf({
-      events: [rawEvent(4, 'deviation', { note: 'n', kind: 'style-missing' }), rawEvent(5, 'deviation', { note: 'n' }), rawEvent(6, 'deviation', { note: 'n', kind: 'signals-missing', auto: true })],
-    })
-    expect(traceOf(events).signalsGaps).toEqual([{ seq: SEQ(6), at: AT }])
-  })
-
+describe('journal: rankingOf (HUD ADR 0007)', () => {
   test('rankingOf decodes to journal.py\'s contract: source required, unavailable a reason, files and labels optional', async () => {
     expect(rankingOf({ source: 'none', unavailable: 'shallow' })).toEqual({ kind: 'Unavailable', reason: 'shallow' })
     expect(rankingOf({ source: 'none', files: [] })).toEqual({ kind: 'Ranked', source: 'none', files: [] })
@@ -444,18 +467,5 @@ describe('journal: decodeLog and the trace (HUD ADR 0007)', () => {
     ] as const) {
       expect([label, rankingOf(value)]).toEqual([label, { kind: 'Unreadable' }])
     }
-  })
-
-  test('the envelope is strict: no events list, or an event without its seq, type, ts or data, is a BadShape', async () => {
-    const errorOf = (raw: unknown): string | null => {
-      const decoded = decodeLog(raw)
-      return decoded.ok ? null : decoded.error.error.path
-    }
-    expect(errorOf({})).toBe('$.events')
-    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), seq: undefined }] })).toBe('$.events[0].seq')
-    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), type: 3 }] })).toBe('$.events[0].type')
-    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), ts: 'yesterday' }] })).toBe('$.events[0].ts')
-    expect(errorOf({ events: [{ ...rawEvent(1, 'deviation', {}), data: [] }] })).toBe('$.events[0].data')
-    expect(errorOf([])).toBe('$')
   })
 })
