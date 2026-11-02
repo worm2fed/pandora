@@ -719,8 +719,28 @@
       "version": "0.17.0",
       "with": 1.0,
       "without": 1.0
+    },
+    "74-review-canon-lens": {
+      "claude": "2.1.316",
+      "delta": 0.11,
+      "judge": "sonnet",
+      "results": "2026-11-02T11-44-37-117Z",
+      "runs": 3,
+      "version": "0.20.0",
+      "with": 1.0,
+      "without": 0.89
+    },
+    "75-graph-past-route": {
+      "claude": "2.1.316",
+      "delta": 0.6,
+      "judge": "sonnet",
+      "results": "2026-11-02T11-44-37-294Z",
+      "runs": 3,
+      "version": "0.20.0",
+      "with": 1.0,
+      "without": 0.4
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
-  "updated": "2026-10-19"
+  "updated": "2026-11-02"
 }
