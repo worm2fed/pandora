@@ -104,12 +104,11 @@ A worker starts with zero context, so the worker brief must be self-contained:
    the brief contradicting the artifact reports the conflict and gets credited, not
    corrected.
 2. **Files to read first** (absolute paths) and the conventions that apply: per-service
-   CLAUDE.md rules, house style, test commands. If the project config's Style section names a
-   style skill, instruct the worker to invoke it before writing code. Tell it to **mirror the
-   vetted reference implementation the design names**. The nearest sibling is not
-   automatically a pattern source, because scaffolds and stubs encode garbage. A previous
-   slice's output is a source only for the surfaces that were actually reviewed. The brief may
-   carry the risk-signal table for the dispatched area
+   CLAUDE.md rules, house style, test commands. The style skills go on their own line (item
+   9). Tell it to **mirror the vetted reference implementation the design names**. The
+   nearest sibling is not automatically a pattern source, because scaffolds and stubs encode
+   garbage. A previous slice's output is a source only for the surfaces that were actually
+   reviewed. The brief may carry the risk-signal table for the dispatched area
    (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <area> --by-dir 2`). That is
    your call per dispatch. The table is context on which files are fragile or load-bearing,
    not an instruction to rank by it. If it is unavailable (see the JSON's `reason`,
@@ -154,6 +153,20 @@ A worker starts with zero context, so the worker brief must be self-contained:
    (`Docs: plain | ste-80`). When it says `ste-80`, also paste the Writing for people
    callout above verbatim, the way item 7 pastes the guardrails: a worker cannot apply a
    rule it never sees. No such section, or a placeholder ⇒ say `plain`.
+9. **The Style line (required).** Every brief carries one line, in one of two forms:
+   `Style: invoke <skill>[, <skill>] with the Skill tool before you write or change code.`
+   or `Style: none — the config's Style section names no skill.` Take the names from the
+   config's Style section; a section that holds only the template's placeholder counts as
+   none. The line is required even when it says none, so a brief without it is visible.
+   On a journaled project, a brief dispatched without the line is a `deviation`:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <branch> \
+     --type deviation --data '{"note":"worker brief for T012 had no Style line","kind":"style-missing"}'
+   ```
+
+   `journal.py stats` counts deviations by `kind`. Send the missing line to the running
+   worker with SendMessage; do not respawn it.
 
 ## Worker rules
 

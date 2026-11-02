@@ -1702,7 +1702,49 @@ def _envelope(a: Analysis, reason: Optional[str]) -> Dict[str, Any]:
         payload["structure"] = structure_unavailable(a.reason or "not-requested")
     if a.selection is not None and a.selection.advisory:
         payload["advisory"] = a.selection.advisory
+    # JSON only: the table keeps the advisory-once rule (code-graph FR-004) for a
+    # person reading it, and the map is built from the JSON.
+    if a.selection is not None and a.selection.source != "graph":
+        note = _codegraph.graph_note(a.selection.reason)
+        if note:
+            payload["graph_note"] = note
     return payload
+
+
+# The risk ranking a phase carries into the journal (#10, ADR 0013): the top rows in
+# this JSON's own order, each path cut to its last segments, three labels each.
+RANKING_TOP = 5
+RANKING_SEGMENTS = 3
+
+
+def _ranking_path(path: str) -> str:
+    return "/".join(path.split("/")[-RANKING_SEGMENTS:])
+
+
+def ranking(rows: Sequence[Dict[str, Any]], structure: Dict[str, Any],
+            reason: Optional[str] = None) -> Dict[str, Any]:
+    """`{source, files: [{path, fix, churn, fan_in}]}` in ROWS' order, or `{source:
+    none, unavailable}` when the signals are. ROWS must already be sorted. `files` is a
+    list because the journal stores payloads with sorted keys. A path is its last
+    segments unless another ranked file already holds that tail."""
+    if reason is not None:
+        return {"source": "none", "unavailable": reason}
+    source = structure.get("source") if structure.get("available") else None
+    files: List[Dict[str, Any]] = []
+    seen = set()
+    for row in rows:
+        if len(files) == RANKING_TOP:
+            break
+        # Two files with one tail (`apps/a/src/index.ts`, `apps/b/src/index.ts`) are
+        # two files: the later one keeps its full path instead of dropping out.
+        path = _ranking_path(row["path"])
+        if path in seen:
+            path = row["path"]
+        seen.add(path)
+        labels = row.get("labels") or {}
+        files.append({"path": path, "fix": labels.get("fix_rate"),
+                      "churn": labels.get("commits"), "fan_in": labels.get("fan_in")})
+    return {"source": source or "none", "files": files}
 
 
 def _unavailable_trajectory(reason: str) -> Dict[str, Any]:
@@ -1774,6 +1816,7 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
     payload["trajectory"] = a.traj_info
     if reason is not None:
         payload["files"] = []
+        payload["ranking"] = ranking([], payload["structure"], reason)
         emit(payload, args.json)
         return EXIT_OK
     assert a.repo is not None
@@ -1789,6 +1832,7 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
     if changed is not None:
         selected = [r for r in selected if r["path"] in changed]
 
+    payload["ranking"] = ranking(sort_rows(selected), payload["structure"])
     lines = _graph_notes(payload) + _half_notes(a.traj_info, payload["structure"])
     if args.by_dir is not None:
         wanted = {dir_of(r["path"], args.by_dir) for r in selected}
@@ -1865,6 +1909,9 @@ def _graph_unavailable(args: argparse.Namespace, reason: str,
                                "reason": reason, "source": "regex"}
     if advisory:
         payload["advisory"] = advisory
+    note = _codegraph.graph_note(reason)
+    if note:
+        payload["graph_note"] = note
     if args.json:
         sys.stdout.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
     else:

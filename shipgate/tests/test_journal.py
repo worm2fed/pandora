@@ -1824,7 +1824,11 @@ class TestStatus(JournalTestCase):
         s = "feature/demo"
         self.append_event(s, "flow-started", {"request": "build it", "branch": "feat/demo"})
         for phase in ("workspace", "route-and-map", "explore", "clarify"):
-            self.append_event(s, "phase-entered", {"phase": phase})
+            data: dict = {"phase": phase}
+            if phase == "route-and-map":
+                # A conforming map; one without signals records a deviation (ADR 0011).
+                data["signals"] = {"source": "regex"}
+            self.append_event(s, "phase-entered", data)
         self.append_event(s, "gate-decision", {
             "gate": "clarify", "question": "storage engine", "decision": "sqlite",
             "mode": "executive", "rationale": "no server dependency",

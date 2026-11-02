@@ -2,6 +2,88 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.20.0 — the style canon and the code graph leave a trace.
+
+**The style skill is recorded and reviewed against (#11, ADR 0012).** A config can name
+style skills in its Style section. Before this release, no event said whether the flow
+named them, and the review had no lens that held the canon. A reviewer without the canon
+treated its rules as taste, so the user found canon violations after a `ready` verdict.
+- The `implement` and `review` phase entries carry `style`: the style skills the config
+  names, or `[]` when it names none. `append` refuses a `style` that is not a list of
+  non-empty strings.
+  `implement` and `review` append the entry explicitly, because an entry implied by
+  `verify-run` or `review-verdict` carries no `style`.
+- The `model-tiers` worker brief has a required ninth item, the **Style** line. It names
+  the skills, or says that the config names none. A brief dispatched without it is a
+  `deviation` with `kind: style-missing`.
+- The review adds a **canon lens** when the config names a style skill: one more
+  `code-reviewer` that loads the skills with the `Skill` tool before it reads the diff. It
+  scores a finding on whether the code breaks a canon rule, never on taste, and a broken
+  rule in changed code is at least MEDIUM. Its findings take dispositions like any other.
+  The re-review after fixes carries the canon lens too.
+- The review Workflow script accepts the `canon` lens and a new `styleSkills` argument. It
+  throws on a `canon` lens without `styleSkills`, and it logs `styleSkills` given without
+  the lens. A refuter of a finding the canon lens reported loads the same skills, and "a
+  matter of taste" does not count as a refutation.
+- The `code-reviewer` agent gets the `Skill` tool and a `canon` row in its lens table.
+
+**The risk ranking travels past route-and-map (#10, ADRs 0011 and 0013).** The code signals
+were computed at route-and-map and dropped. Nothing showed whether a `blast` came from the
+graph or the regex scanner, and a repository with no graph index got one advisory line per
+project and then nothing.
+- `signals.py hotspots --json` prints `ranking`: the structure `source` and the top 5 files
+  in the JSON's own order, each with its `fix`, `churn` and `fan_in` labels and its path cut
+  to the last 3 segments; a second file with the same tail keeps its full path. `files` is
+  a list, because the JSON is printed with sorted keys.
+  Unavailable signals give `{"source": "none", "unavailable": <reason>}`.
+- Every JSON call that wanted the code graph and did not get it carries `graph_note`: one
+  line that says why and how to build an index. `off` gets no note. The table output does
+  not print it, so a person still sees the advisory once.
+- `route-and-map` always records `signals` with `source` set to `graph`, `regex` or `none`,
+  and relays `graph_note` in the map. `append` refuses a `signals` block without a valid
+  `source`.
+- A `route-and-map` entry without `signals` is no longer a silent pass. `append` writes a
+  `deviation` with `kind: signals-missing` and `auto: true` after it, in the same
+  transaction and under the same actor (ADR 0011). The append prints one more line, and
+  `--json` adds `deviation_seq`. `version` is then the stream head, the deviation's version,
+  so a batch or `--expect` chain moves by one more.
+- `design` ranks the files its build plan changes and copies `ranking` into
+  `design-committed`. `review` opens every reviewer brief with the ranking's files in risk
+  order and copies `ranking` into `review-verdict`. To fit the 1 KB cap, the verdict drops
+  `findings` counts first, then cuts `ranking.files` to 3, and never drops `ranking`.
+
+**`stats` reports the trace.** Each stream row gains `trace` and `deviation_kinds`:
+- `trace.style.implement` and `trace.style.review`: `named`, `none` (an empty list),
+  `missing` (the phase was entered and no event said), or null (never entered). The review
+  reads its phase entries and its verdicts.
+- `trace.graph.route`, `.design` and `.review`: the source of the last route-and-map entry,
+  `design-committed` or `review-verdict` that carries `signals` or `ranking`; `missing` when
+  none of them carries one; null when there is no such event. A fix-round verdict without
+  `ranking` does not hide the first round.
+- `deviation_kinds` counts deviations by `kind`; a deviation without one counts as `-`.
+- The totals count streams per state, and the text report adds a section: one line per
+  stream, then "graph fed design: N of M designed streams", the same for route-and-map and
+  review, and the style counts.
+
+**Payload rules.** Three new shape rule kinds: `objects` (a JSON object that passes a
+sub-shape), `list_objects` (a list whose items pass it) and `string_lists` (a list of
+non-empty strings). `vocab --shape` prints them for `phase-entered` (`style`, `signals` with
+`source`, `unavailable` and the umbrella's `repos`), `design-committed` (`ranking`),
+`review-verdict` (`style`, `ranking`) and `deviation` (`kind`). An enum refusal now shows a
+null value as `null` and a non-string value as JSON. All keys are new and optional, except that a
+`signals` or `ranking` block, once present, must name its `source`.
+
+**Evals.** Case 74 reviews a diff with two canon violations under a config whose Style
+section names a project skill; it passes when the review names both before its verdict.
+Case 75 reviews a journaled change on the graph arm; it passes when the verdict carries a
+`ranking` with `source: graph` and the hot file first. Neither case has been run yet, and
+neither has a baseline row.
+
+**For shipgate-hud.** `status` and `position` do not change. shipgate-hud 0.7.0 draws the
+review and design rankings, the canon tag and the `signals-missing` line, read from
+`log --stream <s> --json` (HUD ADR 0007), and its golden fixture gains `LOG_GOLDEN`. A later
+shipgate may print those values in `position --json`, so the HUD can drop the `log` call.
+
 v0.19.0 — a user decision binds its session, bold task ids, and a complete review verdict.
 
 **A session whose writes are all `--actor user` binds to its stream (#9, ADR 0010).** The

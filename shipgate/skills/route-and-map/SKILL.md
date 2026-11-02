@@ -94,6 +94,12 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
    `structure.source` is `regex`, `blast.tests` is `null`, and the map is as before, plus that
    one advisory line.
 
+   A repository with no usable graph index gets a top-level `graph_note` on every call. It
+   says why there is no index and how to build one. Put it in the map as one line per
+   touched repo, even when the advisory was shown before. A `Code graph: off` config gets
+   no note. `design` and `review` later record the JSON's `ranking` for their own file
+   sets.
+
 4. **Classify the change** using the rules that `CLAUDE.md` actually defines. The list below
    holds typical multi-service patterns to look for. They are not universal rules, and they
    are not rules to import from elsewhere:
@@ -140,6 +146,7 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
 - Tests the diff reaches: <n> files — <paths>                    (graph only)
 - Symbol impact: <symbol> (<path>) — <n> affected · ambiguous <yes|no>   (graph only)
 - <advisory, one line, when the JSON carries one>
+- <graph_note, one line per touched repo whose JSON carries one>
   (unavailable → replace this block with one line: `Risk signals: unavailable (<reason>)`)
 
 ### Cross-cutting risks
@@ -163,6 +170,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
            "skipped":["workspace"]}'
 ```
 
+**`signals` is owed on every map, and its `source` is always set.** `source` is `graph`,
+`regex` or `none`: the JSON's `structure.source`, or `none` when the signals were
+unavailable. In an umbrella, `source` is the weakest source over the touched repos
+(`none`, then `regex`, then `graph`), and `repos` maps each repo to its own source. `append`
+refuses a `signals` block without a valid `source`. A map entered without `signals` is not a
+silent pass: `append` records a `deviation` with `kind: signals-missing` beside it (ADR
+0011), and `journal.py stats` counts it.
+
 `skipped` names the phases this stream never entered. `append` refuses a forward jump over a
 phase it was not told about. A stream that `workspace` did not open has skipped exactly that
 one phase. Such streams come from the standalone routing ask, a branch made by hand, or a
@@ -174,13 +189,13 @@ does not exist yet, one `--batch` opens it and records the map. The batch is JSO
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream feat/<slug> --batch <<'EOF'
 {"type":"flow-started","data":{"request":"<the ask, one line>","branch":"feat/<slug>"}}
-{"type":"phase-entered","data":{"phase":"route-and-map","primary_home":"<module>","touched":["<module>"],"skipped":["workspace"]}}
+{"type":"phase-entered","data":{"phase":"route-and-map","primary_home":"<module>","touched":["<module>"],"signals":{"source":"regex","blast":12},"skipped":["workspace"]}}
 EOF
 ```
 
 `signals` carries labels, sizes and the `source` only, never the table. When the signals
-could not be computed, it carries `{"unavailable":"shallow"}` instead. So the entry stays
-well under the 1 KB cap.
+could not be computed, it carries `{"source":"none","unavailable":"shallow"}` instead. So
+the entry stays well under the 1 KB cap.
 
 Record essentials only. The map itself stays in the conversation and in the artifacts that
 follow it. The journal points at position; it doesn't copy documents. A missing or unreadable

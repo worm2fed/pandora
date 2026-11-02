@@ -57,7 +57,8 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | **finder / refuter** | The two stages of the review workflow: a finder is a reviewer instance; a refuter tries to disprove one finding with evidence. | — |
 | **brief** | The self-contained instructions handed to a subagent. Qualified by recipient at its first mention in a section (worker brief, reviewer brief, explorer brief); a bare "the brief" later in that section means that one. Contract: `finderBrief`, `brief` args. | *status brief*. |
 | **fan** | The parallel dispatch of 2-3 subagents (explorer fan, reviewer fan). | — |
-| **lens** | Qualified wherever the context does not make the kind clear: a *thinking lens* (a mental model applied at a phase; config `Thinking lenses`), a *review lens* (correctness, conventions+design, simplicity+security), an *explorer lens* (one explorer's focus). | — |
+| **lens** | Qualified wherever the context does not make the kind clear: a *thinking lens* (a mental model applied at a phase; config `Thinking lenses`), a *review lens* (correctness, conventions+design, simplicity+security, and the *canon lens*), an *explorer lens* (one explorer's focus). | — |
+| **canon lens** | The review lens that holds the style canon: one `code-reviewer` that loads the style skills the config's Style section names and scores each broken canon rule as a convention violation (ADR 0012). Contract: the review workflow's `canon` lens and `styleSkills`. | the *conventions+design* lens (the repo's CLAUDE.md and the agreed design, not the style canon). |
 
 ## Knowledge
 
@@ -91,6 +92,8 @@ agent names: prose uses them exactly as written. Everything else here is a prose
 | **code signals** | The per-file numbers `scripts/signals.py` computes from git history and the import graph; the `## Code signals` config section. | — |
 | **code graph** | The structure `scripts/signals.py` reads from codegraph's index when the `codegraph` CLI is on `PATH` (ADR 0007): file edges, the tests a diff reaches, and symbol queries through `signals.py graph`. Without it, the regex scanner gives the file edges. Config `Code graph: auto \| off \| root`. | *codegraph*, the third-party tool that builds the index; the *regex scanner*, the fallback. |
 | **risk signals** | Those numbers as presented in an impact map, a brief or a suspect list (the "Risk signals" block). | — |
+| **risk ranking** | The top files of a hotspots call in risk order, with their `fix`, `churn` and `fan_in` labels and the structure `source` (ADR 0013). Contract: the hotspots JSON's `ranking`, carried by `design-committed` and `review-verdict`. | *risk signals* (the whole table); `fileRisk` (the review workflow's path → risk map). |
+| **graph note** | The one line a signals JSON carries when a repository has no usable graph index: why, and how to build one. Contract: `graph_note`. | the *advisory* (shown once per project; the graph note is on every call). |
 | **fix-rate** | Share of a file's commits that are fixes. Contract spellings: `fix%` (table), `fix_rate` (JSON). | — |
 
 ## Git and forge

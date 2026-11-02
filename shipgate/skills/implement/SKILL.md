@@ -12,7 +12,8 @@ honest about what actually happened.
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present. If its Style section names a style skill,
 > invoke that skill before writing code — and put the same instruction in every worker brief
-> (see `model-tiers`).
+> (see `model-tiers`). Journaled, record the skills you named in the phase entry (see
+> **Record each task**).
 
 ## Who types the code
 
@@ -136,8 +137,22 @@ vocabulary, not for every task.
 
 ## Record each task (journaled projects)
 
-On a project whose config declares a **Journal**, step 7 has a second half. Append the task
-the moment you tick it, not in a sweep at the end of the plan:
+On a project whose config declares a **Journal**, the phase starts with one event. Before
+the first task, append the phase entry with `style`: the style skills the config's Style
+section names, or `[]` when it names none. The key tells "none configured" from "never
+recorded", so write it even when the list is empty:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream <branch> --type phase-entered --data '{"phase":"implement","style":["<skill>"]}'
+```
+
+A `verify-run` would enter the phase too, but its implied entry carries no `style`, and
+`journal.py stats` then reports the phase as `missing`. A worker brief dispatched without
+its **Style** line is a `deviation` with `kind: style-missing` (see `model-tiers`).
+
+Step 7 has a second half. Append the task the moment you tick it, not in a sweep at the end
+of the plan:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \

@@ -31,9 +31,11 @@ fixed at HEAD. The pass is scoped to the **fix diff**, not to the whole change a
 diff is HEAD against the base the previous round reviewed: the commit before the fix, unless
 the round entry names another.
 
-Scale the pass to that diff. Use one reviewer that carries all lenses. For a fix of a couple
-of files, the orchestrator may do the pass alone; say which, and why. Never use the three-lens
-fan. The pass answers two questions, in order, and the worklog's "fixed" settles neither:
+Scale the pass to that diff. Use one reviewer that carries all lenses. When the config's Style
+section names a style skill, that reviewer also carries the canon lens and loads the skill
+first (Step 1). For a fix of a couple of files, the orchestrator may do the pass alone; say
+which, and why. Never use the three-lens fan. The pass answers two questions, in order, and the
+worklog's "fixed" settles neither:
 
 1. **Is each listed finding actually fixed?** Read the code at HEAD against the finding's
    claim. A finding is closed on evidence, not on the round entry. Evidence is the line that
@@ -62,12 +64,14 @@ reopened, and each new finding with `file:line`. Journaled projects record one
 > The integration branch (`main`, `master`, `develop`) is never a stream. If the status brief
 > has no stream of that name, open it with `flow-started
 > {request, branch}` in the same append as the verdict. To record nothing because the stream
-> does not exist is the one wrong answer. The event owed here is `review-verdict`. Append it
-> the moment Step 6 states the verdict, in that turn and before the MR/PR question. The Stop
-> hook does not check it, so Step 6 is the only thing that writes it. The standalone risk
-> ranking reaches no verdict and records nothing.
+> does not exist is the one wrong answer. Two events are owed here. The first is
+> `phase-entered {phase: review, style}` as Step 1 dispatches the reviewers. `style` lists the
+> style skills the config's Style section names, or `[]` when it names none. The second is
+> `review-verdict`. Append it the moment Step 6 states the verdict, in that turn and before
+> the MR/PR question. The Stop hook checks neither, so these steps are the only thing that
+> writes them. The standalone risk ranking reaches no verdict and records nothing.
 
-## Step 1 — Review in parallel, up to three lenses
+## Step 1 — Review in parallel, up to three lenses plus canon
 
 This review is the flow's **independent verification**. Fresh-context reviewers catch what
 your build context blinds you to. Dispatch `code-reviewer` subagents scaled to the change:
@@ -79,6 +83,16 @@ only for changes where each lens has real surface**:
 - **simplicity + security**: needless complexity / wrong abstractions, plus OWASP-class
   weaknesses and (if relevant) prompt injection.
 
+**The canon lens.** When the config's Style section names a style skill, add one more
+`code-reviewer`: the canon lens. Add it at every size of diff that changes code, because the
+"conventions" lens checks the repo's CLAUDE.md, not the style canon. Its brief names the
+style skills and tells it to load each one with the `Skill` tool before it reads the diff. It
+reports each place the change breaks a rule the canon states, and names the rule. It scores a
+finding on whether the code breaks the rule, never on whether the reviewer agrees with the
+rule, and a broken canon rule in changed code is at least MEDIUM. A reviewer without the
+canon treats its rules as taste and declines them; that is the gap this lens closes (ADR
+0012). Its findings go through Step 2 and into `review-verdict.dispositions` like any other.
+
 Give each reviewer the diff, the worklog (design + build plan), the PRD and the impact map.
 Also give two orchestrator lists:
 - **do-not-flag**: deviations already logged and authorized in the worklog. With this list,
@@ -86,21 +100,33 @@ Also give two orchestrator lists:
 - **pre-rulings**: items you already know are must-fix. Reviewers confirm their scope rather
   than re-discover them.
 
+Journaled, append `phase-entered {phase: review, style: [...]}` as you dispatch, before the
+first reviewer reports:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream <branch> --type phase-entered --data '{"phase":"review","style":["<skill>"]}'
+```
+
 Brief reviewers with the working-tree diff (`git diff <base>`), not a commit made to give them
 a stable ref. Commit after the verdict, so the review sees what will land and a fix round does
 not stack commits. A commit the user asked for as its own reviewable step is the exception.
 
-Add the diff's **per-file risk signals** to the reviewer brief as a compact table (path,
-commits, fix%, fan-in, `risk`), not as raw JSON. Then reviewers spend their reading time on
-the files most likely to regress. Include every changed file, since `--diff` mode does not
-truncate:
+**Dispatch from the risk ranking.** Run the signals over the diff before you write any
+brief. Include every changed file, since `--diff` mode does not truncate:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --diff <base> --blast --json
 ```
 
-Keep that JSON's `files[].path → risk` for the `workflow` path's `fileRisk`. Take it from the
-rows whose `risk` is non-null only.
+The JSON's `ranking` holds the top changed files in risk order, with their `fix`, `churn` and
+`fan_in` labels. Open every reviewer brief with a **Read first** line that lists the
+ranking's files in that order. Under it, put the diff's **per-file risk signals** as a
+compact table (path, commits, fix%, fan-in, `risk`), not as raw JSON. Then reviewers spend
+their reading time on the files most likely to regress. Keep `ranking` for the verdict (Step
+6), and keep that JSON's `files[].path → risk` for the `workflow` path's `fileRisk`. Take it
+from the rows whose `risk` is non-null only. Relay a top-level `graph_note` to the user as
+one line.
 
 Under the table, add a **Tests the diff reaches** line with the paths from `blast.tests`.
 `blast.tests` is a list when `structure.source` is `graph`, and `null` under the regex
@@ -139,10 +165,15 @@ instead. Do these steps:
 
 The `args`:
 
-- `lenses`: 1-3 of `correctness`, `conventions+design`, `simplicity+security`. The script
-  runs one finder per lens and holds the lens definitions. So scale by naming **fewer
-  lenses**: a small diff gets `lenses: ['correctness']`. Unlike the `agents` path, the script
-  cannot put all three lenses in one reviewer.
+- `lenses`: 1-3 of `correctness`, `conventions+design`, `simplicity+security`, plus
+  `canon` when the config's Style section names a style skill. The script runs one finder
+  per lens and holds the lens definitions. So scale by naming **fewer lenses**: a small diff
+  gets `lenses: ['correctness']`, or `['correctness', 'canon']` with a style skill. Unlike
+  the `agents` path, the script cannot put all three lenses in one reviewer.
+- `styleSkills`: the style skills the config's Style section names, one string each.
+  **Required** with the `canon` lens: the script throws without it. The canon finder loads
+  each one with the `Skill` tool, and so does a refuter of a finding the canon lens
+  reported, where "a matter of taste" does not count as a refutation.
 - `finderBrief`: the brief you just built, as one string. **Required**: without it the script
   throws before it spends anything, because the refuters read it too.
 - `doNotFlag`, `preRulings`: your two orchestrator lists, one entry per string.
@@ -246,6 +277,10 @@ Rejections are rulings, not silence. Record what you killed and why under the wo
 **Rejected findings** section, one line each. Journaled projects fold them into the
 `review-verdict` counts. Then a later round doesn't re-raise or re-litigate a finding that
 already lost on evidence.
+
+A canon-lens finding is a convention violation, not a matter of taste. Kill one only on
+evidence that the code meets the rule or that the rule does not cover it, the same bar as
+any other finding.
 
 Order by severity (BLOCKER → HIGH → MEDIUM → LOW). At equal severity and confidence, a
 finding in a `top`-churn or `top`-fix-rate file outranks one in a `low` file. Risk orders
@@ -420,8 +455,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type review-verdict \
   --data '{"verdict":"ready","findings":{"blocker":0,"high":1,"medium":3},
            "criteria":{"SC-001":"met","SC-002":"met"},
-           "dispositions":{"src/api.py:42":"fixed","src/db.py:?":"rejected"}}'
+           "dispositions":{"src/api.py:42":"fixed","src/db.py:?":"rejected"},
+           "ranking":{"source":"graph","files":[{"path":"src/api.py","fix":"top","churn":"high","fan_in":"mid"}]}}'
 ```
+
+`ranking` is the Step 1 hotspots JSON's `ranking`, copied as it is: the ranking the
+reviewer briefs were dispatched from. When the signals were unavailable, it is
+`{"source":"none","unavailable":<reason>}`; record that too. A fix-round verdict that does not
+rerun the signals copies the ranking of the round it re-reviews. `journal.py stats` reads the
+`source` of the last verdict that carries `ranking` to count how often the graph fed the
+review.
 
 Write two more keys with the verdict. The HUD's Review tab draws them, and without them it
 shows every criterion unticked and every finding open:
@@ -437,7 +480,8 @@ at most three, and enough to be unique (`skills/review/SKILL.md`, not
 `/home/.../skills/review/SKILL.md`). The HUD matches such a tail against the finding's full
 path. The whole payload must stay under the journal's 1 KB cap on a work stream, or the
 append is refused. With many findings, keep the dispositions and drop the `findings`
-counts first.
+counts first. Then cut `ranking.files` to its first 3 entries. Never drop `ranking` itself
+or its `source`.
 `journal.py vocab --shape review-verdict` lists both keys and the values each one accepts.
 
 The stream may not exist yet (a commit reviewed on the integration branch). Then opening it

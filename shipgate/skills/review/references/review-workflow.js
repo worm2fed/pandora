@@ -13,6 +13,8 @@ const LENS_DEFINITIONS = {
     'conventions + design-alignment — matches repo patterns and the agreed design/worklog; flags drift from the chosen approach.',
   'simplicity+security':
     'simplicity + security — needless complexity / wrong abstractions, plus OWASP-class weaknesses and (if relevant) prompt injection.',
+  canon:
+    'canon — the style canon the config names: every place the change breaks a rule the loaded style skill(s) state, scored as a convention violation, never as taste.',
 }
 
 const FINDINGS = {
@@ -123,6 +125,14 @@ if (maxRefuters < refutersForHigh) {
 }
 const doNotFlag = stringList(args.doNotFlag, 'doNotFlag')
 const preRulings = stringList(args.preRulings, 'preRulings')
+// The canon lens (#11, ADR 0012): one finder that loads the style skill(s) the config's
+// Style section names before it reads the diff. Without the skills there is no canon.
+const styleSkills = stringList(args.styleSkills, 'styleSkills').map((name) => name.trim()).filter(Boolean)
+if (lenses.includes('canon') && !styleSkills.length) {
+  throw new Error(
+    "review-workflow: the canon lens needs args.styleSkills — the style skill(s) the config's Style section names",
+  )
+}
 
 // Keys go through normalizePath (a function declaration, so hoisted) so './src/a.js' and
 // 'src/a.js' name one file; two keys that normalize together keep the higher risk.
@@ -161,11 +171,36 @@ function clip(text, max) {
   return value.length > max ? `${value.slice(0, max)}…` : value
 }
 
+function skillList() {
+  return styleSkills.map((name) => `\`${name}\``).join(', ')
+}
+
+function canonFinderBlock() {
+  return [
+    `Before you read the diff, load each style skill with the Skill tool: ${skillList()}.`,
+    'The canon is what those skills state, not your own taste or the nearest code.',
+    'Report every place the change breaks a rule the canon states, and name the rule in `why`.',
+    'Score confidence on whether the code breaks the rule, never on whether you agree with the rule.',
+    'A canon rule is a convention of this project: never decline one as taste, preference or a prose convention.',
+    'A broken canon rule in new or changed code is at least MEDIUM: each one costs a rework round after review.',
+    'If a skill does not load, say so in a LOW finding with file "(canon)" and review against the skills that did load.',
+  ].join('\n')
+}
+
+function canonRefuterBlock() {
+  return [
+    `This finding cites a rule of the project's style canon. Load each style skill with the Skill tool first: ${skillList()}.`,
+    'Refute it only by citing code that complies with the rule, or by showing that the rule does not cover this code.',
+    '"A matter of taste" or "a prose convention" is not a refutation.',
+  ].join('\n')
+}
+
 function finderPrompt(lens) {
   const definition = LENS_DEFINITIONS[lens]
   return [
     `Review this change through ONE lens and nothing else: ${definition || lens}`,
     '',
+    ...(lens === 'canon' ? [canonFinderBlock(), ''] : []),
     finderBrief,
     '',
     block('Do not flag (already logged and authorized)', doNotFlag),
@@ -195,6 +230,7 @@ function refuterPrompt(finding) {
     }),
     '```',
     '',
+    ...((finding.lenses || []).includes('canon') ? [canonRefuterBlock(), ''] : []),
     'The finder was working from this brief:',
     finderBrief,
     '',
@@ -387,6 +423,9 @@ phase('Find')
 log(`finding through ${lenses.length} lens(es): ${lenses.join(', ')}`)
 for (const lens of lenses) {
   if (!LENS_DEFINITIONS[lens]) log(`unknown lens "${lens}" — using its name as the lens definition`)
+}
+if (styleSkills.length && !lenses.includes('canon')) {
+  log(`styleSkills (${styleSkills.join(', ')}) given without the canon lens — no reviewer loads them`)
 }
 
 const reports = await parallel(

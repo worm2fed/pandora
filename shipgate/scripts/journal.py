@@ -159,6 +159,13 @@ EVENT_VOCABULARY: Dict[str, str] = {
 #   strings       keys whose value must be a JSON string
 #   map_enums     key -> the only values accepted for each value of the JSON object at
 #                 that key
+#   objects       key -> a sub-shape: the value must be a JSON object that passes it
+#   list_objects  key -> a sub-shape: the value must be a JSON list, and each of its
+#                 items a JSON object that passes it
+#   string_lists  keys whose value must be a JSON list of non-empty strings
+# A sub-shape takes the validating kinds above (required, enums, lists, strings,
+# string_lists, map_enums, objects, list_objects); aliases and defaults apply at the top
+# level only.
 # `normalize_payload` enforces every kind, and `vocab --shape` prints them.
 #
 # The closed values below are declared once as `Literal`s, so the JSON contract
@@ -172,6 +179,33 @@ ReviewVerdict = Literal["ready", "not-ready"]
 # `map_enums`.
 CriterionStatus = Literal["met", "unmet"]
 Disposition = Literal["fixed", "rejected", "deferred"]
+# Where the structure half of the code signals came from (#10, ADR 0013): the code
+# graph, the regex scanner, or nothing at all (`signals.py` unavailable).
+SignalSource = Literal["graph", "regex", "none"]
+# A `signals.py` label: a quartile over this repository, or null when it has no value.
+SignalLabel = Literal["low", "mid", "high", "top"]
+SIGNAL_BUCKETS: List[Optional[str]] = [*get_args(SignalLabel), None]
+# The risk ranking a phase used (ADR 0013). `signals.py hotspots --json` prints it as
+# `ranking`; `design-committed` and `review-verdict` carry it unchanged.
+RANKING_SHAPE: Dict[str, Any] = {
+    "required": ["source"],
+    "enums": {"source": list(get_args(SignalSource))},
+    # Why the signals were unavailable (`no-git`, `shallow`), with `source: none`.
+    "strings": ["unavailable"],
+    # A list, not an object keyed by path: the journal stores payloads with sorted
+    # keys, and the ranking's order is the point of it.
+    "list_objects": {
+        "files": {
+            "required": ["path"],
+            "strings": ["path"],
+            "enums": {
+                "fix": SIGNAL_BUCKETS,
+                "churn": SIGNAL_BUCKETS,
+                "fan_in": SIGNAL_BUCKETS,
+            },
+        },
+    },
+}
 
 
 class EventShape(TypedDict, total=False):
@@ -189,15 +223,37 @@ class EventShape(TypedDict, total=False):
     value_aliases: Dict[str, Dict[str, str]]
     defaults: Dict[str, Any]
     strings: List[str]
+    string_lists: List[str]
     map_enums: Dict[str, List[str]]
+    objects: Dict[str, Dict[str, Any]]
+    list_objects: Dict[str, Dict[str, Any]]
 
 
 EVENT_SHAPES: Dict[str, EventShape] = {
     "flow-started": {"required": ["request"]},
-    "phase-entered": {"required": ["phase"]},
+    "phase-entered": {
+        "required": ["phase"],
+        # The style skills the config's Style section names, `[]` when it names none
+        # (#11). `implement` and `review` carry it.
+        "string_lists": ["style"],
+        # `route-and-map` carries the signals it computed, always with their source
+        # (#10). A map without them records a deviation (ADR 0011).
+        "objects": {
+            "signals": {
+                "required": ["source"],
+                "enums": {"source": list(get_args(SignalSource))},
+                "strings": ["unavailable"],
+                # In an umbrella: each touched repo's own source; `source` is the weakest.
+                "map_enums": {"repos": list(get_args(SignalSource))},
+            },
+        },
+    },
     "deviation": {
         "required": ["note"],
         "aliases": {"correction": "note", "what": "note"},
+        # `kind` groups deviations in `stats` (`signals-missing`, `style-missing`); `auto`
+        # marks the one `append` writes itself (ADR 0011).
+        "strings": ["kind"],
     },
     "gate-decision": {
         "required": ["gate", "question", "decision", "mode"],
@@ -210,7 +266,10 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         "strings": ["decision"],
     },
     "clarify-passed": {"required": ["prd"]},
-    "design-committed": {"required": ["worklog"]},
+    "design-committed": {
+        "required": ["worklog"],
+        "objects": {"ranking": RANKING_SHAPE},
+    },
     "task-done": {"required": ["task_id"]},
     "verify-run": {
         "required": ["outcome", "task_ids"],
@@ -226,6 +285,9 @@ EVENT_SHAPES: Dict[str, EventShape] = {
             "criteria": list(get_args(CriterionStatus)),
             "dispositions": list(get_args(Disposition)),
         },
+        # A verdict that enters review by implication still says what it named (#11).
+        "string_lists": ["style"],
+        "objects": {"ranking": RANKING_SHAPE},
     },
     "capture-done": {
         "required": ["promoted", "dropped"],
@@ -266,11 +328,36 @@ class ReviewVerdictPayload(_ReviewVerdictKeys, total=False):
     ``criteria`` maps a PRD success criterion id (``SC-001``) to its status;
     ``dispositions`` maps a review finding (``<path>:<line or ?>``) to what was done with
     it. Both are optional — a verdict may judge neither — and a value outside its
-    vocabulary is refused at append (the ``map_enums`` rule kind).
+    vocabulary is refused at append (the ``map_enums`` rule kind). ``style`` and
+    ``ranking`` (#11, #10) are optional too; ``objects`` and ``string_lists`` check them.
     """
 
     criteria: Dict[str, CriterionStatus]
     dispositions: Dict[str, Disposition]
+    style: List[str]
+    ranking: "RankingPayload"
+
+
+class RankingFile(TypedDict, total=False):
+    """One file of a risk ranking (ADR 0013); a label is null when it has no value."""
+
+    path: str
+    fix: Optional[SignalLabel]
+    churn: Optional[SignalLabel]
+    fan_in: Optional[SignalLabel]
+
+
+class _RankingKeys(TypedDict):
+    source: SignalSource
+
+
+class RankingPayload(_RankingKeys, total=False):
+    """`ranking` on `design-committed` and `review-verdict`, as `signals.py hotspots
+    --json` prints it (ADR 0013): `files` in risk order, or `unavailable` with
+    `source: none`."""
+
+    files: List[RankingFile]
+    unavailable: str
 
 # Events that can only happen inside one phase, so appending one *is* entering it.
 # ADR 0002: `append` records the transition rather than refusing the event.
@@ -1104,48 +1191,104 @@ def normalize_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in shape.get("defaults", {}).items():
         payload.setdefault(key, value)
 
+    _validate_shape(event_type, payload, shape, "data")
+    return payload
+
+
+def _validate_shape(
+    event_type: str, payload: Dict[str, Any], shape: Dict[str, Any], where: str
+) -> None:
+    """Check PAYLOAD against SHAPE's validating rule kinds, or refuse it.
+
+    WHERE names the object in the refusal: `data` at the top level, `data.signals`
+    inside an `objects` sub-shape, `data.ranking.files[0]` inside a `list_objects`
+    one. The top-level messages read as they always have.
+    """
     missing = [
         key for key in shape.get("required", []) if payload.get(key) in (None, "")
     ]
     if missing:
+        if where == "data":
+            raise GateViolation(
+                f"{event_type} is missing required data key(s): {', '.join(missing)}"
+                + _shape_hint(event_type)
+            )
         raise GateViolation(
-            f"{event_type} is missing required data key(s): {', '.join(missing)}"
+            f"{event_type}: {where} is missing required key(s): {', '.join(missing)}"
             + _shape_hint(event_type)
         )
     for key in shape.get("lists", []):
         if key in payload and not isinstance(payload[key], list):
             raise GateViolation(
-                f"{event_type}: data.{key} must be a list" + _shape_hint(event_type)
+                f"{event_type}: {where}.{key} must be a list" + _shape_hint(event_type)
             )
     for key in shape.get("strings", []):
         if key in payload and not isinstance(payload[key], str):
             raise GateViolation(
-                f"{event_type}: data.{key} must be a string, got "
+                f"{event_type}: {where}.{key} must be a string, got "
                 f"{json.dumps(payload[key], sort_keys=True)}" + _shape_hint(event_type)
+            )
+    for key in shape.get("string_lists", []):
+        if key not in payload:
+            continue
+        value = payload[key]
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) and item.strip() for item in value
+        ):
+            raise GateViolation(
+                f"{event_type}: {where}.{key} must be a list of non-empty strings, got "
+                f"{json.dumps(value, sort_keys=True)}" + _shape_hint(event_type)
             )
     for key, allowed in shape.get("enums", {}).items():
         if key in payload and payload[key] not in allowed:
             raise GateViolation(
-                f"{event_type}: data.{key} must be one of "
-                f"{', '.join(str(a) for a in allowed)}, got {payload[key]!r}"
-                + _shape_hint(event_type)
+                f"{event_type}: {where}.{key} must be one of "
+                f"{', '.join(_json_word(a) for a in allowed)}, got "
+                f"{_json_got(payload[key])}" + _shape_hint(event_type)
             )
     for key, allowed in shape.get("map_enums", {}).items():
         if key not in payload:
             continue
-        if not isinstance(payload[key], dict):
-            raise GateViolation(
-                f"{event_type}: data.{key} must be a JSON object"
-                + _shape_hint(event_type)
-            )
+        _require_object(event_type, payload[key], f"{where}.{key}")
         wrong = {k: v for k, v in payload[key].items() if v not in allowed}
         if wrong:
             raise GateViolation(
-                f"{event_type}: each value of data.{key} must be one of "
+                f"{event_type}: each value of {where}.{key} must be one of "
                 f"{', '.join(allowed)}, got {json.dumps(wrong, sort_keys=True)}"
                 + _shape_hint(event_type)
             )
-    return payload
+    for key, sub_shape in shape.get("objects", {}).items():
+        if key not in payload:
+            continue
+        _require_object(event_type, payload[key], f"{where}.{key}")
+        _validate_shape(event_type, payload[key], sub_shape, f"{where}.{key}")
+    for key, sub_shape in shape.get("list_objects", {}).items():
+        if key not in payload:
+            continue
+        if not isinstance(payload[key], list):
+            raise GateViolation(
+                f"{event_type}: {where}.{key} must be a list" + _shape_hint(event_type)
+            )
+        for index, value in enumerate(payload[key]):
+            label = f"{where}.{key}[{index}]"
+            _require_object(event_type, value, label)
+            _validate_shape(event_type, value, sub_shape, label)
+
+
+def _json_word(value: Any) -> str:
+    """An allowed value as a caller writes it in JSON: a string bare, `null` not `None`."""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _json_got(value: Any) -> str:
+    return repr(value) if isinstance(value, str) else json.dumps(value, sort_keys=True)
+
+
+def _require_object(event_type: str, value: Any, where: str) -> None:
+    if not isinstance(value, dict):
+        raise GateViolation(
+            f"{event_type}: {where} must be a JSON object" + _shape_hint(event_type)
+        )
 
 
 def _shape_hint(event_type: str) -> str:
@@ -1235,6 +1378,10 @@ class AppendResult(NamedTuple):
     # The version `--expect` was compared against, so a caller that lost a race can
     # see what it was actually holding.
     version_before: int = 0
+    # The `deviation` the append recorded for its own event (ADR 0011), when it did.
+    # `version` is then the stream head, the deviation's version, one past the event's
+    # own: a caller chaining `--expect` needs the head, which is what it always was.
+    deviation_seq: Optional[int] = None
 
 
 def _last_phase_spelling(conn: sqlite3.Connection, stream: str) -> Optional[str]:
@@ -1346,6 +1493,26 @@ def _implied_phase_payload(
     return payload
 
 
+# ADR 0011: a `route-and-map` entry without `signals` is a recorded deviation, not a
+# silent pass. `append` writes it right after the entry, in the same transaction.
+SIGNALS_MISSING_KIND = "signals-missing"
+SIGNALS_MISSING_NOTE = (
+    "route-and-map entered without a signals block: the map's risk signals were not "
+    "recorded (route-and-map step 3)"
+)
+
+
+def _auto_deviation(event_type: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The deviation this event records about itself, if any (ADR 0011)."""
+    if (
+        event_type == "phase-entered"
+        and payload.get("phase") == "route-and-map"
+        and "signals" not in payload
+    ):
+        return {"note": SIGNALS_MISSING_NOTE, "kind": SIGNALS_MISSING_KIND, "auto": True}
+    return None
+
+
 def append_event(
     conn: sqlite3.Connection,
     stream: str,
@@ -1427,9 +1594,19 @@ def append_event(
             seq = _insert_event(
                 conn, stream, version, event_type, payload, canonical_actor
             )
+            deviation_seq = None
+            deviation = _auto_deviation(event_type, payload)
+            if deviation is not None:
+                if recorded_by:
+                    deviation[RECORDED_BY_KEY] = recorded_by
+                version += 1
+                deviation_seq = _insert_event(
+                    conn, stream, version, "deviation", deviation, canonical_actor
+                )
             conn.execute("COMMIT")
             return AppendResult(
-                seq, version, implied_phase, version_before=existing
+                seq, version, implied_phase, version_before=existing,
+                deviation_seq=deviation_seq,
             )
         except sqlite3.IntegrityError:
             conn.execute("ROLLBACK")
@@ -3020,6 +3197,86 @@ def _counted_sessions(events: Iterable[Event]) -> Set[str]:
     return counted
 
 
+# The trace of #10 and #11: did the flow name the style skills, and which signals fed
+# each phase? A state is null when the stream never reached the phase.
+TRACE_STYLE_PHASES = ("implement", "review")
+TRACE_GRAPH_PHASES = ("route", "design", "review")
+
+
+def _style_state(events: Sequence[Event], phase: str) -> Optional[str]:
+    """`named`, `none` (an empty list: the config names no style skill), `missing`
+    (the phase was entered and no event said), or null (never entered)."""
+    reached = False
+    styles: List[Any] = []
+    for event in events:
+        own = (
+            event.type == "phase-entered" and event.data.get("phase") == phase
+        ) or (phase == "review" and event.type == "review-verdict")
+        if not own:
+            continue
+        reached = True
+        if "style" in event.data:
+            styles.append(event.data["style"])
+    if any(isinstance(style, list) and any(isinstance(i, str) and i for i in style)
+           for style in styles):
+        return "named"
+    if any(style == [] for style in styles):
+        return "none"
+    return "missing" if reached else None
+
+
+def _source_of(block: Any) -> str:
+    if isinstance(block, dict) and isinstance(block.get("source"), str):
+        return block["source"]
+    return "missing"
+
+
+def _graph_state(events: Sequence[Event], phase: str) -> Optional[str]:
+    """The source the phase's last event WITH the block recorded: `graph`, `regex`,
+    `none`; `missing` when none of its events carries one; null when it has no event.
+
+    The last carrier, not the last event: a fix-round verdict that does not rerun the
+    signals must not hide that the graph fed the first round. Style reads the same way:
+    any phase event that named a skill counts."""
+    if phase == "route":
+        own = [
+            e for e in events
+            if e.type == "phase-entered" and e.data.get("phase") == "route-and-map"
+        ]
+        key = "signals"
+    else:
+        wanted = "design-committed" if phase == "design" else "review-verdict"
+        own = [e for e in events if e.type == wanted]
+        key = "ranking"
+    if not own:
+        return None
+    carriers = [e for e in own if key in e.data]
+    return _source_of(carriers[-1].data.get(key)) if carriers else "missing"
+
+
+def _trace(events: Sequence[Event]) -> Dict[str, Dict[str, Optional[str]]]:
+    return {
+        "style": {phase: _style_state(events, phase) for phase in TRACE_STYLE_PHASES},
+        "graph": {phase: _graph_state(events, phase) for phase in TRACE_GRAPH_PHASES},
+    }
+
+
+def _trace_totals(rows: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Dict[str, int]]]:
+    """Per phase, how many streams ended in each state; streams that never reached
+    the phase are not counted."""
+    totals: Dict[str, Dict[str, Dict[str, int]]] = {}
+    for group, phases in (("style", TRACE_STYLE_PHASES), ("graph", TRACE_GRAPH_PHASES)):
+        totals[group] = {}
+        for phase in phases:
+            counts: Dict[str, int] = {}
+            for row in rows:
+                state = row["trace"][group][phase]
+                if state is not None:
+                    counts[state] = counts.get(state, 0) + 1
+            totals[group][phase] = counts
+    return totals
+
+
 def _stream_stats(
     stream: str, events: Sequence[Event], now: Optional[datetime] = None
 ) -> Dict[str, Any]:
@@ -3032,12 +3289,17 @@ def _stream_stats(
         "review-verdict": 0, "review-feedback": 0,
     }
     implied = 0
+    deviation_kinds: Dict[str, int] = {}
 
     for event in events:
         role = _actor_role(event)
         by_role[role] = by_role.get(role, 0) + 1
         if event.type in tallies:
             tallies[event.type] += 1
+        if event.type == "deviation":
+            kind = event.data.get("kind")
+            kind = kind if isinstance(kind, str) and kind else "-"
+            deviation_kinds[kind] = deviation_kinds.get(kind, 0) + 1
         if event.type == "gate-decision":
             key = "{}/{}".format(
                 event.data.get("mode") or "-", event.data.get("raised_by") or "-"
@@ -3072,6 +3334,8 @@ def _stream_stats(
         "sessions": len(_counted_sessions(events)),
         "implied_phases": implied,
         "stream_render_bytes": len(rendered.encode()),
+        "deviation_kinds": deviation_kinds,
+        "trace": _trace(events),
     }
 
 
@@ -3115,6 +3379,8 @@ def build_stats(
     totals: Dict[str, Any] = {key: sum(row[key] for row in rows) for key in STATS_SUMS}
     totals["by_role"] = _merge_counts(row["by_role"] for row in rows)
     totals["decisions"] = _merge_counts(row["decisions"] for row in rows)
+    totals["deviation_kinds"] = _merge_counts(row["deviation_kinds"] for row in rows)
+    totals["trace"] = _trace_totals(rows)
     totals["sessions"] = len(
         _counted_sessions(e for events in grouped.values() for e in events)
     )
@@ -3182,7 +3448,48 @@ def render_stats(report: Dict[str, Any]) -> str:
             lines.append(f"  {key.ljust(width)}  {decisions[key]}")
     else:
         lines.append("  none recorded")
+    lines.append("")
+    lines.extend(_render_trace(report))
     return "\n".join(lines)
+
+
+def _render_trace(report: Dict[str, Any]) -> List[str]:
+    """The #10/#11 section: per stream, then how often across them."""
+    rows = report["streams"]
+    width = max(len(row["stream"]) for row in rows)
+
+    def cell(state: Optional[str]) -> str:
+        return state if state is not None else "-"
+
+    lines = ["style and code graph per stream:"]
+    for row in rows:
+        style, graph = row["trace"]["style"], row["trace"]["graph"]
+        lines.append(
+            f"  {row['stream'].ljust(width)}  "
+            f"style impl {cell(style['implement'])}, review {cell(style['review'])}  "
+            f"· graph route {cell(graph['route'])}, design {cell(graph['design'])}, "
+            f"review {cell(graph['review'])}"
+        )
+
+    totals = report["totals"]["trace"]
+
+    def share(counts: Dict[str, int], hit: str) -> str:
+        return f"{counts.get(hit, 0)} of {sum(counts.values())}"
+
+    graph, style = totals["graph"], totals["style"]
+    lines.extend([
+        f"  graph at route-and-map: {share(graph['route'], 'graph')} mapped streams",
+        f"  graph fed design: {share(graph['design'], 'graph')} designed streams",
+        f"  graph fed review: {share(graph['review'], 'graph')} reviewed streams",
+        f"  style named at implement: {share(style['implement'], 'named')}",
+        f"  style named at review: {share(style['review'], 'named')}",
+    ])
+    kinds = report["totals"]["deviation_kinds"]
+    named = [f"{kind} {kinds[kind]}" for kind in sorted(kinds) if kind != "-"]
+    if "-" in kinds:
+        named.append(f"no kind {kinds['-']}")
+    lines.append("deviations by kind: " + (", ".join(named) or "none recorded"))
+    return lines
 
 
 # --------------------------------------------------------------------------
@@ -3654,8 +3961,14 @@ def _append_summary(
     transition = (
         f" (entered {result.implied_phase}, implied)" if result.implied_phase else ""
     )
-    return (f"appended {event_type} to {stream}: "
+    line = (f"appended {event_type} to {stream}: "
             f"seq {result.seq}, version {result.version}{transition}")
+    if result.deviation_seq is not None:
+        line += (f"\nrecorded deviation ({SIGNALS_MISSING_KIND}) to {stream}: "
+                 f"seq {result.deviation_seq} — while the stream is still in route-and-map, "
+                 "append the map again with `signals` (`signals.py hotspots ... --json`, "
+                 "ADR 0011); after it, leave the deviation as the record")
+    return line
 
 
 def _append_payload(
@@ -3669,6 +3982,7 @@ def _append_payload(
         "type": event_type,
         "implied_phase": result.implied_phase,
         "duplicate": result.duplicate,
+        "deviation_seq": result.deviation_seq,
     }
     if line is not None:
         payload["line"] = line

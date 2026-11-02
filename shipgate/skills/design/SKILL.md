@@ -167,6 +167,21 @@ the feature slices, then polish. Verify that every PRD requirement (FR-###) and 
 criterion (SC-###) maps to at least one task. A requirement with no task is a requirement
 you'll forget to build.
 
+**Rank the plan's files by risk, and plan from the ranking.** Run the signals over the
+existing files the build plan changes:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots <files the plan changes> --json
+```
+
+The JSON's `ranking` lists the top files with their `fix`, `churn` and `fan_in` labels, and
+the `source` of the structure half. A task that changes a `top` or `high` file gets a test
+that pins the file's current behaviour before the change. Name those files in the
+worklog's **Design** section. Copy `ranking` unchanged into `design-committed` (below), so
+the journal shows which ranking the design used. When the signals are unavailable,
+`ranking` is `{"source":"none","unavailable":<reason>}`; record that too. Relay a top-level
+`graph_note` as one line.
+
 **Journaled: append `design-committed` as the worklog lands.** The form is under **Record the
 commit**. The event records that the design and build plan exist at a path. It does not
 record that every fork is closed. An escalated one-way door stays `proposed` in its ADR, and
@@ -185,10 +200,13 @@ path, so a later session knows exactly what to open:
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type design-committed \
   --data '{"issue":"<issue-id>","worklog":"docs/prd/<slug>.worklog.md",
-           "adrs":["docs/adr/0007-async-export.md"],"open":["docs/adr/0008-schema-change.md"]}'
+           "adrs":["docs/adr/0007-async-export.md"],"open":["docs/adr/0008-schema-change.md"],
+           "ranking":{"source":"graph","files":[{"path":"api/export.py","fix":"top","churn":"high","fan_in":"mid"}]}}'
 ```
 
-`open` lists the ADRs still awaiting the user's answer. Omit it when there are none. The
+`open` lists the ADRs still awaiting the user's answer. Omit it when there are none.
+`ranking` is the hotspots JSON's `ranking`, copied as it is. `journal.py vocab --shape
+design-committed` prints the rules it must meet. The
 design is committed from your side the moment the worklog exists. If the status brief does not
 list the stream, open it in the same `--batch`. Put a `flow-started` line first (for the stdin
 form, see `verify`).

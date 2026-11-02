@@ -443,6 +443,93 @@ class ReviewWorkflow(ScriptCase):
         return self.review({"correctness": findings}, verify="none", fileRisk=risk)["result"]
 
 
+class ReviewCanonLens(ScriptCase):
+    """#11, ADR 0012: the canon lens loads the style skill(s) and scores rule breaks."""
+
+    script = REVIEW
+
+    def run_review(self, reports, verdicts=None, **overrides):
+        args = {"lenses": list(reports), "finderBrief": "diff: HEAD~1", "model": "opus",
+                "styleSkills": ["astrolabe"]}
+        args.update(overrides)
+        return self.ok(args, {**finders(reports), **(verdicts or {})})
+
+    def prompt(self, out, label):
+        return next(c["prompt"] for c in out["calls"] if c["label"] == label)
+
+    def test_the_canon_lens_needs_style_skills(self):
+        for skills in (None, [], ["  "]):
+            with self.subTest(skills=skills):
+                args = {"lenses": ["canon"], "finderBrief": "diff", "model": "opus"}
+                if skills is not None:
+                    args["styleSkills"] = skills
+                self.assertIn("canon lens needs args.styleSkills", self.err(args))
+
+    def test_style_skills_must_be_strings(self):
+        error = self.err({"lenses": ["canon"], "finderBrief": "diff", "model": "opus",
+                          "styleSkills": "astrolabe"})
+        self.assertIn("args.styleSkills must be an array of strings", error)
+
+    def test_the_canon_finder_loads_the_named_skills(self):
+        out = self.run_review({"correctness": [], "canon": []}, verify="none",
+                              styleSkills=["astrolabe", "house-style"])
+        canon = self.prompt(out, "review:canon")
+        self.assertIn("load each style skill with the Skill tool: `astrolabe`, `house-style`",
+                      canon)
+        self.assertIn("never decline one as taste", canon)
+        self.assertIn("at least MEDIUM", canon)
+        self.assertIn("diff: HEAD~1", canon)
+        correctness = self.prompt(out, "review:correctness")
+        self.assertNotIn("astrolabe", correctness)
+        self.assertEqual(out["result"]["lensesRun"], ["correctness", "canon"])
+        self.assertEqual({c["agentType"] for c in out["calls"]}, {"shipgate:code-reviewer"})
+
+    def test_a_canon_finding_lands_like_any_other(self):
+        out = self.run_review({"canon": [finding(line=4, summary="switch where a match belongs")]},
+                              verify="none")
+        survivor = out["result"]["survivors"][0]
+        self.assertEqual(survivor["lenses"], ["canon"])
+        self.assertEqual(survivor["line"], 4)
+
+    def test_a_refuter_of_a_canon_finding_loads_the_canon(self):
+        reports = {
+            "canon": [finding(line=4, severity="HIGH", summary="enum where a union belongs")],
+            "correctness": [finding(file="src/b.js", line=9, severity="HIGH",
+                                    summary="null deref on empty input")],
+        }
+        out = self.run_review(reports, {"refute:": verdict(refuted=False, evidence="")})
+        refuters = [c for c in out["calls"] if c["label"].startswith("refute:")]
+        canon = [c["prompt"] for c in refuters if c["label"].startswith("refute:src/a.js:4")]
+        other = [c["prompt"] for c in refuters if c["label"].startswith("refute:src/b.js:9")]
+        self.assertEqual(len(canon), 2)
+        self.assertEqual(len(other), 2)
+        for prompt in canon:
+            self.assertIn("Load each style skill with the Skill tool first: `astrolabe`", prompt)
+            self.assertIn('"A matter of taste" or "a prose convention" is not a refutation', prompt)
+        for prompt in other:
+            self.assertNotIn("astrolabe", prompt)
+
+    def test_a_merged_finding_that_canon_also_reported_gets_the_canon_refuter(self):
+        reports = {
+            "conventions+design": [finding(line=4, severity="HIGH", summary="naming drift")],
+            "canon": [finding(line=4, severity="HIGH", summary="unbranded id in the domain")],
+        }
+        out = self.run_review(reports, {"refute:": verdict(refuted=False, evidence="")})
+        prompts = [c["prompt"] for c in out["calls"] if c["label"].startswith("refute:")]
+        self.assertTrue(prompts)
+        self.assertTrue(all("`astrolabe`" in p for p in prompts))
+
+    def test_style_skills_without_the_canon_lens_are_logged(self):
+        out = self.run_review({"correctness": []}, verify="none")
+        self.assertTrue(any("without the canon lens" in line for line in out["logs"]))
+
+    def test_the_reviewer_agent_can_load_a_skill(self):
+        definition = (SHIPGATE / "agents" / "code-reviewer.md").read_text(encoding="utf-8")
+        tools_line = next(line for line in definition.splitlines() if line.startswith("tools:"))
+        tools = {tool.strip() for tool in tools_line.split(":", 1)[1].split(",")}
+        self.assertIn("Skill", tools)
+        self.assertIn("**canon**", definition)
+
 class ExploreWorkflow(ScriptCase):
     script = EXPLORE
 

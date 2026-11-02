@@ -160,7 +160,9 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 <!-- Default when absent: match surrounding code; no extra skill invoked. -->
 
 - Style skill(s): <project skill to invoke BEFORE writing or reviewing code — the
-  implement/review phases invoke it, and every worker brief must instruct it too>
+  implement/review phases invoke it, every worker brief carries a Style line naming it, the
+  review adds a canon lens that loads it, and the journal records it as `style` on the
+  implement and review phase entries>
 
 ## Writing style
 

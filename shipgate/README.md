@@ -74,7 +74,7 @@ What the sections configure:
 - `clarify` — the Clarify gate: coverage scan, prioritized questions, writes the PRD (FR-###/SC-###).
 - `design` — parallel architects → recommendation → ADR(s) + worklog (Design + Build Plan).
 - `implement` — reuse-first execution, breaking-change discipline, per-task `verify`.
-- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate orchestrator pass filters at ≥80 confidence. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk", and the re-review after a round of fixes ("I've addressed F1 and F2 — good to push?"), scoped to the fix diff.
+- `review` — parallel reviewers report everything scored (coverage over self-filtering); a separate orchestrator pass filters at ≥80 confidence. A canon lens loads the config's style skills when it names any. Plus CLAUDE.md compliance, acceptance-criteria check, final `verify`. Also answers a standalone "rank the changed files by risk", and the re-review after a round of fixes ("I've addressed F1 and F2 — good to push?"), scoped to the fix diff.
 - `verify` _(cross-cutting)_ — no "done" without fresh command evidence.
 - `model-tiers` _(cross-cutting)_ — the orchestrator never types product code; implementation goes to worker subagents one tier below the session but never below Opus, and only very mechanical sub-work sinks to the cheapest capable tier.
 - `knowledge-base` _(cross-cutting)_ — recall/capture durable knowledge, routed by type to the stores the project config declares (default: repo docs). Named to avoid colliding with Claude's built-in session memory.
@@ -100,7 +100,7 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 
 - `code-explorer` — grounded exploration, file:line, essential-files list; reads refs that are not checked out and the history with read-only git (the orchestrator fetches first).
 - `code-architect` _(opus)_ — one committed design philosophy per instance.
-- `code-reviewer` _(opus)_ — every finding scored (confidence + severity), file:line; the orchestrator filters.
+- `code-reviewer` _(opus)_ — every finding scored (confidence + severity), file:line; the orchestrator filters. Can load a skill, for the canon lens.
 
 **Scripts** (Python 3 stdlib)
 
@@ -152,25 +152,28 @@ compacted or resumed session was driving, branch or no branch), then the checked
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
-| `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations, verifies per task, review rounds |
+| `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review" |
 | `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
 is why such an append can advance the stream's version by two, and why a chain of `--expect N`
 must read each new version back from the output instead of assuming +1 — refuses a payload over
-1 KB (prose belongs in the worklog — the event carries `refs`), and refuses `mr-opened` until
-the stream holds, after its last `task-done`, either a `review-verdict` with `verdict=ready` or
-a `gate-decision` with `gate=publish`, `raised_by=user` and `decision=publish`. A
-`gate-decision`'s `decision` must be a string. A `review-verdict`'s optional `criteria` map
-takes `met` or `unmet`, and its optional `dispositions` map takes `fixed`, `rejected` or
-`deferred`. `status --json` prints the same publish rule per stream as `publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
+1 KB (prose belongs in the worklog — the event carries `refs`), records a `deviation` with
+`kind: signals-missing` beside a `route-and-map` entry that carries no `signals` (ADR 0011),
+and refuses `mr-opened` until the stream holds, after its last `task-done`, either a
+`review-verdict` with `verdict=ready` or a `gate-decision` with `gate=publish`,
+`raised_by=user` and `decision=publish`. A `gate-decision`'s `decision` must be a string. A
+`review-verdict`'s optional `criteria` map takes `met` or `unmet`, and its optional
+`dispositions` map takes `fixed`, `rejected` or `deferred`. `status --json` prints the same
+publish rule per stream as `publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
-the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's shell
-carries its parent's), else the session that started last (ADR 0005). `user` and `watcher` never
-take a session label. A `user` event records the appending session as `data.recorded_by`
-instead, so `status --session`, `check` and `stats` count the session that recorded the user's
-decision (ADR 0010). A stream ends with `flow-completed` and leaves the status brief.
+the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's
+shell carries its parent's), else the session that started last (ADR 0005). `user` and
+`watcher` never take a session label. A `user` event records the appending session as
+`data.recorded_by` instead, so `status --session`, `check` and `stats` count the session that
+recorded the user's decision (ADR 0010). A stream ends with `flow-completed` and leaves the
+status brief.
 
 Each phase skill names its stream before it works — the branch the work takes, per the
 config's **Branching** pattern, opened with `flow-started` by whichever skill runs first when
@@ -230,6 +233,13 @@ list cited as `[signals]` evidence), `implement` and `design` (prefer the proven
 and optionally explorer and worker briefs. No git, a shallow clone, an empty history or no
 adapter → one line saying why, exit 0, the phase runs as before. Output carries counts and
 shares, never author names.
+
+`hotspots --json` also prints `ranking`: the top 5 files in its own order, each with its
+`fix`, `churn` and `fan_in` labels, and the structure `source` (ADR 0013). `design` copies it
+into `design-committed` and `review` into `review-verdict`, so the journal shows which
+ranking each phase used. A JSON call that wanted the code graph and did not get it carries
+`graph_note`: one line that says why and how to build an index. The table output keeps the
+advisory-once rule.
 
 ### Code graph
 

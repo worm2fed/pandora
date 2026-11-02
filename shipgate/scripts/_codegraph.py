@@ -87,6 +87,46 @@ TOO_LARGE = ("code graph: this repository tracks {count} files, more than the "
 # Detection failures: codegraph counts as absent (FR-001), which earns the advisory.
 ABSENT_REASONS = ("graph-not-installed", "graph-version")
 
+# The `graph_note` (#10): one line in the JSON of EVERY call that wanted the graph and
+# got the regex scanner, saying why and how to get an index. The advisory above shows
+# once per project; this note is what keeps a missing index visible in each map. The
+# table output does not print it, so a person still sees the advisory once. `off` is
+# the user's own choice and gets no note.
+NOTE_REGEX = "the regex scanner gave the structure"
+GRAPH_NOTES = {
+    "graph-not-installed": (
+        "code graph: no index for this repository, because codegraph is not "
+        "installed. Install it (https://github.com/colbymchenry/codegraph); the next "
+        "signals call builds the index. Until then " + NOTE_REGEX),
+    "graph-version": (
+        "code graph: no index for this repository, because the codegraph on PATH "
+        "did not report a version. Reinstall codegraph; the next signals call builds "
+        "the index. Until then " + NOTE_REGEX),
+    "graph-too-large": (
+        "code graph: no index for this repository, because it tracks more files than "
+        "shipgate indexes for you. Run `codegraph init` in the repository root to "
+        "build one. Until then " + NOTE_REGEX),
+    "graph-root-not-indexed": (
+        "code graph: no index at the umbrella root. Build it yourself with "
+        "`codegraph init` and your codegraph.json there, or set `Code graph: auto`. "
+        "Until then " + NOTE_REGEX),
+    "graph-index-untrusted": (
+        "code graph: the repository's own .codegraph was refused "
+        "(graph-index-untrusted). Remove the symlink or untrack the files (shipgate "
+        "README, Code graph); the next signals call builds the index. Until then "
+        + NOTE_REGEX),
+}
+
+
+def graph_note(reason: Optional[str]) -> Optional[str]:
+    """The one-line note for a call that wanted the graph and did not get it, or
+    None: no reason, `graph-off`, or a reason that is not the graph's (`no-git`)."""
+    if not reason or reason == "graph-off" or not reason.startswith("graph-"):
+        return None
+    return GRAPH_NOTES.get(reason, (
+        f"code graph: unavailable for this repository ({reason}); the next signals "
+        "call tries the index again. This call: " + NOTE_REGEX))
+
 GitRunner = Callable[..., "subprocess.CompletedProcess"]
 
 
