@@ -533,6 +533,74 @@ class TestShapeValidation(JournalTestCase):
         self.verdict(dispositions="fixed", rc=GATE)
         self.assertEqual(self.events(), [])
 
+    # `review-disposition` records a finding's state when it is decided (ADR 0014).
+    def disposition(self, rc=OK, **data):
+        data.setdefault("dispositions", {"src/a.py:12": "fixing"})
+        data.setdefault("round", 1)
+        return self.append_event("feature/x", "review-disposition", data, rc=rc)
+
+    def test_a_review_disposition_accepts_its_four_states(self):
+        self.disposition(dispositions={
+            "src/a.py:12": "fixing", "src/b.py:?": "fixed", "c.py:3": "rejected",
+            "d.py:4": "deferred",
+        }, round=2)
+        data = self.data_of()
+        self.assertEqual(data["dispositions"]["src/a.py:12"], "fixing")
+        self.assertEqual(data["round"], 2)
+        self.assertNotIn("note", data)
+
+    def test_a_review_disposition_takes_an_optional_note(self):
+        self.disposition(note="the fix is dispatched", round=0)
+        self.assertEqual(self.data_of()["note"], "the fix is dispatched")
+
+    def test_a_review_disposition_state_outside_the_vocabulary_is_refused(self):
+        for state in ("wontfix", "Fixing", "", None, ["fixed"]):
+            with self.subTest(state=state):
+                proc = self.disposition(dispositions={"a.py:1": state}, rc=GATE)
+                self.assertIn("data.dispositions", proc.stderr)
+                self.assertIn("fixing, fixed, rejected, deferred", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_review_disposition_without_a_round_is_refused(self):
+        proc = self.append_event("feature/x", "review-disposition",
+                                 {"dispositions": {"a.py:1": "fixing"}}, rc=GATE)
+        self.assertIn("round", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_review_disposition_round_must_be_a_non_negative_integer(self):
+        for value in ("1", 1.5, 1.0, True, False, -1, [1], {"n": 1}):
+            with self.subTest(round=value):
+                proc = self.disposition(round=value, rc=GATE)
+                self.assertIn("data.round must be a non-negative integer",
+                              proc.stderr)
+                self.assertIn("vocab --shape review-disposition", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_review_disposition_map_must_be_an_object(self):
+        self.disposition(dispositions="fixing", rc=GATE)
+        self.disposition(dispositions=None, rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_a_review_disposition_note_must_be_a_string(self):
+        self.disposition(note=["a"], rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_a_review_disposition_implies_no_phase(self):
+        """`fixing` is appended in the fix round, back in implement: an implied review
+        would move the phase on every dispatch (ADR 0014)."""
+        self.append_event("feature/x", "flow-started", {"request": "build it"})
+        self.disposition()
+        self.assertIsNone(self.status_json()["features"][0]["current"])
+        self.append_event("feature/x", "verify-run",
+                          {"outcome": "pass", "task_ids": ["T001"]})
+        self.disposition(dispositions={"src/a.py:12": "fixed"})
+        current = self.status_json()["features"][0]["current"]
+        self.assertEqual(current["phase"], "implement")
+        self.assertEqual([e["type"] for e in self.events("feature/x")], [
+            "flow-started", "review-disposition", "phase-entered", "verify-run",
+            "review-disposition",
+        ])
+
     def test_force_does_not_waive_the_string_rule(self):
         self.append_event("feature/x", "gate-decision", {
             "gate": "publish", "question": "q", "decision": ["publish"], "mode": "ask",
@@ -3214,10 +3282,14 @@ class TestParseBuildPlan(unittest.TestCase):
         ])
 
 
-POSITION_KEYS = {
+# The keys `position --json` printed in shipgate 0.20.0. A later release adds keys and
+# never renames or removes one of these (FR-007).
+POSITION_KEYS_0_20_0 = {
     "stream", "version", "lifecycle", "current", "publish", "phases", "artifacts",
     "tasks", "last_verify", "decisions", "verdict",
 }
+POSITION_VERDICT_KEYS_0_20_0 = {"seq", "at", "verdict", "criteria", "dispositions"}
+POSITION_KEYS = POSITION_KEYS_0_20_0 | {"trace", "dispositions"}
 
 POSITION_WORKLOG = """# Worklog: demo
 
@@ -3311,6 +3383,10 @@ class TestPosition(JournalTestCase):
         self.assertIsNone(position["last_verify"])
         self.assertEqual(position["decisions"], [])
         self.assertIsNone(position["verdict"])
+        self.assertEqual(position["trace"], {
+            "review_ranking": None, "design_ranking": None, "signals_missing": [],
+        })
+        self.assertEqual(position["dispositions"], {})
 
     def test_the_fold_fields_equal_the_status_brief(self):
         self.append_event(self.S, "flow-started", {"request": "build it"})
@@ -3570,6 +3646,7 @@ class TestPosition(JournalTestCase):
             "seq": event["seq"], "at": event["ts"], "verdict": "ready",
             "criteria": {"SC-001": "met", "SC-002": "unmet"},
             "dispositions": {"src/a.py:12": "fixed", "src/b.py:?": "deferred"},
+            "note": None, "round": 2,
         })
 
     def test_verdict_values_outside_the_vocabularies_are_dropped(self):
@@ -3592,6 +3669,168 @@ class TestPosition(JournalTestCase):
         self.append_event(self.S, "flow-started", {"request": "x"})
         proc = self.journal("--db", self.db, "position", "--stream", self.S, rc=OK)
         self.assertIn(self.S, proc.stdout)
+
+    # -- shipgate 0.21.0: verdict note and round, trace, dispositions (ADR 0014) ------
+
+    def test_every_0_20_0_key_is_still_printed(self):
+        """FR-007: the additions are new keys; none printed before is renamed or gone."""
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {"verdict": "ready"})
+        position = self.position()
+        self.assertLessEqual(POSITION_KEYS_0_20_0, set(position))
+        self.assertLessEqual(POSITION_VERDICT_KEYS_0_20_0, set(position["verdict"]))
+
+    def test_the_verdict_prints_its_note_and_round(self):
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {"verdict": "not-ready"})
+        verdict = self.position()["verdict"]
+        self.assertEqual((verdict["note"], verdict["round"]), (None, 1))
+        self.append_event(self.S, "review-verdict",
+                          {"verdict": "ready", "note": "round two closes it"})
+        verdict = self.position()["verdict"]
+        self.assertEqual((verdict["note"], verdict["round"]),
+                         ("round two closes it", 2))
+
+    def test_the_round_counts_only_verdicts_in_the_vocabulary(self):
+        self.import_row(self.S, "review-verdict", {"verdict": "maybe"})
+        self.import_row(self.S, "review-verdict", {"verdict": "ready", "note": ["x"]})
+        verdict = self.position()["verdict"]
+        self.assertEqual((verdict["note"], verdict["round"]), (None, 1))
+
+    def test_the_trace_is_empty_without_rankings_or_deviations(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.append_event(self.S, "deviation", {"note": "a plain deviation"})
+        self.assertEqual(self.position()["trace"], {
+            "review_ranking": None, "design_ranking": None, "signals_missing": [],
+        })
+
+    def test_the_trace_names_the_signals_missing_deviation(self):
+        self.append_event(self.S, "flow-started", {"request": "x"})
+        self.append_event(self.S, "phase-entered",
+                          {"phase": "route-and-map", "skipped": ["workspace"]})
+        self.append_event(self.S, "deviation", {"note": "another", "kind": "style-missing"})
+        deviation = [e for e in self.events(self.S) if e["type"] == "deviation"][0]
+        self.assertEqual(deviation["data"]["kind"], "signals-missing")
+        self.assertEqual(self.position()["trace"]["signals_missing"],
+                         [{"seq": deviation["seq"], "at": deviation["ts"]}])
+
+    def test_the_trace_takes_the_newest_ranking_carrier(self):
+        """A later verdict without `ranking` does not hide an earlier one's."""
+        first = {"source": "regex", "files": [{"path": "a.py", "fix": "top"}]}
+        second = {"source": "graph", "files": [{"path": "b.py", "fan_in": "high"}]}
+        design = {"source": "none", "unavailable": "shallow"}
+        self.design(ranking=design)
+        carrier_design = self.last()
+        self.design()
+        self.append_event(self.S, "review-verdict",
+                          {"verdict": "not-ready", "ranking": first})
+        self.append_event(self.S, "review-verdict",
+                          {"verdict": "not-ready", "ranking": second})
+        carrier_review = self.last()
+        self.append_event(self.S, "review-verdict", {"verdict": "not-ready"})
+        trace = self.position()["trace"]
+        self.assertEqual(trace["review_ranking"], {
+            "seq": carrier_review["seq"], "at": carrier_review["ts"], "ranking": second,
+        })
+        self.assertEqual(trace["design_ranking"], {
+            "seq": carrier_design["seq"], "at": carrier_design["ts"], "ranking": design,
+        })
+        self.assertEqual(trace["signals_missing"], [])
+
+    def disposition(self, dispositions, round_number=1, **extra):
+        self.append_event(self.S, "review-disposition",
+                          dict(extra, dispositions=dispositions, round=round_number))
+        return self.last()
+
+    def test_the_fold_lets_the_verdict_close_an_interim_state(self):
+        """SC-003: two interim `fixing` entries, then a verdict that closes one."""
+        first = self.disposition({"src/a.py:12": "fixing"})
+        self.disposition({"./src/b.py:?": "fixing", "src/c.py:3": "deferred"},
+                         note="interim")
+        second = self.last()
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "ready", "dispositions": {"./src/a.py:12": "fixed"},
+        })
+        verdict = self.last()
+        self.assertEqual(self.position()["dispositions"], {
+            "src/a.py:12": {"state": "fixed", "seq": verdict["seq"], "at": verdict["ts"]},
+            "src/b.py:?": {"state": "fixing", "seq": second["seq"], "at": second["ts"]},
+            "src/c.py:3": {"state": "deferred", "seq": second["seq"],
+                           "at": second["ts"]},
+        })
+        self.assertEqual(first["data"]["round"], 1)
+
+    def test_a_disposition_after_the_verdict_overrides_it(self):
+        """A round-2 `fixing` on a finding round 1 deferred is the current state."""
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "not-ready", "dispositions": {"src/a.py:12": "deferred"},
+        })
+        later = self.disposition({"src/a.py:12": "fixing"}, round_number=2)
+        self.assertEqual(self.position()["dispositions"], {
+            "src/a.py:12": {"state": "fixing", "seq": later["seq"], "at": later["ts"]},
+        })
+
+    def test_an_older_verdicts_closure_holds_until_a_later_event_changes_it(self):
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "not-ready",
+            "dispositions": {"src/old.py:1": "rejected", "src/a.py:12": "deferred"},
+        })
+        older = self.last()
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "not-ready", "dispositions": {"src/a.py:12": "fixed"},
+        })
+        newer = self.last()
+        self.assertEqual(self.position()["dispositions"], {
+            "src/old.py:1": {"state": "rejected", "seq": older["seq"], "at": older["ts"]},
+            "src/a.py:12": {"state": "fixed", "seq": newer["seq"], "at": newer["ts"]},
+        })
+
+    def test_a_later_rounds_verdict_leaves_earlier_closures_in_place(self):
+        """Round-1 `fixing` x2, the round-2 verdict closes both, the round-3 verdict names
+        a third key only: the two stay closed, and nothing is open."""
+        self.disposition({"src/a.py:1": "fixing", "src/b.py:2": "fixing"})
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "ready",
+            "dispositions": {"src/a.py:1": "fixed", "src/b.py:2": "fixed"},
+        })
+        round_two = self.last()
+        self.disposition({"src/c.py:3": "fixing"}, round_number=3)
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "ready", "dispositions": {"src/c.py:3": "fixed"},
+        })
+        round_three = self.last()
+        dispositions = self.position()["dispositions"]
+        self.assertEqual(dispositions, {
+            "src/a.py:1": {"state": "fixed", "seq": round_two["seq"], "at": round_two["ts"]},
+            "src/b.py:2": {"state": "fixed", "seq": round_two["seq"], "at": round_two["ts"]},
+            "src/c.py:3": {"state": "fixed", "seq": round_three["seq"],
+                           "at": round_three["ts"]},
+        })
+        self.assertEqual(
+            sum(1 for entry in dispositions.values() if entry["state"] == "fixing"), 0)
+
+    def test_the_fold_drops_values_outside_each_events_vocabulary(self):
+        self.import_row(self.S, "review-disposition", {
+            "dispositions": {"a.py:1": "fixing", "b.py:2": "wontfix"}, "round": 1,
+        })
+        self.import_row(self.S, "review-disposition",
+                        {"dispositions": ["c.py:3"], "round": 1})
+        # `fixing` is no verdict state: the verdict cannot reopen a finding.
+        self.import_row(self.S, "review-verdict", {
+            "verdict": "ready", "dispositions": {"a.py:1": "fixing", "d.py:4": "fixed"},
+        })
+        dispositions = self.position()["dispositions"]
+        self.assertEqual({k: v["state"] for k, v in dispositions.items()},
+                         {"a.py:1": "fixing", "d.py:4": "fixed"})
+
+    def test_the_human_form_counts_the_open_dispositions(self):
+        self.disposition({"src/a.py:12": "fixing", "src/b.py:3": "rejected"})
+        proc = self.journal("--db", self.db, "position", "--stream", self.S, rc=OK)
+        self.assertIn("dispositions : 2 (1 open)", proc.stdout)
+        self.assertIn("signals-missing 0", proc.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -3902,6 +4141,26 @@ class TestVocabCommand(JournalTestCase):
             "criteria": ["met", "unmet"],
             "dispositions": ["fixed", "rejected", "deferred"],
         })
+
+    def test_the_review_disposition_shape_names_its_rules(self):
+        out = self.journal(
+            "--db", self.db, "vocab", "--shape", "review-disposition", rc=OK
+        ).stdout
+        self.assertEqual(json.loads(out), {
+            "required": ["dispositions", "round"],
+            "map_enums": {"dispositions": ["fixing", "fixed", "rejected", "deferred"]},
+            "integers": ["round"],
+            "strings": ["note"],
+        })
+
+    def test_review_disposition_is_listed_with_its_shape(self):
+        out = self.journal("--db", self.db, "vocab", rc=OK).stdout
+        line = [l for l in out.splitlines() if l.strip().startswith("review-disposition")]
+        self.assertTrue(line)
+        self.assertTrue(line[0].rstrip().endswith("[shape]"), line[0])
+
+    def test_review_disposition_implies_no_phase(self):
+        self.assertNotIn("review-disposition", load_journal_module().PHASE_OF_EVENT)
 
     def test_shape_of_a_shapeless_type_is_empty(self):
         out = self.journal(

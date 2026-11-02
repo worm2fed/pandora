@@ -86,6 +86,12 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
   the case once on the unchanged tree the same day, compare the after-run with that
   before-run, then `--record` the after-run. After a harness update, re-record the whole
   suite (about $100 and 95 minutes on 3 lanes) rather than reading 70 `~` rows one by one.
+- A grader that reads `.claude/shipgate.db` reads the SQLite record as text. In the
+  `events` row the `type` column comes directly before the `data` column. `journal.py`
+  writes `data` with `json.dumps(sort_keys=True)` and the default `", "` and `": "`
+  separators. So match an event's payload from its type, with no NUL byte between:
+  `review-verdict\{[^\x00]{0,1000}"ranking": \{"files": …`. Keys come in sorted order,
+  never in the order the skill wrote them.
 
 ## Code-graph arm
 

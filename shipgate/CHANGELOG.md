@@ -2,6 +2,66 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.21.0 — a finding's disposition is recorded when it is decided, and `position` prints the trace.
+
+**`review-disposition` (ADR 0014).** Before this release, `review-verdict.dispositions` was
+the only record of a finding's state. The orchestrator wrote it once, at the end of a round.
+So mid-round the HUD showed no state, and a finding in a fix looked like one nobody read.
+- A new event type, `review-disposition`, takes `dispositions` (a map from
+  `<path>:<line|?>` to `fixing`, `fixed`, `rejected` or `deferred`), `round` (a
+  non-negative integer) and an optional `note`. `append` refuses another state, a missing
+  key and a `round` that is not a non-negative integer (a string, `1.5`, `true`, `-1`).
+- `fixing` exists only on this event. `review-verdict.dispositions` keeps its three closed
+  states.
+- The event implies no phase: it is not in `PHASE_OF_EVENT`. The orchestrator appends
+  `fixing` in the fix round, back in `implement`, so an implied `review` would move the
+  phase on every dispatch.
+- A new shape rule kind, `integers`: a key whose value must be a non-negative JSON
+  integer, with a boolean refused. `vocab --shape review-disposition` prints it.
+
+**`position --json` prints the trace, the folded dispositions and more of the verdict.**
+Every addition is a new key. No key that 0.20.0 printed is renamed or removed.
+- `trace`: `review_ranking` and `design_ranking` are the newest `review-verdict` and
+  `design-committed` that carry `ranking`, each as `{seq, at, ranking}` with the ranking
+  verbatim, or null. A later event without `ranking` does not hide an earlier one's.
+  `signals_missing` lists every `deviation` of kind `signals-missing` as `{seq, at}`, oldest
+  first.
+- `dispositions`: per finding key, `{state, seq, at}`. The fold reads every
+  `review-disposition` and every verdict's `dispositions`, in seq order, and the latest
+  event wins per key. A later round's verdict that names only its own findings leaves the
+  earlier closures in place, and a later `fixing` still reopens a key. A leading `./` is
+  dropped from a key, and a state outside the event's vocabulary is dropped. `{}` when there
+  is none.
+- `verdict.note` is the verdict's `note` text, or null. `verdict.round` counts the verdicts
+  in the vocabulary up to and including the last one, from 1.
+- The text form adds a `dispositions` line (the count, and how many are `fixing`) and a
+  `trace` line.
+
+**The `review` skill records each disposition.** Step 2 appends `review-disposition` when a
+finding is killed or deferred. The fix round appends `fixing` when it dispatches a fix and
+the closed state when the re-review confirms it. The verdict's `dispositions` stays the
+final word for the round. The skill shows one append and names
+`journal.py vocab --shape review-disposition`.
+
+**Golden contract.** The scripted journal gains a `dispositions` stream at its top: two
+interim `review-disposition` rows, a passing `verify-run` and a `ready` verdict that closes
+one finding. It is also the HUD's verdict-only round: a verdict and no review board. Every
+later event's `seq` moves up; no event time moves. The `log` runs are gone: the fixture
+`shipgate-hud/tests/fixtures.journal.ts` no longer exports `LOG_GOLDEN`, and a test checks
+that the `signals` position's `trace` holds both rankings and the deviation.
+
+**Tests.** `review-disposition` accepts the four states with or without a note, refuses
+another state, a missing or non-integer `round`, a non-object map and a non-string note,
+and moves no phase. `position` tests cover the newest ranking carrier, the
+`signals-missing` deviation, the verdict's note and round, the fold (a verdict closes one
+interim `fixing` and leaves the other, a later disposition overrides the verdict, an older
+verdict's closure holds until a later event changes it, a round-3 verdict that names only
+its own key leaves the round-2 closures in place, `./` is dropped) and every 0.20.0 key.
+
+**For shipgate-hud.** shipgate-hud 0.8.0 reads `trace`, `dispositions`, `verdict.note` and
+`verdict.round` from `position` and runs no `log` (HUD ADR 0008, and the HUD ADR 0007
+amendment).
+
 v0.20.0 — the style canon and the code graph leave a trace.
 
 **The style skill is recorded and reviewed against (#11, ADR 0012).** A config can name

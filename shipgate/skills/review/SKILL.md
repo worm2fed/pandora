@@ -278,6 +278,10 @@ Rejections are rulings, not silence. Record what you killed and why under the wo
 `review-verdict` counts. Then a later round doesn't re-raise or re-litigate a finding that
 already lost on evidence.
 
+**Journaled: record each disposition as you decide it.** Append `review-disposition` when you
+kill a finding (`rejected`) or defer it (`deferred`). Do not wait for the verdict. The HUD
+shows the state on the finding's card at once. The form is under **Record the outcome**.
+
 A canon-lens finding is a convention violation, not a matter of taste. Kill one only on
 evidence that the code meets the rule or that the rule does not cover it, the same bar as
 any other finding.
@@ -353,6 +357,10 @@ those test files by name, as well as the suite. Then give a clear verdict:
 **Journaled: append `review-verdict` as you state the verdict.** The form is under **Record the
 outcome**. Do it in the same turn, before the MR/PR question, for Ready and Not ready alike. A
 verdict delivered without the event leaves the stream saying the review never happened.
+
+**Journaled: the fix round records its dispositions too.** Append `review-disposition` with
+`fixing` when you dispatch a fix for a finding. Append the closed state (`fixed`, `rejected` or
+`deferred`) when the re-review confirms it. The verdict's `dispositions` stays the final word.
 
 **Cap the internal loop at two rounds.** Not-ready → fix → re-review is normal once. A second
 round should close the gap. If blockers still stand after two rounds, surface the open list
@@ -483,6 +491,24 @@ append is refused. With many findings, keep the dispositions and drop the `findi
 counts first. Then cut `ranking.files` to its first 3 entries. Never drop `ranking` itself
 or its `source`.
 `journal.py vocab --shape review-verdict` lists both keys and the values each one accepts.
+
+The verdict comes at the end of a round. Between verdicts, record each decision as it is
+made with `review-disposition`. Send one key or a few keys at a time, with the same keys as
+the verdict. `round` is the review round the decision belongs to: 1 for the first round.
+`append` takes any non-negative integer:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+  --stream <branch> --type review-disposition \
+  --data '{"dispositions":{"src/api.py:42":"fixing"},"round":1}'
+```
+
+The states are `fixing` (a fix is dispatched), `fixed`, `rejected` and `deferred`. Only
+this event takes `fixing`. Append the closed state when the fix is confirmed. A later event
+wins for its key, so the newest record is the finding's current state. The verdict's
+`dispositions` still lists every finding: it is the final word for the round.
+`journal.py vocab --shape review-disposition` prints the shape. The event implies no phase,
+so it is safe to append from the fix round in `implement`.
 
 The stream may not exist yet (a commit reviewed on the integration branch). Then opening it
 and recording the verdict is one `--batch` (JSONL on stdin; stdin form: see `verify`):

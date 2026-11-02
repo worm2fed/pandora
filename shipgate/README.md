@@ -148,7 +148,7 @@ compacted or resumed session was driving, branch or no branch), then the checked
 | Command | Does |
 | --- | --- |
 | `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. Dormant streams take one line, and completed ones are hidden unless `--all`. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each stream also carries `publish`, `lifecycle` and `current`, and the top level carries `nested_matches` |
-| `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict. An unknown stream exits 1 |
+| `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). An unknown stream exits 1 |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
@@ -165,7 +165,9 @@ and refuses `mr-opened` until the stream holds, after its last `task-done`, eith
 `review-verdict` with `verdict=ready` or a `gate-decision` with `gate=publish`,
 `raised_by=user` and `decision=publish`. A `gate-decision`'s `decision` must be a string. A
 `review-verdict`'s optional `criteria` map takes `met` or `unmet`, and its optional
-`dispositions` map takes `fixed`, `rejected` or `deferred`. `status --json` prints the same
+`dispositions` map takes `fixed`, `rejected` or `deferred`. A `review-disposition` records
+one finding's state when it is decided: its `dispositions` map also takes `fixing`, and its
+`round` must be a non-negative integer. It implies no phase. `status --json` prints the same
 publish rule per stream as `publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's

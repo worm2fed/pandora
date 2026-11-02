@@ -124,6 +124,7 @@ EVENT_VOCABULARY: Dict[str, str] = {
     "debug-root-cause": "root cause established, with the evidence for it",
     # review and delivery
     "review-verdict": "review concluded",
+    "review-disposition": "a review finding's state, recorded when it is decided",
     "mr-opened": "an MR/PR was opened",
     "review-feedback": "reviewer feedback arrived",
     "capture-done": "ledger triaged, learnings promoted or dropped",
@@ -163,9 +164,11 @@ EVENT_VOCABULARY: Dict[str, str] = {
 #   list_objects  key -> a sub-shape: the value must be a JSON list, and each of its
 #                 items a JSON object that passes it
 #   string_lists  keys whose value must be a JSON list of non-empty strings
+#   integers      keys whose value must be a non-negative JSON integer (a boolean is
+#                 refused)
 # A sub-shape takes the validating kinds above (required, enums, lists, strings,
-# string_lists, map_enums, objects, list_objects); aliases and defaults apply at the top
-# level only.
+# string_lists, integers, map_enums, objects, list_objects); aliases and defaults apply
+# at the top level only.
 # `normalize_payload` enforces every kind, and `vocab --shape` prints them.
 #
 # The closed values below are declared once as `Literal`s, so the JSON contract
@@ -179,6 +182,10 @@ ReviewVerdict = Literal["ready", "not-ready"]
 # `map_enums`.
 CriterionStatus = Literal["met", "unmet"]
 Disposition = Literal["fixed", "rejected", "deferred"]
+# A finding's state as `review-disposition` records it when it is decided (ADR 0014):
+# the verdict's three closed states, and `fixing` while a fix is in progress. `fixing`
+# exists only on that event; a verdict's `dispositions` stay closed.
+FindingState = Literal["fixing", "fixed", "rejected", "deferred"]
 # Where the structure half of the code signals came from (#10, ADR 0013): the code
 # graph, the regex scanner, or nothing at all (`signals.py` unavailable).
 SignalSource = Literal["graph", "regex", "none"]
@@ -213,7 +220,8 @@ class EventShape(TypedDict, total=False):
 
     ``strings`` and ``map_enums`` are the payload rules of ADR 0009:
     ``gate-decision.decision`` is a string, and ``review-verdict`` closes the values of
-    ``criteria`` and ``dispositions``.
+    ``criteria`` and ``dispositions``. ``integers`` is ADR 0014's:
+    ``review-disposition.round`` is a non-negative integer.
     """
 
     required: List[str]
@@ -224,6 +232,7 @@ class EventShape(TypedDict, total=False):
     defaults: Dict[str, Any]
     strings: List[str]
     string_lists: List[str]
+    integers: List[str]
     map_enums: Dict[str, List[str]]
     objects: Dict[str, Dict[str, Any]]
     list_objects: Dict[str, Dict[str, Any]]
@@ -289,6 +298,14 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         "string_lists": ["style"],
         "objects": {"ranking": RANKING_SHAPE},
     },
+    # A finding's state the moment it is decided (ADR 0014). No implied phase: `fixing`
+    # is appended in the fix round, while the flow is back in implement.
+    "review-disposition": {
+        "required": ["dispositions", "round"],
+        "map_enums": {"dispositions": list(get_args(FindingState))},
+        "integers": ["round"],
+        "strings": ["note"],
+    },
     "capture-done": {
         "required": ["promoted", "dropped"],
         "lists": ["promoted", "dropped"],
@@ -336,6 +353,23 @@ class ReviewVerdictPayload(_ReviewVerdictKeys, total=False):
     dispositions: Dict[str, Disposition]
     style: List[str]
     ranking: "RankingPayload"
+
+
+class _ReviewDispositionKeys(TypedDict):
+    dispositions: Dict[str, FindingState]
+    round: int
+
+
+class ReviewDispositionPayload(_ReviewDispositionKeys, total=False):
+    """A ``review-disposition`` payload as ``normalize_payload`` leaves it (ADR 0014).
+
+    ``dispositions`` maps a review finding (``<path>:<line or ?>``, as on the verdict) to
+    its state now; ``round`` is the review round it belongs to. A state outside
+    ``FindingState`` is refused (``map_enums``), and so is a ``round`` that is not a
+    non-negative integer (``integers``). ``note`` is optional text.
+    """
+
+    note: str
 
 
 class RankingFile(TypedDict, total=False):
@@ -1237,6 +1271,16 @@ def _validate_shape(
         ):
             raise GateViolation(
                 f"{event_type}: {where}.{key} must be a list of non-empty strings, got "
+                f"{json.dumps(value, sort_keys=True)}" + _shape_hint(event_type)
+            )
+    for key in shape.get("integers", []):
+        if key not in payload:
+            continue
+        value = payload[key]
+        # `bool` is an `int` in Python, and `true` is no round number.
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise GateViolation(
+                f"{event_type}: {where}.{key} must be a non-negative integer, got "
                 f"{json.dumps(value, sort_keys=True)}" + _shape_hint(event_type)
             )
     for key, allowed in shape.get("enums", {}).items():
@@ -2751,13 +2795,62 @@ class PositionDecision(TypedDict):
 
 
 class PositionVerdict(TypedDict):
-    """The stream's last ``review-verdict``: when, which, and its two maps."""
+    """The stream's last ``review-verdict``: when, which, its two maps, its note and
+    its round.
+
+    ``note`` is the verdict's ``data.note`` when it is a string, else None. ``round``
+    counts the verdicts in the vocabulary up to and including this one, from 1
+    (ADR 0014).
+    """
 
     seq: int
     at: str
     verdict: ReviewVerdict
     criteria: Dict[str, CriterionStatus]
     dispositions: Dict[str, Disposition]
+    note: Optional[str]
+    round: int
+
+
+class PositionRanking(TypedDict):
+    """A recorded risk ranking (ADR 0013) and the event that carried it.
+
+    ``ranking`` is the event's ``data.ranking`` verbatim: ``RankingPayload`` when
+    ``append`` checked it, and not validated again here.
+    """
+
+    seq: int
+    at: str
+    ranking: Any
+
+
+class PositionDeviation(TypedDict):
+    """A ``deviation`` the trace names: where it sits in the stream, and when."""
+
+    seq: int
+    at: str
+
+
+class PositionTrace(TypedDict):
+    """What the signals left in the stream (ADR 0014; the HUD read it from ``log``).
+
+    ``review_ranking`` and ``design_ranking`` are the newest ``review-verdict`` and
+    ``design-committed`` whose payload carries ``ranking``, or None: a later event
+    without one does not hide an earlier one's. ``signals_missing`` is every
+    ``deviation`` of kind ``signals-missing`` (ADR 0011), oldest first.
+    """
+
+    review_ranking: Optional[PositionRanking]
+    design_ranking: Optional[PositionRanking]
+    signals_missing: List[PositionDeviation]
+
+
+class PositionDisposition(TypedDict):
+    """A review finding's current state and the event that decided it (ADR 0014)."""
+
+    state: FindingState
+    seq: int
+    at: str
 
 
 class PositionDoc(TypedDict):
@@ -2774,6 +2867,8 @@ class PositionDoc(TypedDict):
     last_verify: Optional[PositionLastVerify]
     decisions: List[PositionDecision]
     verdict: Optional[PositionVerdict]
+    trace: PositionTrace
+    dispositions: Dict[str, PositionDisposition]
 
 
 def build_position(
@@ -2808,10 +2903,20 @@ def build_position(
     - ``decisions``: every ``gate-decision``, oldest first; a field that is not a string
       prints null.
     - ``verdict``: the last ``review-verdict``, or None. A disposition key loses a
+      leading ``./``. ``note`` is its text or None; ``round`` is how many verdicts the
+      stream holds up to and including it.
+    - ``trace``: the newest ``review-verdict`` and ``design-committed`` that carry
+      ``ranking`` (``PositionRanking``, the ranking verbatim), or None each, and every
+      ``signals-missing`` deviation, oldest first (``PositionTrace``).
+    - ``dispositions``: per finding key, its current state (``PositionDisposition``).
+      The fold reads every ``review-disposition`` and every verdict's
+      ``dispositions`` in seq order, and the latest event wins per key. A key loses a
       leading ``./``.
     A value outside its vocabulary is dropped wherever it appears: a verdict map entry,
-    or a ``verify-run`` whose outcome is not ``pass`` or ``fail``. Paths are printed as
-    the events wrote them, relative to ``project_dir``.
+    a ``review-disposition`` state outside ``FindingState``, or a ``verify-run`` whose
+    outcome is not ``pass`` or ``fail``. Every addition since 0.20.0 is a new key; no
+    earlier key was renamed or removed. Paths are printed as the events wrote them,
+    relative to ``project_dir``.
     """
     events = read_events(conn, stream=stream)
     if not events:
@@ -2874,7 +2979,11 @@ def build_position(
         "decisions": [
             _position_decision(e) for e in events if e.type == "gate-decision"
         ],
-        "verdict": _position_verdict(verdicts[-1]) if verdicts else None,
+        "verdict": (
+            _position_verdict(verdicts[-1], len(verdicts)) if verdicts else None
+        ),
+        "trace": _position_trace(events),
+        "dispositions": _position_dispositions(events, verdicts),
     }
 
 
@@ -3092,7 +3201,12 @@ def _vocabulary_map(value: Any, allowed: Sequence[str]) -> Dict[str, Any]:
     }
 
 
-def _position_verdict(event: Event) -> PositionVerdict:
+def _finding_key(key: str) -> str:
+    """A finding key (``<path>:<line or ?>``) without a leading ``./``."""
+    return re.sub(r"^(?:\./)+", "", key)
+
+
+def _position_verdict(event: Event, round_number: int) -> PositionVerdict:
     criteria = _vocabulary_map(event.data.get("criteria"), get_args(CriterionStatus))
     dispositions = _vocabulary_map(event.data.get("dispositions"), get_args(Disposition))
     return {
@@ -3101,9 +3215,53 @@ def _position_verdict(event: Event) -> PositionVerdict:
         "verdict": event.data["verdict"],
         "criteria": criteria,
         "dispositions": {
-            re.sub(r"^(?:\./)+", "", key): item for key, item in dispositions.items()
+            _finding_key(key): item for key, item in dispositions.items()
         },
+        "note": _string_or_none(event.data.get("note")),
+        "round": round_number,
     }
+
+
+def _last_ranking(events: Sequence[Event], event_type: str) -> Optional[PositionRanking]:
+    """The newest ``event_type`` whose payload carries ``ranking``, or None."""
+    carriers = [e for e in events if e.type == event_type and "ranking" in e.data]
+    if not carriers:
+        return None
+    last = carriers[-1]
+    return {"seq": last.seq, "at": last.ts, "ranking": last.data["ranking"]}
+
+
+def _position_trace(events: Sequence[Event]) -> PositionTrace:
+    return {
+        "review_ranking": _last_ranking(events, "review-verdict"),
+        "design_ranking": _last_ranking(events, "design-committed"),
+        "signals_missing": [
+            {"seq": e.seq, "at": e.ts} for e in events
+            if e.type == "deviation" and e.data.get("kind") == SIGNALS_MISSING_KIND
+        ],
+    }
+
+
+def _position_dispositions(
+    events: Sequence[Event], verdicts: Sequence[Event]
+) -> Dict[str, PositionDisposition]:
+    """Each finding's current state: every ``review-disposition`` and every verdict's map
+    (``verdicts``: the verdicts in the vocabulary), folded in seq order, the latest event
+    winning per key (ADR 0014). A later round's verdict that names only its own findings
+    leaves the earlier closures in place; a later ``fixing`` still reopens a key."""
+    verdict_seqs = {verdict.seq for verdict in verdicts}
+    folded: Dict[str, PositionDisposition] = {}
+    for event in events:
+        if event.type == "review-disposition":
+            allowed: Sequence[str] = get_args(FindingState)
+        elif event.seq in verdict_seqs:
+            allowed = get_args(Disposition)
+        else:
+            continue
+        states = _vocabulary_map(event.data.get("dispositions"), allowed)
+        for key, state in states.items():
+            folded[_finding_key(key)] = {"state": state, "seq": event.seq, "at": event.ts}
+    return folded
 
 
 def _render_position(position: PositionDoc) -> str:
@@ -3114,6 +3272,9 @@ def _render_position(position: PositionDoc) -> str:
     tasks = position["tasks"]
     verify = position["last_verify"]
     verdict = position["verdict"]
+    trace = position["trace"]
+    dispositions = position["dispositions"]
+    open_findings = sum(1 for d in dispositions.values() if d["state"] == "fixing")
     phase = "—"
     if current is not None:
         phase = current["phase"] + ("  (implied)" if current["implied"] else "")
@@ -3147,8 +3308,21 @@ def _render_position(position: PositionDoc) -> str:
         ),
         f"  decisions    : {len(position['decisions'])}",
         "  verdict      : " + (
-            f"{verdict['verdict']} (seq {verdict['seq']})" if verdict else "—"
+            f"{verdict['verdict']} (seq {verdict['seq']}, round {verdict['round']})"
+            if verdict else "—"
         ),
+        f"  dispositions : {len(dispositions)} ({open_findings} open)",
+        "  trace        : " + ", ".join([
+            "review ranking " + (
+                f"seq {trace['review_ranking']['seq']}"
+                if trace["review_ranking"] else "—"
+            ),
+            "design ranking " + (
+                f"seq {trace['design_ranking']['seq']}"
+                if trace["design_ranking"] else "—"
+            ),
+            f"signals-missing {len(trace['signals_missing'])}",
+        ]),
     ]
     return "\n".join(lines)
 
