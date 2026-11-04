@@ -2,6 +2,111 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.9.0 — a round without a board tells what each finding was, keys carry labels, one finding in two cases is one finding, and a newer sidecar shows a warning.
+
+**Finding text in a round without a board (#12, HUD ADR 0009).** Before, a round without a
+board drew `<key>  <state>` lines and nothing else. The reader could not tell what a finding
+was. The journal holds keys and states only, by design. The text is in the worklog's review
+section. Now the HUD parses that section in `position.ts` (`parseReviewNotes`). The section
+is every list item under a heading that starts with `Review round` or is `Rejected findings`,
+at any level. It ends at the next heading at the same or a higher level that is no review
+heading. A deeper heading stays inside it. A review heading inside the section keeps the
+section at its first level, so a later sibling heading stays inside too. Fenced code is
+inert. A fence closes only on its own marker character, in a run at least as long as the
+one that opened it, as CommonMark reads it. An indented line continues its item. The HUD
+removes control characters from each item before it collapses the whitespace. Each item
+gives its first backticked `<path>:<line|?>` location (or none), its first sentence after
+that location, and its whole text. Before the sentence, the HUD drops a parenthetical and
+the separators `—`, `–`, `-`, `:`, `,`, `;` and `.`. A sentence with no letter or digit is
+empty. `review.ts` now exports `parseLocation`, the one reader of the `<path>:<line|?>`
+grammar, and the finding keys and the notes both use it. `Position` holds the notes as
+`reviewNotes`. A new pure function in `review.ts`, `noteFor`, matches a key to an item in
+three steps: the exact location (`./` dropped); a path tail on the same line, case folded;
+then the label as a whole word of the item's text, in any case. A key that is no location
+is its own label. In each step the first item in worklog order wins. The round then draws
+one dim line under each matched key: the item's first sentence, indented by 2 and cut to the
+pane's width. A key with no match stays bare. The match is display only. It changes no state
+and no count.
+
+**Labels.** shipgate 0.22.0 records an optional short label per finding key, and
+`position --json` prints it on each folded entry. `FoldedDisposition` gains `label` (text or
+null). The decoder reads an absent `label` key as null, because a 0.21.0 `journal.py` prints
+none. This is the one exception to the rule that a missing key is an error. A label of
+another type is still a `BadShape`, and the decoder removes control characters from a label.
+The round draws the label dim after its key: `<key> · <label>`. The key keeps its room
+first. The label gets only the room that the key and the state leave, and the HUD drops it
+when fewer than 4 cells remain. The state is never cut. The drawn key has its control
+characters removed. The match uses the key without them too, as the notes hold none. The
+lookup in the folded map uses the raw key.
+
+**The board across a reload (#12).** The issue reported a board that was gone after a plugin
+reload. The board is in the `$.state` atom `shipgate-hud.review-v2` since 0.6.0, and the
+engine keeps `$.state` across `/reload-plugins`. So the HUD changes nothing here. A new
+register test pins it: it captures a board, keeps `$.state`, runs `session.start` again and
+finds the board's card text. The test kit cannot load the module again or run `register`
+again, and the test says so. The same test resets `$.state`, as `/clear` does, and finds the
+board gone. The HUD does not copy the board into `$.store`. That would write a file under the
+user's Claude configuration directory, kept across sessions, and the HUD writes nothing
+today. A board from another session would also need its own staleness rule.
+
+**One finding in two cases (#13, HUD ADR 0008 amended).** Two lenses that spell one path in
+two cases gave two cards, and a disposition reached only one of them. Now pass 1 of
+`dispositionsFor` has a case-folded step after the exact and short-location steps. A key
+labels every card whose path and line match it in any case. The same-line path-tail step of
+pass 1 and the line-agnostic step of pass 2 also compare paths case folded. The longest path
+still wins. Pass 2 still gives each key to one card only.
+
+**A newer sidecar.** The HUD now reads the sidecar's `version`. A new pure function in
+`journal.ts`, `sidecarVersionOf`, gives that version when it is a safe integer higher than
+`KNOWN_SIDECAR_VERSION` (1), else null. A new plain atom, `sidecarVersion`, keeps it. Each
+refresh writes it from its one read of the sidecar, and only when it changed. The refresh
+reads the sidecar as soon as it knows the project, before it looks for `journal.py`. So the
+warning is current also when `journal.py` is not found. With no project it is null. While it is set, the pane draws one warning line above every view but
+`Off`: `.claude/shipgate.json declares version 2; this HUD knows version 1 and reads only the
+keys it knows`. The refresh still runs with the keys the HUD knows. It is never a failed
+read. `PaneState` carries the version.
+
+**The stored view.** The view's shape tag moves to `shipgate-hud.view-v6`, because
+`Position` gains `reviewNotes` and a folded entry gains `label`. A stored v5 view reads as
+absent, and the next refresh derives it again.
+
+**The dependency and the read floor.** `plugin.json` declares shipgate `>=0.22.0`, the first
+version that prints the label. The read floor stays 0.21.0: `MIN_SHIPGATE_VERSION` does not
+change. With a 0.21.0 `journal.py`, the keys draw with no label. The README now says what
+happens in a session that you opened before a shipgate release. That session keeps the old
+shipgate in memory, so the dependency range refuses to load the HUD. An
+organization-managed PreModelSwitch check can also block `/model` until `/reload-plugins`.
+
+**Fix: a review launched by `scriptPath` carries its run id.** The review skill can launch
+the workflow with a `scriptPath` alone: the skill's own file, or a repo-local copy. Before,
+the HUD looked only for `shipgate-review` in the script, the script path and the name. Such a
+launch held none, so the HUD did not note it. The board was still captured by its shape, but
+its header read `run ?`. Now `isReviewLaunch` also takes a `scriptPath` whose last segment is
+`review-workflow.js`. Another file name, such as `x-review-workflow.js`, does not count.
+`isReviewLaunch` now takes the call's `script`, `scriptPath` and `name` by name.
+
+**One helper for control characters.** `stripControl` moves from `review.ts` to `json.ts`.
+The decoder of `journal.ts`, the review board, the review notes and the drawn keys all use
+it.
+
+**Tests.** The decoder tests cover the label as absent, null, text and text with control
+characters, two `BadShape` labels, the golden labels, and `sidecarVersionOf` for higher,
+known, lower, absent and non-integer versions. The position tests cover the review section's
+grammar: the headings and their levels, a deeper heading, both fence markers, continuation
+lines, nested items, the first location span, the parenthetical and the separators, and the
+sentence stop outside backticks. They also cover control characters in an item, a review
+heading inside an open section, a `~~~` line inside a backtick fence, leading commas and
+periods, and an item that ends right after its location. The review tests cover each `noteFor` step, the order of the
+steps, a hyphenated label, an empty label, and the #13 board with relative and absolute card
+paths, a folded tail on the same line and the one-card pass-2 fallback. The view tests draw
+SC-001: an exact key, a tail in another case, a free label, a labelled key and a key with no
+match, at 100 and 40 columns, then a dropped label, a key with control characters and the
+sidecar warning over each view. The review tests also cover `parseLocation`.
+The register tests cover the sidecar warning through a refresh, the warning with no
+`journal.py` found, SC-002, the board across a reload, and a `scriptPath` launch whose
+board carries the result's run id. The review tests cover the `review-workflow.js` file
+name. The test world can now change the sidecar it answers.
+
 v0.8.0 — position carries the trace, finding states are live, a review without a board draws a round, and the HUD recovers after `/clear` without `classic.*` hooks.
 
 **Detection after a session change (#8).** `/clear`, `/resume` and `/branch` move the session

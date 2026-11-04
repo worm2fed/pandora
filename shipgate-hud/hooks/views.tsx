@@ -55,10 +55,10 @@ import {
   parseFlowchart,
   splitFences,
 } from './diagram'
-import { absurd } from './json'
-import { MIN_SHIPGATE_VERSION, failureText, outdatedText } from './journal'
+import { absurd, stripControl } from './json'
+import { KNOWN_SIDECAR_VERSION, MIN_SHIPGATE_VERSION, failureText, outdatedText } from './journal'
 import { PHASES, PHASE_SHORT, clock, isVetoable } from './position'
-import { boardsFor, criterionGlyph, dispositionsFor, dispositionsSince, groupBySeverity, roundId, severityLabel, shortLocation, tickOf } from './review'
+import { boardsFor, criterionGlyph, dispositionsFor, dispositionsSince, groupBySeverity, noteFor, roundId, severityLabel, shortLocation, tickOf } from './review'
 
 /** The surface's element table, as `uiOf` (register.tsx) narrows `$.ui.resolve(e)`. */
 export interface Ui {
@@ -94,12 +94,17 @@ export interface Actions {
   readonly openRound: (open: OpenRound) => void
 }
 
-/** The pane's own state: the tab the user picked (null: the phase's default), the open Design section, the width, the review rounds. */
+/**
+ * The pane's own state: the tab the user picked (null: the phase's default), the open Design
+ * section, the width, the review rounds, and the sidecar's version when it is newer than the
+ * one this HUD knows (null: it is not).
+ */
 export interface PaneState {
   readonly tab: Tab | null
   readonly designOpen: string | null
   readonly columns: number
   readonly review: ReviewState
+  readonly sidecarVersion: number | null
 }
 
 export const PANE_ID = 'shipgate-hud'
@@ -1099,11 +1104,37 @@ export function verdictRoundTitle(position: Position): string {
   return verdict === null ? 'round 1 · in progress' : `round ${verdict.round} · verdict ${verdict.verdict} · ${clock(verdict.at)}`
 }
 
+/** What sits between a key and its label on a verdict-only round. */
+const LABEL_SEP = ' · '
+
+/** The fewest cells a label is drawn in; with less room left beside its key, it is dropped. */
+const MIN_LABEL_CELLS = 4
+
+/** How far a key's note line is indented under it. */
+const NOTE_INDENT = 2
+
+/**
+ * One folded key's line as drawn into `room` cells (the width less the state and its gap):
+ * the key, its control characters out (the raw key stays the match's), cut at its head to
+ * the room; then ` · <label>` when the key has a non-empty label
+ * and at least MIN_LABEL_CELLS cells are left for it (null: no label drawn). The key has
+ * priority: the label gets only what the key leaves.
+ */
+function keyLineOf(key: string, label: string | null, room: number): { readonly key: string; readonly label: string | null } {
+  const shown = cutHead(stripControl(key), Math.max(4, room))
+  const left = room - cells(shown) - cells(LABEL_SEP)
+  const name = label === null ? '' : label.replace(/\s+/g, ' ').trim()
+  return { key: shown, label: name === '' || left < MIN_LABEL_CELLS ? null : `${LABEL_SEP}${fit(name, left)}` }
+}
+
 /**
  * A review round with no board (a review run as an agent fan, #5; HUD ADR 0008): the header
  * (`verdictRoundTitle`), the verdict's note when it has one, then one line per folded key in
- * key order, the key cut to the room its state leaves (the state is never cut). Null with
- * neither a verdict nor a folded disposition.
+ * key order: the key cut to the room its state leaves, its label dim beside it when it has
+ * one and room is left (`keyLineOf`), then the state, never cut. Under a key, one dim line,
+ * indented, cut to the width: the first sentence of the worklog note that tells what the
+ * finding was (`noteFor`, HUD ADR 0009); a key with no note, or a note with no sentence, has
+ * no line. Null with neither a verdict nor a folded disposition.
  */
 function verdictRoundOf(ui: Ui, position: Position, width: number): El | null {
   const { Box, Text } = ui
@@ -1117,14 +1148,25 @@ function verdictRoundOf(ui: Ui, position: Position, width: number): El | null {
       {note === null || note === '' ? null : <Text wrap="wrap">{note}</Text>}
       {keys.map(key => {
         const entry = Object.hasOwn(position.dispositions, key) ? position.dispositions[key] : undefined
-        return entry === undefined ? null : (
-          <Box key={`folded-${key}`} flexDirection="row">
-            <Box flexShrink={1}>
-              <Text>{cutHead(key, Math.max(4, width - entry.state.length - cells(PATH_GAP)))}</Text>
+        if (entry === undefined) return null
+        const line = keyLineOf(key, entry.label, width - entry.state.length - cells(PATH_GAP))
+        const sentence = noteFor(key, entry.label, position.reviewNotes)?.sentence ?? ''
+        return (
+          <Box key={`folded-${key}`} flexDirection="column">
+            <Box flexDirection="row">
+              <Box flexShrink={1} flexDirection="row">
+                <Text>{line.key}</Text>
+                {line.label === null ? null : <Text dimColor>{line.label}</Text>}
+              </Box>
+              <Box flexShrink={0} paddingLeft={2}>
+                {stateTextOf(ui, entry.state)}
+              </Box>
             </Box>
-            <Box flexShrink={0} paddingLeft={2}>
-              {stateTextOf(ui, entry.state)}
-            </Box>
+            {sentence === '' ? null : (
+              <Box paddingLeft={NOTE_INDENT}>
+                <Text dimColor>{fit(sentence, width - NOTE_INDENT)}</Text>
+              </Box>
+            )}
           </Box>
         )
       })}
@@ -1206,15 +1248,37 @@ export const TAB_VIEW: Readonly<Record<Tab, TabView>> = {
   review: { label: 'Review', hotkey: '4', body: (ui, position, state, actions) => reviewTab(ui, position, state.review, actions, state.columns) },
 }
 
+/** The warning line for a sidecar newer than this HUD: the version it declares, the one the HUD knows, and that the HUD reads only the keys it knows. */
+export function sidecarVersionText(version: number): string {
+  return `.claude/shipgate.json declares version ${version}; this HUD knows version ${KNOWN_SIDECAR_VERSION} and reads only the keys it knows`
+}
+
 /**
- * The pane, by view: `Off` says no journal was found; `NoJournalScript` says journal.py was
+ * The pane, by view (`viewPaneOf`). While the sidecar declares a version newer than this HUD
+ * knows (`state.sidecarVersion`), one warning line sits above the pane of any view but `Off`
+ * (`sidecarVersionText`); the view draws as it would without it.
+ */
+export function paneOf(ui: Ui, view: HudView, state: PaneState, actions: Actions): El {
+  const pane = viewPaneOf(ui, view, state, actions)
+  if (view.kind === 'Off' || state.sidecarVersion === null) return pane
+  const { Box } = ui
+  return (
+    <Box flexDirection="column" rowGap={1}>
+      {warningOf(ui, sidecarVersionText(state.sidecarVersion))}
+      {pane}
+    </Box>
+  )
+}
+
+/**
+ * The pane of one view: `Off` says no journal was found; `NoJournalScript` says journal.py was
  * not found and names the `journalScript` option; `Unbound` names the nearby live streams and
  * says this session drives none; `Bound` draws the timeline, the tabs and the active tab;
  * `Failed` shows `failureText(failure)` above the stale position (when one exists);
  * `Outdated` says shipgate is older than MIN_SHIPGATE_VERSION and the publish gate is off,
  * how to update, and `outdatedText(sign)` (`outdatedPaneOf`).
  */
-export function paneOf(ui: Ui, view: HudView, state: PaneState, actions: Actions): El {
+function viewPaneOf(ui: Ui, view: HudView, state: PaneState, actions: Actions): El {
   switch (view.kind) {
     case 'Off':
       return noteOf(ui, 'No shipgate journal found in this project.')

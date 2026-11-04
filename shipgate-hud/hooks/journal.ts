@@ -1,6 +1,6 @@
 // The one boundary for journal.py's JSON: the decoded shapes of `status --json` and
 // `position --stream <s> --json` (the trace and the folded dispositions included, HUD ADR
-// 0007 amended, shipgate ADR 0014), the sidecar's homes, the smart constructors of the
+// 0007 amended, shipgate ADR 0014), the sidecar's homes and version, the smart constructors of the
 // brands, the markers that tell an older journal.py (0.18's `nested_matches`, 0.21's
 // `trace`), and the text of a journal run's failure (RunFailure itself is in the contract,
 // because HudView stores it). journal.py prints snake_case keys; the decoded shapes are
@@ -61,6 +61,7 @@ import {
   ok,
   recordOf,
   stringOf,
+  stripControl,
 } from './json'
 
 // ---------------------------------------------------------------------------------------
@@ -756,14 +757,33 @@ const decodeStamp: Decoder<Stamp> = (value, path) => {
   return ok({ seq: seq.value, at: at.value })
 }
 
-/** One folded disposition: its state in the vocabulary, and the stamp of the event that decided it. */
+/** Text with its control characters out (`stripControl`): a label the pane draws carries no escape and no line break. */
+const decodeCleanText: Decoder<string> = (value, path) => {
+  const text = stringOf(value)
+  return text === null ? fail(path, 'text') : ok(stripControl(text))
+}
+
+/**
+ * A folded disposition's `label` (shipgate 0.22.0): text, control characters out, or null.
+ * The one exception to "a missing key is an error": an absent `label` reads as null, because
+ * a shipgate 0.21.0 journal.py prints none and the read floor stays 0.21.0. A present label
+ * of another type is still a shape error.
+ */
+const labelOf = (raw: JsonRecord, path: string): Decoded<string | null> => {
+  const value = field(raw, 'label')
+  return value === undefined ? ok(null) : nullable(decodeCleanText)(value, keyPath(path, 'label'))
+}
+
+/** One folded disposition: its state in the vocabulary, the stamp of the event that decided it, and its label (`labelOf`). */
 const decodeFoldedDisposition: Decoder<FoldedDisposition> = (value, path) => {
   const raw = decodeRecord(value, path)
   if (!raw.ok) return raw
   const state = fieldOf(raw.value, path, 'state', member(FINDING_STATES, "'fixing', 'fixed', 'rejected' or 'deferred'"))
   if (!state.ok) return state
   const stamp = decodeStamp(raw.value, path)
-  return stamp.ok ? ok({ state: state.value, ...stamp.value }) : stamp
+  if (!stamp.ok) return stamp
+  const label = labelOf(raw.value, path)
+  return label.ok ? ok({ state: state.value, ...stamp.value, label: label.value }) : label
 }
 
 /** The folded dispositions: any key (`<path>:<line or ?>`), each value strict. journal.py drops an out-of-vocabulary state, so one that gets through is a shape error. */
@@ -787,8 +807,8 @@ export function decodePosition(raw: unknown): Result<DecodeFailure, PositionDoc>
 }
 
 /**
- * The position's keys decoded: a missing or mistyped key is an error, never a default.
- * journal.py drops unsafe refs; one that gets through anyway (an artifact path `projectPath`
+ * The position's keys decoded: a missing or mistyped key is an error, never a default (one
+ * exception: a folded disposition's `label`, `labelOf`). journal.py drops unsafe refs; one that gets through anyway (an artifact path `projectPath`
  * refuses) is a shape error too.
  */
 function decodeDoc(raw: unknown): Result<JournalShapeError, PositionDoc> {
@@ -933,6 +953,21 @@ const decodeTrace: Decoder<Trace> = (value, path) => {
 
 /** The trace of a stream with no event that records one. */
 export const EMPTY_TRACE: Trace = { reviewRanking: null, designRanking: null, signalsGaps: [] }
+
+/** The sidecar `version` this HUD knows (shipgate's `SIDECAR_VERSION`): it reads the keys of version 1 only. */
+export const KNOWN_SIDECAR_VERSION = 1
+
+/**
+ * The sidecar's `version` when it is a safe integer higher than KNOWN_SIDECAR_VERSION: a newer
+ * shipgate wrote it, and this HUD reads only the keys it knows. Null for the known version, a
+ * lower or absent one, a value that is no safe integer, and a sidecar that is not an object.
+ * Display only: the refresh runs either way.
+ */
+export function sidecarVersionOf(raw: unknown): number | null {
+  const sidecar = recordOf(raw)
+  const version = sidecar === null ? null : numberOf(field(sidecar, 'version'))
+  return version !== null && Number.isSafeInteger(version) && version > KNOWN_SIDECAR_VERSION ? version : null
+}
 
 /**
  * The homes from the sidecar's JSON, over DEFAULT_HOMES: a sidecar with no `artifact_homes`

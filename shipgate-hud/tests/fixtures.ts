@@ -74,11 +74,12 @@ export interface TraceJson {
   readonly signals_missing: readonly { readonly seq: number; readonly at: string }[]
 }
 
-/** One folded disposition of `position`'s `dispositions` (shipgate 0.21.0). */
+/** One folded disposition of `position`'s `dispositions` (shipgate 0.21.0); `label` from shipgate 0.22.0 on (a 0.21.0 journal.py prints none). */
 export interface FoldedDispositionJson {
   readonly state: FindingState
   readonly seq: number
   readonly at: string
+  readonly label?: string | null
 }
 
 /** `position --stream <s> --json`. */

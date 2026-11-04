@@ -297,6 +297,7 @@ export const REVIEW_POSITION: Position = {
   lastVerdict: null,
   dispositions: {},
   trace: EMPTY_TRACE,
+  reviewNotes: [],
 }
 
 /** The review position with a last verdict: `seq`, its time, its criteria and dispositions, its note (default none) and round (default 1). */
@@ -327,10 +328,55 @@ export const withVerdict = (
 /** The review position with folded dispositions (`position.dispositions`): each key's state, recorded by the event at `seq`, at `at`. */
 export const withDispositions = (
   position: Position,
-  folded: Readonly<Record<string, { readonly state: FindingState; readonly seq: number; readonly at: string }>>,
+  folded: Readonly<Record<string, { readonly state: FindingState; readonly seq: number; readonly at: string; readonly label?: string | null }>>,
 ): Position => ({
   ...position,
   dispositions: Object.fromEntries(
-    Object.entries(folded).map(([key, entry]): [string, FoldedDisposition] => [key, { state: entry.state, seq: must(eventSeq(entry.seq)), at: must(isoTime(entry.at)) }]),
+    Object.entries(folded).map(([key, entry]): [string, FoldedDisposition] => [
+      key,
+      { state: entry.state, seq: must(eventSeq(entry.seq)), at: must(isoTime(entry.at)), label: entry.label ?? null },
+    ]),
   ),
 })
+
+/**
+ * A worklog with a review section in the grammar the review skill writes (HUD ADR 0009): a
+ * `# Review round 1` section with a deeper `## Fixes` heading inside it and a fenced block,
+ * a `# Rejected findings` section, and list items before and after them that are no notes.
+ * Generic paths only.
+ */
+export const REVIEW_WORKLOG = `# Worklog: example
+
+# Design
+
+## Approach
+
+- \`src/a.ts:1\` — an item outside the review section. It is not a note.
+
+# Review round 1
+
+- F1 MEDIUM \`src/widget/widget.test.ts:?\` — the widget test misses the empty case. It passes on any input.
+- \`src/api/handler.ts:42\` (HIGH 80): the handler writes before the check. The check now runs first.
+- The sync flush drops older rows when flush-older-sync runs twice. A guard keeps them.
+  It also logs the drop.
+* \`./src/cache.ts:7\` — the cache is read before it is filled! A second sentence.
+- \`src/report.ts:?\` — stale-report: the report reads an old snapshot.
+
+## Fixes
+
+- F2 \`src/deep.ts:3\` — a deeper heading stays inside the section.
+
+\`\`\`ts
+- \`src/fenced.ts:1\` — inert inside a fence.
+\`\`\`
+
+# Rejected findings
+
+1. \`src/util/format.ts:12\`: the helper duplicates \`fmt.ts\`. Rejected: it is the formatter.
+2) No location here, just text? Yes.
+
+# Capture
+
+- \`src/after.ts:5\` — after the section closes.
+`
+

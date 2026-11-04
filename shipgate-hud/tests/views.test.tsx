@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { EngineInterface, On, ResolveInput } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { EMPTY_TRACE, MIN_SHIPGATE_VERSION, type PositionDoc, criterionId, decodePosition, eventSeq, isoTime, projectPath, streamName, taskId } from '../hooks/journal'
-import { clock, parseAdr, toPosition } from '../hooks/position'
+import { clock, parseAdr, parseReviewNotes, toPosition } from '../hooks/position'
 import { EMPTY_REVIEW, decodeReviewReturn, markSurvivor, roundId, toReviewBoard } from '../hooks/review'
 import {
   type Actions,
@@ -25,6 +25,7 @@ import {
   reviewCounts,
   reviewSegment,
   signalsGapText,
+  sidecarVersionText,
   summaryOf,
   summarySegments,
 } from '../hooks/views'
@@ -32,7 +33,7 @@ import type { Decision, HudView, IsoTime, OpenRound, Phase, PhaseMark, Position,
 import { type Gen, bool, forAll, int, listOf, orNull, pick, stringOf } from './arbitrary'
 import { ADR, WORKLOG, WORKLOG_WITH_DIAGRAMS } from './fixtures'
 import { POSITION_GOLDEN } from './fixtures.journal'
-import { PRD_WITH_CRITERIA, REVIEW_POSITION, REVIEW_RETURN, REVIEW_RETURN_ABORTED, REVIEW_RETURN_CANON, REVIEW_STREAM, must, withDispositions, withVerdict } from './fixtures.review'
+import { PRD_WITH_CRITERIA, REVIEW_POSITION, REVIEW_RETURN, REVIEW_RETURN_ABORTED, REVIEW_RETURN_CANON, REVIEW_STREAM, REVIEW_WORKLOG, must, withDispositions, withVerdict } from './fixtures.review'
 import { PANE } from './world'
 
 // The band and the pane drawn by hooks of the test's own (the plugin under test answers only
@@ -68,7 +69,7 @@ const recording = (pressed: string[]): Actions => ({
 
 /** The pane's state as the tests draw it: no tab picked, the first section open, no review; the width comes from the mount. */
 type DrawnState = Omit<PaneState, 'columns'>
-const FRESH: DrawnState = { tab: null, designOpen: null, review: EMPTY_REVIEW }
+const FRESH: DrawnState = { tab: null, designOpen: null, review: EMPTY_REVIEW, sidecarVersion: null }
 
 /** Draws `paneOf(view)` beneath the plugin; `pressed` records every action. */
 const drawPane = (on: On, view: HudView, state: DrawnState, pressed: string[] = []): void => {
@@ -255,6 +256,7 @@ const positionGen: Gen<Position> = rng => ({
   lastVerdict: null,
   dispositions: {},
   trace: EMPTY_TRACE,
+  reviewNotes: [],
 })
 
 interface BandCase {
@@ -431,6 +433,44 @@ describe('views: the pane, by view', () => {
       await ui.unmount()
     })
   }
+
+  test('a newer sidecar: one warning line above the pane of any view but Off; none at the known version', async ($, on) => {
+    const text = '.claude/shipgate.json declares version 2; this HUD knows version 1 and reads only the keys it knows'
+    expect(sidecarVersionText(2)).toBe(text)
+    drawPane(on, bound(FLOW), { ...FRESH, sidecarVersion: 2 })
+    const ui = await mountOwn($, PANE_DRAW)
+    const warning = await ui.find({ type: 'Text', text })
+    expect(warning?.props.color).toBe('warning')
+    // above the timeline and the tabs, which still draw
+    const order = (await ui.findAll({ type: 'Text', text: /^(\.claude\/shipgate\.json declares| IMP ● )/ })).map(t => t.text)
+    expect(order).toEqual([text, ' IMP ● '])
+    expect(await ui.find({ key: 'tab-flow' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const view of [{ kind: 'Unbound', nearby: [] }, { kind: 'NoJournalScript' }, { kind: 'Outdated', sign: { kind: 'MissingTrace' } }, { kind: 'Failed', failure: { kind: 'Truncated' }, stale: null }] as const) {
+    test(`a newer sidecar over ${view.kind}: the warning line, then the view's own pane`, async ($, on) => {
+      drawPane(on, view, { ...FRESH, sidecarVersion: 3 })
+      const ui = await mountOwn($, PANE_DRAW)
+      expect(await ui.find({ type: 'Text', text: /^\.claude\/shipgate\.json declares version 3;/ })).toBeDefined()
+      await ui.unmount()
+    })
+  }
+
+  test('a newer sidecar over Off draws no warning; no newer sidecar draws none either', async ($, on) => {
+    drawPane(on, { kind: 'Off' }, { ...FRESH, sidecarVersion: 2 })
+    const ui = await mountOwn($, PANE_DRAW)
+    expect(await ui.find({ type: 'Text', text: /declares version/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'No shipgate journal found in this project.' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the known sidecar version: no warning over a bound view', async ($, on) => {
+    drawPane(on, bound(FLOW), FRESH)
+    const ui = await mountOwn($, PANE_DRAW)
+    expect(await ui.find({ type: 'Text', text: /declares version/ })).toBeUndefined()
+    await ui.unmount()
+  })
 
   test('Failed with nothing shown before: the failure, no tabs', async ($, on) => {
     drawPane(on, { kind: 'Failed', failure: { kind: 'Exited', exitCode: 1, stderr: 'boom\n' }, stale: null }, FRESH)
@@ -767,7 +807,7 @@ const drawReviewTab = (on: On, position: Position, review: ReviewState, pressed:
   on('ui.render', { component: 'Pane', requestId: REVIEW_TAB_ID }, async ($, e) => {
     // cast: the test kit's element table for the surface, as uiOf (register.tsx) narrows it
     const ui = $.ui.resolve(e) as unknown as Ui
-    return TAB_VIEW.review.body(ui, position, { tab: 'review', designOpen: null, columns: e.props.bodyColumns, review }, actions)
+    return TAB_VIEW.review.body(ui, position, { tab: 'review', designOpen: null, columns: e.props.bodyColumns, review, sidecarVersion: null }, actions)
   })
 }
 
@@ -866,6 +906,10 @@ describe('review tab', () => {
     // one line per folded key, in key order, each state in its colour
     const keys = await ui.findAll({ type: 'Text', text: /^src\/(golden|other)\.py:/ })
     expect(keys.map(key => key.text)).toEqual(['src/golden.py:12', 'src/golden.py:30', 'src/other.py:?'])
+    // each label journal.py printed sits dim beside its key (shipgate 0.22.0; a 0.21.0 journal.py prints none)
+    const labels = Object.values(POSITION_GOLDEN.dispositions.dispositions).flatMap(entry => ('label' in entry && typeof entry.label === 'string' ? [entry.label] : []))
+    for (const label of labels) expect((await ui.find({ type: 'Text', text: ` · ${label}` }))?.props.dimColor).toBe(true)
+    expect((await ui.findAll({ type: 'Text', text: /^ · / })).length).toBe(labels.length)
     expect((await ui.find({ type: 'Text', text: /^fixed$/ }))?.props.color).toBe('success')
     expect((await ui.find({ type: 'Text', text: /^deferred$/ }))?.props.dimColor).toBe(true)
     expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
@@ -899,6 +943,100 @@ describe('review tab', () => {
     async $ => {
       const ui = await mountReview($)
       expect(await ui.find({ type: 'Text', text: `round 3 · verdict not-ready · ${at(VERDICT_AFTER)}` })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  /**
+   * SC-001 (HUD ADR 0009): a verdict, folded keys and the worklog's review notes. One key is
+   * exact, one is a path tail in another case, one is a free label, one carries a label that
+   * names a note, one matches nothing.
+   */
+  const WITH_NOTES: Position = {
+    ...withDispositions(withVerdict(REVIEW_POSITION, { seq: 60, at: VERDICT_AFTER, verdict: 'not-ready', round: 2 }), {
+      'src/api/handler.ts:42': { state: 'fixed', seq: 55, at: VERDICT_BEFORE },
+      'widget/Widget.test.ts:?': { state: 'deferred', seq: 56, at: VERDICT_BEFORE },
+      'flush-older-sync': { state: 'fixing', seq: 57, at: VERDICT_BEFORE },
+      'lib/report/build.ts:5': { state: 'rejected', seq: 58, at: VERDICT_BEFORE, label: 'stale-report' },
+      'src/none.ts:1': { state: 'deferred', seq: 59, at: VERDICT_BEFORE },
+    }),
+    reviewNotes: parseReviewNotes(REVIEW_WORKLOG),
+  }
+  const HANDLER = 'the handler writes before the check.'
+  const WIDGET = 'the widget test misses the empty case.'
+  const FLUSH = 'The sync flush drops older rows when flush-older-sync runs twice.'
+  const REPORT = 'stale-report: the report reads an old snapshot.'
+
+  reviewTest('SC-001: each key that matches a worklog note shows its first sentence under it, dim; the unmatched key stays bare; a label sits beside its key', WITH_NOTES, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    const lines = await ui.findAll({ type: 'Text', text: /^(flush-older-sync|lib\/report|src\/api|src\/none|widget\/|the handler|the widget|The sync| · |stale-report:)/ })
+    expect(lines.map(line => line.text)).toEqual([
+      'flush-older-sync',
+      FLUSH,
+      'lib/report/build.ts:5',
+      ' · stale-report',
+      REPORT,
+      'src/api/handler.ts:42',
+      HANDLER,
+      'src/none.ts:1',
+      'widget/Widget.test.ts:?',
+      WIDGET,
+    ])
+    for (const sentence of [FLUSH, REPORT, HANDLER, WIDGET]) expect((await ui.find({ type: 'Text', text: sentence }))?.props.dimColor).toBe(true)
+    expect((await ui.find({ type: 'Text', text: ' · stale-report' }))?.props.dimColor).toBe(true)
+    // the key's own text stays plain; the state is still drawn
+    expect((await ui.find({ type: 'Text', text: 'lib/report/build.ts:5' }))?.props.dimColor).toBeFalsy()
+    expect((await ui.find({ type: 'Text', text: /^rejected$/ }))?.props.color).toBe('error')
+    await ui.unmount()
+  })
+
+  reviewTest('SC-001 at 40 columns: the sentence is cut to the width less its indent; the label gets the room the key leaves', WITH_NOTES, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($, 'terminal', 40)
+    const flush = await ui.find({ type: 'Text', text: /^The sync flush/ })
+    expect(flush?.text).toBe(`${[...FLUSH].slice(0, 37).join('')}…`)
+    // 40 - `rejected` - the gap leaves 30 cells; the key takes 21, ` · ` 3, the label the 6 left
+    expect(await ui.find({ type: 'Text', text: ' · stale…' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^rejected$/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  reviewTest(
+    'a key that leaves fewer than 4 cells drops its label; the key keeps its room and the state is never cut',
+    withDispositions(REVIEW_POSITION, { [`${'deep/'.repeat(30)}file.ts:7`]: { state: 'deferred', seq: 4, at: VERDICT_BEFORE, label: 'a-label' } }),
+    EMPTY_REVIEW,
+    async $ => {
+      const ui = await mountReview($, 'terminal', 40)
+      expect(await ui.find({ type: 'Text', text: /a-label/ })).toBeUndefined()
+      expect((await ui.find({ type: 'Text', text: /^….*file\.ts:7$/ }))?.text).toBe('…/deep/deep/deep/file.ts:7')
+      expect(await ui.find({ type: 'Text', text: /^deferred$/ })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  reviewTest(
+    'F17: a key with control characters is drawn without them; the raw key still finds its note',
+    {
+      ...withDispositions(REVIEW_POSITION, { 'src/a\u001b[2Jb.ts:4': { state: 'fixed', seq: 4, at: VERDICT_BEFORE } }),
+      reviewNotes: parseReviewNotes('# Review round 1\n- `src/a\u001b[2Jb.ts:4` — the key matched raw.\n'),
+    },
+    EMPTY_REVIEW,
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: 'src/a[2Jb.ts:4' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /\u001b/ })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: 'the key matched raw.' })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  reviewTest(
+    'a note with an empty sentence draws no line under its key',
+    { ...withDispositions(REVIEW_POSITION, { 'src/c.ts:3': { state: 'fixed', seq: 4, at: VERDICT_BEFORE } }), reviewNotes: parseReviewNotes('# Review round 1\n- `src/c.ts:3`\n') },
+    EMPTY_REVIEW,
+    async $ => {
+      const ui = await mountReview($)
+      expect(await ui.find({ type: 'Text', text: 'src/c.ts:3' })).toBeDefined()
+      expect((await ui.findAll({ type: 'Text' })).filter(t => t.props.dimColor === true && t.text.trim() === '')).toEqual([])
       await ui.unmount()
     },
   )

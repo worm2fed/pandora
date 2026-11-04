@@ -19,6 +19,7 @@ import type {
   ReviewCounts,
   ReviewCoverage,
   ReviewMark,
+  ReviewNote,
   ReviewState,
   RiskLabel,
   RoundId,
@@ -31,7 +32,7 @@ import type {
   TickOverride,
   Verification,
 } from '../types'
-import { type Decoded, type JsonRecord, type Result, decodeList, decodeMember, decodeRecord, fail, listOf, numberOf, ok, parseJson, recordOf, stringListOf, stringOf } from './json'
+import { type Decoded, type JsonRecord, type Result, decodeList, decodeMember, decodeRecord, fail, listOf, numberOf, ok, parseJson, recordOf, stringListOf, stringOf, stripControl } from './json'
 import { criterionId, eventSeq, isoTime, streamName } from './journal'
 
 export const SEVERITIES: readonly Severity[] = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW']
@@ -460,13 +461,28 @@ export function runIdOf(text: string): string | null {
   return match ? (match[1] ?? null) : null
 }
 
-/** Does a Workflow call launch the shipgate review workflow? Any of the strings naming `shipgate-review`. */
-export function isReviewLaunch(parts: readonly (string | undefined)[]): boolean {
-  return parts.some((part) => typeof part === 'string' && part.includes('shipgate-review'))
+/** The strings of a Workflow call that may name the workflow it launches (absent: the call has none). */
+export interface WorkflowLaunch {
+  readonly script?: string
+  readonly scriptPath?: string
+  readonly name?: string
 }
 
-/** Control characters (C0, DEL, C1) out of text from the return, so the card, the group header and the prompt agree. */
-export const stripControl = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+/** The review workflow's own file name, as the last segment of a `scriptPath`: `x-review-workflow.js` is another file. */
+const REVIEW_WORKFLOW_FILE = /(^|\/)review-workflow\.js$/
+
+/**
+ * Does a Workflow call launch the shipgate review workflow? Its script, its script path or its
+ * name holds `shipgate-review` (the workflow's `meta.name`, or the tool's persisted copy), or
+ * its script path names the file `review-workflow.js` (a launch from the skill's file or a
+ * repo-local copy, with no script and no name).
+ */
+export function isReviewLaunch(launch: WorkflowLaunch): boolean {
+  const { script, scriptPath, name } = launch
+  const isNamed = [script, scriptPath, name].some(part => part !== undefined && part.includes('shipgate-review'))
+  return isNamed || (scriptPath !== undefined && REVIEW_WORKFLOW_FILE.test(scriptPath))
+}
+
 
 /** A board as captured, before `pushBoard` numbers its round. */
 export type CapturedBoard = Omit<ReviewBoard, 'round'>
@@ -576,50 +592,86 @@ export const ROUNDS_PER_STREAM = 5
 /** Does a board belong to the stream shown? A board captured with no stream is drawn for any. */
 const isBoardOf = (board: ReviewBoard, stream: StreamName | null): boolean => board.stream === null || board.stream === stream
 
-const stripDotSlash = (path: string): string => path.replace(/^(\.\/)+/, '')
+/** A path with its leading `./` segments dropped. */
+export const stripDotSlash = (path: string): string => path.replace(/^(\.\/)+/, '')
 
 /** A finding as the key match reads it: its file and its line. */
 type FindingPlace = Pick<FindingCore, 'file' | 'line'>
 
-/** A key of the folded map split at its last `:`: the key as written, its path (`./` dropped) and its line (null: `?`). */
+/** Text with its case folded: two spellings of one path that differ only by case compare equal (#13). */
+const fold = (text: string): string => text.toLowerCase()
+
+/** A key of the folded map split at its last `:`: the key as written, its path (`./` dropped), that path case folded, and its line (null: `?`). */
 interface ParsedKey {
   readonly key: string
   readonly order: number
   readonly path: string
+  readonly foldedPath: string
   readonly line: number | null
 }
 
-/** A key as `<path>:<line or ?>`, `./` dropped from the path; null when it has no path or its line is neither digits nor `?`. */
-const parseKey = (key: string, order: number): ParsedKey | null => {
-  const cut = key.lastIndexOf(':')
+/** A place as the `<path>:<line|?>` grammar names it: the path (`./` dropped) and the line (null: `?`). */
+export type Location = { readonly path: string; readonly line: number | null }
+
+/**
+ * The one reader of the `<path>:<line|?>` grammar, for a finding key and a worklog note's
+ * location alike: the text split at its last `:`, `./` dropped from the path; null when it
+ * has no path or its line is neither digits nor `?`.
+ */
+export function parseLocation(text: string): Location | null {
+  const cut = text.lastIndexOf(':')
   if (cut <= 0) return null
-  const path = stripDotSlash(key.slice(0, cut))
-  const tail = key.slice(cut + 1)
+  const path = stripDotSlash(text.slice(0, cut))
+  const tail = text.slice(cut + 1)
   if (path === '') return null
-  if (tail === '?') return { key, order, path, line: null }
-  return /^\d+$/.test(tail) ? { key, order, path, line: Number(tail) } : null
+  if (tail === '?') return { path, line: null }
+  return /^\d+$/.test(tail) ? { path, line: Number(tail) } : null
 }
 
-/** Does a key's path name the finding's file: the same path, or a tail of it at a `/` (a workflow reports absolute paths, an orchestrator writes repo-relative ones)? */
+/** A key as `<path>:<line or ?>` (`parseLocation`), with its place in the map; null when it is no location. */
+const parseKey = (key: string, order: number): ParsedKey | null => {
+  const location = parseLocation(key)
+  return location === null ? null : { key, order, path: location.path, foldedPath: fold(location.path), line: location.line }
+}
+
+/**
+ * Does a key's path name the finding's file: the same path, or a tail of it at a `/` (a
+ * workflow reports absolute paths, an orchestrator writes repo-relative ones)? The callers
+ * pass both paths case folded.
+ */
 const isPathTail = (file: string, path: string): boolean => file === path || file.endsWith(`/${path}`)
 
 /** How far a key's line is from the finding's: a `?` on either side is the farthest. */
 const lineDistance = (finding: FindingPlace, key: ParsedKey): number =>
   finding.line === null || key.line === null ? Number.POSITIVE_INFINITY : Math.abs(key.line - finding.line)
 
+/** The keys looked up by their text: `exact` maps a key with `./` dropped, `folded` that text case folded, each to the first key that reads so. */
+interface KeyIndex {
+  readonly exact: ReadonlyMap<string, string>
+  readonly folded: ReadonlyMap<string, string>
+}
+
+/** A map from each key's form (`formOf`) to the first key with that form, in map order. */
+const firstByForm = (keys: readonly string[], formOf: (key: string) => string): ReadonlyMap<string, string> =>
+  keys.reduce((byForm, key) => (byForm.has(formOf(key)) ? byForm : byForm.set(formOf(key), key)), new Map<string, string>())
+
 /**
  * Pass 1 for one finding: the key it names, first hit of the exact `<file>:<line>`, the short
- * location, then a path tail on the same line (the longest path wins, ties to the first key).
- * A `?` key names only a finding with no line here; for a finding with a line it is a pass-2
- * candidate. `exact` maps a key with `./` dropped to the first key that reads so.
+ * location, the same two case folded (#13: one finding reported in two cases is two cards,
+ * and a key labels both), then a path tail on the same line, case folded (the longest path
+ * wins, ties to the first key). A `?` key names only a finding with no line here; for a
+ * finding with a line it is a pass-2 candidate.
  */
-const namedKey = (finding: FindingPlace, exact: ReadonlyMap<string, string>, keys: readonly ParsedKey[]): string | null => {
+const namedKey = (finding: FindingPlace, index: KeyIndex, keys: readonly ParsedKey[]): string | null => {
   const file = stripDotSlash(finding.file)
   const line = finding.line === null ? '?' : String(finding.line)
-  const direct = exact.get(`${file}:${line}`) ?? exact.get(stripDotSlash(shortLocation(finding)))
+  const full = `${file}:${line}`
+  const short = stripDotSlash(shortLocation(finding))
+  const direct = index.exact.get(full) ?? index.exact.get(short) ?? index.folded.get(fold(full)) ?? index.folded.get(fold(short))
   if (direct !== undefined) return direct
+  const foldedFile = fold(file)
   const tail = keys
-    .filter(key => key.line === finding.line && isPathTail(file, key.path))
+    .filter(key => key.line === finding.line && isPathTail(foldedFile, key.foldedPath))
     .reduce<ParsedKey | null>((best, key) => (best === null || key.path.length > best.path.length ? key : best), null)
   return tail === null ? null : tail.key
 }
@@ -640,31 +692,34 @@ const byLooseRank = (a: LooseMatch, b: LooseMatch): number =>
 
 /**
  * The folded state of each finding of one board, in the findings' order (null: none), by the
- * tolerant key match (HUD ADR 0008). Pass 1 gives each finding the key it names (`namedKey`);
- * two findings at one place share it. Pass 2 gives a finding still without a key a path tail
- * of its file on any line, over the keys pass 1 left free: the longest path first, then the
- * nearest line (a `?` key is the farthest, so the last choice), ties to the first key in map
- * order. Each pass-2 key reaches one finding only,
- * so a moved line still matches, and one key never labels every finding of a file. A key
- * taken in pass 1 is never reused in pass 2. Own keys only: a key named like an Object member
- * is an ordinary key.
+ * tolerant key match (HUD ADR 0008, amended). Pass 1 gives each finding the key it names
+ * (`namedKey`); findings at one place share it, and so do findings whose places differ only
+ * by case. Pass 2 gives a finding still without a key a path tail of its file on any line,
+ * case folded, over the keys pass 1 left free: the longest path first, then the nearest line
+ * (a `?` key is the farthest, so the last choice), ties to the first key in map order. Each
+ * pass-2 key reaches one finding only, so a moved line still matches, and one key never
+ * labels every finding of a file. A key taken in pass 1 is never reused in pass 2. Own keys
+ * only: a key named like an Object member is an ordinary key.
  */
 export function dispositionsFor(
   map: Readonly<Record<string, FoldedDisposition>>,
   findings: readonly FindingPlace[],
 ): readonly (FoldedDisposition | null)[] {
   const entries = Object.entries(map)
-  const exact = entries.reduce((byKey, [key]) => (byKey.has(stripDotSlash(key)) ? byKey : byKey.set(stripDotSlash(key), key)), new Map<string, string>())
+  const written = entries.map(([key]) => key)
+  const index: KeyIndex = { exact: firstByForm(written, stripDotSlash), folded: firstByForm(written, key => fold(stripDotSlash(key))) }
   const keys = entries.flatMap(([key], order) => {
     const parsed = parseKey(key, order)
     return parsed === null ? [] : [parsed]
   })
-  const named = findings.map(finding => namedKey(finding, exact, keys))
+  const named = findings.map(finding => namedKey(finding, index, keys))
   const taken = new Set(named.filter((key): key is string => key !== null))
   const free = keys.filter(key => !taken.has(key.key))
   const candidates = findings
     .flatMap((finding, card): LooseMatch[] =>
-      named[card] !== null ? [] : free.filter(key => isPathTail(stripDotSlash(finding.file), key.path)).map(key => ({ card, key, distance: lineDistance(finding, key) })),
+      named[card] !== null
+        ? []
+        : free.filter(key => isPathTail(fold(stripDotSlash(finding.file)), key.foldedPath)).map(key => ({ card, key, distance: lineDistance(finding, key) })),
     )
     .sort(byLooseRank)
   const loose = candidates.reduce<{ readonly byCard: ReadonlyMap<number, string>; readonly used: ReadonlySet<string> }>(
@@ -676,6 +731,44 @@ export function dispositionsFor(
   )
   const stateOf = (key: string | null | undefined): FoldedDisposition | null => (key === null || key === undefined || !Object.hasOwn(map, key) ? null : (map[key] ?? null))
   return findings.map((_, card) => stateOf(named[card] ?? loose.byCard.get(card)))
+}
+
+/** Do two paths, case folded, name one file: the same path, or one ends the other at a `/`? */
+const isFoldedTailEither = (a: string, b: string): boolean => {
+  const [x, y] = [fold(a), fold(b)]
+  return isPathTail(x, y) || isPathTail(y, x)
+}
+
+/** Text as a RegExp source that matches it literally. */
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** Does `body` hold `name` as a whole word, any case? A word boundary is a neighbour outside `[A-Za-z0-9_-]` (labels hold hyphens) or the end. */
+const hasWholeWord = (body: string, name: string): boolean => new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(name)}(?![A-Za-z0-9_-])`, 'i').test(body)
+
+/**
+ * The worklog note that tells what a folded key's finding was (HUD ADR 0009), for display
+ * only; null when none matches. The tiers run from the strongest evidence to the weakest, and
+ * the first note in worklog order wins within a tier: (1) the exact location, the key read as
+ * `<path>:<line|?>` (`parseLocation`, `./` dropped); (2) a path tail on the same line, case folded:
+ * the paths are equal, or one ends the other at a `/` (two `?` lines are the same line); (3)
+ * the name, which is `label`, or the key itself when it is no location, as a whole word of a
+ * note's text, any case. An empty label is none. The key and the label are compared with
+ * their control characters out, as the notes hold none.
+ */
+export function noteFor(rawKey: string, rawLabel: string | null, notes: readonly ReviewNote[]): ReviewNote | null {
+  // the notes carry no control character (parseReviewNotes), so neither do the key and label compared with them
+  const key = stripControl(rawKey)
+  const label = rawLabel === null ? null : stripControl(rawLabel)
+  const parsed = parseKey(key, 0)
+  const located = notes.flatMap(note => (note.location === null ? [] : [{ note, path: note.location.path, line: note.location.line }]))
+  if (parsed !== null) {
+    const exact = located.find(note => note.path === parsed.path && note.line === parsed.line)
+    if (exact !== undefined) return exact.note
+    const tail = located.find(note => note.line === parsed.line && isFoldedTailEither(note.path, parsed.path))
+    if (tail !== undefined) return tail.note
+  }
+  const named = label !== null && label.trim() !== '' ? label.trim() : parsed === null ? key.trim() : ''
+  return named === '' ? null : (notes.find(note => hasWholeWord(note.body, named)) ?? null)
 }
 
 /** The folded dispositions recorded at or after `at` (a board's capture): one recorded before judged an earlier round. */

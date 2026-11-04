@@ -43,6 +43,7 @@ import {
   decodeSidecarHomes,
   decodeStatus,
   isoTime,
+  sidecarVersionOf,
 } from './journal'
 import { type MarkdownFile, type PositionInputs, matchesHome, parseAdr, toPosition } from './position'
 import {
@@ -411,12 +412,29 @@ async function branchIn($: Engine, dir: string | null): Promise<Result<Rejection
   return ok(ran.value.exitCode === 0 ? branchName(ran.value.stdout.trim()) : null)
 }
 
-/** shipgate's defaults overlaid key by key with the sidecar's `artifact_homes` (`decodeSidecarHomes`); the defaults when the sidecar cannot be read or decoded. */
-async function readHomes($: Engine): Promise<SidecarHomes> {
+/** What one read of the sidecar gives: its homes, and its version when it is newer than this HUD knows (null: it is not). */
+interface SidecarRead {
+  readonly homes: SidecarHomes
+  readonly newerVersion: number | null
+}
+
+/**
+ * The sidecar, read once: shipgate's defaults overlaid key by key with its `artifact_homes`
+ * (`decodeSidecarHomes`), the defaults when it cannot be read or decoded; and its version when
+ * it is newer than this HUD knows (`sidecarVersionOf`). A newer version is never a failure:
+ * the HUD reads the keys it knows.
+ */
+async function readSidecar($: Engine): Promise<SidecarRead> {
   const text = await readText($, inProject(SIDECAR))
   const parsed = text === null ? null : parseJson(text)
-  const decoded = parsed === null || !parsed.ok ? null : decodeSidecarHomes(parsed.value)
-  return decoded === null || !decoded.ok ? DEFAULT_HOMES : decoded.value
+  const raw = parsed === null || !parsed.ok ? null : parsed.value
+  const decoded = raw === null ? null : decodeSidecarHomes(raw)
+  return { homes: decoded === null || !decoded.ok ? DEFAULT_HOMES : decoded.value, newerVersion: sidecarVersionOf(raw) }
+}
+
+/** The sidecar's newer version as the pane draws it: written only when it changed, so a refresh at the known version writes nothing. */
+async function noteSidecarVersion($: Engine, version: number | null): Promise<void> {
+  if ((await read($, sidecarVersion)) !== version) await update($, sidecarVersion, () => version)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -741,10 +759,11 @@ const boundStreamOf = (shown: HudView): StreamName | null => (shown.kind === 'Bo
 /** The view before the first refresh, and after a project loses its sidecar. */
 const OFF: HudView = { kind: 'Off' }
 
-const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v5' })
+const view = atom({ plugin: 'shipgate-hud', key: 'view' } as const, OFF, { shape: 'shipgate-hud.view-v6' })
 const tab = atom({ plugin: 'shipgate-hud', key: 'tab' } as const, null)
 const designOpen = atom({ plugin: 'shipgate-hud', key: 'designOpen' } as const, null)
 const review = atom({ plugin: 'shipgate-hud', key: 'review' } as const, EMPTY_REVIEW, { shape: 'shipgate-hud.review-v2' })
+const sidecarVersion = atom({ plugin: 'shipgate-hud', key: 'sidecarVersion' } as const, null)
 
 const JOURNAL_APPEND = /journal\.py\b[\s\S]*\bappend\b/
 
@@ -982,7 +1001,12 @@ async function refreshWith($: Engine, path: string): Promise<Refreshed> {
   return moved.value === null ? NO_JOURNAL_SCRIPT : refreshPosition($, moved.value)
 }
 
-/** One refresh's outcome, nothing written: the project (located again after a reload), journal.py, the homes, the position. */
+/**
+ * One refresh's outcome: the project (located again after a reload), the sidecar, journal.py,
+ * the position. The sidecar is read as soon as the project is known, before journal.py is
+ * looked for, so its newer version is current whatever the lookup gives. Nothing is written
+ * but that version (`sidecarVersion`, null with no project); the caller writes the view.
+ */
 async function readRefresh($: Engine): Promise<Refreshed> {
   if (projectRoot === null) {
     const located = await locateProject($)
@@ -991,12 +1015,15 @@ async function readRefresh($: Engine): Promise<Refreshed> {
   }
   if (projectRoot === null) {
     homes = null
+    await noteSidecarVersion($, null)
     return NO_PROJECT
   }
+  const sidecar = await readSidecar($)
+  homes = sidecar.homes
+  await noteSidecarVersion($, sidecar.newerVersion)
   const found = await journalScriptOf($)
   if (!found.ok) return refreshedOf(found.error)
   if (found.value === null) return NO_JOURNAL_SCRIPT
-  homes = await readHomes($)
   return refreshWith($, found.value)
 }
 
@@ -1464,7 +1491,7 @@ export const register: Register = (on, options) => {
   // The review workflow launched: note its call id and run id, so its notification is known by id.
   on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
     const ran = await next(e)
-    if (ran.deny === undefined && isReviewLaunch([stringArg(e, 'script'), stringArg(e, 'scriptPath'), stringArg(e, 'name')])) {
+    if (ran.deny === undefined && isReviewLaunch({ script: stringArg(e, 'script'), scriptPath: stringArg(e, 'scriptPath'), name: stringArg(e, 'name') })) {
       noteLaunch({ toolUseId: e.tool_use_id, runId: runIdOfResult(ran), stream: boundStreamOf(await read($, view)) })
     }
     return ran
@@ -1498,6 +1525,7 @@ export const register: Register = (on, options) => {
       designOpen: await read($, designOpen),
       columns: e.props.bodyColumns,
       review: decodeReviewState(await read($, review)),
+      sidecarVersion: await read($, sidecarVersion),
     }
     return paneOf(uiOf($, e), shown, state, actionsOf($, shown, state.review))
   })

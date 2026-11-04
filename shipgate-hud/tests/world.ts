@@ -172,6 +172,8 @@ export interface JournalWorld {
   readonly worklog: string
   /** The directory holding the sidecar; null: every directory holds one, so the session finds it at its own root. */
   readonly sidecarDir: string | null
+  /** The sidecar's JSON as it reads at each read (a test may change it between refreshes). */
+  readonly sidecar: () => unknown
 }
 
 /** The example checkout: one stream, named by the branch every checkout is on. */
@@ -181,6 +183,7 @@ export const EXAMPLE_JOURNAL: JournalWorld = {
   branch: () => EXAMPLE_STREAM,
   worklog: WORKLOG,
   sidecarDir: null,
+  sidecar: () => SIDECAR,
 }
 
 /** What a journaled world recorded: each process run's argv and the directory it ran in (same index), each path read, each path asked for. */
@@ -209,7 +212,7 @@ export function journaledWorld(on: On, given: Partial<JournalWorld> = {}): Journ
   })
   on('fs.read', async (_$, e) => {
     reads.push(e.path)
-    if (e.path.endsWith('.claude/shipgate.json')) return { value: JSON.stringify(SIDECAR) }
+    if (e.path.endsWith('.claude/shipgate.json')) return { value: JSON.stringify(journal.sidecar()) }
     if (e.path.endsWith('example.worklog.md')) return { value: journal.worklog }
     if (e.path.endsWith('0007-example-decision.md')) return { value: ADR }
     if (e.path.endsWith('/docs/prd/example.md')) return { value: PRD }

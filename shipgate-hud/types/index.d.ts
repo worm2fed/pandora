@@ -160,11 +160,14 @@ export type Verdict = {
  * One finding key's current state, folded by journal.py from every `review-disposition` and
  * the newest verdict's map (shipgate ADR 0014): the latest event wins, and `seq` and `at` are
  * that event's. A board captured after `at` does not draw it: it judged an earlier round.
+ * `label` is the newest short name a `review-disposition` gave the key (shipgate 0.22.0), null
+ * when none did or journal.py is 0.21.0 (it prints no `label`).
  */
 export type FoldedDisposition = {
   readonly state: FindingState
   readonly seq: EventSeq
   readonly at: IsoTime
+  readonly label: string | null
 }
 
 // ---------------------------------------------------------------------------------------
@@ -334,9 +337,22 @@ export type Plan = {
 }
 
 /**
+ * One list item of the worklog's review section (HUD ADR 0009), for display only: its first
+ * backticked `<path>:<line|?>` location (null: it names none; the path with `./` dropped, the
+ * line null for `?`), the first sentence after that location, and the whole item text, its
+ * whitespace collapsed.
+ */
+export type ReviewNote = {
+  readonly location: { readonly path: string; readonly line: number | null } | null
+  readonly sentence: string
+  readonly body: string
+}
+
+/**
  * The stream's position, mapped from journal.py's `position --json` and the artifacts it
  * names. `plan` is null when the stream has no worklog (or it could not be read); `criteria`
- * is empty when no PRD is named or it lists none.
+ * is empty when no PRD is named or it lists none; `reviewNotes` is empty when there is no
+ * worklog or its review section lists no item.
  */
 export type Position = {
   readonly stream: StreamName
@@ -357,6 +373,8 @@ export type Position = {
   readonly dispositions: Readonly<Record<string, FoldedDisposition>>
   /** The ranking and signals values `position` prints (HUD ADR 0007, amended). */
   readonly trace: Trace
+  /** The items of the worklog's review section, in worklog order (HUD ADR 0009); [] when none. */
+  readonly reviewNotes: readonly ReviewNote[]
 }
 
 /** How the session is bound to its stream: it wrote to it (`Session`), or a checkout's branch names it (`Branch`). */
@@ -372,10 +390,10 @@ export type BindingVia = 'Session' | 'Branch'
  * needs, so the HUD reads nothing and the publish gate is off; `sign` is how the last
  * refresh showed it, drawn as the pane's detail line (`outdatedText`).
  *
- * Stored under the shape tag `shipgate-hud.view-v5`: v4's `Position` has no `dispositions`
- * and its `Trace` carries `isLogCut`, so a v4 value reads as absent and the next refresh
- * derives it again (v3's `Position` has no `trace`; v2's `Failed` could hold the removed
- * `Unsupported` failure).
+ * Stored under the shape tag `shipgate-hud.view-v6`: v5's `Position` has no `reviewNotes`
+ * and its folded dispositions no `label`, so a v5 value reads as absent and the next refresh
+ * derives it again (v4's `Position` has no `dispositions` and its `Trace` carries `isLogCut`;
+ * v3's `Position` has no `trace`; v2's `Failed` could hold the removed `Unsupported` failure).
  */
 export type HudView =
   | { readonly kind: 'Off' }
@@ -545,6 +563,8 @@ declare module 'claude-code' {
       designOpen: string | null
       /** The review rounds captured this session, with the user's marks and ticks. */
       review: Shaped<ReviewState>
+      /** The sidecar's `version` when it is higher than the one this HUD knows; null otherwise (and with no project). */
+      sidecarVersion: number | null
     }
   }
 }

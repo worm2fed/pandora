@@ -2,11 +2,11 @@
 type: adr
 title: "0008. The Review tab reads the folded dispositions, and draws a round from the verdict"
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-04
 tags:
   - adr
   - shipgate-hud
-status: accepted
+status: accepted (amended 2026-11-04, shipgate-hud 0.9.0)
 date: 2026-11-02
 issue: "#5"
 related:
@@ -19,6 +19,12 @@ related:
 > A card's state comes from `position`'s folded `dispositions` (shipgate ADR 0014), matched
 > to the card by a tolerant key. With no board, the tab draws a round from the last verdict
 > and the same folded state.
+
+> **Amended 2026-11-04 (shipgate-hud 0.9.0, #13):** pass 1 gains a case-folded tier after
+> the exact and short-location tiers: a key labels every card whose location (path and line)
+> is the same once case is folded. The path-tail tiers of pass 1 and pass 2 compare folded
+> paths too. Pass 2 still gives each key one card. The verdict-only round also prints one
+> line of finding text per key, read from the worklog (HUD ADR 0009).
 
 ## Context
 

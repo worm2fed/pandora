@@ -8,12 +8,14 @@ import {
   type StatusBrief,
   decodePosition,
   decodeSidecarHomes,
+  KNOWN_SIDECAR_VERSION,
   decodeStatus,
   failureText,
   hasPositionMarker,
   hasStatusMarker,
   outdatedText,
   rankingOf,
+  sidecarVersionOf,
 } from '../hooks/journal'
 import type { ReadFailure, ShapeError } from '../types'
 import { SIDECAR, olderStatus } from './fixtures'
@@ -31,6 +33,9 @@ const positionOf = (raw: unknown): PositionDoc => {
   if (!decoded.ok) throw new Error(`position does not decode: ${JSON.stringify(decoded.error)}`)
   return decoded.value
 }
+
+/** A raw folded entry's label as the decoder must read it: absent (a shipgate 0.21.0 journal.py) is null. */
+const labelOf = (entry: object): unknown => ('label' in entry ? entry.label : null)
 
 /** Where a document that must not decode stopped (a `BadShape`'s error); null when it decoded or was read as `Outdated`. */
 const statusError = (raw: unknown): ShapeError | null => {
@@ -256,14 +261,29 @@ describe('journal: decodePosition', () => {
   })
 
   test('the dispositions position: the fold per key, the verdict\'s note and round', async () => {
-    const doc = positionOf(POSITION_GOLDEN.dispositions)
-    expect(doc.dispositions).toEqual({
+    const raw = POSITION_GOLDEN.dispositions
+    const doc = positionOf(raw)
+    expect(doc.dispositions).toMatchObject({
       'src/golden.py:12': { state: 'fixed', seq: 7, at: '2026-10-01T11:20:00+00:00' },
       'src/golden.py:30': { state: 'deferred', seq: 3, at: '2026-10-01T11:16:00+00:00' },
       'src/other.py:?': { state: 'fixing', seq: 3, at: '2026-10-01T11:16:00+00:00' },
     })
+    // each label as journal.py printed it: absent (a 0.21.0 journal.py) reads as null
+    for (const [key, entry] of Object.entries(raw.dispositions)) {
+      expect(doc.dispositions[key]?.label).toBe(labelOf(entry))
+    }
     expect(Object.keys(doc.dispositions)).toHaveLength(3)
     expect(doc.verdict).toMatchObject({ verdict: 'ready', note: 'the round closes', round: 1, dispositions: { 'src/golden.py:12': 'fixed' } })
+  })
+
+  test('a folded label: absent reads as null (shipgate 0.21.0 prints none), null is null, text is kept with its control characters out', async () => {
+    const at = '2026-10-01T11:00:00+00:00'
+    const entry = { state: 'fixing', seq: 9, at }
+    const labelled = (label: unknown): unknown => positionOf({ ...FLOW, dispositions: { 'a.ts:1': label === undefined ? entry : { ...entry, label } } }).dispositions['a.ts:1']?.label
+    expect(labelled(undefined)).toBeNull()
+    expect(labelled(null)).toBeNull()
+    expect(labelled('flush-older-sync')).toBe('flush-older-sync')
+    expect(labelled('flush\u001b[31m-older\u0007')).toBe('flush[31m-older')
   })
 
   test('a ranking that breaks the contract is Unreadable inside a strict envelope, never a failure', async () => {
@@ -342,6 +362,8 @@ describe('journal: decodePosition', () => {
     ['a folded disposition with no seq', { ...FLOW, dispositions: { 'a.ts:1': { ...folded, seq: undefined } } }, '$.dispositions["a.ts:1"].seq'],
     ['a folded disposition with a bad time', { ...FLOW, dispositions: { 'a.ts:1': { ...folded, at: 'yesterday' } } }, '$.dispositions["a.ts:1"].at'],
     ['a folded disposition as bare text', { ...FLOW, dispositions: { 'a.ts:1': 'fixing' } }, '$.dispositions["a.ts:1"]'],
+    ['a folded label as a number', { ...FLOW, dispositions: { 'a.ts:1': { ...folded, label: 7 } } }, '$.dispositions["a.ts:1"].label'],
+    ['a folded label as a list', { ...FLOW, dispositions: { 'a.ts:1': { ...folded, label: ['x'] } } }, '$.dispositions["a.ts:1"].label'],
     ['trace not an object', { ...FLOW, trace: [] }, '$.trace'],
     ['a trace with no review_ranking key', { ...FLOW, trace: { ...FLOW.trace, review_ranking: undefined } }, '$.trace.review_ranking'],
     ['a trace with no design_ranking key', { ...FLOW, trace: { ...FLOW.trace, design_ranking: undefined } }, '$.trace.design_ranking'],
@@ -389,6 +411,20 @@ describe('journal: decodeSidecarHomes', () => {
     for (const raw of [null, [], 'x', 3]) {
       const homes = decodeSidecarHomes(raw)
       expect(homes.ok ? null : homes.error.path).toBe('$')
+    }
+  })
+})
+
+describe('journal: sidecarVersionOf', () => {
+  test('a version higher than the one this HUD knows is that version', async () => {
+    expect(KNOWN_SIDECAR_VERSION).toBe(1)
+    expect(sidecarVersionOf({ ...SIDECAR, version: 2 })).toBe(2)
+    expect(sidecarVersionOf({ version: 17 })).toBe(17)
+  })
+
+  test('the known version, a lower one, an absent one and a version that is no safe integer are null', async () => {
+    for (const raw of [SIDECAR, { version: 1 }, { version: 0 }, { version: -3 }, {}, { version: '2' }, { version: 2.5 }, { version: 2 ** 60 }, { version: null }, null, [], 'x']) {
+      expect(sidecarVersionOf(raw)).toBeNull()
     }
   })
 })

@@ -11,6 +11,7 @@ import {
   parseAdr,
   parseDesignSection,
   parseDesignSections,
+  parseReviewNotes,
   reflowMarkdown,
   toPosition,
 } from '../hooks/position'
@@ -18,7 +19,7 @@ import type { Phase, PhaseMark, ProjectPath } from '../types'
 import { type Gen, bool, forAll, int, orNull, pick } from './arbitrary'
 import { ADR, WORKLOG } from './fixtures'
 import { POSITION_GOLDEN } from './fixtures.journal'
-import { PRD_WITH_CRITERIA, must } from './fixtures.review'
+import { PRD_WITH_CRITERIA, REVIEW_WORKLOG, must } from './fixtures.review'
 
 /** A golden position decoded; a thrown error naming the path when it does not decode. */
 const docOf = (raw: unknown): PositionDoc => {
@@ -73,6 +74,14 @@ describe('position: toPosition', () => {
     const dispositions = docOf(POSITION_GOLDEN.dispositions)
     expect(toPosition(bare(dispositions)).dispositions).toEqual(dispositions.dispositions)
     expect(Object.keys(toPosition(bare(dispositions)).dispositions)).toEqual(['src/golden.py:12', 'src/golden.py:30', 'src/other.py:?'])
+  })
+
+  test('the review notes come from the worklog the document names; none without a worklog', async () => {
+    expect(toPosition(bare(FLOW_DOC)).reviewNotes).toEqual([])
+    expect(toPosition(FLOW_INPUTS).reviewNotes).toEqual(parseReviewNotes(WORKLOG))
+    const withReview = toPosition({ ...FLOW_INPUTS, worklog: { path: pathOf('docs/prd/golden-flow.worklog.md'), text: REVIEW_WORKLOG } })
+    expect(withReview.reviewNotes).toEqual(parseReviewNotes(REVIEW_WORKLOG))
+    expect(withReview.reviewNotes.length).toBeGreaterThan(0)
   })
 
   // D6: the publish rule is the journal's, never re-derived from events
@@ -285,5 +294,154 @@ describe('position: markdown for display', () => {
 
   test('clock: HH:MM in the local zone', async () => {
     expect(clock(must(isoTime('2026-10-01T11:42:00+00:00')))).toMatch(/^\d\d:\d\d$/)
+  })
+})
+
+describe('position: parseReviewNotes (HUD ADR 0009)', () => {
+  test('every item under a review heading, in worklog order: its location, its first sentence after the location, its whole text', async () => {
+    expect(parseReviewNotes(REVIEW_WORKLOG)).toEqual([
+      {
+        location: { path: 'src/widget/widget.test.ts', line: null },
+        sentence: 'the widget test misses the empty case.',
+        body: 'F1 MEDIUM `src/widget/widget.test.ts:?` — the widget test misses the empty case. It passes on any input.',
+      },
+      {
+        location: { path: 'src/api/handler.ts', line: 42 },
+        sentence: 'the handler writes before the check.',
+        body: '`src/api/handler.ts:42` (HIGH 80): the handler writes before the check. The check now runs first.',
+      },
+      {
+        location: null,
+        sentence: 'The sync flush drops older rows when flush-older-sync runs twice.',
+        body: 'The sync flush drops older rows when flush-older-sync runs twice. A guard keeps them. It also logs the drop.',
+      },
+      {
+        location: { path: 'src/cache.ts', line: 7 },
+        sentence: 'the cache is read before it is filled!',
+        body: '`./src/cache.ts:7` — the cache is read before it is filled! A second sentence.',
+      },
+      {
+        location: { path: 'src/report.ts', line: null },
+        sentence: 'stale-report: the report reads an old snapshot.',
+        body: '`src/report.ts:?` — stale-report: the report reads an old snapshot.',
+      },
+      {
+        location: { path: 'src/deep.ts', line: 3 },
+        sentence: 'a deeper heading stays inside the section.',
+        body: 'F2 `src/deep.ts:3` — a deeper heading stays inside the section.',
+      },
+      {
+        location: { path: 'src/util/format.ts', line: 12 },
+        sentence: 'the helper duplicates fmt.ts.',
+        body: '`src/util/format.ts:12`: the helper duplicates `fmt.ts`. Rejected: it is the formatter.',
+      },
+      { location: null, sentence: 'No location here, just text?', body: 'No location here, just text? Yes.' },
+    ])
+  })
+
+  test('no review heading, no notes: the Design and Build Plan lists are not review items', async () => {
+    expect(parseReviewNotes(WORKLOG)).toEqual([])
+    expect(parseReviewNotes('')).toEqual([])
+    expect(parseReviewNotes('# Reviewer notes\n\n- `src/a.ts:1` — not a round.\n')).toEqual([])
+  })
+
+  test('a review heading at any level opens the section; a heading at the same or a higher level closes it; a deeper one stays inside', async () => {
+    const worklog = [
+      '# Build Plan',
+      '- [ ] T001 — `src/plan.ts:1` — a task.',
+      '## review round 2',
+      '- `src/a.ts:1` — inside.',
+      '### Notes',
+      '- `src/b.ts:2` — still inside.',
+      '## Deviations',
+      '- `src/c.ts:3` — outside again.',
+      '### Rejected Findings',
+      '- `src/d.ts:4` — a rejected one, any case.',
+      '# Next',
+      '- `src/e.ts:5` — outside.',
+    ].join('\n')
+    expect(parseReviewNotes(worklog).map(note => note.location?.path)).toEqual(['src/a.ts', 'src/b.ts', 'src/d.ts'])
+  })
+
+  test('a fence is inert, with either marker; a blank line or an unindented line ends an item; a nested item is an item of its own', async () => {
+    const worklog = [
+      '# Review round 1',
+      '~~~',
+      '- `src/fenced.ts:1` — inert.',
+      '# Capture',
+      '~~~',
+      '- `src/a.ts:1` — one.',
+      '',
+      '  not joined after a blank line.',
+      '- `src/b.ts:2` — two.',
+      'A paragraph line.',
+      '  - `src/c.ts:3` — nested.',
+      '    joined to the nested one.',
+    ].join('\n')
+    expect(parseReviewNotes(worklog).map(note => note.body)).toEqual([
+      '`src/a.ts:1` — one.',
+      '`src/b.ts:2` — two.',
+      '`src/c.ts:3` — nested. joined to the nested one.',
+    ])
+  })
+
+  test('the location is the first backtick span that reads `<path>:<line|?>`; the sentence starts after it', async () => {
+    const [note] = parseReviewNotes('# Review round 1\n- The `flush` helper in `./src/sync.ts:9` loses rows. More.\n')
+    expect(note).toEqual({ location: { path: 'src/sync.ts', line: 9 }, sentence: 'loses rows.', body: 'The `flush` helper in `./src/sync.ts:9` loses rows. More.' })
+    const [plain] = parseReviewNotes('# Review round 1\n- No span, `x:y` is no location, and no stop\n')
+    expect(plain).toEqual({ location: null, sentence: 'No span, x:y is no location, and no stop', body: 'No span, `x:y` is no location, and no stop' })
+  })
+
+  test('a sentence stops at a stop outside backticks that is followed by space or the end; leading separators and a parenthetical go', async () => {
+    const notes = parseReviewNotes(
+      [
+        '# Review round 1',
+        '- `src/a.ts:?` — `a.b`. c',
+        '- `src/b.ts:2` (LOW 10) – - : v1.2 is kept whole. Next.',
+        '- `src/c.ts:3`',
+      ].join('\n'),
+    )
+    expect(notes.map(note => note.sentence)).toEqual(['a.b.', 'v1.2 is kept whole.', ''])
+  })
+})
+
+describe('position: parseReviewNotes, round 1 fixes', () => {
+  test('F6/F11: control characters leave the item before the whitespace collapse: body and sentence carry none', async () => {
+    const [note] = parseReviewNotes('# Review round 1\n- `src/a.ts:1` — the \u001b[31mred\u001b[0m text\u0007 stays. Next.\n')
+    expect(note?.body).toBe('`src/a.ts:1` — the [31mred[0m text stays. Next.')
+    expect(note?.sentence).toBe('the [31mred[0m text stays.')
+    expect(/[\u0000-\u001f\u007f-\u009f]/.test(`${note?.body}${note?.sentence}`)).toBe(false)
+  })
+
+  test('F7: a review heading inside an open review section keeps the outer level, so a later sibling stays inside', async () => {
+    const worklog = ['# Review round 1', '- `src/a.ts:1` — one.', '## Rejected findings', '- `src/b.ts:2` — two.', '## Fixed', '- `src/c.ts:3` — three.', '# Capture', '- `src/d.ts:4` — outside.'].join('\n')
+    expect(parseReviewNotes(worklog).map(note => note.location?.path)).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts'])
+  })
+
+  test('F9: a fence closes only on its own marker character, at least as long as the opener', async () => {
+    const worklog = [
+      '# Review round 1',
+      '```',
+      '~~~',
+      '- `src/fenced.ts:1` — still in the backtick fence.',
+      '``',
+      '- `src/fenced.ts:2` — a shorter run closes nothing.',
+      '````',
+      '- `src/a.ts:1` — after the fence.',
+      '~~~~',
+      '~~~',
+      '- `src/fenced.ts:3` — inside the tilde fence.',
+      '~~~~~',
+      '- `src/b.ts:2` — after it.',
+    ].join('\n')
+    expect(parseReviewNotes(worklog).map(note => note.location?.path)).toEqual(['src/a.ts', 'src/b.ts'])
+  })
+
+  test('F14: leading commas, semicolons and periods go with the separators; a sentence with no letter or digit is empty', async () => {
+    const notes = parseReviewNotes(
+      ['# Review round 1', '- Deferred: `views.tsx:1056` (LOW 35), control characters in a note are drawn raw.', '- `src/c.ts:3`.', '- `src/d.ts:4`; — ...', '- `src/e.ts:5` — `?`'].join('\n'),
+    )
+    expect(notes.map(note => note.sentence)).toEqual(['control characters in a note are drawn raw.', '', '', ''])
+    expect(notes[0]?.location).toEqual({ path: 'views.tsx', line: 1056 })
   })
 })

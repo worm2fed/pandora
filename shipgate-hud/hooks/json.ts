@@ -54,6 +54,9 @@ export const recordOf = (value: unknown): JsonRecord | null => (isRecord(value) 
 /** The value when it is an array, else null. */
 export const listOf = (value: unknown): readonly unknown[] | null => (Array.isArray(value) ? value : null)
 
+/** Text with its control characters (C0, DEL, C1) out: what the pane draws and a prompt carries holds no escape and no line break. */
+export const stripControl = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+
 /** The value when it is a string, else null. */
 export const stringOf = (value: unknown): string | null => (typeof value === 'string' ? value : null)
 

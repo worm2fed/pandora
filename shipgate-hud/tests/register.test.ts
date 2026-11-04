@@ -1625,6 +1625,60 @@ describe('register', () => {
     })
   })
 
+  describe('a sidecar newer than this HUD knows', () => {
+    const WARNING = '.claude/shipgate.json declares version 2; this HUD knows version 1 and reads only the keys it knows'
+
+    /** The pane's warning line and whether the stream still draws, read once. */
+    const paneShows = async ($: Engine): Promise<{ readonly warning: boolean; readonly stream: boolean }> => {
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      const warning = await pane.find({ type: 'Text', text: WARNING })
+      const stream = await pane.find({ key: 'tab-flow' })
+      await pane.unmount()
+      return { warning: warning !== undefined && warning.props.color === 'warning', stream: stream !== undefined }
+    }
+
+    test('version 2: one warning line in the pane, and the refresh still runs with the keys the HUD knows; back at version 1 the line goes', async ($, on) => {
+      engineWorld(on)
+      appendWorld(on)
+      let sidecar: unknown = { ...SIDECAR, version: 2 }
+      const { runs } = journaledWorld(on, { sidecar: () => sidecar })
+      await $.session.start(START)
+      expect(positionRuns(runs).length).toBe(1)
+      expect(await paneShows($)).toEqual({ warning: true, stream: true })
+      sidecar = SIDECAR
+      await refreshByAppend($)
+      expect(await paneShows($)).toEqual({ warning: false, stream: true })
+    })
+
+    test('F15: a refresh that finds no journal.py still reads the sidecar: version 2 warns, and a version-1 sidecar clears the warning', async ($, on) => {
+      engineWorld(on)
+      let sidecar: unknown = { ...SIDECAR, version: 2 }
+      // no journal.py anywhere the HUD looks
+      on('fs.exists', { path: /\/journal\.py$/ }, async () => ({ value: false }))
+      journaledWorld(on, { sidecar: () => sidecar })
+      /** The pane: the journal.py notice, and whether the sidecar warning sits above it. */
+      const shown = async (): Promise<{ readonly noScript: boolean; readonly warning: boolean }> => {
+        const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+        const noScript = (await pane.find({ type: 'Text', text: /cannot find shipgate\/scripts\/journal\.py/ })) !== undefined
+        const warning = (await pane.find({ type: 'Text', text: WARNING })) !== undefined
+        await pane.unmount()
+        return { noScript, warning }
+      }
+      await $.session.start(START)
+      expect(await shown()).toEqual({ noScript: true, warning: true })
+      sidecar = SIDECAR
+      await $.command.run(HUD_COMMAND)
+      expect(await shown()).toEqual({ noScript: true, warning: false })
+    })
+
+    test('a version that is no integer above 1 draws no warning', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, { sidecar: () => ({ ...SIDECAR, version: '2' }) })
+      await $.session.start(START)
+      expect(await paneShows($)).toEqual({ warning: false, stream: true })
+    })
+  })
+
   describe('review board', () => {
     const LAUNCH_ID = 'toolu_01AAAAAAAAAAAAAAAAAAAAAA'
     // the counts' first line at the pane's 100 columns; `unverified 1 · open N` packs onto the next
@@ -1747,6 +1801,15 @@ describe('register', () => {
       expect(watch.last()?.boards.map(board => `${board.runId}:${board.round}`)).toEqual(['wf_0123abcd-ef0:1'])
       await $.prompt.submit(notify(REVIEW_NOTIFICATION))
       expect(watch.last()?.boards.map(board => `${board.runId}:${board.round}`)).toEqual(['wf_0123abcd-ef0:1'])
+    })
+
+    test('F20: a launch by scriptPath alone, to review-workflow.js, is noted: its board carries the result\'s run id', async ($, on) => {
+      captureWorld(on)
+      workflowWorld(on)
+      const watch = reviewWatch(on)
+      await $.tool.call({ tool: 'Workflow', tool_use_id: LAUNCH_ID, scriptPath: '/repo/shipgate/skills/review/references/review-workflow.js' })
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(watch.last()?.boards.map(board => board.runId)).toEqual(['wf_0123abcd-ef0'])
     })
 
     test('a launch that is not the review workflow is not noted: its return carries no run id', async ($, on) => {
@@ -1905,6 +1968,46 @@ describe('register', () => {
       await $.prompt.submit(notify(REVIEW_NOTIFICATION_TRUNCATED))
       const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
       expect(await pane.find({ type: 'Text', text: /shipgate-hud:/ })).toBeUndefined()
+      await pane.unmount()
+    })
+
+    test('SC-002: a board captured in the session is drawn again after a reload; a reset of $.state (/clear) drops it', async ($, on) => {
+      engineWorld(on)
+      const { reset } = stateWorld(on)
+      journaledWorld(on)
+      /**
+       * The Review tab: its button pressed while another tab is active (the active tab is no
+       * button), then the pane mounted again, as the state answered from memory does not draw
+       * a mounted pane again.
+       */
+      const reviewTab = async () => {
+        const tabs = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+        if ((await tabs.find({ type: 'Button', key: 'tab-review' })) !== undefined) await tabs.press({ key: 'tab-review' })
+        await tabs.unmount()
+        return $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      }
+      /** Does the Review tab draw the board's first card text? */
+      const isBoardDrawn = async (): Promise<boolean> => {
+        const pane = await reviewTab()
+        const card = await pane.find({ type: 'Text', text: /^The handler writes the record before the permission check runs\.$/ })
+        await pane.unmount()
+        return card !== undefined
+      }
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(await isBoardDrawn()).toBe(true)
+      // A reload runs register and session.start again, keeps $.state for the session and
+      // starts the module's variables over. The test kit can neither load the module again nor
+      // run register again, so the module's variables stay as they are here: the test keeps
+      // $.state (no reset) and runs session.start again, which is what the board depends on.
+      await $.session.start(START)
+      expect(await isBoardDrawn()).toBe(true)
+      // /clear, /resume, /branch: $.state is reset, so the board is gone; the stream draws again
+      reset()
+      await $.session.start(START)
+      expect(await isBoardDrawn()).toBe(false)
+      const pane = await reviewTab()
+      expect(await pane.find({ type: 'Text', text: /^No review captured for feat\/example-stream yet/ })).toBeDefined()
       await pane.unmount()
     })
 

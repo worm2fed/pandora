@@ -17,7 +17,9 @@ import {
   locationOf,
   markSurvivor,
   nextTicks,
+  noteFor,
   parseCriteria,
+  parseLocation,
   parseTaskNotification,
   pushBoard,
   reviewReturnOfOutput,
@@ -29,7 +31,7 @@ import {
   toReviewBoard,
 } from '../hooks/review'
 import { criterionId, eventSeq, isoTime, streamName } from '../hooks/journal'
-import type { CriterionId, CriterionStatus, EventSeq, FindingState, FoldedDisposition, ReviewBoard, StreamName, TickEntry } from '../types'
+import type { CriterionId, CriterionStatus, EventSeq, FindingState, FoldedDisposition, ReviewBoard, ReviewNote, StreamName, TickEntry } from '../types'
 import { type Gen, forAll, int, listOf, orNull, pick } from './arbitrary'
 import {
   PRD_WITH_CRITERIA,
@@ -40,8 +42,10 @@ import {
   REVIEW_OUTPUT_PATH,
   REVIEW_RETURN,
   REVIEW_RETURN_ABORTED,
+  REVIEW_WORKLOG,
   must,
 } from './fixtures.review'
+import { parseReviewNotes } from '../hooks/position'
 
 const AT = must(isoTime('2026-10-14T10:00:00Z'))
 const STREAM = must(streamName('feature/x'))
@@ -113,11 +117,22 @@ describe('review: the task notification', () => {
     expect(runIdOf('Workflow launched in background.')).toBeNull()
   })
 
-  test('isReviewLaunch names the shipgate review workflow', async () => {
-    expect(isReviewLaunch([undefined, "export const meta = { name: 'shipgate-review' }", undefined])).toBe(true)
-    expect(isReviewLaunch([undefined, '/tmp/workflows/shipgate-review-wf_x.js'])).toBe(true)
-    expect(isReviewLaunch(['explore-workflow', undefined])).toBe(false)
-    expect(isReviewLaunch([])).toBe(false)
+  test('isReviewLaunch names the shipgate review workflow: `shipgate-review` in the script, the path or the name', async () => {
+    expect(isReviewLaunch({ script: "export const meta = { name: 'shipgate-review' }" })).toBe(true)
+    expect(isReviewLaunch({ scriptPath: '/tmp/workflows/shipgate-review-wf_x.js' })).toBe(true)
+    expect(isReviewLaunch({ name: 'shipgate-review' })).toBe(true)
+    expect(isReviewLaunch({ name: 'explore-workflow' })).toBe(false)
+    expect(isReviewLaunch({})).toBe(false)
+  })
+
+  test('F20: isReviewLaunch takes a scriptPath whose file name is review-workflow.js, and no other file name', async () => {
+    expect(isReviewLaunch({ scriptPath: '/repo/shipgate/skills/review/references/review-workflow.js' })).toBe(true)
+    expect(isReviewLaunch({ scriptPath: 'review-workflow.js' })).toBe(true)
+    for (const scriptPath of ['/repo/x-review-workflow.js', '/repo/review-workflow.js.bak', '/repo/review-workflow.ts', '/repo/review-workflow.js/other.js']) {
+      expect(isReviewLaunch({ scriptPath })).toBe(false)
+    }
+    // the file name counts for scriptPath only
+    expect(isReviewLaunch({ script: '// review-workflow.js', name: 'review-workflow.js' })).toBe(false)
   })
 
   test('isSafeTaskOutput: absolute, a /tasks/ segment, .output, no .., no control character, at most 1024', async () => {
@@ -387,7 +402,7 @@ describe('review: dispositions (HUD ADR 0008)', () => {
 
   /** A folded map from `key → state`, every entry recorded at FOLD_AT by the event at seq 1. */
   const folded = (states: Readonly<Record<string, FindingState>>): Readonly<Record<string, FoldedDisposition>> =>
-    Object.fromEntries(Object.entries(states).map(([key, state]) => [key, { state, seq: seq(1), at: FOLD_AT }]))
+    Object.fromEntries(Object.entries(states).map(([key, state]) => [key, { state, seq: seq(1), at: FOLD_AT, label: null }]))
 
   /** The states `dispositionsFor` gives each finding (null: none). */
   const statesOf = (states: Readonly<Record<string, FindingState>>, findings: readonly { readonly file: string; readonly line: number | null }[]) =>
@@ -471,11 +486,51 @@ describe('review: dispositions (HUD ADR 0008)', () => {
     expect(stateOf({ 'register.tsx': 'fixed', ':573': 'fixed', 'hooks/register.tsx:x': 'fixed' }, finding)).toBeNull()
   })
 
+  // #13: one finding, two cards whose paths differ only by case
+  const lower = { file: 'src/widget/widget.test.ts', line: null }
+  const upper = { file: 'src/widget/Widget.test.ts', line: null }
+
+  test('#13: a key labels every card at its case-folded location', async () => {
+    expect(statesOf({ 'src/widget/Widget.test.ts:?': 'deferred' }, [lower, upper])).toEqual(['deferred', 'deferred'])
+    // `./` dropped and the key in a third case
+    expect(statesOf({ './SRC/widget/widget.TEST.ts:?': 'fixed' }, [lower, upper])).toEqual(['fixed', 'fixed'])
+    // with a line, on the same line only
+    expect(statesOf({ 'src/A.ts:5': 'fixed' }, [{ file: 'src/a.ts', line: 5 }, { file: 'src/a.ts', line: 5 }])).toEqual(['fixed', 'fixed'])
+    // an exact key still wins over a folded one: each card keeps its own
+    expect(statesOf({ 'src/widget/widget.test.ts:?': 'fixed', 'src/widget/Widget.test.ts:?': 'deferred' }, [lower, upper])).toEqual(['fixed', 'deferred'])
+  })
+
+  test('#13 with absolute card paths: the short location, folded, labels both cards', async () => {
+    const cards = [
+      { file: '/abs/repo/src/widget/widget.test.ts', line: null },
+      { file: '/abs/repo/src/widget/Widget.test.ts', line: null },
+    ]
+    expect(statesOf({ 'src/widget/Widget.test.ts:?': 'deferred' }, cards)).toEqual(['deferred', 'deferred'])
+  })
+
+  test('#13: the same-line path-tail tier compares folded paths (the longest wins)', async () => {
+    const cards = [
+      { file: '/abs/repo/src/widget/widget.test.ts', line: null },
+      { file: '/abs/repo/src/widget/Widget.test.ts', line: null },
+    ]
+    expect(statesOf({ 'repo/src/widget/WIDGET.test.ts:?': 'deferred' }, cards)).toEqual(['deferred', 'deferred'])
+    expect(stateOf({ 'Register.tsx:573': 'rejected', 'ROOT/plugin/hooks/register.tsx:573': 'fixed' }, finding)).toBe('fixed')
+    // a folded tail must still start at a segment
+    expect(stateOf({ 'GISTER.tsx:573': 'fixed' }, finding)).toBeNull()
+  })
+
+  test('#13: the pass-2 tail fallback compares folded paths and still reaches one card only', async () => {
+    const near = { file: '/abs/src/Widget.ts', line: 10 }
+    const far = { file: '/abs/src/widget.ts', line: 20 }
+    expect(statesOf({ 'src/WIDGET.ts:12': 'fixed' }, [far, near])).toEqual([null, 'fixed'])
+    expect(statesOf({ 'src/WIDGET.ts:?': 'deferred' }, [near, far])).toEqual(['deferred', null])
+  })
+
   test('dispositionsSince keeps entries recorded at or after a time', async () => {
     const map = {
-      'a.ts:1': { state: 'fixed' as const, seq: seq(1), at: atOf('2026-10-01T10:00:00+00:00') },
-      'a.ts:2': { state: 'fixing' as const, seq: seq(2), at: atOf('2026-10-01T11:00:00+00:00') },
-      'a.ts:3': { state: 'deferred' as const, seq: seq(3), at: atOf('2026-10-01T12:00:00+00:00') },
+      'a.ts:1': { state: 'fixed' as const, seq: seq(1), at: atOf('2026-10-01T10:00:00+00:00'), label: null },
+      'a.ts:2': { state: 'fixing' as const, seq: seq(2), at: atOf('2026-10-01T11:00:00+00:00'), label: null },
+      'a.ts:3': { state: 'deferred' as const, seq: seq(3), at: atOf('2026-10-01T12:00:00+00:00'), label: null },
     }
     expect(Object.keys(dispositionsSince(map, atOf('2026-10-01T11:00:00+00:00')))).toEqual(['a.ts:2', 'a.ts:3'])
   })
@@ -715,5 +770,67 @@ describe('review: criteria', () => {
       { id: 'SC-001', text: 'one' },
       { id: 'SC-002', text: 'two' },
     ])
+  })
+})
+
+describe('review: noteFor (HUD ADR 0009)', () => {
+  const notes = parseReviewNotes(REVIEW_WORKLOG)
+  const sentenceOf = (key: string, label: string | null = null): string | null => noteFor(key, label, notes)?.sentence ?? null
+
+  test('tier 1, the exact key: path and line, `./` dropped on either side, `?` for a note with no line', async () => {
+    expect(sentenceOf('src/api/handler.ts:42')).toBe('the handler writes before the check.')
+    expect(sentenceOf('./src/api/handler.ts:42')).toBe('the handler writes before the check.')
+    expect(sentenceOf('src/cache.ts:7')).toBe('the cache is read before it is filled!')
+    expect(sentenceOf('src/report.ts:?')).toBe('stale-report: the report reads an old snapshot.')
+  })
+
+  test('tier 2, a path tail on the same line, case folded: either path may end the other at a `/`', async () => {
+    expect(sentenceOf('widget/Widget.test.ts:?')).toBe('the widget test misses the empty case.')
+    expect(sentenceOf('/abs/repo/SRC/api/handler.ts:42')).toBe('the handler writes before the check.')
+    // another line, or a tail that does not start at a segment: no match
+    expect(sentenceOf('src/api/handler.ts:43')).toBeNull()
+    expect(sentenceOf('andler.ts:42')).toBeNull()
+    expect(sentenceOf('widget.test.ts:3')).toBeNull()
+  })
+
+  test('the tiers run in order: an exact note wins over an earlier tail note', async () => {
+    const tail: ReviewNote = { location: { path: 'a/x.ts', line: 1 }, sentence: 'tail.', body: 'tail.' }
+    const exact: ReviewNote = { location: { path: 'x.ts', line: 1 }, sentence: 'exact.', body: 'exact.' }
+    const named: ReviewNote = { location: null, sentence: 'named.', body: 'x.ts:1 is named here.' }
+    expect(noteFor('x.ts:1', null, [named, tail, exact])?.sentence).toBe('exact.')
+    expect(noteFor('b/a/x.ts:1', null, [named, tail, exact])?.sentence).toBe('tail.')
+    // within a tier, the first note in worklog order
+    expect(noteFor('x.ts:1', null, [exact, { ...exact, sentence: 'second.' }])?.sentence).toBe('exact.')
+  })
+
+  test('tier 3, the label: the key itself when it is no location, as a whole word of the text, any case', async () => {
+    expect(sentenceOf('flush-older-sync')).toBe('The sync flush drops older rows when flush-older-sync runs twice.')
+    expect(sentenceOf('FLUSH-OLDER-SYNC')).toBe('The sync flush drops older rows when flush-older-sync runs twice.')
+    // a hyphen is part of a word: `older-sync` is no whole word of `flush-older-sync`
+    expect(sentenceOf('older-sync')).toBeNull()
+    expect(sentenceOf('no-such-label')).toBeNull()
+  })
+
+  test('tier 3, the label: the folded entry\'s label, for a key that names no note', async () => {
+    expect(sentenceOf('lib/report/build.ts:5', 'stale-report')).toBe('stale-report: the report reads an old snapshot.')
+    expect(sentenceOf('lib/report/build.ts:5')).toBeNull()
+    // a label's regex characters are text: `fmt.ts` is no pattern
+    expect(sentenceOf('lib/x.ts:1', 'fmt.ts')).toBe('the helper duplicates fmt.ts.')
+    expect(sentenceOf('lib/x.ts:1', 'fmt?ts')).toBeNull()
+    // an empty label is none: a location key then has no tier 3; a free key is its own name
+    expect(sentenceOf('lib/x.ts:1', '')).toBeNull()
+    expect(sentenceOf('flush-older-sync', '')).toBe('The sync flush drops older rows when flush-older-sync runs twice.')
+  })
+
+  test('no notes, no note', async () => {
+    expect(noteFor('src/api/handler.ts:42', 'x', [])).toBeNull()
+  })
+})
+
+describe('review: parseLocation (F16)', () => {
+  test('`<path>:<line|?>` split at its last colon, `./` dropped; null for no path or a line that is neither digits nor `?`', async () => {
+    expect(parseLocation('./src/a.ts:12')).toEqual({ path: 'src/a.ts', line: 12 })
+    expect(parseLocation('C:/src/a.ts:?')).toEqual({ path: 'C:/src/a.ts', line: null })
+    for (const text of ['src/a.ts', ':12', './:3', 'src/a.ts:x', 'src/a.ts:', 'flush-older-sync']) expect(parseLocation(text)).toBeNull()
   })
 })

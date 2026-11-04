@@ -69,7 +69,7 @@ const DIRECTIONS: readonly Direction[] = ['LR', 'TD', 'TB', 'RL', 'BT']
 const SKIPPED = /^(subgraph|end|classDef|class|style|click|linkStyle|direction)(?=\s|;|$)/
 
 // a whole CSI escape sequence (ESC [ or C1 CSI, parameters, final byte), then any other C0, DEL
-// or C1 character: the class `stripControl` in review.ts removes; kept here so this file stays pure
+// or C1 character: the class `stripControl` (json.ts) removes, after the whole CSI sequence
 const CSI = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g
 
