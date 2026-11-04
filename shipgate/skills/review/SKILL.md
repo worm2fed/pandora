@@ -49,6 +49,13 @@ is closed. Append the round to the worklog as *Review round N+1*: each finding c
 reopened, and each new finding with `file:line`. Journaled projects record one
 `review-verdict` per round. The round counts toward the two-round cap in Step 6.
 
+The HUD parses this worklog grammar. Each round sits under a `Review round N` heading (any
+level, round 1 included), and its killed findings under a `Rejected findings` heading inside it.
+Each finding is one list item: its backticked `<path>:<line|?>`, then one sentence that says
+what it is: ``- F1 MEDIUM `src/a.ts:12` — <one sentence>.``, or for a rejected one
+``- `src/a.ts:30` (LOW 40): <one sentence>.`` The HUD's verdict-only round shows that sentence
+under the finding's key.
+
 > **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
 > checkout) overrides the defaults below; read it first if present.
 
@@ -483,6 +490,10 @@ shows every criterion unticked and every finding open:
   `rejected` or `deferred`. The key is `<path>:<line>`, or `<path>:?` when the finding has
   no line. A finding with no disposition counts as open.
 
+A disposition key is the finding's location, `<path>:<line|?>`. Never use an invented label
+as the key, such as `null-guard` or `F2`. A free label matches no card and no worklog line,
+so the HUD cannot show the finding's state.
+
 Keep the keys compact. For the path, use the last segments of the path the review reported,
 at most three, and enough to be unique (`skills/review/SKILL.md`, not
 `/home/.../skills/review/SKILL.md`). The HUD matches such a tail against the finding's full
@@ -500,8 +511,13 @@ the verdict. `round` is the review round the decision belongs to: 1 for the firs
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type review-disposition \
-  --data '{"dispositions":{"src/api.py:42":"fixing"},"round":1}'
+  --data '{"dispositions":{"src/api.py:42":"fixing"},"round":1,"labels":{"src/api.py:42":"null-guard"}}'
 ```
+
+`labels` is optional. It maps a key to a short human name (`{"<key>": "<short name>"}`).
+The name travels beside the key and never takes its place. Keep each name to a word or two,
+because `labels` counts toward the same 1 KB cap. A later event without a label keeps the
+earlier one. `journal.py vocab --shape review-disposition` prints the shape with `labels`.
 
 The states are `fixing` (a fix is dispatched), `fixed`, `rejected` and `deferred`. Only
 this event takes `fixing`. Append the closed state when the fix is confirmed. A later event

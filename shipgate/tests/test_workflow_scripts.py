@@ -177,6 +177,41 @@ class ReviewWorkflow(ScriptCase):
         )
         self.assertEqual(result["counts"]["deduped"], 1)
 
+    def test_path_case_shares_a_merge_key_and_the_first_spelling_stays(self):
+        """#13: two lenses spell one file in two cases. One card, the first finder's path."""
+        result = self.deduped(
+            {
+                "correctness": [
+                    finding(file="src/widget/widget.test.ts", summary="the fixture leaks a timer")
+                ],
+                "conventions+design": [
+                    finding(file="src/widget/Widget.test.ts", severity="HIGH",
+                            summary="the fixture leaks a timer")
+                ],
+            }
+        )
+        self.assertEqual(result["counts"]["deduped"], 1)
+        survivor = result["survivors"][0]
+        self.assertEqual(survivor["file"], "src/widget/widget.test.ts")
+        self.assertEqual(survivor["severity"], "HIGH")
+        self.assertEqual(survivor["lenses"], ["correctness", "conventions+design"])
+
+    def test_path_case_merges_on_the_same_line(self):
+        result = self.deduped(
+            {
+                "correctness": [
+                    finding(file="src/widget/Widget.test.ts", line=7, summary="off by one in the bound")
+                ],
+                "simplicity+security": [
+                    finding(file="SRC/widget/widget.test.ts", line=7, summary="the last row is dropped")
+                ],
+            }
+        )
+        self.assertEqual(result["counts"]["deduped"], 1)
+        survivor = result["survivors"][0]
+        self.assertEqual(survivor["file"], "src/widget/Widget.test.ts")
+        self.assertEqual(survivor["lenses"], ["correctness", "simplicity+security"])
+
     def test_nearby_lines_do_not_chain(self):
         result = self.deduped(
             {
@@ -370,6 +405,15 @@ class ReviewWorkflow(ScriptCase):
             {"./src/a.js": "high"},
         )
         self.assertEqual(result["survivors"][0]["risk"], "high")
+
+    def test_file_risk_keys_fold_path_case(self):
+        """#13: a `fileRisk` key that differs from the finding's path in case only."""
+        result = self.deduped_with_risk(
+            [finding(file="src/a.js", line=1, summary="an issue")],
+            {"SRC/A.js": "top"},
+        )
+        self.assertEqual(result["survivors"][0]["risk"], "top")
+        self.assertEqual(result["survivors"][0]["file"], "src/a.js")
 
     def test_file_risk_is_labelled_on_compacted_findings_when_present(self):
         result = self.deduped_with_risk(

@@ -2,6 +2,87 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.22.0 — a finding keeps its location as its key, release files leave the ranking, and a newer sidecar is named.
+
+**`labels` on `review-disposition` (ADR 0014, amended).** Orchestrators gave findings
+invented names as keys. Such a key matched no card and no worklog line, so the HUD showed
+no state for it.
+- `review-disposition` takes an optional `labels`: a map from a finding key to a short
+  name. `append` refuses a value that is not a JSON object. It also refuses an entry that
+  is not a string, or that is empty or blank.
+- A new shape rule kind, `string_maps`, checks it: the value is a JSON object, and each of
+  its values is a non-empty string. `vocab --shape review-disposition` prints it.
+- `position --json` adds `label` to each `dispositions` entry. The value is the newest
+  label that a `review-disposition` gave that key, or null. A leading `./` is dropped from
+  a label key, as from a state key. A later event without a label for the key keeps the
+  earlier label. Labels come from `review-disposition` only. A label for a key with no
+  state is not printed. No key that 0.21.0 printed is renamed or removed.
+
+**The `review` skill: the key is the location.** A disposition key is the finding's
+`<path>:<line|?>`, never an invented label. The skill says why: a free label matches no
+card and no worklog line. `labels` carries a human name beside the key. The skill's
+`review-disposition` example shows it. Names stay short, because `labels` counts toward
+the 1 KB cap. The skill also states the worklog grammar the HUD parses: a `Review round N`
+heading, a `Rejected findings` heading inside it, and one list item per finding with its
+backticked location and one sentence.
+
+**The review Workflow folds path case (#13).** Two lenses can spell one file in two cases,
+such as `Widget.test.ts` and `widget.test.ts`. Before this release they gave two cards.
+- `review-workflow.js` adds `pathKey(file)`: the normalized path, lower-cased. The dedupe
+  maps, the `fileRisk` map and the risk lookup use it.
+- A merge never rewrites `file`, so a card keeps the first finder's spelling.
+- A `fileRisk` key that differs from a finding's path in case only now labels that
+  finding.
+
+**Release files leave the ranking (ADR 0013, amended).** Every release changes the
+changelog and the plugin manifests. So they ranked `top` and pushed product code out of
+the ranking.
+- `signals.py hotspots` leaves out files that match `DEFAULT_RANKING_EXCLUDES` before
+  `ranking` takes its 5 rows. The patterns are `**/CHANGELOG.md`,
+  `**/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
+- A pattern is read as an `Exclude` glob is, and a leading `**/` is dropped first.
+- The table, `files`, `dirs` and `blast` keep every file.
+- A new `Ranking exclude:` bullet in `## Code signals` replaces the built-in patterns with
+  its backticked globs. It does not add to them. An empty backticked value turns them off.
+  A `<placeholder>` counts as absent. No flag sets it.
+- `config.ranking_exclude` prints the patterns in force, and `config.source` names where
+  they came from. The config template, the README and the `--help` text describe the
+  bullet.
+
+**A newer sidecar is named.** A sidecar from a newer shipgate could hold keys this one does
+not know, and nothing said so.
+- `hooks/_common.py` adds `SIDECAR_VERSION = 1`, `SIDECAR_KEYS` and
+  `sidecar_version_note(sidecar)`. `SIDECAR_KEYS` names every key a shipgate reader uses:
+  `version`, `db`, `ledger`, `artifact_homes` and `enforce`. The note is one line. It is given only when `version`
+  is an integer higher than 1. A boolean, a string or an absent value gives no note.
+- The SessionStart hook adds the note to the context it emits, once per session. When
+  `status` fails, the hook drops journal.py's copy of the note from the failure detail, so
+  the note appears once. The no-sidecar path does no extra work.
+- `journal.py` prints the note on stderr, once per run, and keeps working with the keys it
+  knows.
+- `doctor` reports the sidecar's raw `version` (null when absent) and `stray_keys`: the
+  sorted keys outside `SIDECAR_KEYS`. The text form prints both.
+- `signals.py` reads no sidecar key, so it has no version check.
+- The `setup` skill's sidecar shape names `ledger` as an optional key. Its update mode
+  reads both facts from `doctor --json`. It stops on a
+  newer version and tells the user to update shipgate. It never rewrites a newer sidecar
+  down. It drops stray keys when it regenerates the sidecar, and it names the keys it
+  dropped.
+
+**Golden contract.** The second interim `review-disposition` row of the `dispositions`
+stream gains `labels`. The regenerated `shipgate-hud/tests/fixtures.journal.ts` carries a
+`label` on every folded entry: one name and the rest null. A test checks both.
+
+**Tests.** `labels` is accepted with and without a value, and refused as a non-object, as a
+non-string value and as an empty or blank string. `vocab` prints the rule. The fold tests
+cover the newest label, the earlier label kept, the `./` drop, null with no label, no
+label without a state and no label from a verdict. Other tests cover the stderr note once
+for `version` 2 and none for 1, absent, a string or a boolean, and the SessionStart note.
+`doctor` tests cover the version and the stray keys. The Workflow tests cover a case pair
+merged by summary and by line, and a `fileRisk` key in another case. The signals tests
+cover release files out of `ranking` and in `files`, a replacing value, the empty value and
+`config.ranking_exclude`.
+
 v0.21.0 — a finding's disposition is recorded when it is decided, and `position` prints the trace.
 
 **`review-disposition` (ADR 0014).** Before this release, `review-verdict.dispositions` was

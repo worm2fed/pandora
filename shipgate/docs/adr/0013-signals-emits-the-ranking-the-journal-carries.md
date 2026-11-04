@@ -2,11 +2,11 @@
 type: adr
 title: "0013. signals.py emits the ranking the journal carries"
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-04
 tags:
   - adr
   - shipgate
-status: accepted
+status: accepted (amended 2026-11-04, shipgate 0.22.0)
 date: 2026-11-02
 issue: "#10"
 related: ["0004-code-signals-on-demand-stdlib-script.md", "0007-codegraph-as-detected-structure-provider.md"]
@@ -16,6 +16,14 @@ related: ["0004-code-signals-on-demand-stdlib-script.md", "0007-codegraph-as-det
 
 > `signals.py hotspots --json` adds a top-level `ranking` object. The `design` and
 > `review` skills copy it into `design-committed` and `review-verdict` as it is.
+
+> **Amended 2026-11-04 (shipgate 0.22.0):** `ranking` leaves out release files before it
+> takes its 5 rows: `**/CHANGELOG.md`, `**/.claude-plugin/plugin.json` and
+> `.claude-plugin/marketplace.json`. Every release churns them, so they ranked `top` and
+> pushed product code out of READ FIRST. The patterns are read as `Exclude` globs are, with
+> a leading `**/` optional. The config's `Ranking exclude:` bullet replaces them, and an
+> empty backticked value turns them off. The hotspots table and `files` keep every file;
+> `config.ranking_exclude` names the patterns in force.
 
 ## Context
 

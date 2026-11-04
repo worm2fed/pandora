@@ -119,6 +119,14 @@ DEFAULT_EXCLUDES: Tuple[str, ...] = (
     "*_generated.*",
     "*.snap",
 )
+# Release files change on every release, so they would rank `top` and push product code out
+# of the ranking (ADR 0013, amended 0.22.0). Only `ranking` leaves them out: the table and
+# `files` keep every file. The config's `Ranking exclude:` bullet replaces this list.
+DEFAULT_RANKING_EXCLUDES: Tuple[str, ...] = (
+    "**/CHANGELOG.md",
+    "**/.claude-plugin/plugin.json",
+    ".claude-plugin/marketplace.json",
+)
 
 LABEL_RANK = {"low": 0, "mid": 1, "high": 2, "top": 3}
 LABELLED_SIGNALS = (
@@ -178,7 +186,7 @@ _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _FENCE_OPEN_RE = re.compile(r"^(\s*)(`{3,}(?!.*`)|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*$")
 _CONFIG_KEYS = {"window": "window_months", "fix pattern": "fix_pattern",
-                "exclude": "exclude"}
+                "exclude": "exclude", "ranking exclude": "ranking_exclude"}
 
 
 def _is_placeholder(value: str) -> bool:
@@ -234,7 +242,9 @@ def parse_code_signals(text: str) -> Dict[str, Any]:
     """Parse the `## Code signals` section; only backticked values count.
 
     Returns only the keys that carry a usable value — a `<placeholder>`, a
-    non-backticked value, a non-integer window or an invalid regex is absent.
+    non-backticked value, a non-integer window or an invalid regex is absent. One
+    exception: a `Ranking exclude` whose backticked spans are all empty is `[]`, which
+    turns the built-in ranking excludes off.
     """
     bullets = section_bullets(text, CONFIG_SECTION)
     out: Dict[str, Any] = {}
@@ -243,6 +253,9 @@ def parse_code_signals(text: str) -> Dict[str, Any]:
         if name is None or name in out:
             continue
         spans = [s.strip() for s in _BACKTICK_RE.findall(value)]
+        if name == "ranking_exclude" and spans and not any(spans):
+            out[name] = []
+            continue
         spans = [s for s in spans if not _is_placeholder(s)]
         if not spans:
             continue
@@ -366,6 +379,8 @@ class Config(NamedTuple):
     fix_pattern: str
     fix_regex: "re.Pattern[str]"
     exclude: List[str]
+    # The globs `ranking` leaves out; the table and `files` keep those files.
+    ranking_exclude: List[str]
     code_graph: str  # auto | off | root
     source: Dict[str, str]
 
@@ -374,6 +389,7 @@ class Config(NamedTuple):
             "window_months": self.window_months,
             "fix_pattern": self.fix_pattern,
             "exclude": list(self.exclude),
+            "ranking_exclude": list(self.ranking_exclude),
             "code_graph": self.code_graph,
             "source": dict(self.source),
         }
@@ -382,9 +398,11 @@ class Config(NamedTuple):
 def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
                      args: argparse.Namespace) -> Config:
     """Flags override the file, the file overrides the defaults. Excludes are
-    additive: defaults + file + flags."""
+    additive: defaults + file + flags. The ranking excludes are not: the file's list
+    replaces the built-in one, and no flag sets them."""
     source = {"window_months": "default", "fix_pattern": "default",
-              "exclude": "default", "code_graph": "default"}
+              "exclude": "default", "ranking_exclude": "default",
+              "code_graph": "default"}
     window = DEFAULT_WINDOW_MONTHS
     if "window_months" in file_cfg:
         window = file_cfg["window_months"]
@@ -413,13 +431,18 @@ def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
         exclude += args.exclude
         source["exclude"] = "flag"
 
+    ranking_exclude = list(DEFAULT_RANKING_EXCLUDES)
+    if "ranking_exclude" in file_cfg:
+        ranking_exclude = list(file_cfg["ranking_exclude"])
+        source["ranking_exclude"] = file_source.get("ranking_exclude", "shipgate.md")
+
     code_graph = DEFAULT_GRAPH_MODE
     if "code_graph" in file_cfg:
         code_graph = file_cfg["code_graph"]
         source["code_graph"] = file_source.get("code_graph", "shipgate.md")
     if getattr(args, "graph", None) is not None:
         code_graph, source["code_graph"] = args.graph, "flag"
-    return Config(window, pattern, regex, exclude, code_graph, source)
+    return Config(window, pattern, regex, exclude, ranking_exclude, code_graph, source)
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
@@ -447,6 +470,12 @@ def is_excluded(path: str, patterns: Iterable[str]) -> bool:
         elif _matches_glob(path, pattern):
             return True
     return False
+
+
+def ranking_excluded(path: str, patterns: Iterable[str]) -> bool:
+    """A `Ranking exclude` pattern is read as an `Exclude` glob is. A leading `**/` is
+    dropped first: `_matches_glob` already matches a glob at any depth."""
+    return is_excluded(path, [p[3:] if p.startswith("**/") else p for p in patterns])
 
 
 # --------------------------------------------------------------------------
@@ -1482,10 +1511,12 @@ configuration:
   the `## Code signals` section of .claude/shipgate.md (the repository's, then
   the umbrella's — a parent that holds the setup sidecar .claude/shipgate.json
   or is itself a git work tree; a plain parent is not read) — backticked
-  values on the `Window`, `Fix pattern` and `Exclude` bullets. Flags override
-  the file; --exclude adds to the defaults. The `Code graph` bullet of
-  `## Code tooling` takes auto, off or root, backticked or bare (default auto).
-  --graph overrides it. Any other value is a usage error.
+  values on the `Window`, `Fix pattern`, `Exclude` and `Ranking exclude`
+  bullets. Flags override the file; --exclude adds to the defaults. `Ranking
+  exclude` replaces the release files `ranking` leaves out (CHANGELOG.md,
+  plugin.json, marketplace.json); an empty value (``) leaves out none. The
+  `Code graph` bullet of `## Code tooling` takes auto, off or root, backticked
+  or bare (default auto). --graph overrides it. Any other value is a usage error.
   Labels are quartiles over the whole repository (or --scope); zero is always
   `low` and the quartiles run over the non-zero values (fewer than four, or no
   spread: `mid`). Positional paths and --diff only filter the rows shown;
@@ -1832,7 +1863,10 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
     if changed is not None:
         selected = [r for r in selected if r["path"] in changed]
 
-    payload["ranking"] = ranking(sort_rows(selected), payload["structure"])
+    # Only the ranking leaves out release files; the table and `files` keep them.
+    ranked = [r for r in selected
+              if not ranking_excluded(r["path"], a.cfg.ranking_exclude)]
+    payload["ranking"] = ranking(sort_rows(ranked), payload["structure"])
     lines = _graph_notes(payload) + _half_notes(a.traj_info, payload["structure"])
     if args.by_dir is not None:
         wanted = {dir_of(r["path"], args.by_dir) for r in selected}

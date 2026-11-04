@@ -2,11 +2,11 @@
 type: adr
 title: "0014. A finding's disposition is recorded when it is decided, and position folds it"
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-04
 tags:
   - adr
   - shipgate
-status: accepted
+status: accepted (amended 2026-11-04, shipgate 0.22.0)
 date: 2026-11-02
 issue: "#5, HUD ADR 0007 follow-up"
 related:
@@ -21,6 +21,13 @@ related:
 > A new event, `review-disposition`, records a finding's state the moment the orchestrator
 > decides it: `fixing`, `fixed`, `rejected` or `deferred`. `position --json` prints the
 > folded state per finding key, and the trace the HUD read from `log` until now.
+
+> **Amended 2026-11-04 (shipgate 0.22.0, #12):** `review-disposition` takes an optional
+> `labels`, a map from a finding key to a short non-empty name, checked by a new
+> `string_maps` rule kind. The key stays the finding's `<path>:<line|?>`; the label is how a
+> human name travels beside it, never in its place. `position --json` adds `label` to each
+> folded entry: the newest label a `review-disposition` gave that key, or null. A later event
+> without a label keeps the earlier one.
 
 ## Context
 

@@ -25,6 +25,7 @@ from _common import (  # noqa: E402
     resolve_project,
     run_journal,
     safe_main,
+    sidecar_version_note,
     watch_paths,
 )
 
@@ -259,6 +260,11 @@ def main() -> None:
             "failed) — skill appends this session will carry no session label.\n\n"
         )
     )
+    # A sidecar from a newer shipgate: say so once, here, and keep reading the keys
+    # this shipgate knows. Computed only once a project is found.
+    version_note = sidecar_version_note(project.sidecar)
+    if version_note:
+        notice += f"shipgate: {version_note}\n\n"
 
     watched = watch_paths(project)
 
@@ -284,12 +290,18 @@ def main() -> None:
         # session silently blind — the orchestrator treats this as an infrastructure
         # problem needing acknowledgement, not as an un-journaled project.
         detail = (result.stderr or "").strip() if result else "journal CLI unavailable"
+        if version_note:
+            # journal.py prints the same note on its stderr; the notice already carries it.
+            detail = "\n".join(
+                line for line in detail.splitlines()
+                if line.strip() != f"journal.py: {version_note}"
+            ).strip()
         emit(
             {
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
                     "watchPaths": watched,
-                    "additionalContext": (
+                    "additionalContext": notice + (
                         "shipgate: this project declares a flow journal, but reading it "
                         f"failed ({detail or 'unknown error'}). Do NOT silently fall back "
                         "to inferring phase from artifacts — surface this, suggest "

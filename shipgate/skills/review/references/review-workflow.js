@@ -134,10 +134,10 @@ if (lenses.includes('canon') && !styleSkills.length) {
   )
 }
 
-// Keys go through normalizePath (a function declaration, so hoisted) so './src/a.js' and
-// 'src/a.js' name one file; two keys that normalize together keep the higher risk.
-// Known limitation: normalizePath keeps the last 3 segments (the same identity dedupe uses),
-// so distinct files sharing that tail collide here too and the higher risk wins.
+// Keys go through pathKey (a function declaration, so hoisted) so './src/a.js', 'src/a.js'
+// and 'SRC/A.js' name one file; two keys that fold together keep the higher risk.
+// Known limitation: pathKey keeps the last 3 segments (the same identity dedupe uses), so
+// distinct files sharing that tail, or differing in case only, collide and the higher risk wins.
 // A null/undefined label (signals.py on a shallow clone) means "no signal" and is skipped.
 function riskMap(value) {
   const map = new Map()
@@ -153,7 +153,7 @@ function riskMap(value) {
   }
   for (const [file, label] of Object.entries(value)) {
     if (label === null || label === undefined) continue
-    const key = normalizePath(file)
+    const key = pathKey(file)
     const held = map.get(key)
     if (!held || RISK_RANK[label] > RISK_RANK[held]) map.set(key, label)
   }
@@ -253,8 +253,15 @@ function normalizePath(file) {
   return segments.slice(-PATH_SEGMENTS).join('/')
 }
 
+// The identity of a file for the dedupe maps and the fileRisk map (#13). Lenses also spell
+// one file in two cases ('Widget.test.ts', 'widget.test.ts'), so the key is lower-cased. It
+// is a key only: a card keeps the path its first finder wrote.
+function pathKey(file) {
+  return normalizePath(file).toLowerCase()
+}
+
 function riskLabel(finding) {
-  return fileRisk.get(normalizePath(finding.file))
+  return fileRisk.get(pathKey(finding.file))
 }
 
 function riskOf(finding) {
@@ -326,16 +333,17 @@ function alsoReport(target, lens, summary) {
   target.alsoReported.push({ lens, summary: clipped })
 }
 
-// Two findings merge on the normalized path plus either the exact same line or the same
-// normalized summary head — lenses word one defect differently, and a line-less finding can
-// only ever merge by summary. A newcomer's own keys are never registered after a merge, which
-// is what stops one merge from chaining unrelated findings together through the other key.
+// Two findings merge on the path key (pathKey: normalized, case folded) plus either the exact
+// same line or the same normalized summary head — lenses word one defect differently, and a
+// line-less finding can only ever merge by summary. A newcomer's own keys are never registered
+// after a merge, which is what stops one merge from chaining unrelated findings together
+// through the other key. A merge never rewrites `file`: the first finder's spelling stays.
 function dedupe(findings) {
   const merged = []
   const byLocation = new Map()
   const bySummary = new Map()
   for (const finding of findings) {
-    const path = normalizePath(finding.file)
+    const path = pathKey(finding.file)
     const line = concreteLine(finding)
     const locationKey = line === null ? null : `${path}:${line}`
     const summaryKey = `${path}::${normalize(finding.summary)}`

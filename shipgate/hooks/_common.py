@@ -26,6 +26,31 @@ DEFAULT_DB_RELPATH = os.path.join(".claude", "shipgate.db")
 JOURNAL_TIMEOUT_SECONDS = 15
 MAX_WATCH_PATHS = 500
 MAX_GIT_POINTER_BYTES = 4096
+# The sidecar format this shipgate writes and reads, and every key a shipgate reader uses:
+# the hooks read `db`, `artifact_homes` and `enforce`; journal.py reads `ledger` too. A
+# newer shipgate may write a higher version: this one warns and reads only these keys.
+SIDECAR_VERSION = 1
+SIDECAR_KEYS = ("version", "db", "ledger", "artifact_homes", "enforce")
+
+
+def sidecar_version_note(sidecar):
+    """A one-line warning when the sidecar declares a newer format, else None.
+
+    Only an integer `version` above SIDECAR_VERSION warns. A boolean is no version, and
+    an absent, lower or non-integer value says nothing either: the keys known here are
+    still read as they are.
+    """
+    if not isinstance(sidecar, dict):
+        return None
+    version = sidecar.get("version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return None
+    if version <= SIDECAR_VERSION:
+        return None
+    return (
+        f".claude/shipgate.json declares version {version}; this shipgate knows "
+        f"version {SIDECAR_VERSION} and reads only the keys it knows. Update shipgate."
+    )
 
 
 def _ancestors(start):

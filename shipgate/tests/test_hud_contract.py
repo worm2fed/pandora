@@ -74,7 +74,8 @@ REVIEW_RANKING = {
 }
 # shipgate 0.21.0 (ADR 0014): two interim `review-disposition` rows, then a verdict that
 # closes one finding. `position` folds them per key. The stream has a verdict and no
-# review board: the HUD's verdict-only round (#5).
+# review board: the HUD's verdict-only round (#5). shipgate 0.22.0: the second interim row
+# names one key with `labels`, so the fold prints a label and a null one.
 DISPOSITIONS = "feature/golden-dispositions"
 
 FILES = {
@@ -153,6 +154,7 @@ SCRIPT = [
     (DISPOSITIONS, "review-disposition", {
         "dispositions": {"./src/other.py:?": "fixing", "src/golden.py:30": "deferred"},
         "round": 1, "note": "an interim note",
+        "labels": {"src/golden.py:30": "golden-deferral"},
     }, None),
     # `ready` needs a passing run after the last task-done.
     (DISPOSITIONS, "verify-run", {"outcome": "pass", "task_ids": ["T001"]}, None),
@@ -469,6 +471,11 @@ class TestHudContract(unittest.TestCase):
         self.assertEqual(folded["src/other.py:?"]["seq"],
                          folded["src/golden.py:30"]["seq"])
         self.assertLess(folded["src/other.py:?"]["seq"], verdict["seq"])
+        # `label` (shipgate 0.22.0): the interim row's name, and null where none is given.
+        self.assertEqual({key: d["label"] for key, d in folded.items()},
+                         {"src/golden.py:12": None,
+                          "src/other.py:?": None,
+                          "src/golden.py:30": "golden-deferral"})
         # The `flow` stream's dispositions come from its only verdict.
         self.assertEqual({k: d["state"] for k, d in
                           self.position["flow"]["dispositions"].items()},

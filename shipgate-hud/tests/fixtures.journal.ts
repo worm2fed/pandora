@@ -2225,16 +2225,19 @@ export const POSITION_GOLDEN = {
     "dispositions": {
       "src/golden.py:12": {
         "at": "2026-10-01T11:20:00+00:00",
+        "label": null,
         "seq": 7,
         "state": "fixed"
       },
       "src/golden.py:30": {
         "at": "2026-10-01T11:16:00+00:00",
+        "label": "golden-deferral",
         "seq": 3,
         "state": "deferred"
       },
       "src/other.py:?": {
         "at": "2026-10-01T11:16:00+00:00",
+        "label": null,
         "seq": 3,
         "state": "fixing"
       }
@@ -2438,11 +2441,13 @@ export const POSITION_GOLDEN = {
     "dispositions": {
       "src/golden.py:12": {
         "at": "2026-10-01T11:52:00+00:00",
+        "label": null,
         "seq": 39,
         "state": "fixed"
       },
       "src/other.py:?": {
         "at": "2026-10-01T11:52:00+00:00",
+        "label": null,
         "seq": 39,
         "state": "deferred"
       }

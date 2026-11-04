@@ -101,13 +101,17 @@ Order matters. Never leave a sidecar pointing at a database that was not created
    {
      "version": 1,
      "db": ".claude/shipgate.db",
+     "ledger": "docs/ledger.md",
      "artifact_homes": { "prd": "docs/prd/*.md", "adr": "docs/adr/*.md",
                          "worklog": "docs/prd/*.worklog.md" },
      "enforce": { "stop_gate": true, "auto_capture": true }
    }
    ```
-   Paths mirror the interview answers. Both `enforce` flags default to true. Tell the user this
-   file is **generated and never hand-edited**. To change it, the user re-runs setup.
+   Paths mirror the interview answers. `ledger` is optional: it is the path that the
+   config's `## Knowledge base` `Ledger:` line names. Leave it out when that line is absent,
+   and `status` then counts `docs/ledger.md`. Both `enforce` flags default to true. Tell the
+   user this file is **generated and never hand-edited**. To change it, the user re-runs
+   setup.
 4. **Gitignore.** Always ignore the db: `shipgate.db*` at the path you chose (the glob covers
    `-wal`/`-shm`). There is nothing to ignore when the db lives in a global dir. Check
    `git check-ignore -v` first. Many repos already ignore `.claude/`, and a duplicate rule is
@@ -138,14 +142,23 @@ Config and/or sidecar already present. **Never clobber.**
 1. Show what exists: the current artifact homes, journal path, autonomy mode. Ask what the
    user wants to change. Edit those lines **in place**. Leave the rest of the file alone,
    including hand-written sections the template doesn't know about.
-2. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" doctor`. Apply any pending schema
-   migration with `init` (idempotent, safe to re-run). When a migration actually ran, append
-   `--type schema-migrated` to the `shipgate` stream with the from/to schema versions.
+2. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" doctor --json`. Apply any pending
+   schema migration with `init` (idempotent, safe to re-run). When a migration actually ran,
+   append `--type schema-migrated` to the `shipgate` stream with the from/to schema versions.
+   Read two more facts from its `sidecar` object:
+   - `version` as an integer higher than 1 means a newer shipgate wrote the sidecar. Stop.
+     Tell the user to update shipgate, then re-run setup. Never rewrite a newer sidecar down
+     to this version.
+   - `stray_keys` lists the sidecar's keys that the sidecar shape in Step 3 — Write
+     (item 3) does not name. Item 4 below drops them.
 3. **Reconcile drift.** The config's `## Journal` database path and the sidecar's `db` may
    disagree. Then surface both and ask which is right. Fix the loser. Do the same for artifact
    homes that no longer exist on disk. Don't guess. The sidecar drives the hooks, the prose
    drives the model, and a silent mismatch makes capture look broken.
-4. Regenerate the sidecar from the settled answers. Append `setup-completed` with
+4. Regenerate the sidecar from the settled answers, with the keys of the sidecar shape in
+   Step 3 — Write (item 3) only: `version`, `db`, `ledger` (when the config names one),
+   `artifact_homes` and `enforce`. When `doctor` reported `stray_keys`, tell the user which
+   keys you dropped, one line. Append `setup-completed` with
    `"mode":"update"`.
 
 ## Degradation

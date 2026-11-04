@@ -585,6 +585,35 @@ class TestShapeValidation(JournalTestCase):
         self.disposition(note=["a"], rc=GATE)
         self.assertEqual(self.events(), [])
 
+    # `labels` carries a human name beside a finding key (ADR 0014, amended 0.22.0).
+    def test_a_review_disposition_takes_optional_labels(self):
+        self.disposition(labels={"src/a.py:12": "null-guard"})
+        self.assertEqual(self.data_of()["labels"], {"src/a.py:12": "null-guard"})
+        self.disposition()
+        self.assertNotIn("labels", self.data_of())
+
+    def test_review_disposition_labels_must_be_an_object(self):
+        for value in (["null-guard"], "null-guard", 3, None):
+            with self.subTest(labels=value):
+                proc = self.disposition(labels=value, rc=GATE)
+                self.assertIn("data.labels must be a JSON object", proc.stderr)
+                self.assertIn("vocab --shape review-disposition", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_each_review_disposition_label_must_be_a_non_empty_string(self):
+        for value in (3, None, ["x"], {"x": 1}, True, "", "   "):
+            with self.subTest(label=value):
+                proc = self.disposition(labels={"src/a.py:12": value}, rc=GATE)
+                self.assertIn(
+                    "each value of data.labels must be a non-empty string", proc.stderr)
+                self.assertIn("vocab --shape review-disposition", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_vocab_prints_the_labels_rule(self):
+        proc = self.journal("--db", self.db, "vocab", "--shape", "review-disposition",
+                            rc=OK)
+        self.assertEqual(json.loads(proc.stdout)["string_maps"], ["labels"])
+
     def test_a_review_disposition_implies_no_phase(self):
         """`fixing` is appended in the fix round, back in implement: an implied review
         would move the phase on every dispatch (ADR 0014)."""
@@ -3754,10 +3783,12 @@ class TestPosition(JournalTestCase):
         })
         verdict = self.last()
         self.assertEqual(self.position()["dispositions"], {
-            "src/a.py:12": {"state": "fixed", "seq": verdict["seq"], "at": verdict["ts"]},
-            "src/b.py:?": {"state": "fixing", "seq": second["seq"], "at": second["ts"]},
+            "src/a.py:12": {"state": "fixed", "seq": verdict["seq"],
+                            "at": verdict["ts"], "label": None},
+            "src/b.py:?": {"state": "fixing", "seq": second["seq"],
+                           "at": second["ts"], "label": None},
             "src/c.py:3": {"state": "deferred", "seq": second["seq"],
-                           "at": second["ts"]},
+                           "at": second["ts"], "label": None},
         })
         self.assertEqual(first["data"]["round"], 1)
 
@@ -3768,7 +3799,8 @@ class TestPosition(JournalTestCase):
         })
         later = self.disposition({"src/a.py:12": "fixing"}, round_number=2)
         self.assertEqual(self.position()["dispositions"], {
-            "src/a.py:12": {"state": "fixing", "seq": later["seq"], "at": later["ts"]},
+            "src/a.py:12": {"state": "fixing", "seq": later["seq"],
+                            "at": later["ts"], "label": None},
         })
 
     def test_an_older_verdicts_closure_holds_until_a_later_event_changes_it(self):
@@ -3782,8 +3814,10 @@ class TestPosition(JournalTestCase):
         })
         newer = self.last()
         self.assertEqual(self.position()["dispositions"], {
-            "src/old.py:1": {"state": "rejected", "seq": older["seq"], "at": older["ts"]},
-            "src/a.py:12": {"state": "fixed", "seq": newer["seq"], "at": newer["ts"]},
+            "src/old.py:1": {"state": "rejected", "seq": older["seq"],
+                             "at": older["ts"], "label": None},
+            "src/a.py:12": {"state": "fixed", "seq": newer["seq"],
+                            "at": newer["ts"], "label": None},
         })
 
     def test_a_later_rounds_verdict_leaves_earlier_closures_in_place(self):
@@ -3804,10 +3838,12 @@ class TestPosition(JournalTestCase):
         round_three = self.last()
         dispositions = self.position()["dispositions"]
         self.assertEqual(dispositions, {
-            "src/a.py:1": {"state": "fixed", "seq": round_two["seq"], "at": round_two["ts"]},
-            "src/b.py:2": {"state": "fixed", "seq": round_two["seq"], "at": round_two["ts"]},
+            "src/a.py:1": {"state": "fixed", "seq": round_two["seq"],
+                           "at": round_two["ts"], "label": None},
+            "src/b.py:2": {"state": "fixed", "seq": round_two["seq"],
+                           "at": round_two["ts"], "label": None},
             "src/c.py:3": {"state": "fixed", "seq": round_three["seq"],
-                           "at": round_three["ts"]},
+                           "at": round_three["ts"], "label": None},
         })
         self.assertEqual(
             sum(1 for entry in dispositions.values() if entry["state"] == "fixing"), 0)
@@ -3825,6 +3861,73 @@ class TestPosition(JournalTestCase):
         dispositions = self.position()["dispositions"]
         self.assertEqual({k: v["state"] for k, v in dispositions.items()},
                          {"a.py:1": "fixing", "d.py:4": "fixed"})
+
+    # `label` (ADR 0014, amended 0.22.0): the newest label a `review-disposition` gave.
+    def test_the_fold_prints_the_newest_label(self):
+        self.disposition({"src/a.py:12": "fixing"},
+                         labels={"src/a.py:12": "first-name"})
+        self.disposition({"src/a.py:12": "fixed"}, round_number=2,
+                         labels={"src/a.py:12": "second-name"})
+        self.assertEqual(
+            self.position()["dispositions"]["src/a.py:12"]["label"], "second-name")
+
+    def test_a_later_event_without_a_label_keeps_the_earlier_one(self):
+        self.disposition({"src/a.py:12": "fixing"},
+                         labels={"src/a.py:12": "null-guard"})
+        self.disposition({"src/a.py:12": "fixed", "src/b.py:3": "fixing"},
+                         labels={"src/b.py:3": "retry-loop"})
+        self.verify("pass", "T001")
+        self.append_event(self.S, "review-verdict", {
+            "verdict": "ready", "dispositions": {"src/a.py:12": "fixed"},
+        })
+        dispositions = self.position()["dispositions"]
+        self.assertEqual(dispositions["src/a.py:12"]["label"], "null-guard")
+        self.assertEqual(dispositions["src/a.py:12"]["state"], "fixed")
+        self.assertEqual(dispositions["src/b.py:3"]["label"], "retry-loop")
+
+    def test_a_label_key_drops_its_leading_dot_slash(self):
+        self.disposition({"src/a.py:12": "fixing"},
+                         labels={"./src/a.py:12": "null-guard"})
+        self.disposition({"./src/b.py:?": "deferred"},
+                         labels={"src/b.py:?": "flaky-wait"})
+        dispositions = self.position()["dispositions"]
+        self.assertEqual(dispositions["src/a.py:12"]["label"], "null-guard")
+        self.assertEqual(dispositions["src/b.py:?"]["label"], "flaky-wait")
+
+    def test_a_key_without_a_label_prints_null(self):
+        self.disposition({"src/a.py:12": "fixing", "src/b.py:3": "rejected"},
+                         labels={"src/a.py:12": "null-guard"})
+        dispositions = self.position()["dispositions"]
+        self.assertIsNone(dispositions["src/b.py:3"]["label"])
+        self.assertEqual(set(dispositions["src/b.py:3"]), {"state", "seq", "at", "label"})
+
+    def test_a_label_for_a_key_with_no_state_is_not_printed(self):
+        self.disposition({"src/a.py:12": "fixing"},
+                         labels={"src/a.py:12": "null-guard", "src/z.py:1": "orphan"})
+        self.assertEqual(set(self.position()["dispositions"]), {"src/a.py:12"})
+
+    def test_labels_come_from_review_disposition_only(self):
+        """A verdict carries no `labels`; an imported one that does is not read."""
+        self.disposition({"src/a.py:12": "fixing"},
+                         labels={"src/a.py:12": "null-guard"})
+        self.import_row(self.S, "review-verdict", {
+            "verdict": "ready", "dispositions": {"src/a.py:12": "fixed"},
+            "labels": {"src/a.py:12": "verdict-name"},
+        })
+        entry = self.position()["dispositions"]["src/a.py:12"]
+        self.assertEqual((entry["state"], entry["label"]), ("fixed", "null-guard"))
+
+    def test_the_fold_ignores_a_malformed_imported_label(self):
+        self.import_row(self.S, "review-disposition", {
+            "dispositions": {"a.py:1": "fixing", "b.py:2": "fixing"}, "round": 1,
+            "labels": {"a.py:1": 3, "b.py:2": "  "},
+        })
+        self.import_row(self.S, "review-disposition", {
+            "dispositions": {"c.py:3": "fixing"}, "round": 1, "labels": ["c.py:3"],
+        })
+        dispositions = self.position()["dispositions"]
+        self.assertEqual({k: v["label"] for k, v in dispositions.items()},
+                         {"a.py:1": None, "b.py:2": None, "c.py:3": None})
 
     def test_the_human_form_counts_the_open_dispositions(self):
         self.disposition({"src/a.py:12": "fixing", "src/b.py:3": "rejected"})
@@ -3882,6 +3985,80 @@ class TestDoctor(JournalTestCase):
         report = json.loads(proc.stdout)
         self.assertTrue(report["sidecar"]["found"])
         self.assertFalse(report["sidecar"]["agrees"])
+
+    def write_sidecar(self, config):
+        (self.root / ".claude").mkdir(exist_ok=True)
+        (self.root / ".claude" / "shipgate.json").write_text(
+            json.dumps(config), encoding="utf-8"
+        )
+
+    def test_reports_the_sidecar_version_and_stray_keys(self):
+        self.write_sidecar({
+            "version": 2, "db": str(self.db), "artifact_homes": {}, "enforce": {},
+            "watch": True, "auto_merge": "yes",
+        })
+        proc = self.journal("--db", self.db, "doctor", "--json", rc=OK)
+        sidecar = json.loads(proc.stdout)["sidecar"]
+        self.assertEqual(sidecar["version"], 2)
+        self.assertEqual(sidecar["stray_keys"], ["auto_merge", "watch"])
+        text = self.journal("--db", self.db, "doctor", rc=OK).stdout
+        self.assertIn("sidecar version : 2", text)
+        self.assertIn("stray keys      : auto_merge, watch", text)
+
+    def test_a_ledger_key_is_no_stray_key(self):
+        """`ledger` is read by `status` (the ledger count): update mode must keep it."""
+        self.write_sidecar({
+            "version": 1, "db": str(self.db), "ledger": "docs/ledger.md",
+            "artifact_homes": {}, "enforce": {},
+        })
+        proc = self.journal("--db", self.db, "doctor", "--json", rc=OK)
+        self.assertEqual(json.loads(proc.stdout)["sidecar"]["stray_keys"], [])
+
+    def test_a_sidecar_without_a_version_or_stray_keys(self):
+        self.write_sidecar({"db": str(self.db)})
+        proc = self.journal("--db", self.db, "doctor", "--json", rc=OK)
+        sidecar = json.loads(proc.stdout)["sidecar"]
+        self.assertIsNone(sidecar["version"])
+        self.assertEqual(sidecar["stray_keys"], [])
+        text = self.journal("--db", self.db, "doctor", rc=OK).stdout
+        self.assertIn("sidecar version : —", text)
+        self.assertIn("stray keys      : none", text)
+
+    def test_the_raw_version_is_reported_as_it_is(self):
+        self.write_sidecar({"version": "2", "db": str(self.db)})
+        proc = self.journal("--db", self.db, "doctor", "--json", rc=OK)
+        self.assertEqual(json.loads(proc.stdout)["sidecar"]["version"], "2")
+
+
+class TestSidecarVersion(JournalTestCase):
+    """A sidecar from a newer shipgate: warn once, keep reading the keys it knows."""
+
+    def write_sidecar(self, **extra):
+        (self.root / ".claude").mkdir(exist_ok=True)
+        config = {"db": ".claude/shipgate.db"}
+        config.update(extra)
+        (self.root / ".claude" / "shipgate.json").write_text(
+            json.dumps(config), encoding="utf-8"
+        )
+
+    def test_a_newer_version_warns_once_on_stderr_and_keeps_working(self):
+        self.write_sidecar(version=2)
+        proc = self.journal("init", rc=OK)
+        self.assertEqual(proc.stderr.count("journal.py: "), 1, proc.stderr)
+        self.assertIn("declares version 2", proc.stderr)
+        self.assertIn("knows version 1", proc.stderr)
+        self.assertTrue((self.root / ".claude" / "shipgate.db").exists())
+        appended = self.journal("append", "--stream", "feature/x", "--type",
+                                "flow-suspended", rc=OK)
+        self.assertEqual(appended.stderr.count("declares version 2"), 1)
+
+    def test_a_known_or_absent_version_is_silent(self):
+        for extra in ({"version": 1}, {}, {"version": 0}, {"version": True},
+                      {"version": "2"}):
+            with self.subTest(sidecar=extra):
+                self.write_sidecar(**extra)
+                proc = self.journal("init", rc=OK)
+                self.assertNotIn("declares version", proc.stderr)
 
 
 class TestExportImport(JournalTestCase):
@@ -4151,6 +4328,7 @@ class TestVocabCommand(JournalTestCase):
             "map_enums": {"dispositions": ["fixing", "fixed", "rejected", "deferred"]},
             "integers": ["round"],
             "strings": ["note"],
+            "string_maps": ["labels"],
         })
 
     def test_review_disposition_is_listed_with_its_shape(self):

@@ -166,9 +166,11 @@ EVENT_VOCABULARY: Dict[str, str] = {
 #   string_lists  keys whose value must be a JSON list of non-empty strings
 #   integers      keys whose value must be a non-negative JSON integer (a boolean is
 #                 refused)
+#   string_maps   keys whose value must be a JSON object, each of its values a
+#                 non-empty string
 # A sub-shape takes the validating kinds above (required, enums, lists, strings,
-# string_lists, integers, map_enums, objects, list_objects); aliases and defaults apply
-# at the top level only.
+# string_lists, integers, string_maps, map_enums, objects, list_objects); aliases and
+# defaults apply at the top level only.
 # `normalize_payload` enforces every kind, and `vocab --shape` prints them.
 #
 # The closed values below are declared once as `Literal`s, so the JSON contract
@@ -221,7 +223,8 @@ class EventShape(TypedDict, total=False):
     ``strings`` and ``map_enums`` are the payload rules of ADR 0009:
     ``gate-decision.decision`` is a string, and ``review-verdict`` closes the values of
     ``criteria`` and ``dispositions``. ``integers`` is ADR 0014's:
-    ``review-disposition.round`` is a non-negative integer.
+    ``review-disposition.round`` is a non-negative integer. ``string_maps`` is its
+    0.22.0 amendment: ``review-disposition.labels`` maps a finding key to a name.
     """
 
     required: List[str]
@@ -233,6 +236,7 @@ class EventShape(TypedDict, total=False):
     strings: List[str]
     string_lists: List[str]
     integers: List[str]
+    string_maps: List[str]
     map_enums: Dict[str, List[str]]
     objects: Dict[str, Dict[str, Any]]
     list_objects: Dict[str, Dict[str, Any]]
@@ -305,6 +309,8 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         "map_enums": {"dispositions": list(get_args(FindingState))},
         "integers": ["round"],
         "strings": ["note"],
+        # A short human name beside a finding key; the key stays `<path>:<line|?>`.
+        "string_maps": ["labels"],
     },
     "capture-done": {
         "required": ["promoted", "dropped"],
@@ -366,10 +372,13 @@ class ReviewDispositionPayload(_ReviewDispositionKeys, total=False):
     ``dispositions`` maps a review finding (``<path>:<line or ?>``, as on the verdict) to
     its state now; ``round`` is the review round it belongs to. A state outside
     ``FindingState`` is refused (``map_enums``), and so is a ``round`` that is not a
-    non-negative integer (``integers``). ``note`` is optional text.
+    non-negative integer (``integers``). ``note`` is optional text. ``labels`` is
+    optional too: it maps a finding key to a short human name, each name a non-empty
+    string (``string_maps``). The name travels beside the key, never in its place.
     """
 
     note: str
+    labels: Dict[str, str]
 
 
 class RankingFile(TypedDict, total=False):
@@ -566,7 +575,27 @@ def _load_sidecar(path: Path, project_dir: Path) -> Sidecar:
         raise InfraError(f"sidecar {path} is not valid JSON: {exc}") from exc
     if not isinstance(config, dict):
         raise InfraError(f"sidecar {path} must contain a JSON object")
+    _warn_sidecar_version(config)
     return Sidecar(path=path, project_dir=project_dir, config=config)
+
+
+# Set once the newer-sidecar warning is printed: once per process is enough.
+_sidecar_version_warned = False
+
+
+def _warn_sidecar_version(config: Dict[str, Any]) -> None:
+    """Say on stderr, once per run, that the sidecar is newer than this shipgate.
+
+    The run goes on: the keys this shipgate knows are read as they are. The hooks'
+    SessionStart line carries the same text (`_hooks_common.sidecar_version_note`).
+    """
+    global _sidecar_version_warned
+    if _sidecar_version_warned:
+        return
+    note = _hooks_common.sidecar_version_note(config)
+    if note:
+        _sidecar_version_warned = True
+        print(f"journal.py: {note}", file=sys.stderr)
 
 
 def _resolve_against(base: Path, value: str) -> Path:
@@ -1282,6 +1311,19 @@ def _validate_shape(
             raise GateViolation(
                 f"{event_type}: {where}.{key} must be a non-negative integer, got "
                 f"{json.dumps(value, sort_keys=True)}" + _shape_hint(event_type)
+            )
+    for key in shape.get("string_maps", []):
+        if key not in payload:
+            continue
+        _require_object(event_type, payload[key], f"{where}.{key}")
+        wrong = {
+            k: v for k, v in payload[key].items()
+            if not isinstance(v, str) or not v.strip()
+        }
+        if wrong:
+            raise GateViolation(
+                f"{event_type}: each value of {where}.{key} must be a non-empty string, "
+                f"got {json.dumps(wrong, sort_keys=True)}" + _shape_hint(event_type)
             )
     for key, allowed in shape.get("enums", {}).items():
         if key in payload and payload[key] not in allowed:
@@ -2846,11 +2888,17 @@ class PositionTrace(TypedDict):
 
 
 class PositionDisposition(TypedDict):
-    """A review finding's current state and the event that decided it (ADR 0014)."""
+    """A review finding's current state and the event that decided it (ADR 0014).
+
+    ``label`` is the newest name a ``review-disposition``'s ``labels`` gave the key, or
+    None when none did (ADR 0014, amended 0.22.0). A later event that names no label for
+    the key keeps the earlier one, and ``seq``/``at`` stay the state's event.
+    """
 
     state: FindingState
     seq: int
     at: str
+    label: Optional[str]
 
 
 class PositionDoc(TypedDict):
@@ -3248,20 +3296,44 @@ def _position_dispositions(
     """Each finding's current state: every ``review-disposition`` and every verdict's map
     (``verdicts``: the verdicts in the vocabulary), folded in seq order, the latest event
     winning per key (ADR 0014). A later round's verdict that names only its own findings
-    leaves the earlier closures in place; a later ``fixing`` still reopens a key."""
+    leaves the earlier closures in place; a later ``fixing`` still reopens a key.
+
+    Each entry's ``label`` is the newest non-empty name a ``review-disposition``'s
+    ``labels`` gave its key, or None. A verdict carries no labels. A label for a key that
+    has no state is not printed."""
     verdict_seqs = {verdict.seq for verdict in verdicts}
     folded: Dict[str, PositionDisposition] = {}
+    labels: Dict[str, str] = {}
     for event in events:
         if event.type == "review-disposition":
             allowed: Sequence[str] = get_args(FindingState)
+            labels.update(_disposition_labels(event.data.get("labels")))
         elif event.seq in verdict_seqs:
             allowed = get_args(Disposition)
         else:
             continue
         states = _vocabulary_map(event.data.get("dispositions"), allowed)
         for key, state in states.items():
-            folded[_finding_key(key)] = {"state": state, "seq": event.seq, "at": event.ts}
+            folded[_finding_key(key)] = {
+                "state": state, "seq": event.seq, "at": event.ts, "label": None,
+            }
+    for key, entry in folded.items():
+        entry["label"] = labels.get(key)
     return folded
+
+
+def _disposition_labels(value: Any) -> Dict[str, str]:
+    """A ``labels`` map with each key as ``_finding_key`` leaves it; {} for a non-object.
+
+    An imported row was never checked, so a value that is not a non-empty string is
+    dropped here, as ``_vocabulary_map`` drops a state outside the vocabulary.
+    """
+    if not isinstance(value, dict):
+        return {}
+    return {
+        _finding_key(key): item for key, item in value.items()
+        if isinstance(key, str) and isinstance(item, str) and item.strip()
+    }
 
 
 def _render_position(position: PositionDoc) -> str:
@@ -3680,11 +3752,18 @@ def run_doctor(conn: sqlite3.Connection, resolution: Resolution) -> Dict[str, An
     sidecar_report: Dict[str, Any] = {"found": False}
     if resolution.sidecar is not None:
         declared = sidecar_db_path(resolution.sidecar)
+        config = resolution.sidecar.config
         sidecar_report = {
             "found": True,
             "path": str(resolution.sidecar.path),
             "db": str(declared) if declared else None,
             "agrees": bool(declared) and declared == resolution.db_path,
+            # The raw `version`, or None: a newer one means a newer shipgate wrote it.
+            "version": config.get("version"),
+            # Keys no shipgate template names; `setup`'s update mode drops them.
+            "stray_keys": sorted(
+                key for key in config if key not in _hooks_common.SIDECAR_KEYS
+            ),
         }
 
     # Types already recorded that no gate or report can read. `append` refuses these
@@ -3718,6 +3797,15 @@ def render_doctor(report: Dict[str, Any]) -> str:
         sidecar_line = f"{sidecar['path']} — {agreement}"
     else:
         sidecar_line = "not found"
+    sidecar_lines = []
+    if sidecar["found"]:
+        version = sidecar.get("version")
+        stray = sidecar.get("stray_keys") or []
+        sidecar_lines = [
+            "sidecar version : "
+            + ("—" if version is None else json.dumps(version, sort_keys=True)),
+            f"stray keys      : {', '.join(stray) if stray else 'none'}",
+        ]
     pending = report["pending_migrations"]
     lines = [
         f"database        : {report['db']} (resolved from {report['db_source']})",
@@ -3727,6 +3815,7 @@ def render_doctor(report: Dict[str, Any]) -> str:
         f"pending migr.   : {', '.join(str(p) for p in pending) if pending else 'none'}",
         f"events          : {report['events']}",
         f"sidecar         : {sidecar_line}",
+        *sidecar_lines,
     ]
     drift = report.get("off_vocabulary") or []
     if drift:

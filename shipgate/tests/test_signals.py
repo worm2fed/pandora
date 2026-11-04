@@ -349,6 +349,7 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["source"], {"window_months": "default",
                                          "fix_pattern": "default",
                                          "exclude": "default",
+                                         "ranking_exclude": "default",
                                          "code_graph": "default"})
 
     def test_file_values_are_read_from_the_code_signals_section(self):
@@ -364,6 +365,7 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["source"], {"window_months": "shipgate.md",
                                          "fix_pattern": "shipgate.md",
                                          "exclude": "shipgate.md",
+                                         "ranking_exclude": "default",
                                          "code_graph": "default"})
         paths = [f["path"] for f in self.signals_json(
             "hotspots", "--repo", self.repo.path)["files"]]
@@ -392,6 +394,7 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["source"], {"window_months": "default",
                                          "fix_pattern": "default",
                                          "exclude": "default",
+                                         "ranking_exclude": "default",
                                          "code_graph": "default"})
 
     def test_an_umbrella_config_applies_when_the_repo_has_none(self):
@@ -416,6 +419,7 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg["source"], {"window_months": "shipgate.md",
                                          "fix_pattern": "default",
                                          "exclude": "shipgate.md",
+                                         "ranking_exclude": "default",
                                          "code_graph": "default"})
 
     def test_a_sidecar_below_a_git_umbrella_adds_a_config_without_dropping_the_umbrellas(self):
@@ -502,6 +506,103 @@ class TestConfig(SignalsCase):
         self.assertEqual(cfg, {"window_months": 18, "fix_pattern": "^(fix|bug)",
                                "exclude": ["generated/", "*.snap"]})
         self.assertEqual(set(source.values()), {"shipgate.md"})
+
+
+class TestRankingExclude(SignalsCase):
+    """ADR 0013, amended 0.22.0: release files churn on every release, so `ranking`
+    leaves them out. The table and `files` keep every file."""
+
+    RELEASE = ["CHANGELOG.md", "pkg/CHANGELOG.md", "pkg/.claude-plugin/plugin.json",
+               ".claude-plugin/marketplace.json"]
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = FixtureRepo(Path(tmp.name) / "repo")
+        self.repo.commit("feat: start", ts(2020, 1, 1), writes={
+            "src/a.py": "a 1\n", "src/b.py": "b 1\n",
+            **{path: "0\n" for path in self.RELEASE}})
+        self.repo.commit("feat: a", ts(2020, 2, 1), writes={"src/a.py": "a 2\n"})
+        # Each release touches every release file: they churn the most.
+        for month in range(3, 9):
+            self.repo.commit(f"chore: release {month}", ts(2020, month, 1),
+                             writes={path: f"{month}\n" for path in self.RELEASE})
+
+    def write_config(self, body: str):
+        target = self.repo.path / ".claude" / "shipgate.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8")
+
+    def hotspots(self):
+        return self.signals_json("hotspots", "--repo", self.repo.path, "--graph", "off")
+
+    def ranked(self, payload):
+        return [f["path"] for f in payload["ranking"]["files"]]
+
+    def test_release_files_stay_out_of_the_ranking_and_in_the_table(self):
+        mod = load_signals_module()
+        payload = self.hotspots()
+        self.assertEqual(self.ranked(payload), ["src/a.py", "src/b.py"])
+        files = [f["path"] for f in payload["files"]]
+        for path in self.RELEASE:
+            self.assertIn(path, files)
+        # They churn the most, so the table still shows them first.
+        self.assertIn(files[0], self.RELEASE)
+        self.assertEqual(payload["config"]["ranking_exclude"],
+                         list(mod.DEFAULT_RANKING_EXCLUDES))
+        self.assertEqual(payload["config"]["source"]["ranking_exclude"], "default")
+        self.assertEqual(mod.DEFAULT_RANKING_EXCLUDES, (
+            "**/CHANGELOG.md", "**/.claude-plugin/plugin.json",
+            ".claude-plugin/marketplace.json"))
+
+    def test_the_table_output_keeps_release_files(self):
+        table = self.signals("hotspots", "--repo", self.repo.path, "--graph", "off").stdout
+        self.assertIn("pkg/CHANGELOG.md", table)
+
+    def test_a_config_value_replaces_the_built_in_patterns(self):
+        self.write_config("## Code signals\n- Ranking exclude: `src/b.py`, `**/plugin.json`\n")
+        payload = self.hotspots()
+        ranked = self.ranked(payload)
+        self.assertIn("CHANGELOG.md", ranked)
+        self.assertIn("pkg/CHANGELOG.md", ranked)
+        self.assertNotIn("src/b.py", ranked)
+        self.assertNotIn("pkg/.claude-plugin/plugin.json", ranked)
+        self.assertEqual(payload["config"]["ranking_exclude"],
+                         ["src/b.py", "**/plugin.json"])
+        self.assertEqual(payload["config"]["source"]["ranking_exclude"], "shipgate.md")
+
+    def test_an_empty_backticked_value_disables_the_built_in_patterns(self):
+        for value in ("``", "` `"):
+            with self.subTest(value=value):
+                self.write_config(f"## Code signals\n- Ranking exclude: {value}\n")
+                payload = self.hotspots()
+                self.assertEqual(payload["config"]["ranking_exclude"], [])
+                self.assertEqual(payload["config"]["source"]["ranking_exclude"],
+                                 "shipgate.md")
+                self.assertEqual(len(self.ranked(payload)), 5)
+                self.assertIn("CHANGELOG.md", self.ranked(payload))
+
+    def test_a_placeholder_or_bare_value_keeps_the_built_in_patterns(self):
+        mod = load_signals_module()
+        for value in ("`<globs>`", "<globs>", "src/b.py", ""):
+            with self.subTest(value=value):
+                self.write_config(f"## Code signals\n- Ranking exclude: {value}\n")
+                payload = self.hotspots()
+                self.assertEqual(payload["config"]["ranking_exclude"],
+                                 list(mod.DEFAULT_RANKING_EXCLUDES))
+                self.assertEqual(payload["config"]["source"]["ranking_exclude"],
+                                 "default")
+
+    def test_the_parser_reads_the_bullet(self):
+        mod = load_signals_module()
+        parse = mod.parse_code_signals
+        self.assertEqual(parse("## Code signals\n- Ranking exclude: ``\n"),
+                         {"ranking_exclude": []})
+        self.assertEqual(parse("## Code signals\n- Ranking exclude: `a/, *.md`\n"),
+                         {"ranking_exclude": ["a/", "*.md"]})
+        self.assertEqual(parse("## Code signals\n- Ranking exclude: `<globs>`\n"), {})
+        # `Exclude` keeps its rule: an empty span is absent there.
+        self.assertEqual(parse("## Code signals\n- Exclude: ``\n"), {})
 
 
 # ---------------------------------------------------------------------------

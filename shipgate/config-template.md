@@ -222,16 +222,19 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 
 <!-- Default when absent: 12-month window, the built-in fix pattern (conventional-commit fix
      types + fix/bug/hotfix/revert/regression words), the built-in excludes (vendor,
-     node_modules, dist, build, lockfiles, generated). Values must be in backticks; a
-     <placeholder> counts as absent. -->
+     node_modules, dist, build, lockfiles, generated), and the built-in ranking excludes
+     (**/CHANGELOG.md, **/.claude-plugin/plugin.json, .claude-plugin/marketplace.json).
+     Values must be in backticks; a <placeholder> counts as absent. A Ranking exclude
+     value replaces the built-in ranking excludes. An empty value (``) turns them off. -->
 
-The one section a script reads rather than the model: `scripts/signals.py` takes these three
+The one section a script reads rather than the model: `scripts/signals.py` takes these four
 bullets' backticked values (command-line flags still win), so the terminal and the flow
 compute the same numbers.
 
 - Window: `<months, e.g. 18>`
 - Fix pattern: `<regex over the commit subject>`
 - Exclude: `<extra globs, comma-separated, e.g. generated/, *.snap>`
+- Ranking exclude: `<globs the ranking leaves out, comma-separated, e.g. **/CHANGELOG.md>`
 
 ## Worker guardrails
 

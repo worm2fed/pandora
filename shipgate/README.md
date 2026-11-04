@@ -53,7 +53,7 @@ What the sections configure:
 | Epic workflow | epic decomposition command, ordering, delivery rules | issue-by-issue, manual decomposition |
 | MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR/PR opened" |
 | Code tooling | the library-docs tool/MCP to consult for a dependency's current API, and the LSP tool for symbol navigation | training knowledge / WebFetch; grep-and-read |
-| Code signals | window, fix-commit pattern and extra excludes for the bundled risk signals (the one section a script reads, not the model) | 12-month window, built-in fix pattern and excludes |
+| Code signals | window, fix-commit pattern, extra excludes and ranking excludes for the bundled risk signals (the one section a script reads, not the model) | 12-month window, built-in fix pattern, excludes and ranking excludes (release files) |
 | Worker guardrails | the project's hard rules, pasted verbatim into every worker brief | only the built-in worker discipline (branch check, no staging, evidence) |
 | Orchestration | whether Review / Explore fan out via bundled `Workflow` scripts or `Agent` subagents | `agents` for both |
 | Thinking lenses | which lens *skills* to invoke at which phase, overriding the inline bullet (e.g. one from [cc-thinking-skills](https://github.com/tjboudreaux/cc-thinking-skills)); a large lens plugin costs skill-listing space in every session, so map only what you need | no lens skills invoked — the phase skills apply each lens inline |
@@ -148,12 +148,12 @@ compacted or resumed session was driving, branch or no branch), then the checked
 | Command | Does |
 | --- | --- |
 | `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. Dormant streams take one line, and completed ones are hidden unless `--all`. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each stream also carries `publish`, `lifecycle` and `current`, and the top level carries `nested_matches` |
-| `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). An unknown stream exits 1 |
+| `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). Each entry also carries `label`: the newest name a `review-disposition`'s `labels` gave that key, or null. An unknown stream exits 1 |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
 | `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review" |
-| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability |
+| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
@@ -167,7 +167,9 @@ and refuses `mr-opened` until the stream holds, after its last `task-done`, eith
 `review-verdict`'s optional `criteria` map takes `met` or `unmet`, and its optional
 `dispositions` map takes `fixed`, `rejected` or `deferred`. A `review-disposition` records
 one finding's state when it is decided: its `dispositions` map also takes `fixing`, and its
-`round` must be a non-negative integer. It implies no phase. `status --json` prints the same
+`round` must be a non-negative integer. Its optional `labels` map gives a finding key a
+short human name. Each name must be a non-empty string, and the key stays the finding's
+`<path>:<line|?>`. It implies no phase. `status --json` prints the same
 publish rule per stream as `publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
 worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's
@@ -176,6 +178,15 @@ shell carries its parent's), else the session that started last (ADR 0005). `use
 `data.recorded_by` instead, so `status --session`, `check` and `stats` count the session that
 recorded the user's decision (ADR 0010). A stream ends with `flow-completed` and leaves the
 status brief.
+
+The sidecar `.claude/shipgate.json` declares its format `version`. This shipgate knows
+version 1. A sidecar with a higher integer version comes from a newer shipgate. The
+SessionStart hook then adds one warning line to the session context, and `journal.py` prints
+the same line on stderr once per run. Both keep working with the keys they know. `doctor`
+reports the raw `version` and `stray_keys`: the keys outside `version`, `db`, `ledger`,
+`artifact_homes` and `enforce`. `setup`'s update mode stops on a newer version, and it drops
+stray keys when it regenerates the sidecar. `signals.py` reads no sidecar key, so it makes no
+version check.
 
 Each phase skill names its stream before it works — the branch the work takes, per the
 config's **Branching** pattern, opened with `flow-started` by whichever skill runs first when
@@ -237,11 +248,16 @@ adapter → one line saying why, exit 0, the phase runs as before. Output carrie
 shares, never author names.
 
 `hotspots --json` also prints `ranking`: the top 5 files in its own order, each with its
-`fix`, `churn` and `fan_in` labels, and the structure `source` (ADR 0013). `design` copies it
-into `design-committed` and `review` into `review-verdict`, so the journal shows which
-ranking each phase used. A JSON call that wanted the code graph and did not get it carries
-`graph_note`: one line that says why and how to build an index. The table output keeps the
-advisory-once rule.
+`fix`, `churn` and `fan_in` labels, and the structure `source` (ADR 0013). `design` copies
+it into `design-committed` and `review` into `review-verdict`, so the journal shows which
+ranking each phase used. The ranking leaves out release files, because every release
+changes them: `**/CHANGELOG.md`, `**/.claude-plugin/plugin.json` and
+`.claude-plugin/marketplace.json`. The table and `files` keep them. A pattern is read as an
+`Exclude` glob is, and a leading `**/` is optional. The `Ranking exclude:` bullet of
+`## Code signals` replaces these patterns with its backticked globs. An empty value
+(` `` `) turns them off. `config.ranking_exclude` names the patterns in force. A JSON call
+that wanted the code graph and did not get it carries `graph_note`: one line that says why
+and how to build an index. The table output keeps the advisory-once rule.
 
 ### Code graph
 

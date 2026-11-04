@@ -293,6 +293,70 @@ class TestSessionStart(HookTestCase):
         self.assertEqual(result.stdout.strip(), SESSION)
 
 
+class TestSessionStartSidecarVersion(HookTestCase):
+    """A sidecar from a newer shipgate: the session hears it once, at start."""
+
+    def set_version(self, version):
+        sidecar = self.root / ".claude" / "shipgate.json"
+        config = json.loads(sidecar.read_text())
+        if version is None:
+            config.pop("version", None)
+        else:
+            config["version"] = version
+        sidecar.write_text(json.dumps(config), encoding="utf-8")
+
+    def context(self):
+        result = run_hook(
+            "session_start",
+            {"session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)["hookSpecificOutput"].get("additionalContext", "")
+
+    def test_a_newer_version_adds_one_note_to_the_context(self):
+        self.set_version(2)
+        context = self.context()
+        self.assertEqual(context.count("declares version 2"), 1, context)
+        self.assertIn("knows version 1", context)
+        self.assertIn("Update shipgate.", context)
+        # The brief is still there: the hook keeps working with the keys it knows.
+        self.assertIn("journal", context.lower())
+        self.assertEqual(len(self.events(event_type="session-started")), 1)
+
+    def test_a_known_or_absent_version_adds_no_note(self):
+        for version in (1, None, 0, "2", True):
+            with self.subTest(version=version):
+                self.set_version(version)
+                self.assertNotIn("declares version", self.context())
+
+
+class TestSidecarVersionNote(unittest.TestCase):
+    def test_only_an_integer_above_the_known_version_warns(self):
+        from _common import SIDECAR_VERSION, sidecar_version_note
+
+        self.assertEqual(SIDECAR_VERSION, 1)
+        note = sidecar_version_note({"version": 2})
+        self.assertEqual(
+            note,
+            ".claude/shipgate.json declares version 2; this shipgate knows version 1 "
+            "and reads only the keys it knows. Update shipgate.",
+        )
+        self.assertNotIn("\n", note)
+        for sidecar in ({"version": 1}, {"version": 0}, {}, {"version": "2"},
+                        {"version": True}, {"version": 2.0}, {"version": None}, None, []):
+            with self.subTest(sidecar=sidecar):
+                self.assertIsNone(sidecar_version_note(sidecar))
+
+    def test_the_known_keys(self):
+        from _common import SIDECAR_KEYS
+
+        # Every key a shipgate reader uses: the hooks, journal.py (`ledger` feeds the
+        # status ledger count) and setup's sidecar shape.
+        self.assertEqual(SIDECAR_KEYS,
+                         ("version", "db", "ledger", "artifact_homes", "enforce"))
+
+
 class StubJournalMixin:
     """Stands a stub in for the journal CLI, in a throwaway copy of the plugin tree.
 
@@ -612,6 +676,36 @@ if "session" in sys.argv[1:]:
         self.assertEqual(result.returncode, 0, result.stderr)
         specific = json.loads(result.stdout)["hookSpecificOutput"]
         self.assertNotIn("additionalContext", specific)
+
+
+class TestSidecarVersionOnAFailedStatus(StubJournalMixin, HookTestCase):
+    """journal.py prints the version note on its own stderr. When `status` fails, that
+    stderr is the failure detail, and the note must not reach the context twice."""
+
+    STUB = """#!/usr/bin/env python3
+import sys
+
+note = ".claude/shipgate.json declares version 2; this shipgate knows version 1 and reads only the keys it knows. Update shipgate."
+sys.stderr.write("journal.py: " + note + "\\n")
+if "status" in sys.argv[1:]:
+    sys.stderr.write("error: database is locked\\n")
+    sys.exit(1)
+"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        sidecar = self.root / ".claude" / "shipgate.json"
+        config = json.loads(sidecar.read_text())
+        config["version"] = 2
+        sidecar.write_text(json.dumps(config), encoding="utf-8")
+
+    def test_the_note_appears_once_and_the_real_error_stays(self):
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(context.count("declares version 2"), 1, context)
+        self.assertIn("error: database is locked", context)
+        self.assertIn("reading it failed", context)
 
 
 class TestProjectResolution(StubJournalMixin, HookTestCase):
