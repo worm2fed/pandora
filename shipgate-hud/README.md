@@ -139,9 +139,11 @@ interface, from the journal shipgate already keeps.
   `glab mr create` (or `glab mr new`). It accepts git's, gh's and glab's global options before
   the subcommand. The command waits until the stream **of the branch it publishes** may
   publish (ADR 0005). The stream may publish when the journal holds a `review-verdict` of
-  `ready` after its last `task-done`. The user's own publish `gate-decision` after the last
-  `task-done` also lets it publish. journal.py computes this rule (the one `mr-opened` uses)
-  and prints it as `publish`; the HUD does not copy it.
+  `ready` after its last `task-done`. The user's publish approval after the last `task-done`
+  also lets it publish. From shipgate 0.23.0 that approval is a `gate-decision` with
+  `gate: publish`, `decision: publish`, `raised_by: user`, the actor `user` and the marker
+  `source: dialog` or `source: shell`. journal.py computes this rule (the one `mr-opened`
+  uses) and prints it as `publish`; the HUD does not copy it.
 
   The gate finds the command anywhere in the shell line. It looks after `&&`, `;`, `||`, `|`
   or a newline. It looks behind shell words such as `if`, `do` or `{`, and behind wrappers
@@ -164,17 +166,36 @@ interface, from the journal shipgate already keeps.
     the stream the session is bound to instead.
 
   Before it decides, the gate refreshes the position once. A stream that is not reviewed
-  opens the engine's dialog with **Refuse** and **Let it through once**. A journal that cannot
-  be read opens the same dialog, and the hold names the failure. Any other answer refuses.
-  The model then reads what the stream still needs: a review verdict to record, the journal
-  to repair, or a question for the user. It is never told to record the user's decision
-  itself.
+  opens the engine's dialog with **Refuse**, **Let it through once** and **Approve
+  publishing** (ADR 0010). **Let it through once** lets the line through and records
+  nothing. **Approve publishing** records your approval: one `gate-decision` per held stream,
+  with the marker `source: dialog` and the actor `user`, then lets the line through. The
+  approval lasts until the stream's next `task-done`, so a later push of the same stream
+  passes, and `mr-opened` is accepted. If the record fails, the line still goes through. A
+  journal that cannot be read opens the dialog with the first two answers only, and the hold
+  names the failure. Any other answer refuses. The model then reads what the stream still
+  needs: a review verdict to record, the journal to repair, or a question for you. It is
+  never told to record your decision itself.
+
+  You can also approve from the prompt with a `!` command, which no hook sees:
+
+  ```
+  ! python3 <shipgate>/scripts/journal.py append --stream <stream> --type gate-decision --actor user --data '{"gate": "publish", "question": "publish <stream>", "decision": "publish", "mode": "ask", "raised_by": "user", "source": "shell"}'
+  ```
+
+  **What the approval protects, and what it does not.** shipgate's PreToolUse hook refuses
+  a model's Bash call that writes the marker, or that records a publish decision as yours
+  (shipgate ADR 0015). So no normal tool path of the model records an approval the gate
+  counts. It is a net against a flow that forges approval through its tools. It is no
+  defence against deliberate circumvention: the model has a shell and can write the
+  journal's SQLite file, run a copy of the script, or build a payload the hook cannot read.
 
   The gate passes the command in these cases: the stream may publish; neither the branch
   nor the session has a stream; the project has no sidecar; no `journal.py` is found; or no
-  surface is drawing (`claude -p`). A read that fails never passes. The gate writes nothing
-  and remembers nothing, so the next publish command asks again. The gate trusts the
-  journal. It is a net for a forgetful model, not a boundary against a deliberate one.
+  surface is drawing (`claude -p`). A read that fails never passes. The gate writes only
+  the approval that **Approve publishing** records, and remembers nothing else, so after
+  **Let it through once** the next publish command asks again. The gate trusts the journal.
+  It is a net for a forgetful model, not a boundary against a deliberate one.
   Known limits: the gate does not hold a command it cannot read: `"$(…)"` inside double
   quotes, `… | bash`, `sh -c "$X"`, `ssh host git push` or `find -exec`. It does not see a
   directory change made by a shell function, an alias, a sourced script, `eval 'cd x'` or an
@@ -212,7 +233,9 @@ no process.
 - **After a shipgate release.** A session that you opened before the release keeps the old
   shipgate in memory. The HUD's dependency range then refuses to load the HUD. An
   organization-managed PreModelSwitch check can also block `/model` until
-  `/reload-plugins`. Update the plugins, then run `/reload-plugins`.
+  `/reload-plugins`. Update the plugins, then run `/reload-plugins`. The first reload can
+  load the HUD before the new shipgate, and the dependency check then fails. Run
+  `/reload-plugins` a second time: it loads the HUD.
 - A project that ran `/shipgate:setup`
   with a journal: the HUD keys off the `.claude/shipgate.json` sidecar, in the session's
   project root (where it started; a shell `cd` does not move it) or any directory above it
@@ -292,7 +315,8 @@ What the pane shows:
   the keys it knows`. The refresh still runs with the keys the HUD knows. A newer sidecar is
   never a failed read.
 
-The HUD writes nothing. A veto goes through the prompt, and the orchestrator records the
+The HUD writes one thing only: the approval that the publish dialog's **Approve publishing**
+records (ADR 0010). A veto goes through the prompt, and the orchestrator records the
 outcome.
 
 `journal.py` is looked for, in order: the `journalScript` option; beside this plugin in a

@@ -35,6 +35,7 @@ import type {
   Task,
   TaskState,
   TickEntry,
+  Verdict,
   WorklogFrom,
 } from '../types'
 import {
@@ -137,20 +138,24 @@ export function boardFor(position: Position, review: ReviewState): ReviewBoard |
 }
 
 /**
- * The folded `fixing` entries still live with no board: those recorded after the last verdict
- * (all of them with no verdict). The verdict is the round's final word, so a `fixing` it did
- * not close under the same key is stale, not open.
+ * Is a folded entry a stale `fixing` (HUD ADR 0008, amended)? A `fixing` recorded before the
+ * last verdict, when that verdict is `ready`: a legacy journal recorded the fix and never its
+ * closure. A `not-ready` verdict opens a fix round, so a `fixing` before it stays live.
  */
-const liveFixing = (position: Position): number => {
-  const verdict = position.lastVerdict
-  return Object.values(position.dispositions).filter(entry => entry.state === 'fixing' && (verdict === null || entry.seq > verdict.seq)).length
-}
+export const isStaleFixing = (entry: FoldedDisposition, lastVerdict: Verdict | null): boolean =>
+  entry.state === 'fixing' && lastVerdict !== null && lastVerdict.verdict === 'ready' && entry.seq < lastVerdict.seq
+
+/** Is a folded entry a live `fixing`, open until a closing state replaces it? Any `fixing` that is not stale (`isStaleFixing`). */
+const isLiveFixing = (entry: FoldedDisposition, lastVerdict: Verdict | null): boolean => entry.state === 'fixing' && !isStaleFixing(entry, lastVerdict)
+
+/** The folded `fixing` entries still open with no board: every one that is not stale (`isStaleFixing`). */
+const liveFixing = (position: Position): number => Object.values(position.dispositions).filter(entry => isLiveFixing(entry, position.lastVerdict)).length
 
 /**
  * The band's review segment. With a board for the stream: `review N open` (N = survivors of
  * the newest round still open, `openFindings`), or `review aborted`. With no board (a review
- * run as an agent fan): `review N open` when N folded findings are `fixing` after the last
- * verdict (`liveFixing`); else null, as with no review at all.
+ * run as an agent fan): `review N open` when N folded findings are a live `fixing`
+ * (`liveFixing`: a stale one is not open); else null, as with no review at all.
  */
 export function reviewSegment(position: Position, review: ReviewState): string | null {
   const board = boardFor(position, review)
@@ -173,13 +178,13 @@ export function boardStates(position: Position, board: ReviewBoard): readonly (F
   )
 }
 
-/** Is a finding with this state still open? No state, or `fixing` (a fix in progress). */
-const isOpenState = (state: FoldedDisposition | null): boolean => state === null || state.state === 'fixing'
+/** Is a finding with this state still open? No state, or a live `fixing` (a fix in progress; a stale one is not open). */
+const isOpenState = (state: FoldedDisposition | null, lastVerdict: Verdict | null): boolean => state === null || isLiveFixing(state, lastVerdict)
 
-/** Survivors still open: no user's mark, and no folded state or a `fixing` one. */
+/** Survivors still open: no user's mark, and no folded state or a live `fixing` one. */
 export function openFindings(position: Position, board: ReviewBoard): number {
   const states = boardStates(position, board)
-  return board.survivors.filter((survivor, index) => survivor.mark === null && isOpenState(states[index] ?? null)).length
+  return board.survivors.filter((survivor, index) => survivor.mark === null && isOpenState(states[index] ?? null, position.lastVerdict)).length
 }
 
 /** A lifecycle's mark: its word and colour where the band and the pane name it. */
@@ -908,11 +913,17 @@ const quorumText = (finding: { readonly quorum: { readonly refuting: number; rea
 /** A finding's confidence as drawn: the number, `?` when the return carried none. */
 const confidenceText = (finding: FindingCore): string => `${finding.confidence === null ? '?' : String(finding.confidence)}%`
 
-/** A folded state's colour, on a card and on a verdict-only round; null: drawn dim. */
-const DISPOSITION_COLOR: Readonly<Record<FindingState, ThemeKey | null>> = { fixing: 'warning', fixed: 'success', rejected: 'error', deferred: null }
+/** A folded state as a card and a verdict-only round draw it: the state, or `fixing?` for a stale `fixing` (HUD ADR 0008, amended). */
+export type DrawnState = FindingState | 'fixing?'
 
-/** A folded state as drawn: its word, in its colour (`DISPOSITION_COLOR`), dim when it has none. */
-function stateTextOf(ui: Ui, state: FindingState): El {
+/** A folded entry's drawn state: `fixing?` when it is a stale `fixing` (`isStaleFixing`), else its state. */
+export const drawnStateOf = (entry: FoldedDisposition, lastVerdict: Verdict | null): DrawnState => (isStaleFixing(entry, lastVerdict) ? 'fixing?' : entry.state)
+
+/** A drawn state's colour, on a card and on a verdict-only round; null: drawn dim. A stale `fixing?` never takes the live `warning`. */
+const DISPOSITION_COLOR: Readonly<Record<DrawnState, ThemeKey | null>> = { fixing: 'warning', 'fixing?': null, fixed: 'success', rejected: 'error', deferred: null }
+
+/** A drawn state: its word, in its colour (`DISPOSITION_COLOR`), dim when it has none. */
+function stateTextOf(ui: Ui, state: DrawnState): El {
   const { Text } = ui
   const color = DISPOSITION_COLOR[state]
   return color === null ? <Text dimColor>{state}</Text> : <Text color={color}>{state}</Text>
@@ -933,10 +944,10 @@ export const MARK_VIEW: Readonly<Record<ReviewMark, MarkView>> = {
 /**
  * One survivor. Header, one line, three cells: the severity in a fixed cell, the meta (confidence,
  * verification and quorum, lenses) truncated to the room left, then the state: the user's mark,
- * else the folded state from `position` (`fixing`, `fixed`, `rejected` or `deferred`), else
- * Accept / Kill. Then `file:line` beside the wrapped summary.
+ * else the folded state from `position` as drawn (`fixing`, `fixing?` when stale, `fixed`,
+ * `rejected` or `deferred`), else Accept / Kill. Then `file:line` beside the wrapped summary.
  */
-function findingCardOf(ui: Ui, survivor: BoardSurvivor, id: RoundId, index: number, folded: FindingState | null, actions: Actions, width: number): El {
+function findingCardOf(ui: Ui, survivor: BoardSurvivor, id: RoundId, index: number, folded: DrawnState | null, actions: Actions, width: number): El {
   const { Box, Text, Button } = ui
   const { finding, mark } = survivor
   const meta = `${confidenceText(finding)} · ${finding.verification} ${quorumText(finding)} · ${finding.lenses.join('+') || '?'}`
@@ -1049,6 +1060,7 @@ function boardBodyOf(ui: Ui, position: Position, board: ReviewBoard, actions: Ac
   // the counts packed into lines at the ` · ` separators, so no line starts with one
   const countLines = packSegments(reviewCountSegments(board, openFindings(position, board)), width)
   const states = boardStates(position, board)
+  const drawnOf = (state: FoldedDisposition | null): DrawnState | null => (state === null ? null : drawnStateOf(state, position.lastVerdict))
   return (
     <Box flexDirection="column" rowGap={1}>
       <Box flexDirection="column">
@@ -1064,7 +1076,7 @@ function boardBodyOf(ui: Ui, position: Position, board: ReviewBoard, actions: Ac
           <Text dimColor>{`  ${severityLabel(group.severity)} (${group.indexes.length})`}</Text>
           {group.indexes.map(index => {
             const survivor = board.survivors[index]
-            return survivor === undefined ? null : findingCardOf(ui, survivor, id, index, states[index]?.state ?? null, actions, width)
+            return survivor === undefined ? null : findingCardOf(ui, survivor, id, index, drawnOf(states[index] ?? null), actions, width)
           })}
         </Box>
       ))}
@@ -1131,7 +1143,8 @@ function keyLineOf(key: string, label: string | null, room: number): { readonly 
  * A review round with no board (a review run as an agent fan, #5; HUD ADR 0008): the header
  * (`verdictRoundTitle`), the verdict's note when it has one, then one line per folded key in
  * key order: the key cut to the room its state leaves, its label dim beside it when it has
- * one and room is left (`keyLineOf`), then the state, never cut. Under a key, one dim line,
+ * one and room is left (`keyLineOf`), then the drawn state (`drawnStateOf`: a stale `fixing`
+ * is a dim `fixing?`), never cut. Under a key, one dim line,
  * indented, cut to the width: the first sentence of the worklog note that tells what the
  * finding was (`noteFor`, HUD ADR 0009); a key with no note, or a note with no sentence, has
  * no line. Null with neither a verdict nor a folded disposition.
@@ -1149,7 +1162,8 @@ function verdictRoundOf(ui: Ui, position: Position, width: number): El | null {
       {keys.map(key => {
         const entry = Object.hasOwn(position.dispositions, key) ? position.dispositions[key] : undefined
         if (entry === undefined) return null
-        const line = keyLineOf(key, entry.label, width - entry.state.length - cells(PATH_GAP))
+        const drawn = drawnStateOf(entry, verdict)
+        const line = keyLineOf(key, entry.label, width - drawn.length - cells(PATH_GAP))
         const sentence = noteFor(key, entry.label, position.reviewNotes)?.sentence ?? ''
         return (
           <Box key={`folded-${key}`} flexDirection="column">
@@ -1159,7 +1173,7 @@ function verdictRoundOf(ui: Ui, position: Position, width: number): El | null {
                 {line.label === null ? null : <Text dimColor>{line.label}</Text>}
               </Box>
               <Box flexShrink={0} paddingLeft={2}>
-                {stateTextOf(ui, entry.state)}
+                {stateTextOf(ui, drawn)}
               </Box>
             </Box>
             {sentence === '' ? null : (

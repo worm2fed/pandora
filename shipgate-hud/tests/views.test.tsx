@@ -15,6 +15,8 @@ import {
   bandLines,
   bandOf,
   boardFor,
+  drawnStateOf,
+  isStaleFixing,
   openFindings,
   packSegments,
   paneOf,
@@ -29,7 +31,7 @@ import {
   summaryOf,
   summarySegments,
 } from '../hooks/views'
-import type { Decision, HudView, IsoTime, OpenRound, Phase, PhaseMark, Position, ReviewBoard, ReviewState, StreamName, Task } from '../types'
+import type { Decision, FoldedDisposition, HudView, IsoTime, OpenRound, Phase, PhaseMark, Position, ReviewBoard, ReviewState, StreamName, Task } from '../types'
 import { type Gen, bool, forAll, int, listOf, orNull, pick, stringOf } from './arbitrary'
 import { ADR, WORKLOG, WORKLOG_WITH_DIAGRAMS } from './fixtures'
 import { POSITION_GOLDEN } from './fixtures.journal'
@@ -912,7 +914,12 @@ describe('review tab', () => {
     expect((await ui.findAll({ type: 'Text', text: /^ · / })).length).toBe(labels.length)
     expect((await ui.find({ type: 'Text', text: /^fixed$/ }))?.props.color).toBe('success')
     expect((await ui.find({ type: 'Text', text: /^deferred$/ }))?.props.dimColor).toBe(true)
-    expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+    // a golden fixing draws as its staleness says (HUD ADR 0008, amended): live in the warning colour, stale as a dim `fixing?`
+    for (const entry of Object.values(VERDICT_ONLY.dispositions).filter(folded => folded.state === 'fixing')) {
+      const drawn = await ui.find({ type: 'Text', text: new RegExp(`^${drawnStateOf(entry, VERDICT_ONLY.lastVerdict).replace('?', '\\?')}$`) })
+      if (isStaleFixing(entry, VERDICT_ONLY.lastVerdict)) expect(drawn?.props.dimColor).toBe(true)
+      else expect(drawn?.props.color).toBe('warning')
+    }
     // no card, so no buttons; then the SC checklist
     expect(await ui.find({ key: 'accept-0' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'SUCCESS CRITERIA' })).toBeDefined()
@@ -1367,10 +1374,11 @@ describe('review: the band segment and the counts', () => {
     expect(openFindings(fixing, markSurvivor(boardOf(), 0, 'accepted'))).toBe(3)
   })
 
-  test('reviewSegment with no board: `review N open` only while N folded findings are fixing after the last verdict; else none', async () => {
+  test('reviewSegment with no board: `review N open` only while N folded findings are a live fixing; a stale one is not open', async () => {
     const golden = positionOf(POSITION_GOLDEN.dispositions)
-    // the golden fixing (seq 3) predates the verdict (seq 7), which did not close it: stale, not open
+    // the golden fixing (seq 3) predates the ready verdict (seq 7), which did not close it: stale, not open
     expect(golden.dispositions['src/other.py:?']?.state).toBe('fixing')
+    expect(golden.lastVerdict?.verdict).toBe('ready')
     expect(reviewSegment(golden, EMPTY_REVIEW)).toBeNull()
     // a fixing recorded after the verdict is open
     const later = withDispositions(golden, { ...POSITION_GOLDEN.dispositions.dispositions, 'src/new.py:4': { state: 'fixing', seq: 9, at: '2026-10-01T11:30:00+00:00' } })
@@ -1616,5 +1624,117 @@ describe('the trace (HUD ADR 0007)', () => {
     expect(await ui.find({ type: 'Text', text: /^route-and-map: no risk signals/ })).toBeUndefined()
     await ui.unmount()
     expect(signalsGapText([{ seq: must(eventSeq(3)), at }, { seq: must(eventSeq(8)), at }])).toBe('route-and-map: no risk signals recorded · signals-missing deviations seq 3, 8')
+  })
+})
+
+describe('a stale fixing (HUD ADR 0008, amended): before a ready verdict, drawn dim as fixing?, never open', () => {
+  const READY = withVerdict(REVIEW_POSITION, { seq: 60, at: VERDICT_AFTER, verdict: 'ready' })
+  const NOT_READY = withVerdict(REVIEW_POSITION, { seq: 60, at: VERDICT_AFTER, verdict: 'not-ready', round: 2 })
+  /** A folded `fixing` recorded by the event at `seq`, after the boards' capture. */
+  const fixingAt = (seq: number): { readonly state: 'fixing'; readonly seq: number; readonly at: string } => ({ state: 'fixing', seq, at: VERDICT_AFTER })
+  const STALE_KEY = 'src/api/handler.ts:42'
+  const LIVE_KEY = 'src/app.ts:126'
+  /** The ready verdict at seq 60: a fixing at seq 52 is stale, one at seq 61 is live. */
+  const STALE_AND_LIVE = withDispositions(READY, { [STALE_KEY]: fixingAt(52), [LIVE_KEY]: fixingAt(61) })
+  /** The not-ready verdict at seq 60 over a fixing at seq 52: a fix round follows, so it is live. */
+  const BEFORE_NOT_READY = withDispositions(NOT_READY, { [STALE_KEY]: fixingAt(52) })
+
+  test('isStaleFixing: a fixing before a ready verdict only', async () => {
+    const entry = (state: FoldedDisposition['state'], seq: number): FoldedDisposition => ({ state, seq: must(eventSeq(seq)), at: must(isoTime(VERDICT_AFTER)), label: null })
+    const ready = READY.lastVerdict
+    const notReady = NOT_READY.lastVerdict
+    expect(isStaleFixing(entry('fixing', 52), ready)).toBe(true)
+    expect(isStaleFixing(entry('fixing', 61), ready)).toBe(false)
+    expect(isStaleFixing(entry('fixing', 60), ready)).toBe(false)
+    expect(isStaleFixing(entry('fixing', 52), notReady)).toBe(false)
+    expect(isStaleFixing(entry('fixing', 52), null)).toBe(false)
+    for (const state of ['fixed', 'rejected', 'deferred'] as const) expect(isStaleFixing(entry(state, 52), ready)).toBe(false)
+    expect(drawnStateOf(entry('fixing', 52), ready)).toBe('fixing?')
+    expect(drawnStateOf(entry('fixing', 61), ready)).toBe('fixing')
+    expect(drawnStateOf(entry('fixed', 52), ready)).toBe('fixed')
+  })
+
+  test('the band with no board counts the live fixing only; a fixing before a not-ready verdict counts', async () => {
+    expect(reviewSegment(STALE_AND_LIVE, EMPTY_REVIEW)).toBe('review 1 open')
+    expect(reviewSegment(withDispositions(READY, { [STALE_KEY]: fixingAt(52) }), EMPTY_REVIEW)).toBeNull()
+    expect(reviewSegment(BEFORE_NOT_READY, EMPTY_REVIEW)).toBe('review 1 open')
+    expect(summarySegments(BEFORE_NOT_READY, EMPTY_REVIEW).at(-1)).toBe('review 1 open')
+  })
+
+  test('a board\'s open count leaves a stale fixing out; a live one, and one before a not-ready verdict, stay open', async () => {
+    // four survivors: the stale fixing closes one, the live one stays open
+    expect(openFindings(STALE_AND_LIVE, boardOf())).toBe(3)
+    expect(reviewSegment(STALE_AND_LIVE, stateOf([boardOf()]))).toBe('review 3 open')
+    expect(openFindings(withDispositions(READY, { [STALE_KEY]: fixingAt(61) }), boardOf())).toBe(4)
+    expect(openFindings(BEFORE_NOT_READY, boardOf())).toBe(4)
+  })
+
+  reviewTest('a card draws a stale fixing dim as fixing?, a live one in the warning colour; the open count leaves the stale one out', STALE_AND_LIVE, stateOf([boardOf()]), async $ => {
+    const ui = await mountReview($)
+    const stale = await ui.find({ type: 'Text', text: /^fixing\?$/ })
+    expect(stale?.props.dimColor).toBe(true)
+    expect(stale?.props.color).not.toBe('warning')
+    expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+    // neither card has buttons: each shows its folded state
+    expect(await ui.find({ key: 'accept-0' })).toBeUndefined()
+    expect(await ui.find({ key: 'accept-1' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'unverified 1 · open 3' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  reviewTest('a card over a fixing before a not-ready verdict draws it live', BEFORE_NOT_READY, stateOf([boardOf()]), async $ => {
+    const ui = await mountReview($)
+    expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+    expect(await ui.find({ type: 'Text', text: /^fixing\?$/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'unverified 1 · open 4' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const columns of [40, 120]) {
+    reviewTest(
+      `a stale card's state at ${columns} columns is drawn whole; the meta gives way to the width of fixing?`,
+      withDispositions(READY, { [STALE_KEY]: fixingAt(52) }),
+      stateOf([boardOf()]),
+      async $ => {
+        const ui = await mountReview($, 'terminal', columns)
+        const cellsOfState = (await ui.findAll({ type: 'Box', text: /^fixing\?$/ })).filter(box => box.props.flexShrink === 0)
+        expect(cellsOfState.length).toBe(1)
+        // the other cards keep their buttons, which leave less room: every meta fits beside fixing?
+        const room = columns - 10 - 'fixing?'.length - 2
+        const metas = await ui.findAll({ type: 'Text', text: /^\d+% · / })
+        expect(metas.length).toBe(4)
+        expect(metas.every(meta => [...meta.text].length <= room)).toBe(true)
+        // at 40 the stale card's meta is cut to exactly that room: the cell is as wide as the drawn text
+        if (columns === 40) expect(metas.some(meta => meta.text.endsWith('…') && [...meta.text].length === room)).toBe(true)
+        await ui.unmount()
+      },
+    )
+  }
+
+  reviewTest('the verdict-only round draws a stale fixing dim as fixing?, a live one in the warning colour', STALE_AND_LIVE, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    expect(await ui.find({ type: 'Text', text: `round 1 · verdict ready · ${at(VERDICT_AFTER)}` })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: STALE_KEY })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: LIVE_KEY })).toBeDefined()
+    const stale = await ui.find({ type: 'Text', text: /^fixing\?$/ })
+    expect(stale?.props.dimColor).toBe(true)
+    expect(stale?.props.color).not.toBe('warning')
+    expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+    await ui.unmount()
+  })
+
+  reviewTest('the verdict-only round draws a fixing before a not-ready verdict live', BEFORE_NOT_READY, EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($)
+    expect((await ui.find({ type: 'Text', text: /^fixing$/ }))?.props.color).toBe('warning')
+    expect(await ui.find({ type: 'Text', text: /^fixing\?$/ })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  reviewTest('the verdict-only round at 40 columns: a stale key is cut to the room fixing? leaves; the state is never cut', withDispositions(READY, { [`${'deep/'.repeat(30)}file.ts:7`]: fixingAt(52) }), EMPTY_REVIEW, async $ => {
+    const ui = await mountReview($, 'terminal', 40)
+    const deep = await ui.find({ type: 'Text', text: /^….*file\.ts:7$/ })
+    expect([...(deep?.text ?? '')].length).toBeLessThanOrEqual(40 - 'fixing?'.length - 2)
+    expect(await ui.find({ type: 'Text', text: /^fixing\?$/ })).toBeDefined()
+    await ui.unmount()
   })
 })

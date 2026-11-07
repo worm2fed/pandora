@@ -48,18 +48,24 @@ import {
 import { type MarkdownFile, type PositionInputs, matchesHome, parseAdr, toPosition } from './position'
 import {
   FAIL_CLOSED,
+  type Approval,
   type BoundStream,
   type CommandDir,
   type CommandScan,
   type GateInputs,
+  type HoldAnswer,
   type Holds,
   type PublishCommand,
   type PublishCommands,
   type PublishTarget,
   type TargetBinding,
+  approvalArgs,
+  approvalsOf,
   denyReason,
   gateVerdict,
-  holdReason,
+  holdAnswerOf,
+  holdOptions,
+  holdQuestion,
   publishCommandOf,
   scanCommand,
 } from './publish'
@@ -767,10 +773,6 @@ const sidecarVersion = atom({ plugin: 'shipgate-hud', key: 'sidecarVersion' } as
 
 const JOURNAL_APPEND = /journal\.py\b[\s\S]*\bappend\b/
 
-/** The publish hold's two choices; any other answer refuses. */
-const REFUSE = 'Refuse'
-const ONCE = 'Let it through once'
-
 /** A Bash call's command line as `tool.check` carries it; null when the input has none. */
 const commandOf = (input: unknown): string | null => stringOf(recordOf(input)?.['command'])
 
@@ -1393,13 +1395,53 @@ async function gateInputsOf($: Engine, scan: CommandScan): Promise<GateInputs> {
 }
 
 /**
- * Held means asked: the dialog shows `holdReason`, which names every held command of the line,
- * so one "Let it through once" lets the whole line through on informed consent; true only for
- * that answer. A dismissed dialog, a -p run or an engine with no dialog refuses.
+ * Held means asked: the dialog shows `holdQuestion`, which names every held command of the
+ * line, so one answer covers the whole line on informed consent. It offers `Refuse` and
+ * `Let it through once`, and `Approve publishing` when a hold names a stream (`holdOptions`).
+ * A dismissed dialog, a -p run or an engine with no dialog refuses.
  */
-async function askToPass($: Engine, holds: Holds): Promise<boolean> {
-  const answer = await settle(() => $.ui.ask(`${holdReason(holds)} Let it through?`, { options: [REFUSE, ONCE], header: 'publish' }))
-  return answer.ok && answer.value === ONCE
+async function askToPass($: Engine, holds: Holds): Promise<HoldAnswer> {
+  const answer = await settle(() => $.ui.ask(holdQuestion(holds), { options: holdOptions(holds), header: 'publish' }))
+  return answer.ok ? holdAnswerOf(holds, answer.value) : 'Refuse'
+}
+
+/**
+ * Records one approval (HUD ADR 0010): `journal.py append` of a marked user publish decision
+ * on its stream, in the project root. A `$.process.run`, never a tool call, so no PreToolUse
+ * hook sees it. True when journal.py exited 0; any failure is false, never thrown.
+ */
+async function recordApproval($: Engine, path: string, approval: Approval): Promise<boolean> {
+  const ran = await settle(() => $.process.run(['python3', path, ...approvalArgs(approval)], { timeoutMs: 10_000, ...(projectRoot === null ? {} : { cwd: projectRoot }) }))
+  return ran.ok && ran.value.exitCode === 0
+}
+
+/**
+ * "Approve publishing": one approval per held stream, in textual order, with the journal.py
+ * the gate read the line with. Then a refresh when one was recorded, so the pane and the band
+ * show the stream authorized. A failed record is not retried: the line passes all the same,
+ * and the next publish asks again.
+ */
+async function recordApprovals($: Engine, holds: Holds): Promise<void> {
+  const found = script
+  if (found.kind !== 'Found') return
+  const recorded: boolean[] = []
+  for (const approval of approvalsOf(holds)) recorded.push(await recordApproval($, found.path, approval))
+  if (recorded.some(Boolean)) await refresh($)
+}
+
+/** Lets a held line through on the person's answer: "Let it through once" records nothing; "Approve publishing" records first. */
+async function passesOn($: Engine, holds: Holds, answer: HoldAnswer): Promise<boolean> {
+  switch (answer) {
+    case 'Refuse':
+      return false
+    case 'Once':
+      return true
+    case 'Approve':
+      await recordApprovals($, holds)
+      return true
+    default:
+      return absurd(answer)
+  }
 }
 
 /** The scan of a Bash call's input: a line with no command publishes nothing. */
@@ -1480,12 +1522,14 @@ export const register: Register = (on, options) => {
 
   // The publish gate: `git push`, `gh pr create` and `glab mr create` wait for the evidence
   // journal.py demands before mr-opened, on the stream of the branch the command publishes
-  // (HUD ADR 0005). Held means asked; any answer but "Let it through once" refuses. Nothing
-  // is written and nothing remembered. A failure refuses a publish command (`.catch`, pure only).
+  // (HUD ADR 0005). Held means asked. "Let it through once" passes and records nothing;
+  // "Approve publishing" records the user's approval on each held stream, then passes (HUD
+  // ADR 0010); any other answer refuses. A failure refuses a publish command (`.catch`, pure only).
   on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
     const verdict = gateVerdict(await gateInputsOf($, scanOf(e.input)))
     if (verdict.kind === 'Pass') return next(e)
-    return (await askToPass($, verdict.holds)) ? next(e) : { decision: 'deny' as const, reason: denyReason(verdict.holds) }
+    const passes = await passesOn($, verdict.holds, await askToPass($, verdict.holds))
+    return passes ? next(e) : { decision: 'deny' as const, reason: denyReason(verdict.holds) }
   }).catch(($, e, next) => (isPublishInput(e.input) ? { decision: 'deny' as const, reason: FAIL_CLOSED } : next(e)))
 
   // The review workflow launched: note its call id and run id, so its notification is known by id.

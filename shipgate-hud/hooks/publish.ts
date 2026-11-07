@@ -1100,13 +1100,22 @@ export function publishCommandOf(command: string): PublishHead | null {
   return scan.kind === 'publishes' ? scan.commands[0].head : null
 }
 
+/**
+ * What `mr-opened` demands (shipgate ADR 0015): a ready verdict, or the user's approval. The
+ * approval carries a `source` marker that only the user's own paths write.
+ */
 const MISSING =
-  'a `review-verdict` with `verdict: ready`, or a `gate-decision` with `gate: publish`, `raised_by: user` and ' +
-  '`decision: publish`, recorded after the last `task-done`'
+  'a `review-verdict` with `verdict: ready`, or the user\'s approval: a `gate-decision` with `gate: publish`, `raised_by: user`, ' +
+  '`decision: publish` and the marker `source: dialog` or `source: shell`, recorded after the last `task-done`'
 
-/** Where the user's word on a held publish is taken: the gate's own dialog, never a record the model writes. */
+/**
+ * Where the user's word on a held publish is taken: "Approve publishing" in the gate's own
+ * dialog, or the user's own `!` command; never a record the model writes (HUD ADR 0010).
+ */
 const USER_DECIDES =
-  'or stop and ask the user: their decision is taken at the dialog this gate shows ("Let it through once"), never recorded on their behalf. Then run the command again.'
+  'or stop and ask the user: only they approve a publish, with "Approve publishing" in the dialog this gate shows ' +
+  '(it records the `gate-decision` with `source: dialog`) or with their own `!` command (`source: shell`); ' +
+  'that approval is never recorded on their behalf. Then run the command again.'
 
 /** What a hold is about: the stream that lacks the evidence, or the failure that kept the journal from being read (D14: never a stale stream). */
 function subjectOf(hold: Hold): string {
@@ -1143,8 +1152,8 @@ function heldText(verb: 'holds' | 'refused', holds: Holds): string {
 
 /**
  * What the dialog shows the person: the plugin, each held command with its stream (or why the
- * journal could not be read), what is missing. One "Let it through once" covers the whole
- * line, so every held command is named.
+ * journal could not be read), what is missing. One answer covers the whole line, so every
+ * held command is named.
  */
 export function holdReason(holds: Holds): string {
   return heldText('holds', holds)
@@ -1156,8 +1165,8 @@ const REVIEW_STEP = 'finish the review and record its verdict with `journal.py a
 /** What the model may do about a journal it could not read: never a verdict for a stream nobody read (D14). */
 const READ_STEP = 'find out why the journal could not be read and fix that'
 
-/** The streams held for want of a review, each once, in textual order. */
-const unreviewedStreams = (holds: Holds): readonly StreamName[] => [...new Set(holds.flatMap(hold => (hold.kind === 'Unreviewed' ? [hold.stream] : [])))]
+/** The streams held for want of a review, each once, in textual order: the streams "Approve publishing" records on. */
+export const unreviewedStreams = (holds: Holds): readonly StreamName[] => [...new Set(holds.flatMap(hold => (hold.kind === 'Unreviewed' ? [hold.stream] : [])))]
 
 /** What the model may do about one held command. */
 function stepOf(hold: Hold): string {
@@ -1187,9 +1196,10 @@ function stepsOf(holds: Holds): string {
 
 /**
  * What the model reads on a deny: each held command with what its stream lacks (or why the
- * journal could not be read), and the one record it may write itself. The user's decision is
- * taken at the gate's dialog, never recorded on their behalf. An unreadable journal sends the
- * model to the read, never to a verdict for a stream nobody read (D14).
+ * journal could not be read), and the one record it may write itself. The user's approval is
+ * recorded by the gate's dialog ("Approve publishing") or by their own `!` command, never on
+ * their behalf. An unreadable journal sends the model to the read, never to a verdict for a
+ * stream nobody read (D14).
  */
 export function denyReason(holds: Holds): string {
   return `${heldText('refused', holds)} ${stepsOf(holds)}, ${USER_DECIDES}`
@@ -1199,3 +1209,84 @@ export function denyReason(holds: Holds): string {
 export const FAIL_CLOSED =
   'shipgate-hud refused this publish command: its publish gate failed before it could check the journal. ' +
   'Run the command again; if it keeps failing, ask the user.'
+
+// ---------------------------------------------------------------------------------------
+// The dialog's answers, and the approval it records (HUD ADR 0010)
+// ---------------------------------------------------------------------------------------
+
+/** The dialog's labels: refuse the line, let it through and record nothing, or approve publishing and record it. */
+export const REFUSE = 'Refuse'
+export const ONCE = 'Let it through once'
+export const APPROVE = 'Approve publishing'
+
+/**
+ * The person's answer to a held line. `Refuse`: also a dismissed dialog, a run with no one to
+ * ask, free text, or a label the dialog did not offer. `Once`: pass, record nothing. `Approve`:
+ * record the approval on each held stream, then pass.
+ */
+export type HoldAnswer = 'Refuse' | 'Once' | 'Approve'
+
+/** Does the dialog offer "Approve publishing"? Only when a hold names a stream: an unreadable journal has none to record on. */
+export const canApprove = (holds: Holds): boolean => unreviewedStreams(holds).length > 0
+
+/** The labels the dialog offers for `holds`, in order: `Approve publishing` last, and only when `canApprove`. */
+export const holdOptions = (holds: Holds): readonly string[] => (canApprove(holds) ? [REFUSE, ONCE, APPROVE] : [REFUSE, ONCE])
+
+/** The answer a chosen label means, among the labels offered for `holds` (`holdOptions`): any other text refuses. */
+export function holdAnswerOf(holds: Holds, label: string): HoldAnswer {
+  if (label === ONCE) return 'Once'
+  return label === APPROVE && canApprove(holds) ? 'Approve' : 'Refuse'
+}
+
+/**
+ * The dialog's question: the hold (`holdReason`), what each passing answer records, then the
+ * ask. "Approve publishing" is named only when it is offered.
+ */
+export function holdQuestion(holds: Holds): string {
+  const streams = unreviewedStreams(holds).map(name => `stream ${name}`)
+  const [first, ...rest] = streams
+  const approve = first === undefined ? '' : `"${APPROVE}" records your approval on ${andList([first, ...rest])}; `
+  return `${holdReason(holds)} ${approve}"${ONCE}" records nothing. Let it through?`
+}
+
+/** One approval the dialog records: the held stream, and the held commands on it, each once, in textual order. */
+export interface Approval {
+  readonly stream: StreamName
+  readonly heads: readonly [PublishHead, ...PublishHead[]]
+}
+
+/** One approval per held stream (`unreviewedStreams`), in textual order. Empty when no hold names a stream. */
+export function approvalsOf(holds: Holds): readonly Approval[] {
+  return unreviewedStreams(holds).flatMap(stream => {
+    const [head, ...rest] = [...new Set(holds.flatMap(hold => (hold.kind === 'Unreviewed' && hold.stream === stream ? [hold.head] : [])))]
+    return head === undefined ? [] : [{ stream, heads: [head, ...rest] }]
+  })
+}
+
+/**
+ * The payload of one approval: a user publish decision with the dialog's marker (shipgate ADR
+ * 0015), and a short question that names the held commands. Well under journal.py's 1 KB cap.
+ */
+export function approvalData(approval: Approval): string {
+  return JSON.stringify({
+    gate: 'publish',
+    decision: 'publish',
+    raised_by: 'user',
+    mode: 'ask',
+    source: 'dialog',
+    question: `${andList(approval.heads)} held by the shipgate-hud publish gate`,
+  })
+}
+
+/** The journal.py arguments that record one approval: a `gate-decision` on its stream, by the user. */
+export const approvalArgs = (approval: Approval): readonly string[] => [
+  'append',
+  '--stream',
+  approval.stream,
+  '--type',
+  'gate-decision',
+  '--actor',
+  'user',
+  '--data',
+  approvalData(approval),
+]

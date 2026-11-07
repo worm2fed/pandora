@@ -1084,16 +1084,22 @@ describe('register', () => {
     /** The question an AskUserQuestion call carries. */
     const questionOf = (e: unknown): string => String(listOf(recordOf(e)?.['questions'])?.map(recordOf)[0]?.['question'] ?? '')
 
-    /** The engine's verdict beneath the plugin, and the dialog answered with `answer`; the questions asked are recorded. */
-    const gateWorld = (on: On, answer: Answer = { label: REFUSE }): { asked: string[] } => {
+    /** The option labels an AskUserQuestion call offers, in order. */
+    const optionsOf = (e: unknown): string[] =>
+      (listOf(listOf(recordOf(e)?.['questions'])?.map(recordOf)[0]?.['options']) ?? []).map(option => String(recordOf(option)?.['label'] ?? option))
+
+    /** The engine's verdict beneath the plugin, and the dialog answered with `answer`; the questions asked and the options each offered are recorded. */
+    const gateWorld = (on: On, answer: Answer = { label: REFUSE }): { asked: string[]; offered: string[][] } => {
       const asked: string[] = []
+      const offered: string[][] = []
       on('tool.check', { tool: 'Bash' }, async () => BENEATH)
       on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
         const question = questionOf(e)
         asked.push(question)
+        offered.push(optionsOf(e))
         return answer === 'dismiss' ? { deny: 'dismissed' } : { result: { answers: { [question]: answer.label } } }
       })
-      return { asked }
+      return { asked, offered }
     }
 
     const check = ($: Engine, command: string) => $.tool.check({ tool: 'Bash', input: { command } })
@@ -1519,6 +1525,118 @@ describe('register', () => {
       expect(asked.length).toBe(1)
       expect(asked[0]).toContain('stream feat/a-stream')
       expect(asked[0]).toContain('stream feat/b-stream')
+    })
+
+    // HUD ADR 0010: "Approve publishing" records the user's approval on each held stream, then lets the line through.
+    const APPROVE = 'Approve publishing'
+
+    /** journal.py `append` runs among the recorded runs, in order. */
+    const appendRuns = (runs: readonly string[][]): string[][] => runs.filter(argv => argv[0] === 'python3' && argv[2] === 'append')
+
+    /** The payload an approval records, naming the held commands. */
+    const approvalOf = (heads: string): Record<string, string> => ({
+      gate: 'publish',
+      decision: 'publish',
+      raised_by: 'user',
+      mode: 'ask',
+      source: 'dialog',
+      question: `${heads} held by the shipgate-hud publish gate`,
+    })
+
+    /** The `--data` payload of an append run, parsed. */
+    const dataOf = (argv: readonly string[]): unknown => JSON.parse(argv[argv.indexOf('--data') + 1] ?? 'null')
+
+    test('ADR 0010: an unreviewed stream is offered three answers; Approve publishing records one marked decision by the user, then passes', async ($, on) => {
+      engineWorld(on)
+      const { runs, cwds } = journaledWorld(on)
+      const { asked, offered } = gateWorld(on, { label: APPROVE })
+      await $.session.start(START)
+      const verdict = await check($, 'git push')
+      expect(offered).toEqual([[REFUSE, ONCE, APPROVE]])
+      expect(asked[0]).toContain('"Approve publishing" records your approval on stream feat/example-stream')
+      expect(verdict).toMatchObject(BENEATH)
+      const appends = appendRuns(runs)
+      expect(appends.length).toBe(1)
+      const [append] = appends
+      if (append === undefined) throw new Error('no append')
+      expect(append[1]?.endsWith('/shipgate/scripts/journal.py')).toBe(true)
+      expect(append.slice(2, -1)).toEqual(['append', '--stream', 'feat/example-stream', '--type', 'gate-decision', '--actor', 'user', '--data'])
+      expect(dataOf(append)).toEqual(approvalOf('git push'))
+      // in the project root, as every journal run
+      const at = runs.indexOf(append)
+      expect(cwds[at]).toBe(START.cwd)
+      // then a refresh, so the pane shows the stream authorized
+      expect(runs.slice(at + 1).some(argv => argv[0] === 'python3' && argv.includes('status'))).toBe(true)
+    })
+
+    test('ADR 0010: a line on two unreviewed streams: one approval per stream, in line order', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on, TWO_HELD)
+      gateWorld(on, { label: APPROVE })
+      await $.session.start(START)
+      expect(await check($, TWO_PUSHES)).toMatchObject(BENEATH)
+      const appends = appendRuns(runs)
+      expect(appends.map(argv => argv[argv.indexOf('--stream') + 1])).toEqual(['feat/a-stream', 'feat/b-stream'])
+      expect(appends.map(dataOf)).toEqual([approvalOf('git push'), approvalOf('git push')])
+    })
+
+    test('ADR 0010: a stream two commands of the line hold is approved once, naming both commands', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on)
+      gateWorld(on, { label: APPROVE })
+      await $.session.start(START)
+      expect(await check($, 'git push && gh pr create --fill')).toMatchObject(BENEATH)
+      const appends = appendRuns(runs)
+      expect(appends.length).toBe(1)
+      expect(appends[0]?.[appends[0].indexOf('--stream') + 1]).toBe('feat/example-stream')
+      expect(dataOf(appends[0] ?? [])).toEqual(approvalOf('git push and gh pr create'))
+    })
+
+    test('ADR 0010: only an unreadable journal: two answers, no approval offered; that label typed refuses and records nothing', async ($, on) => {
+      engineWorld(on)
+      const { faulted } = journalFaults(on, () => exits(exited(1, 'journal database not found')))
+      const { runs } = journaledWorld(on)
+      const { offered } = gateWorld(on, { label: APPROVE })
+      await $.session.start(START)
+      const verdict = await check($, 'git push')
+      expect(offered).toEqual([[REFUSE, ONCE]])
+      expect(verdict.decision).toBe('deny')
+      expect(appendRuns([...faulted, ...runs])).toEqual([])
+    })
+
+    for (const [name, fault] of [
+      ['exits non-zero', exits(exited(1, 'error: the journal is locked'))],
+      ['is rejected', rejects('python3 could not start')],
+    ] as const) {
+      test(`ADR 0010: an approval whose append ${name} still lets the line through`, async ($, on) => {
+        engineWorld(on)
+        const { faulted } = journalFaults(on, argv => (argv[2] === 'append' ? fault : null))
+        journaledWorld(on)
+        const { asked } = gateWorld(on, { label: APPROVE })
+        await $.session.start(START)
+        expect(await check($, 'git push')).toMatchObject(BENEATH)
+        expect(appendRuns(faulted).length).toBe(1)
+        expect(asked.length).toBe(1)
+      })
+    }
+
+    test('ADR 0010: Let it through once passes and records nothing', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on, TWO_HELD)
+      const { offered } = gateWorld(on, { label: ONCE })
+      await $.session.start(START)
+      expect(await check($, TWO_PUSHES)).toMatchObject(BENEATH)
+      expect(offered).toEqual([[REFUSE, ONCE, APPROVE]])
+      expect(appendRuns(runs)).toEqual([])
+    })
+
+    test('ADR 0010: Refuse and a dismissed dialog record nothing', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on)
+      gateWorld(on, 'dismiss')
+      await $.session.start(START)
+      expect((await check($, 'git push')).decision).toBe('deny')
+      expect(appendRuns(runs)).toEqual([])
     })
 
     test('R1-F1: a line whose every publish is authorized passes without a dialog', async ($, on) => {

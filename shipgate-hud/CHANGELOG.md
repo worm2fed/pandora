@@ -2,6 +2,70 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.10.0 — the publish dialog records your approval, and a stale `fixing` is no longer drawn as live.
+
+**Approve publishing (#1, HUD ADR 0010).** shipgate 0.23.0 counts a user publish decision
+only with the marker `source: dialog` or `source: shell`, and its PreToolUse hook refuses the
+marker from the model (shipgate ADR 0015). Before, the dialog recorded nothing, so after
+"Let it through once" the flow's `mr-opened` was still refused.
+- The dialog has three answers: **Refuse**, **Let it through once** and **Approve
+  publishing**. The third appears only when at least one hold is `Unreviewed`. An
+  unreadable journal has no stream to record on, so it keeps the first two. A dismissed
+  dialog, free text, or the approve label when it was not offered refuses.
+- The question says what each passing answer records: "Approve publishing" records your
+  approval on the named streams, and "Let it through once" records nothing.
+- **Approve publishing** runs, for each distinct `Unreviewed` stream in textual order,
+  `journal.py append --stream <s> --type gate-decision --actor user` with `gate: publish`,
+  `decision: publish`, `raised_by: user`, `mode: ask`, `source: dialog` and a `question`
+  that names the held commands. It runs through `$.process.run` in the project root, so no
+  PreToolUse hook sees it. Then the line passes. A failed append still passes, as the user
+  approved. After an append that succeeds, the HUD refreshes once.
+- The approval lasts until the stream's next `task-done`, as every publish authorization
+  does. So a later push of the same stream passes, and `mr-opened` is accepted.
+- **Let it through once** records nothing, as before.
+- The texts the model reads say only the user approves: "Approve publishing" in this
+  dialog, or the user's own `!` command with `source: shell`. They never tell the model to
+  record the approval.
+- `REFUSE` and `ONCE` move from `register.tsx` to `publish.ts`, beside `APPROVE`.
+
+**The HUD now writes one event.** The approval above is the only thing it writes. The README
+says so, and it shows the `!` command for an approval from the prompt.
+
+**Older journals.** A user publish decision recorded before shipgate 0.23.0 has no marker.
+journal.py no longer counts it, so the gate holds that stream and asks again.
+
+**A stale `fixing` (#14, HUD ADR 0008 amended).** On a production project's journal, 5 of 10
+streams ended with findings at `fixing` after a `ready` verdict. The fix was never closed in
+the journal.
+- A folded `fixing` is stale when the newest verdict is `ready` and the entry's seq is below
+  it. A new pure predicate, `isStaleFixing`, decides it.
+- A card and the verdict-only round draw a stale entry dim as `fixing?`, never in the
+  warning colour. The state cell takes its width from the drawn text.
+- No count treats a stale entry as open: not the band's `review N open`, not a board's open
+  count.
+- **Changed behaviour.** A `fixing` recorded before a `not-ready` verdict now counts as
+  open, because a fix round follows that verdict. Before, the band counted only a `fixing`
+  after the last verdict of any kind.
+- shipgate 0.23.0 refuses a `ready` verdict over an open `fixing`, so only older journals
+  hold a stale one.
+
+**README.** "After a shipgate release": the first `/reload-plugins` can load the HUD before
+the new shipgate, and the dependency check then fails. A second reload loads it. The
+Publish gate section describes the three answers and the boundary: a net against a flow
+that forges approval through its tools, not a defence against deliberate circumvention.
+
+**The dependency and the read floor.** `plugin.json` declares shipgate `>=0.23.0`, the first
+version that checks the marker. The read floor stays 0.21.0: `MIN_SHIPGATE_VERSION` does not
+change. With an older journal.py, the dialog's record carries a key that journal.py does not
+check, and the old rule counts it.
+
+**Tests.** The dialog: one stream, two streams in order, one stream held twice, an
+unreadable journal with two answers, a failing or rejected append that still passes, and
+"Let it through once" and a dismissed dialog that record nothing. The views: the predicate,
+the band, a board's open count, a card and the verdict-only round with a stale and a live
+entry, the `not-ready` case, and the state-cell widths. The golden journal is regenerated
+from shipgate 0.23.0.
+
 v0.9.0 — a round without a board tells what each finding was, keys carry labels, one finding in two cases is one finding, and a newer sidecar shows a warning.
 
 **Finding text in a round without a board (#12, HUD ADR 0009).** Before, a round without a

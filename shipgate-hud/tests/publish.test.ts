@@ -1,8 +1,17 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
+  APPROVE,
+  ONCE,
+  REFUSE,
+  approvalArgs,
+  approvalData,
+  approvalsOf,
   denyReason,
   gateVerdict,
+  holdAnswerOf,
+  holdOptions,
+  holdQuestion,
   holdReason,
   publishCommandOf,
   scanCommand,
@@ -763,8 +772,8 @@ describe('holdReason and denyReason', () => {
   const UNREVIEWED: Hold = { kind: 'Unreviewed', head: 'git push', stream: STREAM }
   const FAILURE: RunFailure = { kind: 'Exited', exitCode: 1, stderr: 'Traceback …\nsqlite3.OperationalError: database is locked\n' }
   const UNREADABLE: Hold = { kind: 'Unreadable', head: 'gh pr create', failure: FAILURE }
-  /** What `mr-opened` demands, as both texts name it. */
-  const DEMANDS = ['`review-verdict` with `verdict: ready`', '`gate-decision` with `gate: publish`, `raised_by: user`']
+  /** What `mr-opened` demands, as both texts name it: the user's approval carries the marker only the user's paths write. */
+  const DEMANDS = ['`review-verdict` with `verdict: ready`', '`gate-decision` with `gate: publish`, `raised_by: user`', '`source: dialog` or `source: shell`']
 
   test('the hold names the plugin, the command, the stream and what mr-opened demands', async () => {
     const text = holdReason([UNREVIEWED])
@@ -809,9 +818,9 @@ describe('holdReason and denyReason', () => {
 
   // R2-N1: one "Let it through once" passes the whole line, so the dialog and the deny name every held command.
   const NEEDS =
-    'Publishing needs a `review-verdict` with `verdict: ready`, or a `gate-decision` with `gate: publish`, `raised_by: user` and `decision: publish`, recorded after the last `task-done`.'
+    'Publishing needs a `review-verdict` with `verdict: ready`, or the user\'s approval: a `gate-decision` with `gate: publish`, `raised_by: user`, `decision: publish` and the marker `source: dialog` or `source: shell`, recorded after the last `task-done`.'
   const ASK_USER =
-    'or stop and ask the user: their decision is taken at the dialog this gate shows ("Let it through once"), never recorded on their behalf. Then run the command again.'
+    'or stop and ask the user: only they approve a publish, with "Approve publishing" in the dialog this gate shows (it records the `gate-decision` with `source: dialog`) or with their own `!` command (`source: shell`); that approval is never recorded on their behalf. Then run the command again.'
 
   test('R2-N1: a line with one hold keeps the one-command wording', async () => {
     expect(holdReason([UNREVIEWED])).toBe(`shipgate-hud holds \`git push\` for stream feature/held-stream. ${NEEDS}`)
@@ -871,5 +880,59 @@ describe('holdReason and denyReason', () => {
     expect(deny).toContain(failureText({ kind: 'Cut' }))
     expect(deny).not.toContain('append --type review-verdict')
     expect(deny).toContain('Find out why the journal could not be read and fix that')
+  })
+})
+
+describe('the dialog\'s answers and the approval it records (HUD ADR 0010)', () => {
+  const A = must(streamName('feature/a-stream'))
+  const B = must(streamName('feature/b-stream'))
+  const PUSH_A: Hold = { kind: 'Unreviewed', head: 'git push', stream: A }
+  const PR_A: Hold = { kind: 'Unreviewed', head: 'gh pr create', stream: A }
+  const PUSH_B: Hold = { kind: 'Unreviewed', head: 'git push', stream: B }
+  const CUT: Hold = { kind: 'Unreadable', head: 'git push', failure: { kind: 'Cut' } }
+
+  test('the options: Approve publishing only when a hold names a stream', async () => {
+    expect(holdOptions([PUSH_A])).toEqual([REFUSE, ONCE, APPROVE])
+    expect(holdOptions([CUT, PUSH_A])).toEqual([REFUSE, ONCE, APPROVE])
+    expect(holdOptions([CUT])).toEqual([REFUSE, ONCE])
+  })
+
+  test('an answer means only an offered label: free text and an approval not offered refuse', async () => {
+    expect(holdAnswerOf([PUSH_A], ONCE)).toBe('Once')
+    expect(holdAnswerOf([PUSH_A], APPROVE)).toBe('Approve')
+    expect(holdAnswerOf([PUSH_A], REFUSE)).toBe('Refuse')
+    expect(holdAnswerOf([PUSH_A], 'approve publishing')).toBe('Refuse')
+    expect(holdAnswerOf([CUT], APPROVE)).toBe('Refuse')
+    expect(holdAnswerOf([CUT], ONCE)).toBe('Once')
+  })
+
+  test('the question: the hold, what each passing answer records, then the ask', async () => {
+    expect(holdQuestion([PUSH_A])).toBe(`${holdReason([PUSH_A])} "Approve publishing" records your approval on stream feature/a-stream; "Let it through once" records nothing. Let it through?`)
+    expect(holdQuestion([PUSH_A, PUSH_B])).toContain('records your approval on stream feature/a-stream and stream feature/b-stream;')
+    expect(holdQuestion([CUT])).toBe(`${holdReason([CUT])} "Let it through once" records nothing. Let it through?`)
+  })
+
+  test('one approval per held stream, in line order; a stream held twice once, with both heads', async () => {
+    expect(approvalsOf([PUSH_B, PUSH_A, PR_A, CUT])).toEqual([
+      { stream: B, heads: ['git push'] },
+      { stream: A, heads: ['git push', 'gh pr create'] },
+    ])
+    expect(approvalsOf([CUT])).toEqual([])
+  })
+
+  test('the record: a marked user publish decision on the stream, by the user, well under 1 KB', async () => {
+    const [approval] = approvalsOf([PUSH_A, PR_A])
+    if (approval === undefined) throw new Error('no approval')
+    const args = approvalArgs(approval)
+    expect(args.slice(0, -1)).toEqual(['append', '--stream', 'feature/a-stream', '--type', 'gate-decision', '--actor', 'user', '--data'])
+    expect(JSON.parse(args.at(-1) ?? '')).toEqual({
+      gate: 'publish',
+      decision: 'publish',
+      raised_by: 'user',
+      mode: 'ask',
+      source: 'dialog',
+      question: 'git push and gh pr create held by the shipgate-hud publish gate',
+    })
+    expect(approvalData(approval).length).toBeLessThan(1024)
   })
 })

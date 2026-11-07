@@ -2,11 +2,11 @@
 type: adr
 title: "0008. The Review tab reads the folded dispositions, and draws a round from the verdict"
 created: 2026-11-02
-updated: 2026-11-04
+updated: 2026-11-06
 tags:
   - adr
   - shipgate-hud
-status: accepted (amended 2026-11-04, shipgate-hud 0.9.0)
+status: accepted (amended 2026-11-04, shipgate-hud 0.9.0; amended 2026-11-06, shipgate-hud 0.10.0)
 date: 2026-11-02
 issue: "#5"
 related:
@@ -25,6 +25,13 @@ related:
 > is the same once case is folded. The path-tail tiers of pass 1 and pass 2 compare folded
 > paths too. Pass 2 still gives each key one card. The verdict-only round also prints one
 > line of finding text per key, read from the worklog (HUD ADR 0009).
+
+> **Amended 2026-11-06 (shipgate-hud 0.10.0):** a folded `fixing` older than the newest
+> verdict, when that verdict is `ready`, is stale: a legacy journal recorded the fix and
+> never its closure. A card and the verdict-only round draw it dim as `fixing?`, never in
+> the live `fixing` colour, and no count treats it as open (the band, a board's open
+> count). From shipgate 0.23.0 `append` refuses such a verdict, so only older journals
+> hold one.
 
 ## Context
 
