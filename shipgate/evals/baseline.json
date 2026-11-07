@@ -712,13 +712,13 @@
     },
     "72-graph-blast-radius-large": {
       "claude": "2.1.319",
-      "delta": -0.17,
+      "delta": -0.06,
       "judge": "sonnet",
-      "results": "2026-11-07T18-17-52-804Z",
-      "runs": 3,
+      "results": "2026-11-07T21-22-33-316Z",
+      "runs": 6,
       "version": "0.23.0",
-      "with": 0.72,
-      "without": 0.89
+      "with": 0.89,
+      "without": 0.94
     },
     "73-graph-reuse-hidden-helper": {
       "claude": "2.1.304",
