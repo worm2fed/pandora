@@ -121,12 +121,12 @@
       "without": 1.0
     },
     "13-blast-radius-explicit": {
-      "claude": "2.1.303",
+      "claude": "2.1.319",
       "delta": 0.0,
       "judge": "sonnet",
-      "results": "2026-10-19T14-45-27-544Z",
+      "results": "2026-11-07T18-17-52-590Z",
       "runs": 3,
-      "version": "0.17.0",
+      "version": "0.23.0",
       "with": 1.0,
       "without": 1.0
     },
@@ -710,6 +710,16 @@
       "with": 1.0,
       "without": 1.0
     },
+    "72-graph-blast-radius-large": {
+      "claude": "2.1.319",
+      "delta": -0.17,
+      "judge": "sonnet",
+      "results": "2026-11-07T18-17-52-804Z",
+      "runs": 3,
+      "version": "0.23.0",
+      "with": 0.72,
+      "without": 0.89
+    },
     "73-graph-reuse-hidden-helper": {
       "claude": "2.1.304",
       "delta": 0.0,
@@ -742,5 +752,5 @@
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
-  "updated": "2026-11-02"
+  "updated": "2026-11-07"
 }
