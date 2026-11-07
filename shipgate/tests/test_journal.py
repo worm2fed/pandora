@@ -614,6 +614,86 @@ class TestShapeValidation(JournalTestCase):
                             rc=OK)
         self.assertEqual(json.loads(proc.stdout)["string_maps"], ["labels"])
 
+    # `source` marks a decision written outside the model's tools (ADR 0015).
+    def test_a_gate_decision_takes_a_source_marker(self):
+        for source in ("dialog", "shell"):
+            with self.subTest(source=source):
+                self.append_event("feature/x", "gate-decision", {
+                    "gate": "publish", "question": "q", "decision": "publish",
+                    "mode": "ask", "raised_by": "user", "source": source,
+                }, "--actor", "user")
+                self.assertEqual(self.data_of()["source"], source)
+
+    def test_a_source_outside_the_enum_is_refused(self):
+        for source in ("hud", "Dialog", "", None, ["dialog"], True):
+            with self.subTest(source=source):
+                proc = self.append_event("feature/x", "gate-decision", {
+                    "gate": "publish", "question": "q", "decision": "publish",
+                    "mode": "ask", "raised_by": "user", "source": source,
+                }, "--actor", "user", rc=GATE)
+                self.assertIn("data.source must be one of dialog, shell", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    # Every key of a finding map is a location (ADR 0014, amended 0.23.0).
+    FREE_LABELS = ("F21", "flush-older-sync")
+
+    def finding_map_appends(self, key):
+        """One append per map that is keyed by a finding, each naming ``key``."""
+        return [
+            ("review-disposition.dispositions", "review-disposition",
+             {"dispositions": {key: "fixing"}, "round": 1}),
+            ("review-disposition.labels", "review-disposition",
+             {"dispositions": {"src/a.ts:3": "fixing"}, "round": 1,
+              "labels": {key: "a name"}}),
+            ("review-verdict.dispositions", "review-verdict",
+             {"verdict": "not-ready", "dispositions": {key: "fixed"}}),
+        ]
+
+    def test_a_free_label_key_is_refused_in_every_finding_map(self):
+        for label in self.FREE_LABELS:
+            for where, etype, data in self.finding_map_appends(label):
+                with self.subTest(map=where, key=label):
+                    proc = self.append_event("feature/x", etype, data, rc=GATE)
+                    field = where.split(".", 1)[1]
+                    self.assertIn(f"data.{field} has 1 key(s) that are not a finding "
+                                  f"location: \"{label}\"", proc.stderr)
+                    self.assertIn("`<path>:<line|?>`", proc.stderr)
+                    self.assertIn("labels", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_location_keys_are_accepted_in_every_finding_map(self):
+        for key in ("./src/a.ts:3", "src/a.ts:?", "src/a.ts:12"):
+            for where, etype, data in self.finding_map_appends(key):
+                with self.subTest(map=where, key=key):
+                    self.append_event("feature/x", etype, data)
+                    self.assertEqual(self.events()[-1]["type"], etype)
+
+    def test_force_does_not_waive_the_location_key(self):
+        for where, etype, data in self.finding_map_appends("F21"):
+            with self.subTest(map=where):
+                self.append_event("feature/x", etype, data, "--force",
+                                  "--force-reason", "testing", rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_the_refusal_names_five_bad_keys_and_counts_the_rest(self):
+        bad = {f"F{n}": "fixing" for n in range(1, 8)}
+        bad["src/a.ts:3"] = "fixing"
+        proc = self.disposition(dispositions=bad, rc=GATE)
+        self.assertIn("data.dispositions has 7 key(s)", proc.stderr)
+        self.assertIn('"F5" and 2 more', proc.stderr)
+        self.assertNotIn('"F6"', proc.stderr)
+        self.assertNotIn("src/a.ts:3", proc.stderr.split("`<path>")[0])
+
+    def test_an_imported_free_label_key_is_not_checked_again(self):
+        raw = self.root / "old.jsonl"
+        raw.write_text(json.dumps({
+            "stream": "feature/x", "version": 1, "type": "review-disposition",
+            "data": {"dispositions": {"F21": "fixing"}, "round": 1},
+            "ts": "2026-10-01T09:00:00+00:00", "actor": "orchestrator",
+        }) + "\n", encoding="utf-8")
+        self.journal("--db", self.db, "import", raw, rc=OK)
+        self.assertEqual(self.data_of()["dispositions"], {"F21": "fixing"})
+
     def test_a_review_disposition_implies_no_phase(self):
         """`fixing` is appended in the fix round, back in implement: an implied review
         would move the phase on every dispatch (ADR 0014)."""
@@ -1188,8 +1268,8 @@ class TestImpliedPhase(JournalTestCase):
     def test_mr_opened_implies_no_phase(self):
         self.append_event("feature/x", "gate-decision", {
             "gate": "publish", "question": "ship it?", "decision": "publish",
-            "mode": "ask", "raised_by": "user",
-        })
+            "mode": "ask", "raised_by": "user", "source": "dialog",
+        }, "--actor", "user")
         self.append_event("feature/x", "mr-opened", {"url": "https://host.invalid/1"})
         self.assertEqual(self.phase_rows(), [])
 
@@ -1259,6 +1339,105 @@ class TestGateReviewVerdict(JournalTestCase):
         self.append_event("feature/x", "review-verdict", {"verdict": "ready"})
         self.assertEqual(len(self.events("feature/x")), 6)
 
+    # A ready verdict closes every `fixing` key first (ADR 0014, amended 0.23.0).
+    def fresh_verify(self):
+        self.append_event(
+            "feature/x", "verify-run", {"outcome": "pass", "task_ids": ["T001"]}
+        )
+
+    def disposition(self, dispositions, round_number=1):
+        self.append_event("feature/x", "review-disposition",
+                          {"dispositions": dispositions, "round": round_number})
+
+    def ready(self, *args, rc=OK, **data):
+        return self.append_event("feature/x", "review-verdict",
+                                 dict(data, verdict="ready"), *args, rc=rc)
+
+    def test_ready_over_an_open_fixing_is_refused(self):
+        self.disposition({"src/a.ts:3": "fixing", "src/b.ts:?": "fixing"})
+        self.disposition({"./src/b.ts:?": "fixed", "src/c.ts:9": "fixing"},
+                         round_number=2)
+        self.fresh_verify()
+        before = len(self.events("feature/x"))
+        proc = self.ready(rc=GATE)
+        self.assertIn("leaves 2 finding(s) at fixing: src/a.ts:3, src/c.ts:9",
+                      proc.stderr)
+        self.assertIn(
+            "journal.py append --stream feature/x --type review-disposition --data "
+            '\'{"round": 2, "dispositions": {"src/a.ts:3": "fixed", '
+            '"src/c.ts:9": "fixed"}}\'', proc.stderr)
+        self.assertIn("--force and a --force-reason", proc.stderr)
+        self.assertEqual(len(self.events("feature/x")), before)
+
+    def test_the_pass_alias_is_refused_over_an_open_fixing_too(self):
+        self.disposition({"src/a.ts:3": "fixing"})
+        self.fresh_verify()
+        self.append_event("feature/x", "review-verdict", {"verdict": "pass"}, rc=GATE)
+
+    def test_the_closing_row_lists_ten_keys_and_counts_the_rest(self):
+        keys = {f"src/f{n:02d}.ts:{n}": "fixing" for n in range(1, 13)}
+        self.disposition(keys, round_number=4)
+        self.fresh_verify()
+        proc = self.ready(rc=GATE)
+        self.assertIn("leaves 12 finding(s)", proc.stderr)
+        self.assertIn("src/f10.ts:10 and 2 more", proc.stderr)
+        self.assertNotIn("src/f11.ts:11", proc.stderr)
+        self.assertIn('{"round": 4, "dispositions": {"src/f01.ts:1": "fixed"',
+                      proc.stderr)
+
+    def test_the_verify_refusal_comes_first(self):
+        self.disposition({"src/a.ts:3": "fixing"})
+        proc = self.ready(rc=GATE)
+        self.assertIn("verify-run", proc.stderr)
+        self.assertNotIn("at fixing", proc.stderr)
+
+    def test_ready_is_accepted_when_its_own_map_closes_the_key(self):
+        self.disposition({"src/a.ts:3": "fixing", "src/b.ts:?": "fixing"})
+        self.fresh_verify()
+        self.ready(dispositions={"./src/a.ts:3": "fixed", "src/b.ts:?": "deferred"})
+        self.assertEqual(self.events("feature/x")[-1]["type"], "review-verdict")
+
+    def test_ready_is_accepted_after_a_review_disposition_closes_the_key(self):
+        self.disposition({"src/a.ts:3": "fixing"})
+        self.disposition({"src/a.ts:3": "rejected"}, round_number=2)
+        self.fresh_verify()
+        self.ready()
+        self.assertEqual(self.events("feature/x")[-1]["type"], "review-verdict")
+
+    def test_a_key_an_earlier_verdict_closed_stays_closed(self):
+        self.disposition({"src/a.ts:3": "fixing"})
+        self.append_event("feature/x", "review-verdict", {
+            "verdict": "not-ready", "dispositions": {"src/a.ts:3": "fixed"},
+        })
+        self.fresh_verify()
+        self.ready()
+
+    def test_a_not_ready_verdict_over_an_open_fixing_is_allowed(self):
+        self.disposition({"src/a.ts:3": "fixing"})
+        self.append_event("feature/x", "review-verdict", {"verdict": "not-ready"})
+        self.assertEqual(self.events("feature/x")[-1]["type"], "review-verdict")
+
+    def test_force_without_a_reason_is_refused_over_an_open_fixing(self):
+        self.disposition({"src/a.ts:3": "fixing"})
+        self.fresh_verify()
+        before = len(self.events("feature/x"))
+        proc = self.ready("--force", rc=USAGE)
+        self.assertIn("--force-reason", proc.stderr)
+        self.assertIn("src/a.ts:3", proc.stderr)
+        self.assertIn("--type review-disposition", proc.stderr)
+        self.assertEqual(len(self.events("feature/x")), before)
+
+    def test_force_with_a_reason_overrides_an_open_fixing(self):
+        self.disposition({"src/a.ts:3": "fixing"})
+        self.ready("--force", "--force-reason", "the fix ships in a follow-up MR")
+        data = self.events("feature/x")[-1]["data"]
+        self.assertEqual((data["verdict"], data["forced"]), ("ready", True))
+
+    def test_force_without_a_reason_is_fine_when_nothing_is_open(self):
+        self.disposition({"src/a.ts:3": "fixed"})
+        self.ready("--force")
+        self.assertEqual(self.events("feature/x")[-1]["type"], "review-verdict")
+
 
 class TestGateMrOpened(JournalTestCase):
     """FR-009: an MR is opened on the review's word, or on a deliberate publish call."""
@@ -1279,11 +1458,18 @@ class TestGateMrOpened(JournalTestCase):
     def last_type(self):
         return self.events("feature/x")[-1]["type"]
 
-    def publish_decision(self, decision="publish", raised_by="user"):
-        self.append_event("feature/x", "gate-decision", {
+    def publish_decision(self, decision="publish", raised_by="user", source="dialog",
+                         actor="user"):
+        """A publish decision, marked as the HUD's dialog writes it unless told not to
+        (ADR 0015). ``source=None`` leaves the marker out; ``actor=None`` the flag."""
+        data = {
             "gate": "publish", "question": "open it before the second review?",
             "decision": decision, "mode": "ask", "raised_by": raised_by,
-        })
+        }
+        if source is not None:
+            data["source"] = source
+        args = ("--actor", actor) if actor is not None else ()
+        self.append_event("feature/x", "gate-decision", data, *args)
 
     def test_without_a_verdict_or_a_publish_decision_is_a_violation(self):
         proc = self.mr_opened(rc=GATE)
@@ -1330,6 +1516,45 @@ class TestGateMrOpened(JournalTestCase):
         self.publish_decision(raised_by="orchestrator")
         self.mr_opened(rc=GATE)
         self.assertEqual(self.last_type(), "gate-decision")
+
+    # ADR 0015: a user's publish decision authorizes only with its marker and actor.
+    def test_a_decision_marked_by_the_dialog_unblocks(self):
+        self.publish_decision(source="dialog")
+        self.mr_opened()
+        self.assertEqual(self.last_type(), "mr-opened")
+
+    def test_a_decision_marked_by_the_users_shell_unblocks(self):
+        self.publish_decision(source="shell", actor="user@alice")
+        self.mr_opened()
+        self.assertEqual(self.last_type(), "mr-opened")
+
+    def test_an_unmarked_user_publish_decision_does_not_unblock(self):
+        """An older row, or one the model wrote as the user's: the gate asks again."""
+        self.publish_decision(source=None)
+        self.mr_opened(rc=GATE)
+        self.assertEqual(self.last_type(), "gate-decision")
+
+    def test_a_marked_decision_by_the_orchestrator_does_not_unblock(self):
+        for actor in ("orchestrator", None, "worker@w1"):
+            with self.subTest(actor=actor):
+                self.publish_decision(actor=actor)
+                self.mr_opened(rc=GATE)
+                self.assertEqual(self.last_type(), "gate-decision")
+
+    def test_a_marked_decision_the_orchestrator_raised_does_not_unblock(self):
+        self.publish_decision(raised_by="orchestrator", source="dialog", actor="user")
+        self.mr_opened(rc=GATE)
+        self.assertEqual(self.last_type(), "gate-decision")
+
+    def test_the_refusal_sends_the_model_to_the_user(self):
+        proc = self.mr_opened(rc=GATE)
+        combined = proc.stdout + proc.stderr
+        self.assertIn("publish dialog", combined)
+        self.assertIn("`!`", combined)
+        self.assertIn("source: dialog|shell", combined)
+        self.assertIn("--actor user", combined)
+        self.assertIn("--force and a reason", combined)
+        self.assertNotIn("take the publish decision with the user", combined)
 
     def test_a_decision_at_another_gate_does_not_unblock(self):
         self.append_event("feature/x", "gate-decision", {
@@ -1387,6 +1612,25 @@ class TestGateMrOpened(JournalTestCase):
         self.test_a_verdict_from_before_the_last_task_done_is_stale()
         self.assertEqual(self.publish_of(), {"kind": "held"})
 
+    def position_publish(self):
+        proc = self.journal("--db", self.db, "position", "--stream", "feature/x",
+                            "--json", rc=OK)
+        return json.loads(proc.stdout)["publish"]
+
+    def test_status_position_and_the_gate_agree_on_the_marker(self):
+        """ADR 0015: the one rule, read by the gate, `status` and `position`."""
+        self.publish_decision(source=None)
+        self.publish_decision(actor="orchestrator")
+        self.assertEqual(self.publish_of(), {"kind": "held"})
+        self.assertEqual(self.position_publish(), {"kind": "held"})
+        self.publish_decision()
+        event = self.events("feature/x")[-1]
+        expected = {"kind": "authorized", "by": "gate-decision",
+                    "seq": event["seq"], "at": event["ts"]}
+        self.assertEqual(self.publish_of(), expected)
+        self.assertEqual(self.position_publish(), expected)
+        self.mr_opened()
+
     def test_an_old_row_with_a_list_decision_never_authorizes(self):
         """A row from before the string rule (here imported) can still hold a list;
         neither the gate nor status reads it as a publish (audit D6)."""
@@ -1409,10 +1653,10 @@ class TestPublishAuthorization(unittest.TestCase):
     def setUp(self):
         self.journal = load_journal_module()
 
-    def event(self, seq, etype, data=None):
+    def event(self, seq, etype, data=None, actor="orchestrator@s"):
         return self.journal.Event(
             seq=seq, stream="feature/x", version=seq, type=etype, data=data or {},
-            ts=f"2026-10-01T09:{seq:02d}:00+00:00", actor="orchestrator@s",
+            ts=f"2026-10-01T09:{seq:02d}:00+00:00", actor=actor,
         )
 
     def task_done(self, seq):
@@ -1421,11 +1665,15 @@ class TestPublishAuthorization(unittest.TestCase):
     def verdict(self, seq, verdict="ready"):
         return self.event(seq, "review-verdict", {"verdict": verdict})
 
-    def decision(self, seq, decision="publish", raised_by="user", gate="publish"):
-        return self.event(seq, "gate-decision", {
+    def decision(self, seq, decision="publish", raised_by="user", gate="publish",
+                 source="dialog", actor="user"):
+        data = {
             "gate": gate, "question": "q", "decision": decision, "mode": "ask",
             "raised_by": raised_by,
-        })
+        }
+        if source is not None:
+            data["source"] = source
+        return self.event(seq, "gate-decision", data, actor=actor)
 
     def authorize(self, *events):
         return self.journal.publish_authorization(list(events))
@@ -1478,6 +1726,29 @@ class TestPublishAuthorization(unittest.TestCase):
         self.assertEqual(self.authorize(self.decision(1, gate="design")),
                          {"kind": "held"})
 
+    def test_a_decision_without_the_source_marker_is_held(self):
+        """ADR 0015: an older unmarked decision no longer authorizes."""
+        for source in (None, "hud", "", ["dialog"]):
+            with self.subTest(source=source):
+                self.assertEqual(self.authorize(self.decision(1, source=source)),
+                                 {"kind": "held"})
+
+    def test_both_markers_authorize(self):
+        for source in ("dialog", "shell"):
+            with self.subTest(source=source):
+                self.assertEqual(self.authorize(self.decision(1, source=source)),
+                                 self.authorized("gate-decision", 1))
+
+    def test_a_marked_decision_needs_an_actor_of_role_user(self):
+        for actor in ("orchestrator@s", "worker", "hook", None, "", "users@x"):
+            with self.subTest(actor=actor):
+                self.assertEqual(self.authorize(self.decision(1, actor=actor)),
+                                 {"kind": "held"})
+        for actor in ("user", "user@alice"):
+            with self.subTest(actor=actor):
+                self.assertEqual(self.authorize(self.decision(1, actor=actor)),
+                                 self.authorized("gate-decision", 1))
+
     def test_the_events_are_read_in_seq_order_not_list_order(self):
         """A task-done with a higher seq makes an earlier verdict stale, wherever the
         list puts it."""
@@ -1491,6 +1762,27 @@ class TestPublishAuthorization(unittest.TestCase):
             self.authorize(self.decision(9), self.verdict(6), self.task_done(3)),
             self.authorized("review-verdict", 6),
         )
+
+
+class TestIsLocationKey(unittest.TestCase):
+    """The HUD's `parseLocation` grammar (shipgate-hud hooks/review.ts), in Python."""
+
+    def setUp(self):
+        self.journal = load_journal_module()
+
+    def test_locations(self):
+        for key in ("src/a.ts:3", "src/a.ts:?", "./src/a.ts:3", "././a.py:0",
+                    "a:1", "C:/x/a.ts:12", "src/a b.ts:7", "a.ts:3:4", "/abs/a.ts:?"):
+            with self.subTest(key=key):
+                self.assertTrue(self.journal.is_location_key(key))
+
+    def test_not_locations(self):
+        for key in ("F21", "flush-older-sync", "", ":3", "./:3", "././:?",
+                    "src/a.ts", "src/a.ts:", "src/a.ts:3a", "src/a.ts:-1",
+                    "src/a.ts:??", "src/a.ts: 3", "src/a.ts:3 ", "src/a.ts:3\n",
+                    "src/a.ts:\u0663", "src/a.ts:3:x", None, 3):
+            with self.subTest(key=key):
+                self.assertFalse(self.journal.is_location_key(key))
 
 
 class TestArtifactDedupe(JournalTestCase):
@@ -3778,8 +4070,10 @@ class TestPosition(JournalTestCase):
                          note="interim")
         second = self.last()
         self.verify("pass", "T001")
+        # Not ready: `src/b.py:?` stays at fixing, and `append` refuses a ready verdict
+        # over it (shipgate 0.23.0).
         self.append_event(self.S, "review-verdict", {
-            "verdict": "ready", "dispositions": {"./src/a.py:12": "fixed"},
+            "verdict": "not-ready", "dispositions": {"./src/a.py:12": "fixed"},
         })
         verdict = self.last()
         self.assertEqual(self.position()["dispositions"], {
@@ -3878,7 +4172,7 @@ class TestPosition(JournalTestCase):
                          labels={"src/b.py:3": "retry-loop"})
         self.verify("pass", "T001")
         self.append_event(self.S, "review-verdict", {
-            "verdict": "ready", "dispositions": {"src/a.py:12": "fixed"},
+            "verdict": "not-ready", "dispositions": {"src/a.py:12": "fixed"},
         })
         dispositions = self.position()["dispositions"]
         self.assertEqual(dispositions["src/a.py:12"]["label"], "null-guard")
@@ -4309,6 +4603,13 @@ class TestVocabCommand(JournalTestCase):
         self.assertEqual(shape["defaults"]["raised_by"], "orchestrator")
         self.assertEqual(shape["aliases"]["chosen"], "decision")
         self.assertEqual(shape["strings"], ["decision"])
+
+    def test_the_gate_decision_shape_names_its_source_marker(self):
+        """ADR 0015: the HUD's dialog writes `dialog`, the user's `!` command `shell`."""
+        out = self.journal(
+            "--db", self.db, "vocab", "--shape", "gate-decision", rc=OK
+        ).stdout
+        self.assertEqual(json.loads(out)["enums"]["source"], ["dialog", "shell"])
 
     def test_the_review_verdict_shape_names_its_map_vocabularies(self):
         out = self.journal(

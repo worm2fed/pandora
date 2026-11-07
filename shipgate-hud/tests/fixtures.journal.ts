@@ -103,6 +103,7 @@ export const STATUS_GOLDEN = {
             "mode": "ask",
             "question": "open the MR before the second review?",
             "raised_by": "user",
+            "source": "dialog",
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
@@ -430,6 +431,7 @@ export const STATUS_GOLDEN = {
             "mode": "ask",
             "question": "open the MR before the second review?",
             "raised_by": "user",
+            "source": "dialog",
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
@@ -856,6 +858,7 @@ export const STATUS_GOLDEN = {
             "mode": "ask",
             "question": "open the MR before the second review?",
             "raised_by": "user",
+            "source": "dialog",
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
@@ -1218,6 +1221,7 @@ export const STATUS_GOLDEN = {
             "mode": "ask",
             "question": "open the MR before the second review?",
             "raised_by": "user",
+            "source": "dialog",
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
@@ -1581,6 +1585,7 @@ export const STATUS_GOLDEN = {
             "mode": "ask",
             "question": "open the MR before the second review?",
             "raised_by": "user",
+            "source": "dialog",
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
@@ -1980,6 +1985,7 @@ export const STATUS_GOLDEN = {
             "mode": "ask",
             "question": "open the MR before the second review?",
             "raised_by": "user",
+            "source": "dialog",
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],

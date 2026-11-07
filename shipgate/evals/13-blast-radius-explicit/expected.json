@@ -1,0 +1,28 @@
+{
+  "hub": "src/util/round.ts",
+  "importers": [
+    "src/billing/invoice.ts",
+    "src/billing/lineItem.ts",
+    "src/billing/pdfSummary.ts",
+    "src/billing/tax.ts",
+    "src/util/currency.ts",
+    "src/util/percent.ts"
+  ],
+  "tests": [],
+  "depth": {
+    "src/billing/invoice.ts": 3,
+    "src/billing/lineItem.ts": 2,
+    "src/billing/pdfSummary.ts": 4,
+    "src/billing/tax.ts": 2,
+    "src/util/currency.ts": 1,
+    "src/util/percent.ts": 1,
+    "src/util/round.ts": 0
+  },
+  "distractors": [
+    "src/billing/refundPolicy.ts",
+    "src/catalog/product.ts",
+    "src/catalog/search.ts",
+    "src/util/slugify.ts"
+  ],
+  "files_total": 13
+}

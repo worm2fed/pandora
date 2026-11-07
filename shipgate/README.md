@@ -162,16 +162,21 @@ must read each new version back from the output instead of assuming +1 — refus
 1 KB (prose belongs in the worklog — the event carries `refs`), records a `deviation` with
 `kind: signals-missing` beside a `route-and-map` entry that carries no `signals` (ADR 0011),
 and refuses `mr-opened` until the stream holds, after its last `task-done`, either a
-`review-verdict` with `verdict=ready` or a `gate-decision` with `gate=publish`,
-`raised_by=user` and `decision=publish`. A `gate-decision`'s `decision` must be a string. A
-`review-verdict`'s optional `criteria` map takes `met` or `unmet`, and its optional
-`dispositions` map takes `fixed`, `rejected` or `deferred`. A `review-disposition` records
-one finding's state when it is decided: its `dispositions` map also takes `fixing`, and its
-`round` must be a non-negative integer. Its optional `labels` map gives a finding key a
-short human name. Each name must be a non-empty string, and the key stays the finding's
-`<path>:<line|?>`. It implies no phase. `status --json` prints the same
-publish rule per stream as `publish`. `actor` is `role[@label]` with role ∈ `orchestrator |
-worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
+`review-verdict` with `verdict=ready` or the user's publish approval: a `gate-decision` with
+`gate=publish`, `raised_by=user`, `decision=publish`, the actor `user` and the marker
+`source=dialog` or `source=shell` (ADR 0015). A `gate-decision`'s `decision` must be a
+string, and its optional `source` is `dialog` or `shell`. A `review-verdict`'s optional
+`criteria` map takes `met` or `unmet`, and its optional `dispositions` map takes `fixed`,
+`rejected` or `deferred`. A `review-disposition` records one finding's state when it is
+decided: its `dispositions` map also takes `fixing`, and its `round` must be a non-negative
+integer. Its optional `labels` map gives a finding key a short human name. Each name must be
+a non-empty string. Every key of these maps must be the finding's location
+`<path>:<line|?>`; `append` refuses another key, even with `--force`. `append` also refuses
+a `ready` verdict while a finding is still `fixing` and the verdict's own map does not close
+it. The message lists the open keys and the `review-disposition` row that closes them.
+`--force` overrides it only with `--force-reason`. A `review-disposition` implies no phase.
+`status --json` prints the same publish rule per stream as `publish`. `actor` is
+`role[@label]` with role ∈ `orchestrator | worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's
 shell carries its parent's), else the session that started last (ADR 0005). `user` and
 `watcher` never take a session label. A `user` event records the appending session as
@@ -195,6 +200,22 @@ step that establishes the fact: the map emitted, the defect reproduced, the root
 confirmed, the worklog written, the verdict stated. Not at the end of the turn, and never
 skipped for want of a branch. The Stop hook enforces the build-side gates only (`task-done`,
 `verify-run`, clarify's `gate-decision`); the phase events rely on those steps.
+
+**The user's publish approval.** Only the user approves a publish. The approval is a
+`gate-decision` with `gate=publish`, `decision=publish`, `raised_by=user`, the actor `user`
+and a marker: `source=dialog` when shipgate-hud's publish dialog records it ("Approve
+publishing"), `source=shell` when you run the append yourself with a `!` command. Neither
+path is a model tool call. A **PreToolUse hook on Bash** refuses a model's command that
+appends a `gate-decision` with the marker, or a publish decision that names the user
+(`--actor user`, `user@…`, a JSONL `actor`, or `raised_by: user`). It reads `--data`,
+`--batch` with a heredoc, a here-string or a pipe from `echo`, `printf` or `cat`, abbreviated
+options, any path to `journal.py`, and `sh -c` or `eval` strings. It refuses a payload it
+cannot read in full, such as one from a variable, a file or another command. Decisions at
+other gates pass. The hook does nothing for a command without `journal.py` and `append`.
+This is a net against a flow that forges your approval through its tools. It is no defence
+against deliberate circumvention: the model has a shell and can write the SQLite file, run
+a copy of the script or call its functions from Python. A user publish decision recorded
+before 0.23.0 carries no marker and no longer authorizes; the gate asks again.
 
 The hooks record which session wrote an artifact, and the journal decides it when it reads
 them (ADR 0008).

@@ -254,8 +254,11 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   implement* the next issue. Don't silently roll implementation from one issue into the next.
   - **"Start the next item" is never publish authorization for this one.** An MR/PR goes up
     only once one of two events is recorded: this issue's `review-verdict` {verdict: ready},
-    or the user's explicit `gate-decision` {gate: publish, raised_by: user, decision: publish},
-    appended with `--actor user`. Journaled projects refuse `mr-opened` without one.
+    or the user's own publish approval. The user approves in the shipgate-hud publish
+    dialog ("Approve publishing"), or runs the `gate-decision` append with `!` and
+    `"source": "shell"` (form: `review`, **Record the outcome**). Never append a publish
+    decision as the user's yourself: a PreToolUse hook refuses it. Journaled projects
+    refuse `mr-opened` without one of the two events.
   - Design-ahead work on upcoming issues is explicitly allowed (and encouraged) during that
     wait. The gate exists so the user controls what gets built, not to park the orchestrator.
 - **Shared vs per-issue artifacts.** The epic-level PRD and design are shared context, written
@@ -306,7 +309,8 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   - **Say who decided.** A `gate-decision` carries `raised_by`. Use `user` when the user
     raised or corrected the point. Use `orchestrator` when you asked it or decided it
     yourself. Pass `--actor user` for a decision the user made, and `--actor orchestrator`
-    (or nothing) otherwise. A worker that appends passes `--actor worker`. The form is
+    (or nothing) otherwise. The publish gate is the exception: the user records that
+    approval, not you. A worker that appends passes `--actor worker`. The form is
     `role[@label]`. If you omit the label, `append` fills in the current session, except
     for the sessionless roles `user` and `watcher`. Their label is never a session id. A
     `user` event records the session that wrote it under `data.recorded_by` instead, so

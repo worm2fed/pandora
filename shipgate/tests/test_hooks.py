@@ -1626,6 +1626,14 @@ class TestHookWiring(unittest.TestCase):
         matchers = [entry["matcher"] for entry in config["hooks"]["PostToolUse"]]
         self.assertEqual(matchers, ["Write|Edit|NotebookEdit|Bash"])
 
+    def test_pre_tool_use_fires_on_bash(self):
+        config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
+        entries = config["hooks"]["PreToolUse"]
+        self.assertEqual([entry["matcher"] for entry in entries], ["Bash"])
+        self.assertEqual(
+            entries[0]["hooks"][0]["args"], ["${CLAUDE_PLUGIN_ROOT}/hooks/pre_tool_use.py"]
+        )
+
 
 class TestUnjournaledProjectIsInert(unittest.TestCase):
     """SC-004: a project that never ran setup must pay nothing, anywhere."""
@@ -1718,6 +1726,410 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0)
                     self.assertEqual(result.stderr, "")
+
+
+# ADR 0015: only the user approves a publish. The PreToolUse hook refuses a model's Bash
+# call that appends the user's approval, and stays silent on everything else.
+J = "python3 shipgate/scripts/journal.py"
+PUBLISH = '{"gate":"publish","question":"open the MR?","decision":"publish","mode":"ask"}'
+PUBLISH_BY_USER = (
+    '{"gate":"publish","question":"open the MR?","decision":"publish","mode":"ask",'
+    '"raised_by":"user"}'
+)
+CLARIFY_BY_USER = (
+    '{"gate":"clarify","question":"scope?","decision":"narrow","mode":"ask",'
+    '"raised_by":"user"}'
+)
+USER_LINE = '{"type":"gate-decision","data":%s,"actor":"user"}' % PUBLISH
+APPEND = f"{J} append --stream feature/x"
+
+
+class PreToolUseCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.cwd = Path(self._tmp.name).resolve()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def run_bash(self, command):
+        return run_hook(
+            "pre_tool_use",
+            {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(self.cwd)},
+            self.cwd,
+        )
+
+    def assertDenied(self, command, fragment):
+        result = self.run_bash(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertTrue(result.stdout, f"allowed: {command!r}")
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "PreToolUse")
+        self.assertEqual(output["permissionDecision"], "deny")
+        reason = output["permissionDecisionReason"]
+        self.assertIn(fragment, reason)
+        self.assertIn("Approve publishing", reason)
+        self.assertIn('"source": "shell"', reason)
+        self.assertIn("Never record it on their behalf", reason)
+
+    def assertSilent(self, command):
+        result = self.run_bash(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(result.stdout, "", f"refused: {command!r}")
+
+
+class TestPreToolUseRefusesAForgedApproval(PreToolUseCase):
+    """FR-001, FR-002, SC-001: every spelling the CLI accepts is refused."""
+
+    USER = "as the user's"
+    MARKER = "carries `source`"
+
+    def test_a_publish_decision_with_a_user_actor(self):
+        for actor in ("--actor user", "--actor user@alice", "--act user", "--actor=user",
+                      "--actor ' User '"):
+            with self.subTest(actor=actor):
+                self.assertDenied(
+                    f"{APPEND} --type gate-decision --data '{PUBLISH}' {actor}", self.USER
+                )
+
+    def test_abbreviated_type_and_data(self):
+        self.assertDenied(
+            f"{APPEND} --ty gate-decision --da '{PUBLISH}' --act user", self.USER
+        )
+        self.assertDenied(
+            f"{APPEND} --type=gate-decision --data='{PUBLISH}' --actor=user", self.USER
+        )
+
+    def test_raised_by_user_with_no_actor(self):
+        self.assertDenied(f"{APPEND} --type gate-decision --data '{PUBLISH_BY_USER}'",
+                          self.USER)
+
+    def test_the_kind_alias_and_a_padded_gate(self):
+        for data in ('{"kind":"publish","raised_by":"user"}',
+                     '{"gate":" Publish ","raised_by":"user"}'):
+            with self.subTest(data=data):
+                self.assertDenied(f"{APPEND} --type gate-decision --data '{data}'",
+                                  self.USER)
+
+    def test_a_batch_on_every_visible_stdin(self):
+        commands = {
+            "quoted heredoc": f"{APPEND} --batch <<'EOF'\n{USER_LINE}\nEOF",
+            "unquoted heredoc": f"{APPEND} --batch <<EOF\n{USER_LINE}\nEOF",
+            "tab-stripped heredoc": f"{APPEND} --batch <<-EOF\n\t{USER_LINE}\n\tEOF",
+            "here-string": f"{APPEND} --batch <<< '{USER_LINE}'",
+            "echo": f"echo '{USER_LINE}' | {APPEND} --batch",
+            "printf": f"printf '%s\\n' '{USER_LINE}' | {APPEND} --batch",
+            "cat heredoc": f"cat <<'EOF' | {APPEND} --batch\n{USER_LINE}\nEOF",
+            "BOM": f"{APPEND} --batch <<'EOF'\n\ufeff{USER_LINE}\nEOF",
+        }
+        for name, command in commands.items():
+            with self.subTest(stdin=name):
+                self.assertDenied(command, self.USER)
+
+    def test_a_batch_line_actor_and_a_batch_with_the_flag_actor(self):
+        flag_actor = '{"type":"gate-decision","data":%s}' % PUBLISH
+        self.assertDenied(f"{APPEND} --actor user --batch <<'EOF'\n{flag_actor}\nEOF",
+                          self.USER)
+
+    def test_the_marker_on_any_gate(self):
+        for gate in ("publish", "clarify"):
+            with self.subTest(gate=gate):
+                data = '{"gate":"%s","raised_by":"user","source":"dialog"}' % gate
+                self.assertDenied(
+                    f"{APPEND} --type gate-decision --data '{data}' --actor user",
+                    self.MARKER,
+                )
+
+    def test_journal_py_at_any_path_and_through_a_variable(self):
+        tail = f"append --stream x --type gate-decision --data '{PUBLISH}' --actor user"
+        for command in (
+            f"python3 /abs/path/to/journal.py --db x {tail}",
+            f"python3 ./journal.py --db=x {tail}",
+            f"J=shipgate/scripts/journal.py; python3 $J {tail}",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.USER)
+
+    def test_shells_eval_chains_and_substitutions(self):
+        forged = f"{APPEND} --type gate-decision --data '{PUBLISH}' --actor user"
+        escaped = forged.replace('"', '\\"')
+        for command in (
+            f'bash -c "{escaped}"',
+            f'sh -lc "{escaped}"',
+            f'eval "{escaped}"',
+            f"cd x && {forged}",
+            f"true; ( {forged} )",
+            f"X=$({forged})",
+            f"bash <<'EOF'\n{forged}\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.USER)
+
+    def test_a_wrapped_shell_that_reads_its_script_on_stdin(self):
+        # Review round 2, F5 and F8: the wrapper's options, values and operands are skipped.
+        forged = f"{APPEND} --type gate-decision --data '{PUBLISH}' --actor user"
+        escaped = forged.replace('"', '\\"')
+        for command in (
+            f"timeout 60 bash <<'EOF'\n{forged}\nEOF",
+            f"nice -n 5 sh <<'EOF'\n{forged}\nEOF",
+            f"cat <<'EOF' | timeout 60 bash\n{forged}\nEOF",
+            f'echo "{escaped}" | timeout 60 bash',
+            f"sudo -u alice bash <<'EOF'\n{forged}\nEOF",
+            f"cd /x && timeout -k 5 60 stdbuf -o L bash -s <<'EOF'\n{forged}\nEOF",
+            # A wrapper the table does not know: the literal stdin is still read.
+            f"unknown-wrapper --flag bash <<'EOF'\n{forged}\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.USER)
+
+    def test_a_wrapper_with_arguments_before_the_shell(self):
+        # Review round 1, F2: `timeout 5` hid `bash -c` from the shell rule.
+        forged = f"{APPEND} --type gate-decision --data '{PUBLISH}' --actor user"
+        escaped = forged.replace('"', '\\"')
+        for command in (
+            f'timeout 5 bash -c "{escaped}"',
+            f'nice -n 5 sh -c "{escaped}"',
+            f'sudo -u alice bash -c "{escaped}"',
+            f"ssh host \"{escaped}\"",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.USER)
+
+
+class TestPreToolUseRefusesAnOpaquePayload(PreToolUseCase):
+    """FR-003: a payload the hook cannot read is refused when it could be the approval."""
+
+    OPAQUE = "cannot read"
+    SPLIT = "write the subcommand and options literally"
+
+    def test_each_opaque_payload(self):
+        commands = {
+            "variable": f'{APPEND} --type gate-decision --data "$D"',
+            "substitution": f'{APPEND} --type gate-decision --data "$(cat f)"',
+            "no type": f'{APPEND} --data "$D" --actor user',
+            "file": f"{APPEND} --batch < f.jsonl",
+            "another command": f"jq -c . f.jsonl | {APPEND} --batch",
+            "expanding heredoc": f'{APPEND} --batch <<EOF\n{{"type":"$X"}}\nEOF',
+            "expanding here-string": f'{APPEND} --batch <<< "$LINE"',
+            "no stdin": f"{APPEND} --batch",
+            "opaque actor": f"{APPEND} --type gate-decision --data '{PUBLISH}' --actor \"$A\"",
+            "opaque echo": f'echo "$LINE" | {APPEND} --batch',
+            # Review round 2, F11: a shell reads a script from a group the hook cannot see.
+            "a group piped into a shell": "{ echo \"$CMD\"; } | sh  # journal.py append",
+            "a literal group piped into a shell": (
+                f"{{ echo '{APPEND} --type task-done'; }} | sh"
+            ),
+            "a subshell piped into a shell": f"(echo '{APPEND} --type task-done') | sh",
+        }
+        for name, command in commands.items():
+            with self.subTest(payload=name):
+                self.assertDenied(command, self.OPAQUE)
+
+    def test_arguments_from_a_variable(self):
+        # Review round 2, F7: these get their own message, which asks for quoting.
+        commands = {
+            "opaque arguments": f"{APPEND} $ARGS",
+            # Review round 1, F1: `$S` splits into `x --type gate-decision`, and argparse
+            # keeps the last --type.
+            "split value": (
+                f"S='x --type gate-decision'; {J} append --type task-done --stream $S "
+                f"--actor user --data '{PUBLISH}'"
+            ),
+            "split inline value": (
+                f"{J} append --type task-done --stream=$S --actor user --data '{PUBLISH}'"
+            ),
+            # Review round 1, F3: the subcommand itself comes from a variable.
+            "variable subcommand": (
+                f"SUB=append; {J} $SUB --stream s --type gate-decision --actor user "
+                f"--data '{PUBLISH}'"
+            ),
+            "quoted variable subcommand": (
+                f'SUB=append; {J} "$SUB" --stream s --type gate-decision '
+                f"--data '{PUBLISH}'"
+            ),
+            "split top-level value": (
+                f"X='x append --type gate-decision'; {J} --db $X --stream s "
+                f"--actor user --data '{PUBLISH}'"
+            ),
+            "split db value": (
+                f"{J} --db $DB append --stream s --type gate-decision --actor user "
+                f"--data '{CLARIFY_BY_USER}'"
+            ),
+        }
+        for name, command in commands.items():
+            with self.subTest(arguments=name):
+                self.assertDenied(command, self.SPLIT)
+
+
+class TestPreToolUseAllowsEverythingElse(PreToolUseCase):
+    """SC-001: the user's own clarify decision, the orchestrator and other events pass."""
+
+    def test_allowed_appends(self):
+        task_done = '{"type":"task-done","data":{"task_id":"T001"},"actor":"user"}'
+        commands = {
+            "clarify by the user": (
+                f"{APPEND} --type gate-decision --data '{CLARIFY_BY_USER}' --actor user"
+            ),
+            "publish by the orchestrator": (
+                f"{APPEND} --type gate-decision --data '{PUBLISH}' --actor orchestrator"
+            ),
+            "publish with no actor": f"{APPEND} --type gate-decision --data '{PUBLISH}'",
+            "a ready verdict": (
+                f"{APPEND} --type review-verdict --data '{{\"verdict\":\"ready\"}}'"
+            ),
+            "another type, opaque": f'{APPEND} --type phase-entered --data "$D"',
+            "an opaque stream": (
+                f'{J} append --stream "$(git branch --show-current)" --type task-done '
+                f"--data '{{\"task_id\":\"T001\"}}'"
+            ),
+            "a batch of other events": f"{APPEND} --batch <<'EOF'\n{task_done}\nEOF",
+            # A double-quoted variable is one word: it cannot split into another --type.
+            "a quoted stream after the type": (
+                f'{J} append --type task-done --stream "$B" '
+                f"--data '{{\"task_id\":\"T001\"}}'"
+            ),
+            "an opaque inline value of another type": (
+                f'{APPEND} --type phase-entered --data="$D"'
+            ),
+            "a journal note that names an append": (
+                f"{APPEND} --type deviation "
+                f"--data '{{\"note\":\"journal.py append --batch reads stdin\"}}'"
+            ),
+            # Review round 2, F6: an unsplit value of a known top-level option is skipped.
+            "a quoted inline db": (
+                f'{J} --db="$DB" append --stream s --type gate-decision --actor user '
+                f"--data '{CLARIFY_BY_USER}'"
+            ),
+            "a quoted db": (
+                f'{J} --db "$DB" append --stream s --type gate-decision --actor user '
+                f"--data '{CLARIFY_BY_USER}'"
+            ),
+            "a batch with the user's clarify decision": (
+                f"{APPEND} --batch <<'EOF'\n"
+                '{"type":"phase-entered","data":{"phase":"design"}}\n'
+                '{"type":"gate-decision","data":%s,"actor":"user"}\nEOF' % CLARIFY_BY_USER
+            ),
+            "a heredoc that is not stdin": (
+                f"cat > notes.md <<'EOF'\n{USER_LINE}\nEOF\n{J} status"
+            ),
+        }
+        for name, command in commands.items():
+            with self.subTest(command=name):
+                self.assertSilent(command)
+
+    def test_reads_of_the_journal_and_of_its_source(self):
+        # `grep append journal.py` names both words, but runs no append: with no --data and
+        # no --batch there is no payload to refuse.
+        for command in (
+            f"{J} status",
+            f"{J} position --json  # append",
+            "grep append shipgate/scripts/journal.py",
+            "grep -n journal.py append",
+            f"{J} status --json && echo append",
+            f'python3 "$J" status --json  # append',
+            "cp $SRC $DST && grep append shipgate/scripts/journal.py",
+            # Review round 3: a word with no break in it is not a command line.
+            "python3 -m pytest shipgate/tests/test_journal.py::test_append_rejects_marker",
+            "cp journal.py journal.py.append.bak",
+            "git commit -m 'docs: journal.py append --batch reads stdin'",
+            # Review round 2, F8: the text-only exemption sees past a wrapper.
+            "timeout 30 git commit -m 'x: journal.py append --stream $S'",
+            "sudo -u alice git commit -m 'x: journal.py append --batch'",
+            f"tee docs/notes.md <<'EOF'\n{APPEND} --type gate-decision --actor user\nEOF",
+            "timeout 60 bash <<'EOF'\necho hi\nEOF",
+            f"git commit -m \"$(cat <<'EOF'\nfix: journal.py append --data \"$D\" publish\nEOF\n)\"",
+        ):
+            with self.subTest(command=command):
+                self.assertSilent(command)
+
+
+class TestPreToolUseNoOpPath(PreToolUseCase):
+    """FR-005, SC-002: not applicable means no output, exit 0, and no file read."""
+
+    def run_raw(self, stdin_text):
+        return subprocess.run(
+            [sys.executable, str(HOOKS / "pre_tool_use.py")],
+            input=stdin_text, capture_output=True, text=True, cwd=str(self.cwd),
+            timeout=60,
+        )
+
+    def test_not_applicable_inputs_are_silent(self):
+        forged = f"{APPEND} --type gate-decision --data '{PUBLISH}' --actor user"
+        inputs = {
+            "another tool": json.dumps(
+                {"tool_name": "Write", "tool_input": {"command": forged}}
+            ),
+            "no journal.py": json.dumps(
+                {"tool_name": "Bash", "tool_input": {"command": "git append --actor user"}}
+            ),
+            "no append": json.dumps(
+                {"tool_name": "Bash", "tool_input": {"command": f"{J} status"}}
+            ),
+            "no command": json.dumps({"tool_name": "Bash", "tool_input": {}}),
+            "empty stdin": "",
+            "invalid JSON": "{not json",
+        }
+        for name, stdin_text in inputs.items():
+            with self.subTest(input=name):
+                result = self.run_raw(stdin_text)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
+
+    def test_the_fast_path_reads_no_file(self):
+        driver = (
+            "import os, runpy, sys, sysconfig\n"
+            "hook = sys.argv[1]\n"
+            "roots = {os.path.realpath(sysconfig.get_paths()[k])\n"
+            "         for k in ('stdlib', 'platstdlib')}\n"
+            "seen = []\n"
+            "def audit(event, args):\n"
+            "    if event in ('open', 'os.listdir', 'os.scandir') and args:\n"
+            "        if isinstance(args[0], (str, bytes)):\n"
+            "            seen.append(os.path.realpath(os.fsdecode(args[0])))\n"
+            "sys.addaudithook(audit)\n"
+            "runpy.run_path(hook, run_name='__main__')\n"
+            "stray = [p for p in seen if p != os.path.realpath(hook)\n"
+            "         and not any(p == r or p.startswith(r + os.sep) for r in roots)]\n"
+            "sys.stderr.write('\\n'.join(stray))\n"
+        )
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls -la"}})
+        result = subprocess.run(
+            [sys.executable, "-c", driver, str(HOOKS / "pre_tool_use.py")],
+            input=payload, capture_output=True, text=True, cwd=str(self.cwd), timeout=60,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "", "the fast path opened a file")
+
+
+class TestPreToolUseFailurePolicy(unittest.TestCase):
+    """ADR 0015 §7: a crash refuses only a command that names journal.py, append, publish."""
+
+    def run_main_with_a_crash(self, command):
+        import contextlib
+        import io
+        from unittest import mock
+
+        import pre_tool_use
+
+        stdin = io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}))
+        stdout = io.StringIO()
+        with mock.patch.object(pre_tool_use, "inspect", side_effect=RuntimeError("boom")), \
+                mock.patch.object(sys, "stdin", stdin), contextlib.redirect_stdout(stdout):
+            pre_tool_use.main()
+        return stdout.getvalue()
+
+    def test_a_crash_on_a_publish_append_refuses(self):
+        output = json.loads(self.run_main_with_a_crash(f"{APPEND} --data '{PUBLISH}'"))
+        decision = output["hookSpecificOutput"]
+        self.assertEqual(decision["permissionDecision"], "deny")
+        self.assertIn("could not read", decision["permissionDecisionReason"])
+
+    def test_a_crash_on_any_other_append_is_silent(self):
+        self.assertEqual(self.run_main_with_a_crash(f"{APPEND} --type task-done"), "")
 
 
 # SC-008: hooks run on every user's machine in every project, so the code graph stays out of

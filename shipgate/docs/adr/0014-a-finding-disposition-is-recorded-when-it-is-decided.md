@@ -2,11 +2,11 @@
 type: adr
 title: "0014. A finding's disposition is recorded when it is decided, and position folds it"
 created: 2026-11-02
-updated: 2026-11-04
+updated: 2026-11-06
 tags:
   - adr
   - shipgate
-status: accepted (amended 2026-11-04, shipgate 0.22.0)
+status: accepted (amended 2026-11-04, shipgate 0.22.0; amended 2026-11-06, shipgate 0.23.0)
 date: 2026-11-02
 issue: "#5, HUD ADR 0007 follow-up"
 related:
@@ -28,6 +28,16 @@ related:
 > human name travels beside it, never in its place. `position --json` adds `label` to each
 > folded entry: the newest label a `review-disposition` gave that key, or null. A later event
 > without a label keeps the earlier one.
+
+> **Amended 2026-11-06 (shipgate 0.23.0):** two refusals close what a fix round opens.
+> Every key of `review-disposition.dispositions`, `review-disposition.labels` and
+> `review-verdict.dispositions` must be a location `<path>:<line|?>`, read as the HUD's
+> `parseLocation` reads it; `append` refuses another key, `--force` included. And `append`
+> refuses a `ready` verdict while the fold holds a `fixing` key that the verdict's own map
+> does not close; the message lists the keys and the `review-disposition` row that closes
+> them, and `--force` overrides it only with `--force-reason`. Measured on a production
+> journal: 5 of 10 streams ended with 37 of about 200 keys at `fixing`, from a closure
+> never recorded and from free labels on one side of the fold.
 
 ## Context
 

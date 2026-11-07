@@ -71,6 +71,16 @@ fi
 if [ -n "$new" ]; then
   printf '\nrun-evals: results dir: %s\n' "${new%/}"
   printf 'run-evals: summarize:   python3 %s/summarize.py %s\n' "$here" "${new%/}"
+  # A case with an expected.json gets the signal grader (ADR 0016): precision and recall
+  # of the signals.py blast result the agent read. It never changes this script's status.
+  grader="$plugin/evals/signal_grader.py"
+  for d in "$plugin"/evals/$glob/; do
+    if [ -f "$grader" ] && [ -f "${d}expected.json" ]; then
+      printf '\nrun-evals: signal grader (reads trace.jsonl, kept only with --keep-temp): python3 %s results %s\n' "$grader" "${new%/}"
+      python3 "$grader" results "${new%/}" || printf 'run-evals: signal grader exited %s; the harness status stands\n' "$?" >&2
+      break
+    fi
+  done
 else
   printf '\nrun-evals: no new dir under %s (did you pass --output-dir/--eval-dir, or did the run abort?)\n' "$results_root" >&2
 fi

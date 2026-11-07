@@ -82,6 +82,12 @@ scores it (`min`/`max` set). `summarize.py` prints per case: with score, without
 delta, per-run turns per arm, and `skill-fired k/n` for the with arm (from the run's
 graders, else the trace if kept, else `n/a`).
 
+When the case holds an `expected.json` (13, 72), `run-case.sh` then runs
+`shipgate/evals/signal_grader.py results <dir>`: one row per run with the precision and
+recall of the `signals.py` blast result the agent read. It needs the trace, so pass
+`--keep-temp`; without it every row says "trace gone". The grader's exit status never
+changes the script's. See the evals README, "Signal grader".
+
 Cost rule of thumb (measured 2026-10-06, 69 cases, 3 runs per arm): $1.46 per case per
 with+without tree — small cases ~$1.40, the large journaled fixtures (58–67) ~$1.80, the design
 fan (51) $4 — so the whole suite is ~$100 and ~95 min on 3 parallel lanes. Probes are ~$0.10 a

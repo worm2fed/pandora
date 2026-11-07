@@ -365,9 +365,13 @@ those test files by name, as well as the suite. Then give a clear verdict:
 outcome**. Do it in the same turn, before the MR/PR question, for Ready and Not ready alike. A
 verdict delivered without the event leaves the stream saying the review never happened.
 
-**Journaled: the fix round records its dispositions too.** Append `review-disposition` with
-`fixing` when you dispatch a fix for a finding. Append the closed state (`fixed`, `rejected` or
-`deferred`) when the re-review confirms it. The verdict's `dispositions` stays the final word.
+**Journaled: the fix round records its dispositions too, and closes every one.** Append
+`review-disposition` with `fixing` when you dispatch a fix for a finding. Append the closed
+state (`fixed`, `rejected` or `deferred`) when the re-review confirms it. Close every `fixing`
+key with a `review-disposition` before you append the verdict. `append` refuses a `ready`
+verdict while a key is still `fixing` and its own `dispositions` does not close it. The
+refusal lists the open keys and prints the `review-disposition` row that closes them. The
+verdict's `dispositions` stays the final word.
 
 **Cap the internal loop at two rounds.** Not-ready → fix → re-review is normal once. A second
 round should close the gap. If blockers still stand after two rounds, surface the open list
@@ -386,7 +390,7 @@ the worklog's round entries and Rejected findings, ledger lines, the MR/PR body 
 reply in the review-feedback cycle; absent, a placeholder, or `plain`, write them as before.
 
 With no tracker/remote, stop at "Ready, evidence attached" and let the user handle pushing.
-On a journaled project the verdict (or the user's publish decision) is recorded *before* the
+On a journaled project the verdict (or the user's publish approval) is recorded *before* the
 MR/PR goes up. See **Record the outcome** below.
 
 **Use the canonical template. Don't invent a body.** If the config's **Forge & tracker**
@@ -492,7 +496,9 @@ shows every criterion unticked and every finding open:
 
 A disposition key is the finding's location, `<path>:<line|?>`. Never use an invented label
 as the key, such as `null-guard` or `F2`. A free label matches no card and no worklog line,
-so the HUD cannot show the finding's state.
+so the HUD cannot show the finding's state. `append` refuses a key that is not a location, in
+a verdict's `dispositions` and in a `review-disposition`'s `dispositions` and `labels`.
+`--force` does not change that. Put the human name in `labels`, keyed by the location.
 
 Keep the keys compact. For the path, use the last segments of the path the review reported,
 at most three, and enough to be unique (`skills/review/SKILL.md`, not
@@ -500,7 +506,10 @@ at most three, and enough to be unique (`skills/review/SKILL.md`, not
 path. The whole payload must stay under the journal's 1 KB cap on a work stream, or the
 append is refused. With many findings, keep the dispositions and drop the `findings`
 counts first. Then cut `ranking.files` to its first 3 entries. Never drop `ranking` itself
-or its `source`.
+or its `source`. A verdict that closes about 20 findings still does not fit, even with no
+counts and 3 ranking files. Then append `review-disposition` rows with state `fixed` for
+those findings just before the verdict, and let the verdict's map carry the rest. `position`
+folds both, and the latest event wins for each key.
 `journal.py vocab --shape review-verdict` lists both keys and the values each one accepts.
 
 The verdict comes at the end of a round. Between verdicts, record each decision as it is
@@ -552,18 +561,25 @@ It holds counts and references only; the finding text and thread bodies stay in 
 
 **Publishing follows the record, not the momentum.** The journal accepts `mr-opened` only when
 the stream holds one of two events, appended after its last `task-done`: a `review-verdict`
-with `verdict: ready`, or the user's own publish decision:
+with `verdict: ready`, or the user's own publish approval.
+
+The user records the approval, not you. Ask the user to approve in the shipgate-hud publish
+dialog ("Approve publishing"). Without the HUD, the user runs the append in their own shell
+with `!`. Give the user the command with the stream name and the script's full path written
+out:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
+! python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type gate-decision --actor user \
   --data '{"gate":"publish","question":"Open the MR/PR now?","decision":"publish",
-           "mode":"ask","raised_by":"user"}'
+           "mode":"ask","raised_by":"user","source":"shell"}'
 ```
 
-All three of `gate: publish`, `raised_by: user` and `decision: publish` (that literal word)
-are required. So a flow cannot authorize its own publish by raising the gate and answering it
-itself. An instruction to start the next piece of work authorizes neither route.
+The approval needs `gate: publish`, `raised_by: user`, `decision: publish` (that literal
+word), a `source` marker (`dialog` or `shell`) and the actor `user`. Never append a publish
+decision as the user's yourself. A PreToolUse hook refuses that append. So a flow cannot
+authorize its own publish by raising the gate and answering it itself. An instruction to
+start the next piece of work authorizes neither route.
 
 A missing or unreadable database is an infrastructure failure, not a reason to skip the
 append. Surface it loudly. Continue un-journaled only with the user's acknowledgement.

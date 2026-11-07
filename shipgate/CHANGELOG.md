@@ -2,6 +2,109 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.23.0 — only the user approves a publish, a `ready` verdict closes every finding in a fix, and a script grades the blast-radius signal.
+
+**The user's publish approval (#1, ADR 0015).** Before this release, `--actor user` and
+`raised_by: user` were text the model could write. So a flow could record a publish
+decision "by the user" and satisfy `mr-opened` and shipgate-hud's publish gate.
+- `gate-decision` takes an optional `source`, one of `dialog` or `shell`. `vocab --shape
+  gate-decision` prints it. shipgate-hud's publish dialog writes `dialog`. Your own `!`
+  command writes `shell`.
+- **Changed rule.** A `gate-decision` authorizes a publish only with `gate: publish`,
+  `decision: publish`, `raised_by: user`, an actor of role `user` and a `source` marker.
+  `mr-opened`, `status --json` and `position --json` read this one rule, and the HUD reads
+  its result.
+- **Older journals.** A user publish decision recorded before 0.23.0 has no marker and no
+  longer authorizes. The gate asks again: approve in the HUD's dialog, or run the append with
+  `!`.
+- `mr-opened`'s refusal now sends the model to the user. It no longer suggests recording the
+  user's decision.
+- **A new PreToolUse hook on Bash** (`hooks/pre_tool_use.py`). It refuses a command that
+  appends a `gate-decision` with a `source` marker, at any gate. It also refuses a publish
+  `gate-decision` that names the user: `--actor user`, `user@…`, a JSONL `actor` of that
+  role, or `raised_by: user`. `gate` and its alias `kind` are compared trimmed and case
+  folded. Decisions at other gates pass with every actor.
+- The hook lexes the shell line itself. It reads quotes, escapes, `$'…'`, operators,
+  heredocs (quoted and unquoted delimiters, `<<-`), here-strings and redirections. It reads
+  `--data`, `--data=`, `--batch`, `--type`, `--actor` and their unique abbreviations, as
+  argparse does. Stdin can come from a heredoc, a here-string, or a pipe from `echo`,
+  `printf` or `cat`. `journal.py` can sit at any path or behind a variable. A literal line
+  given to `sh -c`, `bash -c`, `zsh -c` or `eval`, a `$(…)` body and a shell that reads a
+  literal script on stdin are lexed again. A table of wrappers (`timeout`, `nice`, `sudo`,
+  `env`, `stdbuf`, `nohup`, `time` and others), with the options that take a value, finds
+  the program behind them, so `timeout 60 bash <<'EOF'` is read too. A literal word that
+  holds `journal.py`, `append` and a word break is lexed again, whatever program takes it
+  (`ssh host '…'`). So is such a literal stdin of a program the hook does not know; there
+  only a marker or a user claim refuses. The arguments
+  of a journal append itself and of a program that only prints or stores text (`git`, `gh`,
+  `glab`, `echo`, `printf`, `grep`, `rg`, `jq`, `cat`, `head`, `tail`, `tee`) are not lexed
+  again, so a commit message that names an append passes, behind a wrapper too.
+- **It fails closed** on a payload it cannot read in full, when the append can be a
+  `gate-decision`: a variable, a command substitution, a redirected file, a pipe from
+  another command, `xargs`. An unquoted expansion in the append's words (`--stream $S`) can
+  split into more options, and a subcommand can come from a variable (`journal.py $SUB`);
+  both are refused too, with a message that asks to quote the expansion. A double-quoted
+  `"$B"` is one word, and so is `--db="$DB"`. An append whose literal `--type` names another
+  type, after any such word, passes. A shell whose script comes from a stdin the hook cannot
+  read (a group, a subshell, a file) is refused when the line names `journal.py` and
+  `append`.
+- **The no-op path.** A tool other than Bash, or a command without the words `journal.py`
+  and `append`, prints nothing and exits 0. It reads no file; a test proves it with an
+  audit hook. A crash exits 0, except on a command that names `journal.py`, `append` and
+  `publish`: that one is refused.
+- The refusal says only the user approves a publish: "Approve publishing" in the HUD's
+  dialog, or the user's own `!` command with `"source": "shell"`.
+- This is a net against a flow that forges approval through its tools. It is no defence
+  against deliberate circumvention: a direct SQLite write, `python3 -c`, a copy of the
+  script. The README says so, and ADR 0015 lists the known limits.
+
+**A finding key is a location (#14, ADR 0014 amended).** On a production project's journal
+(counts only), 5 of 10 streams that used `review-disposition` ended with keys at `fixing`:
+37 of about 200 keys. One cause was key drift: `fixing` under `<path>:<line>`, the closure
+under a free label such as `F21`.
+- **Changed rule.** Every key of `review-disposition.dispositions`,
+  `review-disposition.labels` and `review-verdict.dispositions` must be a location
+  `<path>:<line|?>`, read as the HUD's `parseLocation` reads it: split at the last `:`, a
+  non-empty path after `./` is dropped, a line of ASCII digits or `?`. `append` refuses
+  another key and names up to 5 of them. The hint says to put a name in `labels`.
+  `--force` does not waive it. `import` does not check old rows again.
+
+**A `ready` verdict closes every finding in a fix (#14, ADR 0014 amended).** The other cause:
+a fix round appended `fixing`, and the `ready` verdict carried an empty map.
+- **Changed rule.** `append` refuses a `ready` verdict while the fold holds a `fixing` key
+  that the verdict's own map does not close. The existing verify check runs first. The
+  message lists up to 10 keys and prints the `review-disposition` row that closes them, with
+  the round of the events that opened them.
+- `--force` overrides it only with `--force-reason`, as the payload cap does.
+
+**Skills.** `review`: the fix round closes every `fixing` key (`fixed`, `rejected` or
+`deferred`) before the verdict. "Keep the keys compact" now says to close about 20
+findings with `review-disposition` rows before the verdict, because a verdict that closes
+them all breaks the 1 KB cap. That line leaves `docs/ledger.md`. The publish section and
+`feature`'s epic bullet say the user approves in the HUD dialog or with `!`; the model never
+records that decision.
+
+**A signal grader for the evals (#6, ADR 0016).** `evals/signal_grader.py` scores a
+`signals.py blast --json` or `hotspots --blast --json` result against a case's
+`expected.json`. It prints precision and recall for `blast.files` (truth: importers and
+tests) and for `blast.tests`. It reads the result from a run's trace (`trace`, `results`),
+or runs `signals.py` in the scaffolded fixture (`fixture --arm graph|regex`). Case 13 gets
+an `expected.json`. `run-case.sh` runs the grader after a case that has one, in both arms;
+the trace exists only with `--keep-temp`. It adds no grader to the harness score or to
+`baseline.json`. Offline, case 72 gives `blast.files` recall 0.95 on the graph arm and
+0.03 on the regex arm; case 13 gives 1.00 on both.
+
+**Golden contract.** The publish decision of the `feature/golden-flow` stream carries
+`source: dialog`, so `status --json` prints it there. The `dispositions` stream's `ready`
+verdict is appended with `--force` and a reason. It keeps the stale `fixing` case the HUD
+draws.
+
+**Tests.** The hook: every forged spelling, every opaque payload, the allowed decisions,
+the no-op path and the failure policy. The journal: the `source` enum, the publish rule
+with and without the marker, actor and `raised_by`, and `status`, `position` and the gate
+agreeing. Also location keys in all three maps (with `--force`), the `ready` refusal and
+its override. The grader: the metrics, `score`, `trace`, `results` and a regex-arm fixture.
+
 v0.22.0 — a finding keeps its location as its key, release files leave the ranking, and a newer sidecar is named.
 
 **`labels` on `review-disposition` (ADR 0014, amended).** Orchestrators gave findings

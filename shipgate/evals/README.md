@@ -147,6 +147,78 @@ upstreams"), and a grep for `attempt` finds `attempts` in `policy.ts`.
 Case 11 grades the negative side: `no-codegraph-run` fails on any Bash call that names
 `codegraph` or runs `signals.py graph`, in both arms.
 
+## Signal grader
+
+The harness grades the agent's answer. `signal_grader.py` grades the signal that the agent
+read: the `blast` object of `signals.py blast --json` or `signals.py hotspots --blast
+--json`. On case 72 the two arms give the same answer score, but the signals differ by a
+factor of 28. The grader shows that difference (ADR 0016, #6).
+
+It reads the case's `expected.json`. Only cases 13 and 72 have one. Case 09 is a
+blast-radius case too, but it has no `expected.json`, so it gets no signal grade.
+
+The grader gives two numbers for each of two lists:
+
+- **Precision** = true files in the list / files in the list. An empty list or a `null`
+  list gives 1.0.
+- **Recall** = true files in the list / true files. An empty truth gives 1.0.
+
+| list | truth |
+|---|---|
+| `blast.files` | `importers` and `tests` of `expected.json` |
+| `blast.tests` | `tests` of `expected.json` |
+
+The changed file itself (`hub`) is not in the truth, because `signals.py` does not list a
+seed as its own importer. The grader drops a leading `./` before it compares paths. It also
+prints the counts (true positives, got, truth), the missed and the extra files, and the
+structure source (`graph` or `regex`). `blast.truncated: true` means that `--limit` cut the
+list. The grader then reports the cut, and the recall is a lower bound.
+
+Three ways to run it:
+
+```
+G=shipgate/evals/signal_grader.py
+python3 $G fixture shipgate/evals/72-graph-blast-radius-large --arm graph   # or --arm regex
+python3 $G trace <run>/trace.jsonl shipgate/evals/72-graph-blast-radius-large/expected.json
+python3 $G results shipgate/evals/results/<timestamp>
+```
+
+- `fixture` runs offline and costs nothing. It scaffolds `fixture.sh` into a temp dir and
+  runs `signals.py blast --diff HEAD~1 --json` in `app/`. The graph arm uses `--graph auto`
+  (codegraph must be on `PATH`), the regex arm `--graph off`. The prompts ask about "the
+  change at HEAD", so the seeds are the files that HEAD changes. In case 72 HEAD also
+  changes a script that nothing imports; that seed adds no files.
+- `trace` reads a kept `trace.jsonl`. It scores the last Bash call that runs `signals.py`
+  with `blast` (or `hotspots --blast`) and `--json` and whose result holds the JSON. It
+  ignores other output in the same result, such as an advisory line. With no such call it
+  prints "no signals result in the trace" and exits 3.
+- `results` runs `trace` for each run of each case with an `expected.json`. It prints one
+  row per run: case, arm, run, files P/R, tests P/R and source. `run-case.sh` runs it after
+  each such case, in both arms (also with `--no-codegraph`). The trace exists only with
+  `--keep-temp`; without it the row says "trace gone".
+
+Every subcommand takes `--json`. The grader adds nothing to the harness score or to
+`baseline.json`, and `compare.py` does not track it (ADR 0016).
+
+`expected.json` of case 72 comes from `fixture.sh --expected`. The one of case 13 comes from
+a read of the imports in `fixture.sh`. HEAD changes only `src/util/round.ts`. `currency.ts`
+and `percent.ts` import it, `lineItem.ts` and `tax.ts` import those, `invoice.ts` imports
+both, and `pdfSummary.ts` imports `invoice.ts`. The case has no test files.
+
+Offline result on 2026-11-06 (`fixture`, codegraph 1.6.2):
+
+| case | arm | `blast.files` P / R | tp / got / truth | `blast.tests` P / R | tp / got / truth |
+|---|---|---|---|---|---|
+| 72 | graph | 1.00 / 0.95 | 56 / 56 / 59 | 1.00 / 1.00 | 15 / 15 / 15 |
+| 72 | regex | 1.00 / 0.03 | 2 / 2 / 59 | 1.00 / 0.00 | 0 / null / 15 |
+| 13 | graph | 1.00 / 1.00 | 6 / 6 / 6 | 1.00 / 1.00 | 0 / 0 / 0 |
+| 13 | regex | 1.00 / 1.00 | 6 / 6 / 6 | 1.00 / 1.00 | 0 / null / 0 |
+
+In 72 the graph misses three files: the two barrels `money/src/index.ts` and
+`notify/src/index.ts`, and `core/src/config/scanRebateSet.ts`, which only a second barrel
+reaches. The regex scanner does not resolve the `@app/*` package names, and it finds no
+tests (`null`).
+
 ## Backlog
 
 - **Multi-turn flows** — `feature` (start path: branch + confirm), `workspace`, `implement`,

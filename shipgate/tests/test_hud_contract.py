@@ -75,8 +75,15 @@ REVIEW_RANKING = {
 # shipgate 0.21.0 (ADR 0014): two interim `review-disposition` rows, then a verdict that
 # closes one finding. `position` folds them per key. The stream has a verdict and no
 # review board: the HUD's verdict-only round (#5). shipgate 0.22.0: the second interim row
-# names one key with `labels`, so the fold prints a label and a null one.
+# names one key with `labels`, so the fold prints a label and a null one. shipgate 0.23.0:
+# `append` refuses a `ready` verdict over an open `fixing` unless it is forced with a
+# reason, so this verdict is forced: the fold keeps a `fixing` older than a `ready`
+# verdict, the stale state the HUD draws as `fixing?`.
 DISPOSITIONS = "feature/golden-dispositions"
+# Rows appended with `--force` and this reason, by (stream, type).
+FORCED = {
+    (DISPOSITIONS, "review-verdict"): "the golden stale fixing: src/other.py:? stays open",
+}
 
 FILES = {
     "docs/prd/golden-flow.md": """---
@@ -207,10 +214,12 @@ SCRIPT = [
     # Back from review: review stays `revisited`.
     (FLOW, "phase-entered", {"phase": "implement"}, None),
     (FLOW, "verify-run", {"outcome": "fail", "task_ids": ["T002"]}, None),
+    # The user's approval, as the HUD's publish dialog records it (shipgate 0.23.0,
+    # ADR 0015): the `source` marker and a `user` actor. It authorizes `publish`.
     (FLOW, "gate-decision", {
         "gate": "publish", "question": "open the MR before the second review?",
-        "decision": "publish", "mode": "ask", "raised_by": "user",
-    }, None),
+        "decision": "publish", "mode": "ask", "raised_by": "user", "source": "dialog",
+    }, "user"),
     (NESTED, "flow-started", {"request": "a nested repo's flow", "branch": NESTED}, None),
     (NESTED, "phase-entered", {"phase": "workspace"}, None),
     (EPIC, "flow-started", {"request": "a session-driven epic"}, f"orchestrator@{SESSION}"),
@@ -308,6 +317,9 @@ def build_golden() -> tuple:
                     "--data", json.dumps(data)]
             if actor is not None:
                 argv += ["--actor", actor]
+            reason = FORCED.get((stream, event_type))
+            if reason is not None:
+                argv += ["--force", "--force-reason", reason]
             _journal(root, *argv, session=session[0] if session else None)
         stamps = _set_times(root)
         roots = sorted({str(root), str(root.resolve())}, key=len, reverse=True)
@@ -412,6 +424,12 @@ class TestHudContract(unittest.TestCase):
                          {"done", "skipped", "current", "revisited", "todo"})
         self.assertEqual(flow["publish"]["kind"], "authorized")
         self.assertEqual(flow["publish"]["by"], "gate-decision")
+        # The marked user decision authorizes it (shipgate 0.23.0, ADR 0015).
+        publish = [d for d in flow["decisions"] if d["gate"] == "publish"]
+        self.assertEqual([d["seq"] for d in publish], [flow["publish"]["seq"]])
+        status_flow = next(f for f in self.status["all"]["features"]
+                           if f["stream"] == FLOW)
+        self.assertIn("dialog", [d.get("source") for d in status_flow["gate_decisions"]])
         self.assertEqual(flow["artifacts"]["worklog_from"], "event")
         self.assertEqual(flow["artifacts"]["prd"], "docs/prd/golden-flow.md")
         self.assertEqual(len(flow["artifacts"]["adrs"]), 2)

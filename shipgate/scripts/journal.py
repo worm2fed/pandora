@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -177,6 +178,10 @@ EVENT_VOCABULARY: Dict[str, str] = {
 # (`status --json`, `position`) and the append check read the same list.
 GateMode = Literal["ask", "executive"]
 RaisedBy = Literal["user", "orchestrator"]
+# Where a user's `gate-decision` was written outside the model's tools (ADR 0015): the
+# HUD's publish dialog, or the user's own `!` command. A publish decision authorizes
+# only with one of these.
+DecisionSource = Literal["dialog", "shell"]
 VerifyOutcome = Literal["pass", "fail"]
 ReviewVerdict = Literal["ready", "not-ready"]
 # A `review-verdict`'s optional maps (ADR 0009): a PRD success criterion's status, and
@@ -273,6 +278,7 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         "enums": {
             "mode": list(get_args(GateMode)),
             "raised_by": list(get_args(RaisedBy)),
+            "source": list(get_args(DecisionSource)),
         },
         "aliases": {"chosen": "decision", "kind": "gate"},
         "defaults": {"raised_by": "orchestrator"},
@@ -335,10 +341,12 @@ class GateDecisionPayload(_GateDecisionKeys, total=False):
     how a list-valued decision authorized in the HUD and was refused by ``mr-opened``
     (audit D6). ``raised_by`` is always present, because the shape's default fills it.
     Rows written before T010 may break any of this; readers of old rows type them as
-    ``Dict[str, Any]``.
+    ``Dict[str, Any]``. ``source`` is optional: the HUD's publish dialog writes
+    ``dialog``, the user's own ``!`` command writes ``shell`` (ADR 0015).
     """
 
     rationale: str
+    source: DecisionSource
 
 
 class _ReviewVerdictKeys(TypedDict):
@@ -353,6 +361,9 @@ class ReviewVerdictPayload(_ReviewVerdictKeys, total=False):
     it. Both are optional — a verdict may judge neither — and a value outside its
     vocabulary is refused at append (the ``map_enums`` rule kind). ``style`` and
     ``ranking`` (#11, #10) are optional too; ``objects`` and ``string_lists`` check them.
+    A ``dispositions`` key that is not a location is refused (``check_location_keys``),
+    and a ``ready`` verdict that leaves a folded key at ``fixing`` is refused unless
+    forced with a reason (``_validate_review_verdict``, ADR 0014 amended 0.23.0).
     """
 
     criteria: Dict[str, CriterionStatus]
@@ -375,6 +386,8 @@ class ReviewDispositionPayload(_ReviewDispositionKeys, total=False):
     non-negative integer (``integers``). ``note`` is optional text. ``labels`` is
     optional too: it maps a finding key to a short human name, each name a non-empty
     string (``string_maps``). The name travels beside the key, never in its place.
+    Every key of ``dispositions`` and ``labels`` must be a location
+    (``check_location_keys``, ADR 0014 amended 0.23.0).
     """
 
     note: str
@@ -1094,26 +1107,117 @@ def _validate_phase_entered(
 def _validate_review_verdict(
     conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
 ) -> None:
+    """A ``ready`` verdict needs fresh verify evidence, then no open ``fixing`` key.
+
+    The evidence check comes first: a verdict without it is refused whatever its
+    findings. ``--force`` skips both; ``append_event`` asks a reason for skipping the
+    second (``_require_closure_reason``).
+    """
     if data.get("verdict") != "ready":
         return
     task_dones = read_events(conn, stream=stream, types=("task-done",))
     last_task_done_seq = max((e.seq for e in task_dones), default=0)
-    for event in _passing_verify_runs(conn, stream):
-        if event.seq > last_task_done_seq:
-            return
-    raise GateViolation(
-        "review-verdict=ready requires a verify-run with outcome=pass recorded after "
-        f"the last task-done in stream {stream!r}"
+    if not any(
+        event.seq > last_task_done_seq for event in _passing_verify_runs(conn, stream)
+    ):
+        raise GateViolation(
+            "review-verdict=ready requires a verify-run with outcome=pass recorded "
+            f"after the last task-done in stream {stream!r}"
+        )
+    open_keys, round_number = open_fixing_keys(conn, stream, data)
+    if open_keys:
+        raise GateViolation(
+            _open_fixing_message(stream, open_keys, round_number)
+            + " — or append the verdict with --force and a --force-reason"
+        )
+
+
+# How many open keys a refusal lists, and puts in its closing row.
+_OPEN_KEYS_SHOWN = 10
+
+
+def open_fixing_keys(
+    conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
+) -> Tuple[List[str], int]:
+    """The keys a verdict with payload ``data`` would leave at ``fixing``, and a round.
+
+    The fold is ``position``'s (``_position_dispositions`` over the stream's events and
+    its verdicts in the vocabulary); this verdict's own ``dispositions`` then apply on
+    top, each key as ``_finding_key`` leaves it. The keys come in fold order. The round
+    is the highest ``round`` of the ``review-disposition`` events that set the first
+    ``_OPEN_KEYS_SHOWN`` of them to ``fixing``, or 1 when none of those carries one.
+    """
+    events = read_events(conn, stream=stream)
+    verdicts = [
+        e for e in events
+        if e.type == "review-verdict"
+        and e.data.get("verdict") in get_args(ReviewVerdict)
+    ]
+    folded = _position_dispositions(events, verdicts)
+    states = {key: entry["state"] for key, entry in folded.items()}
+    own = _vocabulary_map(data.get("dispositions"), get_args(Disposition))
+    for key, state in own.items():
+        states[_finding_key(key)] = state
+    open_keys = [key for key, state in states.items() if state == "fixing"]
+    setters = {folded[key]["seq"] for key in open_keys[:_OPEN_KEYS_SHOWN]}
+    rounds = [
+        e.data["round"] for e in events
+        if e.seq in setters
+        and isinstance(e.data.get("round"), int)
+        and not isinstance(e.data.get("round"), bool)
+    ]
+    return open_keys, max(rounds, default=1)
+
+
+def _open_fixing_message(stream: str, open_keys: List[str], round_number: int) -> str:
+    """The refusal's body: the open keys and the ``review-disposition`` that closes them."""
+    shown = open_keys[:_OPEN_KEYS_SHOWN]
+    more = len(open_keys) - len(shown)
+    closing = json.dumps(
+        {"round": round_number, "dispositions": {key: "fixed" for key in shown}}
+    )
+    return (
+        f"review-verdict=ready in stream {stream!r} leaves {len(open_keys)} finding(s) "
+        "at fixing: " + ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+        + ". Close each one (fixed, rejected or deferred) before the verdict, or in the "
+        "verdict's own dispositions map: `journal.py append --stream "
+        f"{shlex.quote(stream)} --type review-disposition --data {shlex.quote(closing)}`"
+        " (write rejected or deferred where that is the state)"
     )
 
 
-def _authorizes_publish(data: Dict[str, Any]) -> bool:
-    """Whether a ``gate-decision`` is the deliberate call to publish.
+def _require_closure_reason(
+    conn: sqlite3.Connection,
+    stream: str,
+    event_type: str,
+    data: Dict[str, Any],
+    force_reason: Optional[str],
+) -> None:
+    """Refuse ``--force`` without a reason on a ``ready`` verdict over open ``fixing``.
 
-    All three conditions matter: the orchestrator can raise a publish gate and answer
+    ``--force`` skips ``validate_gate``, so this is the one check left on that path
+    (ADR 0014, amended 0.23.0), the same pattern as ``check_payload_size``.
+    """
+    if force_reason or event_type != "review-verdict" or data.get("verdict") != "ready":
+        return
+    open_keys, round_number = open_fixing_keys(conn, stream, data)
+    if open_keys:
+        raise UsageError(
+            "--force on " + _open_fixing_message(stream, open_keys, round_number)
+            + " — --force needs --force-reason saying why the verdict leaves them open"
+        )
+
+
+def _authorizes_publish(data: Dict[str, Any]) -> bool:
+    """Whether a ``gate-decision`` payload is the user's deliberate call to publish.
+
+    All four conditions matter: the orchestrator can raise a publish gate and answer
     it itself, so a decision that only *sits at* the gate — or records "no" there —
     would otherwise let the flow authorize its own MR. A ``decision`` that is not a string
-    (a row from before the ``strings`` rule) never authorizes.
+    (a row from before the ``strings`` rule) never authorizes. The ``source`` marker says
+    the decision was written outside the model's tools, by the HUD's publish dialog or
+    the user's own ``!`` command (ADR 0015); an unmarked decision, older rows included,
+    never authorizes. ``publish_authorization`` also reads the event's actor role.
     """
     decision = data.get("decision")
     return (
@@ -1121,6 +1225,7 @@ def _authorizes_publish(data: Dict[str, Any]) -> bool:
         and data.get("raised_by") == "user"
         and isinstance(decision, str)
         and decision.strip().lower() == "publish"
+        and data.get("source") in get_args(DecisionSource)
     )
 
 
@@ -1153,9 +1258,10 @@ def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
     ``events`` are one stream's, in any order; the rule reads them in seq order. After
     the last ``task-done`` (seq 0 when there is none), the first event that is either a
     ``review-verdict`` with ``verdict: ready`` or a ``gate-decision`` that
-    ``_authorizes_publish`` accepts gives ``{kind: authorized, by: <its type>, seq,
-    at: <its ts>}``. No such event gives ``{kind: held}``. A ``decision`` that is not a
-    string never authorizes (audit D6).
+    ``_authorizes_publish`` accepts and whose actor role is ``user`` gives ``{kind:
+    authorized, by: <its type>, seq, at: <its ts>}``. No such event gives ``{kind:
+    held}``. A ``decision`` that is not a string never authorizes (audit D6), and neither
+    does a decision without the ``source`` marker or with another actor (ADR 0015).
 
     ``_validate_mr_opened`` raises when this is held, ``fold_stream`` prints it as
     ``publish`` and ``build_position`` copies it, so the gate and the HUD cannot
@@ -1171,7 +1277,11 @@ def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
         by: PublishBy
         if event.type == "review-verdict" and event.data.get("verdict") == "ready":
             by = "review-verdict"
-        elif event.type == "gate-decision" and _authorizes_publish(event.data):
+        elif (
+            event.type == "gate-decision"
+            and _authorizes_publish(event.data)
+            and _actor_role(event) == "user"
+        ):
             by = "gate-decision"
         else:
             continue
@@ -1189,10 +1299,12 @@ def _validate_mr_opened(
         return
     raise GateViolation(
         f"mr-opened in stream {stream!r} needs, recorded after the last task-done, "
-        "either a review-verdict with verdict=ready, or a gate-decision with "
-        "gate=publish, raised_by=user and decision=publish — record the review's "
-        "outcome, take the publish decision with the user, or append with --force "
-        "and a reason"
+        "either a review-verdict with verdict=ready, or the user's publish approval: a "
+        "gate-decision with gate=publish, raised_by=user and decision=publish, recorded "
+        "by the HUD's publish dialog or by the user's own `!` command (source: "
+        "dialog|shell, --actor user) — record the review's outcome, ask the user to "
+        "approve in the publish dialog or to run that append with `!`, or append with "
+        "--force and a reason"
     )
 
 
@@ -1229,6 +1341,9 @@ def normalize_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
     Two keys that mean the same thing are refused rather than resolved: silently
     dropping one of them would discard a value the caller meant to record, and there
     is no way to tell which of the two they meant.
+
+    After the shape, the finding maps of ``LOCATION_KEYED_MAPS`` must hold location
+    keys only (``check_location_keys``, ADR 0014 amended 0.23.0).
     """
     shape = EVENT_SHAPES.get(event_type)
     if not shape:
@@ -1255,7 +1370,67 @@ def normalize_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
         payload.setdefault(key, value)
 
     _validate_shape(event_type, payload, shape, "data")
+    check_location_keys(event_type, payload)
     return payload
+
+
+# The maps keyed by a review finding (ADR 0014, amended 0.23.0). Each key must be a
+# location, as the HUD's `parseLocation` reads one; a free label never matches a finding,
+# so its state would stay open on one side of the fold for good.
+LOCATION_KEYED_MAPS: Dict[str, Tuple[str, ...]] = {
+    "review-disposition": ("dispositions", "labels"),
+    "review-verdict": ("dispositions",),
+}
+_LOCATION_LINE_RE = re.compile(r"[0-9]+")
+_LOCATION_KEYS_SHOWN = 5
+
+
+def is_location_key(key: Any) -> bool:
+    """Whether ``key`` is a finding location ``<path>:<line|?>``.
+
+    The same grammar as the HUD's ``parseLocation`` (shipgate-hud ``hooks/review.ts``):
+    the text splits at its last ``:``, which must not be its first character; the path
+    is the text before it with every leading ``./`` dropped, and must not be empty; the
+    line after it is ``?`` or ASCII digits only.
+    """
+    if not isinstance(key, str):
+        return False
+    cut = key.rfind(":")
+    if cut <= 0:
+        return False
+    if _finding_key(key[:cut]) == "":
+        return False
+    tail = key[cut + 1:]
+    return tail == "?" or _LOCATION_LINE_RE.fullmatch(tail) is not None
+
+
+def check_location_keys(event_type: str, payload: Dict[str, Any]) -> None:
+    """Refuse a finding map key that is not a location (ADR 0014, amended 0.23.0).
+
+    A payload check, like the shape: ``--force`` does not waive it. An imported row is
+    not checked again. Runs after ``_validate_shape``, so each map is a JSON object.
+    """
+    for key in LOCATION_KEYED_MAPS.get(event_type, ()):
+        value = payload.get(key)
+        if not isinstance(value, dict):
+            continue
+        bad = [k for k in value if not is_location_key(k)]
+        if not bad:
+            continue
+        shown = ", ".join(json.dumps(k) for k in bad[:_LOCATION_KEYS_SHOWN])
+        more = len(bad) - _LOCATION_KEYS_SHOWN
+        name_home = (
+            "put a human name in data.labels, keyed by the location"
+            if event_type == "review-disposition"
+            else "put a human name in a review-disposition's labels, keyed by the "
+            "location"
+        )
+        raise GateViolation(
+            f"{event_type}: data.{key} has {len(bad)} key(s) that are not a finding "
+            f"location: {shown}" + (f" and {more} more" if more > 0 else "")
+            + " — a key is the finding's `<path>:<line|?>` (`src/a.ts:12`, "
+            f"`src/a.ts:?`); {name_home}"
+        )
 
 
 def _validate_shape(
@@ -1658,6 +1833,10 @@ def append_event(
                     )
             if not force:
                 validate_gate(conn, stream, event_type, payload, project_dir)
+            else:
+                _require_closure_reason(
+                    conn, stream, event_type, payload, force_reason
+                )
 
             version = existing + 1
             implied_phase = PHASE_OF_EVENT.get(event_type)
