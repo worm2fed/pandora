@@ -33,11 +33,12 @@ import {
   REVIEW_OUTPUT_PATH,
   REVIEW_RETURN,
   REVIEW_RETURN_ABORTED,
+  must,
   notificationOf,
 } from './fixtures.review'
 import { listOf, recordOf } from '../hooks/json'
-import { MIN_SHIPGATE_VERSION } from '../hooks/journal'
-import { decodeReviewState, findingPrompt } from '../hooks/review'
+import { MIN_SHIPGATE_VERSION, isoTime, streamName } from '../hooks/journal'
+import { decodeReviewReturn, decodeReviewState, decodeStoredBoards, encodeStoredBoards, findingPrompt, roundId, toReviewBoard } from '../hooks/review'
 import type { ReviewState } from '../types'
 
 /** `/hud` typed by the person. */
@@ -1854,7 +1855,7 @@ describe('register', () => {
      */
     const reviewWatch = (on: On, rewrite: (value: unknown) => unknown = v => v) => {
       const values: ReviewState[] = []
-      on('state.set', async (_$, e, next) => {
+      on('state.set', { plugin: 'shipgate-hud', key: 'review' }, async (_$, e, next) => {
         const stored = e.plugin === 'shipgate-hud' && e.key === 'review' ? recordOf(e.value) : null
         const value = stored !== null && stored.shape === REVIEW_SHAPE ? rewrite(stored.value) : null
         if (value !== null) values.push(decodeReviewState(value))
@@ -1867,6 +1868,62 @@ describe('register', () => {
 
     const launchReview = ($: Engine, id: string = LAUNCH_ID, script = "export const meta = { name: 'shipgate-review' }") =>
       $.tool.call({ tool: 'Workflow', tool_use_id: id, script })
+
+    /** The example stream's store key under the example project root (HUD ADR 0011). */
+    const STORE_KEY = 'review-board:/tmp/project:feat/example-stream'
+
+    /**
+     * Every `$.store.set` (its key and value) and `$.store.delete` (its key) the plugin makes,
+     * recorded and passed on. Register it above `mock.store`, which answers them.
+     */
+    const storeWatch = (on: On) => {
+      const sets: { readonly key: string; readonly value: unknown }[] = []
+      const deletes: string[] = []
+      on('store.set', { key: /^review-board:/ }, async (_$, e, next) => {
+        sets.push({ key: e.key, value: e.value })
+        return next(e)
+      })
+      on('store.delete', { key: /^review-board:/ }, async (_$, e, next) => {
+        deletes.push(e.key)
+        return next(e)
+      })
+      return { sets, deletes }
+    }
+
+    /** The marks of each board a saved entry holds, newest board first; null when the entry does not decode. */
+    const savedMarks = (value: unknown): (string | null)[][] | null => {
+      const saved = decodeStoredBoards(JSON.parse(JSON.stringify(value)))
+      return saved.ok ? saved.value.boards.map(board => board.survivors.map(survivor => survivor.mark)) : null
+    }
+
+    /** The example return as round 1 of `stream`, saved under `root` at `savedAt`, as the store gives it back. */
+    const savedEntry = (stream: string, savedAt = '2026-10-01T00:00:00Z', root = '/tmp/project'): unknown => {
+      const name = must(streamName(stream))
+      const at = must(isoTime(savedAt))
+      const ret = decodeReviewReturn(REVIEW_RETURN)
+      const boards = ret.ok ? [{ ...toReviewBoard(ret.value, null, name, at), round: 1 }] : []
+      return JSON.parse(JSON.stringify(encodeStoredBoards(root, name, boards, at)))
+    }
+
+    /**
+     * The Review tab: its button pressed while another tab is active (the active tab is no
+     * button), then the pane mounted again, as the state answered from memory does not draw
+     * a mounted pane again.
+     */
+    const reviewTab = async ($: Engine) => {
+      const tabs = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      if ((await tabs.find({ type: 'Button', key: 'tab-review' })) !== undefined) await tabs.press({ key: 'tab-review' })
+      await tabs.unmount()
+      return $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+    }
+
+    /** Does the Review tab draw the example board's first card text? */
+    const isBoardDrawn = async ($: Engine): Promise<boolean> => {
+      const pane = await reviewTab($)
+      const card = await pane.find({ type: 'Text', text: /^The handler writes the record before the permission check runs\.$/ })
+      await pane.unmount()
+      return card !== undefined
+    }
 
     // ── The capture path: a notification in, a stored round out. No bound stream needed. ──
 
@@ -2089,43 +2146,237 @@ describe('register', () => {
       await pane.unmount()
     })
 
-    test('SC-002: a board captured in the session is drawn again after a reload; a reset of $.state (/clear) drops it', async ($, on) => {
+    test('SC-002, HUD ADR 0011: a board captured in the session is drawn again after a reload; after a reset of $.state (/clear) the store restores it, the newest round open', async ($, on) => {
       engineWorld(on)
+      const watch = reviewWatch(on)
       const { reset } = stateWorld(on)
       journaledWorld(on)
-      /**
-       * The Review tab: its button pressed while another tab is active (the active tab is no
-       * button), then the pane mounted again, as the state answered from memory does not draw
-       * a mounted pane again.
-       */
-      const reviewTab = async () => {
-        const tabs = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
-        if ((await tabs.find({ type: 'Button', key: 'tab-review' })) !== undefined) await tabs.press({ key: 'tab-review' })
-        await tabs.unmount()
-        return $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
-      }
-      /** Does the Review tab draw the board's first card text? */
-      const isBoardDrawn = async (): Promise<boolean> => {
-        const pane = await reviewTab()
-        const card = await pane.find({ type: 'Text', text: /^The handler writes the record before the permission check runs\.$/ })
-        await pane.unmount()
-        return card !== undefined
-      }
+      mock.store(on)
       await $.session.start(START)
       await $.prompt.submit(notify(REVIEW_NOTIFICATION))
-      expect(await isBoardDrawn()).toBe(true)
+      expect(await isBoardDrawn($)).toBe(true)
       // A reload runs register and session.start again, keeps $.state for the session and
       // starts the module's variables over. The test kit can neither load the module again nor
       // run register again, so the module's variables stay as they are here: the test keeps
       // $.state (no reset) and runs session.start again, which is what the board depends on.
+      // The atom already holds the stream's board, so the restore writes nothing.
+      const captured = watch.writes()
       await $.session.start(START)
-      expect(await isBoardDrawn()).toBe(true)
-      // /clear, /resume, /branch: $.state is reset, so the board is gone; the stream draws again
+      expect(watch.writes()).toBe(captured)
+      expect(await isBoardDrawn($)).toBe(true)
+      // /clear, /resume, /branch: $.state is reset; the detection loads the stream's key back
       reset()
       await $.session.start(START)
-      expect(await isBoardDrawn()).toBe(false)
-      const pane = await reviewTab()
+      expect(watch.writes()).toBe(captured + 1)
+      expect(watch.last()?.open).toEqual({ kind: 'newest' })
+      expect(watch.last()?.boards.map(board => roundId(board))).toEqual(['feat/example-stream:1'])
+      expect(await isBoardDrawn($)).toBe(true)
+    })
+
+    // ── HUD ADR 0011: the board kept in $.store, one key per project root and stream. ──
+
+    test('a capture saves the stream\'s boards under its key, every mark null; a mark saves them again', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const store = storeWatch(on)
+      const gets: string[] = []
+      on('store.get', { key: /^review-board:/ }, async (_$, e, next) => {
+        gets.push(e.key)
+        return next(e)
+      })
+      mock.store(on)
+      await $.session.start(START)
+      expect(store.sets).toEqual([])
+      gets.length = 0
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(store.sets.map(set => set.key)).toEqual([STORE_KEY])
+      expect(recordOf(store.sets[0]?.value)?.shape).toBe('shipgate-hud.review-board-v1')
+      expect(recordOf(store.sets[0]?.value)?.root).toBe('/tmp/project')
+      expect(savedMarks(store.sets[0]?.value)).toEqual([[null, null, null, null]])
+      // the atom held no board of the stream, so the capture read the stream's own key for its
+      // history first; with fewer than 20 board keys the save reads nothing more (no cut)
+      expect(gets).toEqual([STORE_KEY])
+      gets.length = 0
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      await pane.press({ key: 'tab-review' })
+      await pane.press({ key: 'accept-0' })
+      await pane.unmount()
+      expect(store.sets.map(set => set.key)).toEqual([STORE_KEY, STORE_KEY])
+      expect(savedMarks(store.sets[1]?.value)).toEqual([['accepted', null, null, null]])
+      expect(gets).toEqual([])
+      expect(store.deletes).toEqual([])
+    })
+
+    test('a return that lands after /clear and before the re-detection goes on top of the stored rounds, never over them', async ($, on) => {
+      engineWorld(on)
+      const watch = reviewWatch(on)
+      const { reset } = stateWorld(on)
+      journaledWorld(on)
+      workflowWorld(on)
+      const store = storeWatch(on)
+      mock.store(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION)) // round 1, no run id
+      // a second review launched before /clear: noted with the stream it launched on
+      await launchReview($, 'toolu_second')
+      reset() // $.state reset; no session.start, no classic.SessionStart, no detection yet
+      await $.prompt.submit(notify(notificationOf(REVIEW_RETURN, 'toolu_second')))
+      expect(savedMarks(store.sets.at(-1)?.value)?.length).toBe(2)
+      const saved = decodeStoredBoards(JSON.parse(JSON.stringify(store.sets.at(-1)?.value)))
+      expect(saved.ok ? saved.value.boards.map(board => board.round) : null).toEqual([2, 1])
+      expect(watch.last()?.boards.map(board => roundId(board))).toEqual(['feat/example-stream:2', 'feat/example-stream:1'])
+    })
+
+    test('FR-011: after a session change with no classic.SessionStart, the next typed prompt detects again and restores the board', async ($, on) => {
+      const { moveSession, clock } = engineWorld(on)
+      const { reset } = stateWorld(on)
+      journaledWorld(on)
+      mock.store(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      moveSession('session-b')
+      reset()
+      expect(await isBoardDrawn($)).toBe(false)
+      await $.prompt.submit({ text: 'go on', origin: { kind: 'composer' }, wait: false })
+      await clock.settle()
+      expect(await isBoardDrawn($)).toBe(true)
+    })
+
+    test('a board captured under no stream is not saved', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, { branch: () => 'main' })
+      const store = storeWatch(on)
+      const watch = reviewWatch(on)
+      mock.store(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(watch.last()?.boards.map(board => board.stream)).toEqual([null])
+      expect(store.sets).toEqual([])
+    })
+
+    test('a project with no sidecar runs no store call: not at start, not after /clear, not on a capture', async ($, on) => {
+      engineWorld(on)
+      on('classic.SessionStart', async () => ({}))
+      bareWorld(on)
+      const calls: string[] = []
+      on('store.get', async (_$, e) => {
+        calls.push(`get ${e.key}`)
+        return { value: undefined }
+      })
+      on('store.set', async (_$, e) => {
+        calls.push(`set ${e.key}`)
+        return { value: undefined }
+      })
+      on('store.delete', async (_$, e) => {
+        calls.push(`delete ${e.key}`)
+        return { value: undefined }
+      })
+      on('store.keys', async () => {
+        calls.push('keys')
+        return { value: [] }
+      })
+      await $.session.start(START)
+      await $.classic.SessionStart({ source: 'clear' })
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(calls).toEqual([])
+    })
+
+    test('after /clear (classic.SessionStart) moves the session and resets $.state, the board is restored', async ($, on) => {
+      const { moveSession } = engineWorld(on)
+      const { reset } = stateWorld(on)
+      on('classic.SessionStart', async () => ({}))
+      journaledWorld(on)
+      mock.store(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      moveSession('session-b')
+      reset()
+      expect(await isBoardDrawn($)).toBe(false)
+      await $.classic.SessionStart({ source: 'clear' })
+      expect(await isBoardDrawn($)).toBe(true)
+    })
+
+    test('a key saved for another stream, or under another project root, is never loaded nor deleted', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const store = storeWatch(on)
+      const watch = reviewWatch(on)
+      mock.store(on, {
+        'review-board:/tmp/project:feat/other-stream': savedEntry('feat/other-stream'),
+        // the example stream's key holding another root's entry
+        [STORE_KEY]: savedEntry(EXAMPLE_STREAM, '2026-10-01T00:00:00Z', '/tmp/elsewhere'),
+      })
+      await $.session.start(START)
+      expect(watch.writes()).toBe(0)
+      expect(await isBoardDrawn($)).toBe(false)
+      expect(store.deletes).toEqual([])
+      expect(store.sets).toEqual([])
+    })
+
+    test('a completed stream\'s key is deleted and no board is loaded; the pane draws no error', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, { position: stream => ({ ...EXAMPLE_POSITION, stream, lifecycle: 'terminal' }) })
+      const store = storeWatch(on)
+      const watch = reviewWatch(on)
+      mock.store(on, { [STORE_KEY]: savedEntry(EXAMPLE_STREAM) })
+      await $.session.start(START)
+      expect(store.deletes).toEqual([STORE_KEY])
+      expect(watch.writes()).toBe(0)
+      expect(await isBoardDrawn($)).toBe(false)
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect(await pane.find({ type: 'Text', text: /shipgate-hud:/ })).toBeUndefined()
+      await pane.unmount()
+    })
+
+    test('a dormant stream\'s key is restored: the flow can resume', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on, { position: stream => ({ ...EXAMPLE_POSITION, stream, lifecycle: 'dormant' }) })
+      const store = storeWatch(on)
+      mock.store(on, { [STORE_KEY]: savedEntry(EXAMPLE_STREAM) })
+      await $.session.start(START)
+      expect(store.deletes).toEqual([])
+      expect(await isBoardDrawn($)).toBe(true)
+    })
+
+    test('the store keeps the newest 20 streams: a save past them deletes the oldest by savedAt; a value that does not decode is left alone', async ($, on) => {
+      engineWorld(on)
+      journaledWorld(on)
+      const store = storeWatch(on)
+      // 20 streams saved before the clock's time (0: 1970-01-01), out of order: feat/s07 is the oldest
+      const seeded: Record<string, unknown> = Object.fromEntries(
+        Array.from({ length: 20 }, (_, i) => {
+          const name = `feat/s${String(i + 1).padStart(2, '0')}`
+          const second = i === 6 ? 0 : i + 10
+          return [`review-board:/tmp/project:${name}`, savedEntry(name, `1969-12-31T23:59:${String(second).padStart(2, '0')}Z`)]
+        }),
+      )
+      const JUNK = 'review-board:/tmp/project:feat/junk'
+      mock.store(on, { ...seeded, [JUNK]: { shape: 'another' }, other: 1 })
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(store.sets.map(set => set.key)).toEqual([STORE_KEY])
+      expect(store.deletes).toEqual(['review-board:/tmp/project:feat/s07'])
+      const left = [...Object.keys(seeded), STORE_KEY].filter(key => !store.deletes.includes(key))
+      expect(left.length).toBe(20)
+      expect(left).toContain(STORE_KEY)
+    })
+
+    test('a store that refuses every read and write: the capture draws in the session; after a reset the verdict-only round draws, with no error', async ($, on) => {
+      engineWorld(on)
+      const { reset } = stateWorld(on)
+      journaledWorld(on)
+      on('store.get', { key: /^review-board:/ }, async () => ({ deny: 'disk' }))
+      on('store.set', { key: /^review-board:/ }, async () => ({ deny: 'disk' }))
+      mock.store(on)
+      await $.session.start(START)
+      await $.prompt.submit(notify(REVIEW_NOTIFICATION))
+      expect(await isBoardDrawn($)).toBe(true)
+      reset()
+      await $.session.start(START)
+      expect(await isBoardDrawn($)).toBe(false)
+      const pane = await reviewTab($)
       expect(await pane.find({ type: 'Text', text: /^No review captured for feat\/example-stream yet/ })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: /shipgate-hud:/ })).toBeUndefined()
       await pane.unmount()
     })
 

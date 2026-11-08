@@ -1,6 +1,6 @@
 {
   "name": "shipgate-hud",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "A Claude Code mod that draws a shipgate flow's position: stream, phase, tasks and verify evidence in a band above the prompt, and a phase-aware pane with the gate decisions (veto in one press), the Build Plan with journal evidence, the committed design, a Review tab fed by the review workflow's return that also draws a round from the review verdict and live finding states, and the worklog's diagrams drawn on desktop and as box-drawing pictures in the terminal. Holds git push, gh pr create and glab mr create until the stream is reviewed, the user lets it through once, or the user approves publishing in its dialog. Reads shipgate's journal through its CLI; draws nothing in a project without a shipgate journal.",
   "author": {
     "name": "worm2fed",

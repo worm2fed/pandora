@@ -2,15 +2,16 @@
 type: adr
 title: "0009. The verdict-only round reads finding text from the worklog, and the board stays in $.state"
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-07
 tags:
   - adr
   - shipgate-hud
-status: accepted
+status: accepted (§3 superseded 2026-11-07 by ADR 0011, shipgate-hud 0.11.0)
 date: 2026-11-04
 issue: "#12"
 related:
   - "0008-the-review-tab-reads-folded-dispositions.md"
+  - "0011-the-review-board-is-kept-in-the-store.md"
   - "../../../shipgate/docs/adr/0009-the-journal-computes-the-hud-position.md"
   - "../../../shipgate/docs/adr/0014-a-finding-disposition-is-recorded-when-it-is-decided.md"
 ---
@@ -20,6 +21,12 @@ related:
 > The HUD parses the worklog's review section and prints one line of finding text under
 > each key of the verdict-only round. The review board stays in its `$.state` atom, which
 > the engine keeps across `/reload-plugins`.
+
+> **Superseded in part, 2026-11-07 (shipgate-hud 0.11.0, HUD ADR 0011):** §3 no longer
+> holds. The board still lives in the `$.state` atom, and the HUD now also saves each
+> stream's boards in `$.store`, one key per project root and stream, and loads them back on
+> the re-detection after `/clear`, `/resume`, `/branch` and at session start. The last
+> consequence below is the limit ADR 0011 removes. §1 and §2 stand.
 
 ## Context
 
@@ -46,7 +53,9 @@ starts the module's own variables over.
    the key's. Then the label: the key's `label` from `position`, or the key itself when it is
    no `<path>:<line|?>`, as a whole word of the item's text, case folded. The first item in
    worklog order wins in each tier. A key with no match draws no text line.
-3. **The board stays in `$.state`.** No `$.store` copy and no re-read of the task output
+3. **The board stays in `$.state`.** *Superseded by HUD ADR 0011 (shipgate-hud 0.11.0):
+   the board is also kept in `$.store`, one key per project root and stream.* No `$.store`
+   copy and no re-read of the task output
    file. A test pins the reload: the stored board, `$.state` kept, `session.start` run
    again, the board drawn. The test kit cannot reload the module, so module state stays as
    it is in the test; the board is read from `$.state` alone, never from module state.

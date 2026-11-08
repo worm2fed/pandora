@@ -17,6 +17,7 @@ import type {
   CriterionId,
   Decision,
   HudView,
+  IsoTime,
   OpenRound,
   OutdatedSign,
   Position,
@@ -72,21 +73,32 @@ import {
 import {
   EMPTY_REVIEW,
   type ReviewReturn,
+  STORE_LIMIT,
+  type StoreEntry,
+  type StoredBoards,
   TASK_OUTPUT_LIMIT,
   boardsFor,
   decodeReviewReturn,
   decodeReviewState,
+  decodeStoredBoards,
+  encodeStoredBoards,
   findingPrompt,
+  holdsStream,
   isReviewLaunch,
   isSafeTaskOutput,
+  isStoreKey,
+  keysPastLimit,
   markSurvivor,
   nextTicks,
+  ownBoardsOf,
   parseTaskNotification,
   pushBoard,
   reviewReturnOfOutput,
   roundId,
   runIdOf,
+  storeKeyOf,
   toReviewBoard,
+  withRestored,
 } from './review'
 import { PANE_ID, bandOf, paneOf } from './views'
 import type { Actions, PaneState, Ui } from './views'
@@ -905,12 +917,14 @@ function startTicking($: Engine): void {
 
 /**
  * The project detected again for `sessionId` (`detectFor`), and refreshed when found, starting
- * the clock (`startTicking`).
+ * the clock (`startTicking`). A refresh that binds a stream loads its stored boards back
+ * (`restoreBoards`, HUD ADR 0011) before this returns; no other refresh path restores.
  */
 async function detectAndRefresh($: Engine, sessionId: string | null): Promise<Result<Rejection, boolean>> {
   const project = await detectFor($, sessionId)
   if (project.ok && project.value) {
-    await refresh($)
+    const refreshed = await refresh($)
+    if (refreshed.kind === 'Bound') await restoreBoards($, refreshed.position)
     startTicking($)
   }
   return project
@@ -1148,9 +1162,13 @@ function markFinding($: Engine, shown: HudView, drawn: ReviewState, action: Revi
   const position = shownPositionOf(shown)
   const board = boardsFor(drawn.boards, position === null ? null : position.stream).find(held => roundId(held) === id) ?? null
   if (board === null || board.survivors[index] === undefined) return
-  void update($, review, stored => {
-    const state = decodeReviewState(stored)
-    return { ...state, boards: state.boards.map(held => (roundId(held) === id ? markSurvivor(held, index, action) : held)) }
+  // the mark is written, then the board's stream saved with it (HUD ADR 0011)
+  void settle(async () => {
+    await update($, review, stored => {
+      const state = decodeReviewState(stored)
+      return { ...state, boards: state.boards.map(held => (roundId(held) === id ? markSurvivor(held, index, action) : held)) }
+    })
+    await saveBoards($, board.stream)
   })
   void $.prompt.submit({ text: findingPrompt(action, index, board) })
 }
@@ -1197,23 +1215,128 @@ function actionsOf($: Engine, shown: HudView, drawn: ReviewState): Actions {
   }
 }
 
+/** The clock's time as an ISO time; null when the engine's time is no date. */
+async function nowIso($: Engine): Promise<IsoTime | null> {
+  const now = new Date(await $.clock.now())
+  return Number.isNaN(now.getTime()) ? null : isoTime(now.toISOString())
+}
+
 /**
  * A decoded review return captured as its stream's next round: a noted launch stamps its run id
  * and launch stream, else the stream the view is bound to; the newest round opens; older rounds,
- * their marks and the ticks stay.
+ * their marks and the ticks stay. Then the stream's boards are saved (HUD ADR 0011).
  */
 async function captureBoard($: Engine, ret: ReviewReturn, toolUseId: string | null): Promise<void> {
   const launch = launchFor(toolUseId)
   const stream = launch?.stream ?? boundStreamOf(await read($, view))
-  const now = new Date(await $.clock.now())
-  const at = Number.isNaN(now.getTime()) ? null : isoTime(now.toISOString())
+  const at = await nowIso($)
   if (at === null) return
   const board = toReviewBoard(ret, launch?.runId ?? null, stream, at)
+  // a return that lands after /clear and before the re-detection goes on top of the stored rounds
+  const history = stream === null ? null : await missingHistoryOf($, stream)
   // the newest round opens; older rounds, their marks and the ticks stay
   await update($, review, (stored): ReviewState => {
-    const state = decodeReviewState(stored)
+    const decoded = decodeReviewState(stored)
+    const state = history === null ? decoded : withRestored(decoded, history)
     return { ...state, boards: pushBoard(state.boards, board), open: { kind: 'newest' } }
   })
+  await saveBoards($, stream)
+}
+
+// ---------------------------------------------------------------------------------------
+// The board kept in the store (HUD ADR 0011): one key per project root and stream
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Saves `stream`'s boards as the `review` atom now holds them, under the stream's key, then cuts
+ * the store to the newest STORE_LIMIT streams (`pruneStore`). No project root, or no stream (a
+ * board captured under none): nothing is saved. A rejected call ends the step: nothing is shown,
+ * nothing thrown.
+ */
+async function saveBoards($: Engine, stream: StreamName | null): Promise<void> {
+  const root = projectRoot
+  if (root === null || stream === null) return
+  const held = await settle(() => read($, review))
+  if (!held.ok) return
+  const boards = ownBoardsOf(decodeReviewState(held.value).boards, stream)
+  if (boards.length === 0) return
+  const savedAt = await settle(() => nowIso($))
+  if (!savedAt.ok || savedAt.value === null) return
+  const entry = encodeStoredBoards(root, stream, boards, savedAt.value)
+  const saved = await settle(() => $.store.set(storeKeyOf(root, stream), entry))
+  if (saved.ok) await pruneStore($)
+}
+
+/** The value under each key, in order; null when a read rejects, which ends the step. */
+async function storeEntriesOf($: Engine, keys: readonly string[]): Promise<readonly StoreEntry[] | null> {
+  return keys.reduce<Promise<readonly StoreEntry[] | null>>(async (pending, key) => {
+    const entries = await pending
+    if (entries === null) return null
+    const value = await settle(() => $.store.get(key))
+    return value.ok ? [...entries, { key, value: value.value }] : null
+  }, Promise.resolve([]))
+}
+
+/**
+ * Deletes every board key past the newest STORE_LIMIT by `savedAt` (`keysPastLimit`). With no
+ * more than STORE_LIMIT board keys there is nothing to cut, and no value is read. A value that
+ * does not decode is left alone and not counted: it may be a newer HUD's. A rejected call ends
+ * the step.
+ */
+async function pruneStore($: Engine): Promise<void> {
+  const keys = await settle(() => $.store.keys())
+  if (!keys.ok) return
+  const boardKeys = keys.value.filter(isStoreKey)
+  if (boardKeys.length <= STORE_LIMIT) return
+  const entries = await storeEntriesOf($, boardKeys)
+  if (entries === null) return
+  await keysPastLimit(entries, STORE_LIMIT).reduce<Promise<boolean>>(async (pending, key) => {
+    if (!(await pending)) return false
+    return (await settle(() => $.store.delete(key))).ok
+  }, Promise.resolve(true))
+}
+
+/**
+ * The stream's stored boards: the value under its key, decoded, whose root is `root` and whose
+ * stream is `stream`. Null for no value, a rejected read, a value of another shape or one that
+ * does not match; such a value is ignored, never deleted.
+ */
+async function storedBoardsOf($: Engine, root: string, stream: StreamName): Promise<StoredBoards | null> {
+  const raw = await settle(() => $.store.get(storeKeyOf(root, stream)))
+  if (!raw.ok || raw.value === undefined) return null
+  const stored = decodeStoredBoards(raw.value)
+  return stored.ok && stored.value.root === root && stored.value.stream === stream ? stored.value : null
+}
+
+/**
+ * The stream's stored boards when the `review` atom holds none of the stream's (`storedBoardsOf`);
+ * null when it holds one, when the project root is unknown, or when a read rejects. Read before
+ * a write, so the write can go on top of them.
+ */
+async function missingHistoryOf($: Engine, stream: StreamName): Promise<StoredBoards | null> {
+  const root = projectRoot
+  if (root === null) return null
+  const held = await settle(() => read($, review))
+  if (!held.ok || holdsStream(decodeReviewState(held.value), stream)) return null
+  return storedBoardsOf($, root, stream)
+}
+
+/**
+ * Loads the bound stream's stored boards back into the `review` atom (HUD ADR 0011). A
+ * completed (`terminal`) stream's key is deleted and nothing is loaded. Otherwise, when the
+ * atom holds no board of the stream, its stored boards (`missingHistoryOf`) are loaded, the
+ * newest round open; a state that already holds one is not written at all.
+ */
+async function restoreBoards($: Engine, position: Position): Promise<void> {
+  const root = projectRoot
+  if (root === null) return
+  if (position.lifecycle === 'terminal') {
+    await settle(() => $.store.delete(storeKeyOf(root, position.stream)))
+    return
+  }
+  const restored = await missingHistoryOf($, position.stream)
+  if (restored === null) return
+  await settle(() => update($, review, (current): ReviewState => withRestored(decodeReviewState(current), restored)))
 }
 
 // ---------------------------------------------------------------------------------------

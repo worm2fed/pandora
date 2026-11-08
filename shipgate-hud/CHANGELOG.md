@@ -2,6 +2,42 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.11.0 — the review board comes back after `/clear`, `/resume` and `/branch`.
+
+**The board is kept in the store (HUD ADR 0011).** Before, the Review tab's board lived in
+`$.state` only. `/clear`, `/resume`, `/branch` and a new process reset `$.state`, so the
+user saw the verdict-only round instead of the board with its cards and Accept / Kill
+buttons, although the stream was the same.
+- On each capture and on each Accept or Kill, the HUD saves the stream's rounds, marks
+  included, in the engine's store (`$.store`): a JSON file of the HUD's own under the
+  user's Claude Code configuration directory. One key per project root and stream,
+  `review-board:<root>:<stream>`; the value carries the shape tag
+  `shipgate-hud.review-board-v1` and a save time. A board captured under no stream is not
+  saved.
+- The HUD keeps the newest 20 saved streams by save time and deletes the rest. Twenty
+  streams of five rounds stay near 1 MiB of the store's 4 MiB.
+- On the re-detection after `/clear`, `/resume` and `/branch` (the `classic.SessionStart`
+  path and the lazy path) and at session start, a bound stream's saved rounds are loaded
+  into the `review` atom when it holds none of that stream, and the newest round opens.
+  A saved board of another stream is never loaded. A saved board of a stream whose flow is
+  completed (`lifecycle: terminal`) is deleted and not restored; a dormant stream's is
+  restored.
+- A store call that fails, or a value of a shape the HUD does not know, is ignored: the HUD
+  draws as before. Such a value is never deleted.
+- The success-criteria ticks stay in `$.state` only.
+- HUD ADR 0009 §3 ("the board stays in `$.state`") is superseded. The README's Review tab
+  section and its "writes" paragraph say what the HUD saves and where.
+
+**The dependency.** `plugin.json` declares shipgate `>=0.23.0`, as before. The golden
+contract with journal.py does not change.
+
+**Tests.** The store: a save on capture and on a mark, the restore after a `$.state` reset
+and `session.start` for the same stream (the reload test now pins the restore instead of
+the loss), the `classic.SessionStart` path after `/clear`, no restore for another stream, a
+delete and no restore for a completed stream, the newest-20 cut, and an unreadable store
+that draws the verdict-only round. The codec: a round trip, another shape tag refused, a
+junk board dropped.
+
 v0.10.0 — the publish dialog records your approval, and a stale `fixing` is no longer drawn as live.
 
 **Approve publishing (#1, HUD ADR 0010).** shipgate 0.23.0 counts a user publish decision

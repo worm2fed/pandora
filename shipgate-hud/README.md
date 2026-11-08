@@ -125,10 +125,19 @@ interface, from the journal shipgate already keeps.
     newest round opens first, and its header folds it. Up to four older rounds fold behind a
     one-line summary, with their marks kept. A board for another stream is not drawn.
 
-    The HUD keeps the boards in `$.state`. `/reload-plugins` keeps `$.state`, so a board
-    stays after a reload, and a test pins this. `/clear`, `/resume`, `/branch` and a new
-    process reset `$.state`. A board captured before them is gone. The tab then draws the
-    round without a board, with the finding text from the worklog.
+    The HUD keeps the boards in `$.state`, and saves each stream's boards in the engine's
+    store as well (HUD ADR 0011). The store is a JSON file of the HUD's own under your
+    Claude Code configuration directory. The key is the project root and the stream; the
+    value holds the stream's rounds with your Accept and Kill marks, and a save time. The
+    HUD saves on each capture and on each mark, and keeps the newest 20 saved streams.
+    `/reload-plugins` keeps `$.state`, so a board stays after a reload. `/clear`,
+    `/resume`, `/branch` and a new process reset `$.state`. When the HUD detects the
+    project again after them and binds the same stream, it loads that stream's saved
+    boards back, marks included, and opens the newest round. A saved board of another
+    stream is not loaded. A saved board of a stream whose flow is completed is deleted. A
+    store the HUD cannot read, or a value of a shape it does not know, is ignored, and the
+    tab draws the round without a board, with the finding text from the worklog. The
+    success-criteria ticks stay in `$.state` only.
 - The pane opens on the tab that matches the phase: Plan in `implement`, Design in `design`,
   Review in `review`, Flow otherwise. The active tab and the current phase are drawn inverted.
   Hotkeys `1` `2` `3` `4` switch, `r` refreshes, while the pane has focus. Long text is
@@ -242,8 +251,8 @@ no process.
   (a session inside a nested repo of an umbrella uses the umbrella's journal, as shipgate's
   hooks do).
 
-In a project **without** that sidecar the mod draws nothing, opens no pane and runs no
-process. `/hud` still exists and says so.
+In a project **without** that sidecar the mod draws nothing, opens no pane, runs no
+process and touches no store. `/hud` still exists and says so.
 
 ## Install
 
@@ -315,8 +324,10 @@ What the pane shows:
   the keys it knows`. The refresh still runs with the keys the HUD knows. A newer sidecar is
   never a failed read.
 
-The HUD writes one thing only: the approval that the publish dialog's **Approve publishing**
-records (ADR 0010). A veto goes through the prompt, and the orchestrator records the
+The HUD writes two things only: the approval that the publish dialog's **Approve
+publishing** records in the journal (ADR 0010), and the Review tab's boards in the HUD's
+own store file under your Claude Code configuration directory (ADR 0011). It writes
+nothing into the project. A veto goes through the prompt, and the orchestrator records the
 outcome.
 
 `journal.py` is looked for, in order: the `journalScript` option; beside this plugin in a
@@ -341,7 +352,7 @@ shipgate-hud/
   hooks/journal.ts             pure: the one boundary for journal.py's JSON (decoders, brands)
   hooks/position.ts            pure: decoded position + worklog / ADR / PRD → Position
   hooks/publish.ts             pure: what a shell line publishes, the gate's verdict, the hold's text
-  hooks/review.ts              pure: task-notification → review board, Accept / Kill prompts, SC criteria
+  hooks/review.ts              pure: task-notification → review board, the store entry's codec, Accept / Kill prompts, SC criteria
   hooks/diagram.ts             pure: mermaid flowchart subset → layout, SVG, terminal grid and text form
   hooks/views.tsx              pure: Position → band and pane trees
   types/index.d.ts             the $.state contract

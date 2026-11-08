@@ -939,6 +939,100 @@ export function decodeReviewState(raw: unknown): ReviewState {
   return { boards, ticks, open: decodeOpenRound(state.open, boards) }
 }
 
+// ---------------------------------------------------------------------------------------
+// The store entry (HUD ADR 0011): one stream's boards kept in `$.store` between sessions
+// ---------------------------------------------------------------------------------------
+
+/** The stored entry's shape tag: its own, so it and the `review` atom's tag evolve apart. */
+export const STORE_SHAPE = 'shipgate-hud.review-board-v1'
+
+/** The most streams the store keeps boards for: the newest by `savedAt`. */
+export const STORE_LIMIT = 20
+
+/** The prefix of every key the HUD keeps boards under. */
+const STORE_KEY_PREFIX = 'review-board:'
+
+/** One stream's boards as the store keeps them: newest first, marks included, saved at `savedAt`. */
+export type StoredBoards = {
+  readonly root: string
+  readonly stream: StreamName
+  readonly savedAt: IsoTime
+  readonly boards: readonly ReviewBoard[]
+}
+
+/** The stored entry as `$.store.set` takes it: the boards under their shape tag. */
+export type StoredBoardsJson = StoredBoards & { readonly shape: typeof STORE_SHAPE }
+
+/** A key and the value the store holds under it, as read. */
+export type StoreEntry = {
+  readonly key: string
+  readonly value: unknown
+}
+
+/** The key a stream's boards are kept under: `review-board:<project root>:<stream>`. */
+export const storeKeyOf = (root: string, stream: StreamName): string => `${STORE_KEY_PREFIX}${root}:${stream}`
+
+/** Is this a key the HUD keeps boards under? */
+export const isStoreKey = (key: string): boolean => key.startsWith(STORE_KEY_PREFIX)
+
+/** A stream's boards as the store entry `$.store.set` takes. */
+export function encodeStoredBoards(root: string, stream: StreamName, boards: readonly ReviewBoard[], savedAt: IsoTime): StoredBoardsJson {
+  return { shape: STORE_SHAPE, root, stream, savedAt, boards }
+}
+
+/**
+ * A store entry, decoded at the read: another shape tag (another version), a missing root,
+ * stream or time, or boards that are no list is an error. A board that does not decode, or a
+ * board of another stream, is dropped, never cast (D11); a stream keeps ROUNDS_PER_STREAM.
+ */
+export function decodeStoredBoards(raw: unknown): Result<ShapeError, StoredBoards> {
+  const entry = decodeRecord(raw, '$')
+  if (!entry.ok) return entry
+  if (entry.value.shape !== STORE_SHAPE) return fail('$.shape', STORE_SHAPE)
+  const root = stringOf(entry.value.root)
+  if (root === null || root === '') return fail('$.root', 'a project root')
+  const streamText = stringOf(entry.value.stream)
+  const stream = streamText === null ? null : streamName(streamText)
+  if (stream === null) return fail('$.stream', 'a stream name')
+  const savedText = stringOf(entry.value.savedAt)
+  const savedAt = savedText === null ? null : isoTime(savedText)
+  if (savedAt === null) return fail('$.savedAt', 'an ISO time')
+  if (listOf(entry.value.boards) === null) return fail('$.boards', 'a list of boards')
+  const boards = keepDecoded(entry.value.boards, '$.boards', decodeStoredBoard).filter(board => board.stream === stream)
+  return ok({ root, stream, savedAt, boards: boards.slice(0, ROUNDS_PER_STREAM) })
+}
+
+/**
+ * The keys past the newest `limit` entries by `savedAt`, newest first: the ones to delete. An
+ * entry that does not decode is not counted and never named: it may be a newer HUD's.
+ */
+export function keysPastLimit(entries: readonly StoreEntry[], limit: number): readonly string[] {
+  const saved = entries.flatMap(entry => {
+    const decoded = decodeStoredBoards(entry.value)
+    return decoded.ok ? [{ key: entry.key, at: Date.parse(decoded.value.savedAt) }] : []
+  })
+  // a stable sort: two entries saved at one time keep the store's order
+  return [...saved]
+    .sort((a, b) => b.at - a.at)
+    .slice(limit)
+    .map(entry => entry.key)
+}
+
+/** The boards captured under `stream` itself, in order; unlike `boardsFor`, a board captured under no stream is left out. */
+export const ownBoardsOf = (boards: readonly ReviewBoard[], stream: StreamName): readonly ReviewBoard[] => boards.filter(board => board.stream === stream)
+
+/** Does the state hold a board of `stream`? A board captured under no stream is no board of it. */
+export const holdsStream = (state: ReviewState, stream: StreamName): boolean => ownBoardsOf(state.boards, stream).length > 0
+
+/**
+ * The state with a stream's stored boards loaded in front, the newest round open; unchanged
+ * (the same value) when it already holds a board of that stream.
+ */
+export function withRestored(state: ReviewState, stored: StoredBoards): ReviewState {
+  if (holdsStream(state, stored.stream)) return state
+  return { ...state, boards: [...stored.boards, ...state.boards], open: { kind: 'newest' } }
+}
+
 /** A criterion's tick as the Review tab draws it. */
 export type CriterionGlyph = '☑' | '☒' | '☐'
 

@@ -3,21 +3,28 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   EMPTY_REVIEW,
   ROUNDS_PER_STREAM,
+  STORE_LIMIT,
+  STORE_SHAPE,
   type CapturedBoard,
   type ReviewReturn,
   criterionGlyph,
   decodeReviewReturn,
   decodeReviewState,
+  decodeStoredBoards,
   dispositionsFor,
   dispositionsSince,
+  encodeStoredBoards,
   findingPrompt,
   groupBySeverity,
   isReviewLaunch,
   isSafeTaskOutput,
+  isStoreKey,
+  keysPastLimit,
   locationOf,
   markSurvivor,
   nextTicks,
   noteFor,
+  ownBoardsOf,
   parseCriteria,
   parseLocation,
   parseTaskNotification,
@@ -27,9 +34,12 @@ import {
   runIdOf,
   shortLocation,
   shortPath,
+  storeKeyOf,
   tickOf,
   toReviewBoard,
+  withRestored,
 } from '../hooks/review'
+import { recordOf } from '../hooks/json'
 import { criterionId, eventSeq, isoTime, streamName } from '../hooks/journal'
 import type { CriterionId, CriterionStatus, EventSeq, FindingState, FoldedDisposition, ReviewBoard, ReviewNote, StreamName, TickEntry } from '../types'
 import { type Gen, forAll, int, listOf, orNull, pick } from './arbitrary'
@@ -741,6 +751,92 @@ describe('review: the stored state', () => {
     // the v1 shape: one `board`, marks keyed by index, ticks keyed by text
     expect(decodeReviewState({ board: one, marks: { '0': 'accepted' }, ticks: { 's:SC-001': 'on' }, open: null })).toEqual(EMPTY_REVIEW)
     for (const raw of [null, undefined, 'x', 3, [], {}]) expect(decodeReviewState(raw)).toEqual(EMPTY_REVIEW)
+  })
+})
+
+describe('review: the store entry (HUD ADR 0011)', () => {
+  const ROOT = '/tmp/project'
+
+  /** A value as `$.store` gives it back: through JSON. */
+  const roundTrip = (value: unknown): unknown => JSON.parse(JSON.stringify(value))
+
+  /** The encoded entry as a plain record, so a test can change one field. */
+  const encoded = (boards: readonly ReviewBoard[] = [fixtureBoard()]): Record<string, unknown> => {
+    const raw = roundTrip(encodeStoredBoards(ROOT, STREAM, boards, AT))
+    return typeof raw === 'object' && raw !== null ? { ...raw } : {}
+  }
+
+  test('the key names the project root and the stream; the shape tag is its own', async () => {
+    expect(storeKeyOf(ROOT, STREAM)).toBe('review-board:/tmp/project:feature/x')
+    expect(isStoreKey(storeKeyOf(ROOT, STREAM))).toBe(true)
+    expect(isStoreKey('review:/tmp/project')).toBe(false)
+    expect(STORE_SHAPE).toBe('shipgate-hud.review-board-v1')
+    expect(STORE_LIMIT).toBe(20)
+  })
+
+  test('an entry round-trips through JSON: the boards with their marks, the root, the stream, the time saved', async () => {
+    const boards = [markSurvivor({ ...fixtureBoard(), round: 2 }, 0, 'accepted'), markSurvivor(fixtureBoard(), 3, 'killed')]
+    const entry = encodeStoredBoards(ROOT, STREAM, boards, AT)
+    expect(recordOf(roundTrip(entry))?.shape).toBe(STORE_SHAPE)
+    expect(decodeStoredBoards(roundTrip(entry))).toEqual({ ok: true, value: { root: ROOT, stream: STREAM, savedAt: AT, boards } })
+  })
+
+  test('another shape tag, the atom\'s tag, a missing root, stream or time, or boards that are no list are refused', async () => {
+    const paths = (raw: unknown): string | null => {
+      const decoded = decodeStoredBoards(raw)
+      return decoded.ok ? null : decoded.error.path
+    }
+    expect(paths({ ...encoded(), shape: 'shipgate-hud.review-board-v2' })).toBe('$.shape')
+    expect(paths({ ...encoded(), shape: 'shipgate-hud.review-v2' })).toBe('$.shape')
+    expect(paths({ ...encoded(), shape: undefined })).toBe('$.shape')
+    expect(paths({ ...encoded(), root: undefined })).toBe('$.root')
+    expect(paths({ ...encoded(), root: '' })).toBe('$.root')
+    expect(paths({ ...encoded(), stream: undefined })).toBe('$.stream')
+    expect(paths({ ...encoded(), savedAt: undefined })).toBe('$.savedAt')
+    expect(paths({ ...encoded(), savedAt: 'not a time' })).toBe('$.savedAt')
+    expect(paths({ ...encoded(), boards: 'none' })).toBe('$.boards')
+    for (const raw of [null, undefined, 'x', 3, [], {}]) expect(paths(raw)).toBe(raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw) ? '$' : '$.shape')
+  })
+
+  test('a junk board is dropped and its sound neighbours stay; a board of another stream is dropped', async () => {
+    const sound = fixtureBoard()
+    const junk = { ...sound, round: 0 }
+    const other = { ...fixtureBoard(stream('feature/y')), round: 4 }
+    const decoded = decodeStoredBoards({ ...encoded(), boards: [junk, roundTrip(sound), roundTrip(other), 'x'] })
+    expect(decoded.ok ? decoded.value.boards : null).toEqual([sound])
+  })
+
+  test('the newest STORE_LIMIT entries by savedAt stay: the keys past them are the oldest; a value that does not decode is not counted', async () => {
+    const at = (time: string) => must(isoTime(time))
+    const entry = (name: string, time: string) => ({ key: storeKeyOf(ROOT, stream(name)), value: roundTrip(encodeStoredBoards(ROOT, stream(name), [], at(time))) })
+    const entries = [
+      entry('feature/b', '2026-10-02T00:00:00Z'),
+      { key: 'review-board:/tmp/project:junk', value: { shape: 'another' } },
+      entry('feature/a', '2026-10-01T00:00:00Z'),
+      entry('feature/c', '2026-10-03T00:00:00Z'),
+    ]
+    expect(keysPastLimit(entries, 2)).toEqual([storeKeyOf(ROOT, stream('feature/a'))])
+    expect(keysPastLimit(entries, 3)).toEqual([])
+    expect(keysPastLimit(entries, 0)).toEqual([storeKeyOf(ROOT, stream('feature/c')), storeKeyOf(ROOT, stream('feature/b')), storeKeyOf(ROOT, stream('feature/a'))])
+  })
+
+  test('a restore loads the stream\'s boards in front and opens the newest; a state already holding a board of the stream is unchanged', async () => {
+    const saved = { root: ROOT, stream: STREAM, savedAt: AT, boards: [markSurvivor(fixtureBoard(), 0, 'accepted')] }
+    const otherBoard = { ...fixtureBoard(stream('feature/y')), round: 2 }
+    const state = { ...EMPTY_REVIEW, boards: [otherBoard], open: { kind: 'folded' as const } }
+    expect(withRestored(state, saved)).toEqual({ ...state, boards: [...saved.boards, otherBoard], open: { kind: 'newest' } })
+    const holding = { ...EMPTY_REVIEW, boards: [{ ...fixtureBoard(), round: 7 }] }
+    expect(withRestored(holding, saved)).toBe(holding)
+    // a board captured under no stream is no board of the stream: the restore goes ahead
+    const unstreamed = { ...EMPTY_REVIEW, boards: [fixtureBoard(null)] }
+    expect(withRestored(unstreamed, saved).boards).toEqual([...saved.boards, fixtureBoard(null)])
+  })
+
+  test('a stream\'s own boards leave out the boards captured under no stream and under another stream', async () => {
+    const own = fixtureBoard()
+    const other = { ...fixtureBoard(stream('feature/y')), round: 2 }
+    expect(ownBoardsOf([fixtureBoard(null), own, other], STREAM)).toEqual([own])
+    expect(ownBoardsOf([fixtureBoard(null)], STREAM)).toEqual([])
   })
 })
 
