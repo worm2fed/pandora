@@ -2,6 +2,43 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.24.0 — the graph reaches a file behind two barrel re-exports, and the grader scores the last call that listed files.
+
+**Re-export edges beside the graph (#7, ADR 0017).** codegraph 1.6.2 records no edge for
+`export * from "<spec>"`: in the case 72 index, 12 files hold such a line and none has a
+cross-file out edge, and a barrel file holds one `file` node and nothing else. A bare
+workspace-package import (`import { x } from "@app/notify"`) gets an edge to the symbol's
+file and none to the package entry. So a file reachable only through two barrels was lost.
+- On the graph arm, `signals.py` now scans every TypeScript and JavaScript file the graph
+  kept, once, and adds two kinds of edge: `file -> target` for each `export * from`,
+  `export * as x from`, `export { … } from`, `export type { … } from`, `export type * from`
+  and `export type * as x from` whose specifier resolves to a file in the graph (the regex scanner's relative-path rules: extensions,
+  `.js` to `.ts`, `index` files); and `file -> entry` for each `import … from "<name>"` or
+  `require("<name>")` whose `<name>` is the bare name of a workspace package (the root
+  `package.json` `workspaces`, each package's `name`, its entry from `exports["."]`, else
+  `main`, else `index`). A subpath import adds nothing: codegraph resolves it.
+- Bounds: each file is read once; a file over 1 MiB, a symlink or a special file adds no
+  edge; nothing outside the repository is read. The pass lives in `signals.py` beside the
+  regex scanner; `_codegraph.py` and the regex arm are unchanged.
+- `structure.source` stays `graph`. The `structure.graph` block gains one additive key,
+  `reexport_edges`: the number of edges the pass added (`null` on the regex arm). No note
+  is printed.
+- Offline on case 72 (`signal_grader.py fixture --arm graph`, codegraph 1.6.2):
+  `blast.files` precision 1.00 and recall 0.95 (56 of 59) before, 1.00 and 1.00 (59 of 59)
+  after. The regex arm stays at 0.03.
+- The worklog holds the index evidence and a three-file repro of the missing edge for the
+  maintainer to report upstream.
+
+**The grader's last-call rule (ADR 0016).** `signal_grader.py trace` and `results` score the
+last `signals.py` call whose result holds a `blast` object with a `files` list. A call
+whose `blast.files` is `null` is skipped, and the walk continues to the earlier call. One
+live run scored 0.00 because the agent's last call carried no `files` list.
+
+**Tests.** The shim fixture gains a two-hop barrel chain with a workspace: the file behind
+both barrels and the barrels themselves reach `blast.files` on the graph arm, the regex
+arm is unchanged, a barrel over 1 MiB adds no edge, and every re-export form counts. The
+grader: a trailing call with `blast.files: null` is skipped.
+
 v0.23.0 — only the user approves a publish, a `ready` verdict closes every finding in a fix, and a script grades the blast-radius signal.
 
 **The user's publish approval (#1, ADR 0015).** Before this release, `--actor user` and

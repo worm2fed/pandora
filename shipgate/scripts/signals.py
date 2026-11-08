@@ -1089,7 +1089,7 @@ def _ts_aliases(root: Path, files: frozenset
                 aliases.append((prefix, suffix, joined, wildcard))
             aliases.sort(key=lambda a: (a[3], -len(a[0])))
             return aliases
-        except (ValueError, AttributeError, TypeError):
+        except (ValueError, AttributeError, TypeError, RecursionError):
             return []  # an unparseable config skips aliases silently
     return []
 
@@ -1189,6 +1189,117 @@ def scan_structure(root: Path, tracked: List[str], graph_files: List[str]) -> Gr
     return Graph(True, None, sorted(languages), scanned, out, inn, status, unresolved)
 
 
+# `export * from`, `export * as x from`, `export { … } from`, and each with `type` after
+# `export`; DOTALL so a brace list over several lines matches. The brace list may hold no
+# brace. That class keeps the scan linear: an unclosed `export {` stops at the next brace,
+# so it never rescans to the end of the file.
+_REEXPORT_RE = re.compile(
+    r"""\bexport\s+(?:type\s*)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^{}]*\})"""
+    r"""\s*from\s*['"]([^'"]+)['"]""", re.DOTALL)
+_GLOB_CHARS = frozenset("*?[]{}!")
+
+
+def _package_entry(meta: Dict[str, Any]) -> Optional[str]:
+    """The entry a package.json names: `exports["."]` (a string, or its `import` or
+    `default` member), else `main`; None when it names neither."""
+    exports = meta.get("exports")
+    dot = exports.get(".") if isinstance(exports, dict) and "." in exports else exports
+    if isinstance(dot, str):
+        return dot
+    if isinstance(dot, dict):
+        for key in ("import", "default"):
+            if isinstance(dot.get(key), str):
+                return dot[key]
+    main = meta.get("main")
+    return main if isinstance(main, str) else None
+
+
+def _workspace_entries(root: Path, ctx: GraphContext, nodes: set) -> Dict[str, str]:
+    """Workspace package name -> its entry file, for entries in NODES. The packages come
+    from the root package.json `workspaces` (a list, or `{packages: [...]}`): `dir/*` is
+    every tracked `dir/<name>/package.json`, a literal pattern is that directory. Other
+    globs are skipped; an unreadable or unparseable package.json gives nothing."""
+    import posixpath
+
+    def load(path: str) -> Dict[str, Any]:
+        if path not in ctx.files:
+            return {}
+        try:
+            meta = json.loads(_read_text(root, path) or "")
+        except (ValueError, RecursionError):  # deep nesting raises RecursionError
+            return {}
+        return meta if isinstance(meta, dict) else {}
+
+    patterns = load("package.json").get("workspaces")
+    if isinstance(patterns, dict):
+        patterns = patterns.get("packages")
+    if not isinstance(patterns, list):
+        return {}
+    dirs = set()
+    for pattern in patterns:
+        norm = _join("", pattern) if isinstance(pattern, str) else None
+        if not norm:
+            continue
+        wildcard = norm.endswith("/*")
+        base = norm[:-2] if wildcard else norm
+        if _GLOB_CHARS & set(base):
+            continue  # `**`, `?`, `[…]`, `{…}`, `!`: not expanded
+        if not wildcard:
+            dirs.add(base)
+            continue
+        for path in ctx.files:
+            pkg_dir = posixpath.dirname(path)
+            if posixpath.basename(path) == "package.json" and \
+                    posixpath.dirname(pkg_dir) == base:
+                dirs.add(pkg_dir)
+    entries: Dict[str, str] = {}
+    for pkg_dir in sorted(dirs):
+        meta = load(pkg_dir + "/package.json")
+        name = meta.get("name")
+        if not isinstance(name, str) or not name or name in entries:
+            continue
+        target = _package_entry(meta)
+        entry = _probe_ts(ctx, _join(pkg_dir, target) if target is not None
+                         else pkg_dir + "/index")
+        if entry in nodes:
+            entries[name] = entry
+    return entries
+
+
+def reexport_edges(root: Path, files: Sequence[str], tracked: Sequence[str]
+                   ) -> Dict[str, set]:
+    """The edges a codegraph index lacks (ADR 0017), importer -> imported, both in
+    FILES: each `export … from` of a TS/JS file, resolved like the regex scanner does,
+    and each bare import of a workspace package name, to that package's entry file.
+    Each file is read once with `_read_text`; an unreadable file adds nothing, and
+    nothing here counts as unresolved."""
+    all_files = frozenset(tracked)
+    ctx = GraphContext(all_files, _ts_aliases(root, all_files), {}, [], {})
+    nodes = set(files)
+    packages = _workspace_entries(root, ctx, nodes)
+    edges: Dict[str, set] = {}
+    for path in files:
+        if adapter_for(path) != "ts-js":
+            continue
+        text = _read_text(root, path)
+        if text is None:
+            continue
+        targets: set = set()
+        code = "\n".join(_lines(text, ("//", "/*", "*")))
+        for spec in _REEXPORT_RE.findall(code):
+            result = _resolve_ts(spec, path, ctx)
+            if isinstance(result, set):
+                targets |= result
+        if packages:
+            for spec in _extract_ts(text):
+                if spec in packages:
+                    targets.add(packages[spec])
+        targets = {t for t in targets if t != path and t in nodes}
+        if targets:
+            edges[path] = targets
+    return edges
+
+
 def graph_structure(root: Path, tracked: List[str], graph_files: List[str],
                     selection: Any) -> Tuple[Graph, Any]:
     """The provider swap: the codegraph index when SELECTION is available, else
@@ -1204,11 +1315,19 @@ def graph_structure(root: Path, tracked: List[str], graph_files: List[str],
             selection = selection._replace(available=False, source="regex",
                                            state="failed", reason=exc.reason)
         else:
-            block = dict(selection.to_json(), outside_repo=found.outside_repo)
+            added = 0
+            for a, targets in reexport_edges(root, found.files, tracked).items():
+                mine = found.out.setdefault(a, set())
+                for b in targets - mine:
+                    mine.add(b)
+                    found.inn.setdefault(b, set()).add(a)
+                    added += 1
+            block = dict(selection.to_json(), outside_repo=found.outside_repo,
+                         reexport_edges=added)
             return Graph(True, None, found.languages, len(found.files), found.out,
                          found.inn, {p: "ok" for p in found.files},
                          {p: 0 for p in found.files}, "graph", block), selection
-    block = dict(selection.to_json(), outside_repo=None)
+    block = dict(selection.to_json(), outside_repo=None, reexport_edges=None)
     return scan_structure(root, tracked, graph_files)._replace(graph=block), selection
 
 

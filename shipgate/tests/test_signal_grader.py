@@ -205,6 +205,18 @@ class TestTrace(TmpCase):
         self.assertEqual((s["call"], s["calls"]), (1, 2))
         self.assertEqual(s["files"]["tp"], 1)
 
+    def test_a_last_result_with_null_files_falls_back_to_the_previous_call(self):
+        trace = self.write_trace([
+            bash_use("t1", "python3 signals.py blast --diff HEAD~1 --json"),
+            bash_result("t1", json.dumps(payload(["src/a.ts", "src/b.ts"]))),
+            bash_use("t2", "python3 signals.py blast --diff HEAD~1 --json"),
+            bash_result("t2", json.dumps(payload(None))),
+        ])
+        s = sg.score_trace(str(trace), EXPECTED)
+        self.assertEqual((s["call"], s["calls"]), (1, 2))
+        self.assertEqual((s["files"]["tp"], s["files"]["got"]), (2, 2))
+        self.assertEqual(s["files"]["recall"], 0.5)
+
     def test_no_signals_result_exits_3(self):
         trace = self.write_trace([bash_use("t1", "git log"), bash_result("t1", "x")])
         self.assertIsNone(sg.score_trace(str(trace), EXPECTED))

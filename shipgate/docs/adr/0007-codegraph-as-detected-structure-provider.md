@@ -2,19 +2,25 @@
 type: adr
 title: "0007. codegraph as a detected structure provider behind signals.py"
 created: 2026-10-19
-updated: 2026-10-19
+updated: 2026-11-07
 tags:
   - adr
-status: accepted
+status: accepted (amended 2026-11-07, shipgate 0.24.0)
 date: 2026-10-19
 issue: "none / ad-hoc"
 related:
   - ../prd/code-graph.md
   - ../research/2026-10-19-codegraph-vs-signals.md
   - ./0004-code-signals-on-demand-stdlib-script.md
+  - ./0017-re-export-edges-are-added-beside-the-graph.md
 ---
 
 # 0007. codegraph as a detected structure provider behind signals.py
+
+> **Amended 2026-11-07 (shipgate 0.24.0, ADR 0017):** §2's file graph is the index's
+> cross-file edges plus the re-export and package-entry edges that `signals.py` adds from
+> a scan of the graph's TypeScript and JavaScript files, because codegraph 1.6.2 records
+> neither. `_codegraph.py` still holds every codegraph call and nothing else.
 
 > `signals.py` stays the one command the phases call. When the `codegraph` binary is on
 > `PATH`, the structural half (file edges, blast, tests reached, symbols) comes from its

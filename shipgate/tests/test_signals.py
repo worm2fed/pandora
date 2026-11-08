@@ -776,7 +776,7 @@ class TestTrajectory(StandardRepoCase):
             "files_scanned": 4, "source": "regex", "graph": {
                 "state": "absent", "reason": "graph-not-installed", "version": None,
                 "index_root": None, "built": None, "sync": "none",
-                "outside_repo": None}})
+                "outside_repo": None, "reexport_edges": None}})
         self.assertEqual(set(payload["files"][0]), {
             "path", "commits", "fixes", "fix_rate", "age_days", "stale_days",
             "authors", "top_share", "fan_in", "fan_out", "unresolved", "structure",

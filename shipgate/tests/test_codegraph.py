@@ -18,6 +18,7 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1006,7 +1007,8 @@ class TestProviderSwap(ShimSignalsCase):
         self.assertEqual(regex["source"], "regex")
         self.assertEqual(regex["graph"], {
             "state": "off", "reason": "graph-off", "version": None, "index_root": None,
-            "built": None, "sync": "none", "outside_repo": None})
+            "built": None, "sync": "none", "outside_repo": None,
+            "reexport_edges": None})
 
     def test_the_first_graph_run_reports_the_build(self):
         payload = self.run_json("hotspots")
@@ -1072,6 +1074,171 @@ class TestProviderSwap(ShimSignalsCase):
                              self.repo.path, env=env)
         self.assertEqual(table.stderr, "")
         self.assertIn("tests reached: unavailable (graph-affected)", table.stdout)
+
+
+# ---------------------------------------------------------------------------
+# ADR 0017 — re-export edges beside the graph
+# ---------------------------------------------------------------------------
+
+# A two-hop barrel chain in a workspace: the hub is behind the money barrel, `leaf`
+# deep-imports the hub and sits behind the notify barrel, and `use` imports the bare
+# package name `@app/notify`.
+REEXPORT_FILES = {
+    "package.json": '{"name":"ws","private":true,"workspaces":["packages/*"]}\n',
+    "packages/money/package.json": '{"name":"@app/money","exports":{".":"./src/index.ts"}}\n',
+    "packages/money/src/hub.ts": "export const hub = 1;\n",
+    "packages/money/src/index.ts": 'export * from "./hub";\n',
+    "packages/notify/package.json": '{"name":"@app/notify","main":"src/index.ts"}\n',
+    "packages/notify/src/leaf.ts": (
+        'import { hub } from "@app/money/hub";\nexport const leaf = hub;\n'),
+    "packages/notify/src/index.ts": 'export { leaf } from "./leaf";\n',
+    "packages/core/src/use.ts": 'import { leaf } from "@app/notify";\nexport const use = leaf;\n',
+}
+# What codegraph 1.6.2 records: nothing from a barrel, nothing to a barrel.
+REEXPORT_EDGES = [["packages/notify/src/leaf.ts", "packages/money/src/hub.ts"],
+                  ["packages/core/src/use.ts", "packages/notify/src/leaf.ts"]]
+REEXPORT_HUB = "packages/money/src/hub.ts"
+
+
+class TestReexportEdges(ShimSignalsCase):
+    """ADR 0017: on the graph arm, `export … from` lines and bare workspace-package
+    imports add the edges the index lacks; the regex arm is unchanged."""
+
+    def make_repo(self, files, name="repo") -> FixtureRepo:
+        # One commit: `make` appends a line to the first sorted file, which here is the
+        # root package.json, and the workspace map needs it to stay JSON.
+        repo = FixtureRepo(self.tmp / name)
+        repo.commit("one", ts(2020, 1, 1), writes=files)
+        return repo
+
+    def blast(self, repo, *extra, edges=REEXPORT_EDGES):
+        env = self.env(SHIM_EDGES=json.dumps(edges))
+        return self.signals_json("blast", REEXPORT_HUB, "--repo", repo.path, *extra,
+                                 env=env)
+
+    def test_a_two_hop_barrel_chain_reaches_every_importer(self):
+        repo = self.make_repo(REEXPORT_FILES)
+        graph = self.blast(repo)
+        self.assertEqual(graph["structure"]["source"], "graph")
+        self.assertEqual(graph["blast"]["files"], sorted([
+            "packages/core/src/use.ts", "packages/money/src/index.ts",
+            "packages/notify/src/index.ts", "packages/notify/src/leaf.ts"]))
+        self.assertEqual(graph["structure"]["graph"]["reexport_edges"], 3)
+        self.assertEqual(graph["structure"]["files_scanned"], len(REEXPORT_FILES))
+
+    def test_the_regex_arm_is_unchanged(self):
+        # The regex scanner resolves the relative re-export and no workspace name.
+        repo = self.make_repo(REEXPORT_FILES)
+        regex = self.blast(repo, "--graph", "off")
+        self.assertEqual(regex["structure"]["source"], "regex")
+        self.assertEqual(regex["blast"]["files"], ["packages/money/src/index.ts"])
+        self.assertIsNone(regex["structure"]["graph"]["reexport_edges"])
+
+    def test_a_barrel_over_the_scan_cap_adds_no_edge(self):
+        barrel = 'export * from "./hub";\n'
+        files = {"src/hub.ts": "export const hub = 1;\n",
+                 "src/index.ts": barrel,
+                 "src/use.ts": 'import { hub } from "./index";\nexport const use = hub;\n'}
+        # codegraph resolves the named import through the barrel and records both.
+        edges = [["src/use.ts", "src/hub.ts"], ["src/use.ts", "src/index.ts"]]
+        env = self.env(SHIM_EDGES=json.dumps(edges))
+        small = self.make_repo(files, "small")
+        payload = self.signals_json("blast", "src/hub.ts", "--repo", small.path, env=env)
+        self.assertEqual(payload["blast"]["files"], ["src/index.ts", "src/use.ts"])
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 1)
+        # One byte over MAX_SCAN_BYTES of comment padding: the barrel is not read.
+        big = dict(files, **{"src/index.ts": barrel + "/" * (1024 * 1024 + 1 - len(barrel))})
+        self.assertEqual(len(big["src/index.ts"]), 1024 * 1024 + 1)
+        large = self.make_repo(big, "large")
+        payload = self.signals_json("blast", "src/hub.ts", "--repo", large.path, env=env)
+        self.assertEqual(payload["structure"]["source"], "graph")
+        self.assertEqual(payload["blast"]["files"], ["src/use.ts"])
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 0)
+
+    def test_every_re_export_form_counts(self):
+        files = {
+            "src/a.ts": "export const a = 1;\n",
+            "src/b.ts": "export type T = number;\n",
+            "src/c.ts": "export const c = 1;\nexport const d = 2;\n",
+            "src/index.ts": (
+                '// export * from "./ignored";\n'
+                'export * as ns from "./a";\n'
+                "export type { T } from './b';\n"
+                "export {\n  c,\n  d\n} from \"./c\";\n"
+                'export * from "left-pad";\n'),
+        }
+        repo = self.make_repo(files)
+        env = self.env(SHIM_EDGES="[]")
+        payload = self.signals_json("hotspots", "--repo", repo.path, env=env)
+        self.assertEqual(payload["structure"]["source"], "graph")
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 3)
+        rows = {r["path"]: r for r in payload["files"]}
+        self.assertEqual(rows["src/index.ts"]["fan_out"], 3)
+        for leaf in ("src/a.ts", "src/b.ts", "src/c.ts"):
+            self.assertEqual(rows[leaf]["fan_in"], 1, leaf)
+
+    def test_type_star_re_exports_count(self):
+        files = {"src/a.ts": "export type A = 1;\n",
+                 "src/b.ts": "export type B = 2;\n",
+                 "src/index.ts": ('export type * from "./a";\n'
+                                  "export type * as ns from './b';\n")}
+        repo = self.make_repo(files)
+        payload = self.signals_json("hotspots", "--repo", repo.path,
+                                    env=self.env(SHIM_EDGES="[]"))
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 2)
+        rows = {r["path"]: r for r in payload["files"]}
+        self.assertEqual(rows["src/index.ts"]["fan_out"], 2)
+
+    def test_unclosed_brace_lists_stay_linear(self):
+        # About 1 MB of `export {` lines with no closing brace, under the scan cap: an
+        # unbounded brace list would rescan to the end of the file at every line.
+        lines = "export {\n" * (1000 * 1000 // len("export {\n"))
+        files = {"src/hub.ts": "export const hub = 1;\n",
+                 "src/flood.ts": lines,
+                 "src/use.ts": 'import { hub } from "./hub";\n'}
+        repo = self.make_repo(files)
+        env = self.env(SHIM_EDGES=json.dumps([["src/use.ts", "src/hub.ts"]]))
+        started = time.monotonic()
+        payload = self.signals_json("blast", "src/hub.ts", "--repo", repo.path, env=env)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 5.0)
+        self.assertEqual(payload["structure"]["source"], "graph")
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 0)
+        self.assertEqual(payload["blast"]["files"], ["src/use.ts"])
+
+    def test_a_deeply_nested_root_package_json_is_ignored(self):
+        # json.loads raises RecursionError, not ValueError, on deep nesting.
+        files = {"package.json": "[" * 200000,
+                 "src/hub.ts": "export const hub = 1;\n",
+                 "src/use.ts": 'import { hub } from "./hub";\n'}
+        repo = self.make_repo(files)
+        env = self.env(SHIM_EDGES=json.dumps([["src/use.ts", "src/hub.ts"]]))
+        payload = self.signals_json("blast", "src/hub.ts", "--repo", repo.path, env=env)
+        self.assertEqual(payload["structure"]["source"], "graph")
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 0)
+        self.assertEqual(payload["blast"]["files"], ["src/use.ts"])
+
+    def test_a_deeply_nested_tsconfig_is_ignored(self):
+        files = {"tsconfig.json": "[" * 200000,
+                 "src/hub.ts": "export const hub = 1;\n",
+                 "src/use.ts": 'import { hub } from "./hub";\n'}
+        repo = self.make_repo(files)
+        env = self.env(SHIM_EDGES=json.dumps([["src/use.ts", "src/hub.ts"]]))
+        payload = self.signals_json("blast", "src/hub.ts", "--repo", repo.path, env=env)
+        self.assertEqual(payload["structure"]["source"], "graph")
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 0)
+        self.assertEqual(payload["blast"]["files"], ["src/use.ts"])
+
+    def test_a_brace_list_over_4096_characters_counts(self):
+        names = ["generatedExportName%03d" % i for i in range(300)]
+        big = "".join("export const %s = %d;\n" % (n, i) for i, n in enumerate(names))
+        barrel = "export {\n" + "".join("  %s,\n" % n for n in names) + '} from "./big";\n'
+        self.assertGreater(len(barrel), 4096)
+        repo = self.make_repo({"src/big.ts": big, "src/index.ts": barrel})
+        payload = self.signals_json("blast", "src/big.ts", "--repo", repo.path,
+                                    env=self.env(SHIM_EDGES="[]"))
+        self.assertEqual(payload["structure"]["graph"]["reexport_edges"], 1)
+        self.assertEqual(payload["blast"]["files"], ["src/index.ts"])
 
 
 # ---------------------------------------------------------------------------

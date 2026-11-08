@@ -24,7 +24,9 @@ Sources:
 - `score` reads a saved signals.py JSON output.
 - `trace` reads a run's trace.jsonl (kept with --keep-temp). It takes the last Bash call
   that runs `signals.py blast ... --json` or `signals.py hotspots --blast ... --json` and
-  whose result holds a JSON object with a `blast` key.
+  whose result holds a JSON object with a `blast` key whose `files` is a list. A call
+  whose `blast.files` is null, absent or not a list is skipped, and the grader takes the
+  call before it.
 - `fixture` scaffolds the case's fixture.sh into a fresh temp dir and runs
   `signals.py blast --diff HEAD~1 --json` in `app/`, with `--graph auto` (graph arm) or
   `--graph off` (regex arm). The prompts of cases 13 and 72 ask about "the change at
@@ -218,12 +220,21 @@ def signals_calls(trace_path):
     return [tuple(c) for c in calls]
 
 
+def _has_files_list(obj):
+    blast = obj.get("blast")
+    return isinstance(blast, dict) and isinstance(blast.get("files"), list)
+
+
 def score_trace(trace_path, expected):
-    """Score the last signals blast result in a trace; None when the trace has none."""
+    """Score the last signals blast result in a trace whose `blast.files` is a list.
+
+    A call whose `blast.files` is null, absent or not a list is skipped. None when no call
+    qualifies.
+    """
     calls = signals_calls(trace_path)
     for index in range(len(calls) - 1, -1, -1):
         command, text = calls[index]
-        objects = blast_objects(text or "")
+        objects = [o for o in blast_objects(text or "") if _has_files_list(o)]
         if objects:
             out = score_payload(objects[-1], expected)
             out["command"] = command

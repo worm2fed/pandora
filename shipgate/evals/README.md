@@ -48,7 +48,7 @@ claude plugin eval . --runs 3 --ablation with-without --scaffold --judge-model s
 | 12–14 explicit | same as 08–10, prompt names the shipgate skill | the signals path itself (`review` + `hotspots --diff`) |
 | 70 fact retention | review the change at HEAD; three planted findings in three files | the with arm's report keeps every planted fact (file:line, severity, failing input) while following the Writing for people rule; readability rubric at weight 0.25, paired with a hedge-word regex |
 | 71 reuse detection | add retry with exponential delay to `fetchInvoice`; prompt names `implement` | the reuse step finds `withBackoff`, a helper whose name does not say "retry", and wraps the call in it instead of writing a new loop |
-| 72 blast radius, large | the change at HEAD in a generated 484-file npm workspace (`@app/*` package imports, barrel re-exports, `require`, a `__tests__/` tree); prompt names `route-and-map` | recall and precision against the generated truth (44 importers, 15 tests); the regex scanner does not resolve workspace package names (2 of 59 files), the graph misses only re-export hops (56 of 59) |
+| 72 blast radius, large | the change at HEAD in a generated 484-file npm workspace (`@app/*` package imports, barrel re-exports, `require`, a `__tests__/` tree); prompt names `route-and-map` | recall and precision against the generated truth (44 importers, 15 tests); the regex scanner does not resolve workspace package names (2 of 59 files); the graph alone missed the re-export and package-entry hops (56 of 59), and from shipgate 0.24.0 the re-export pass reaches all 59 |
 | 73 reuse, hidden helper | as 71, in a generated 290-file workspace; the helper `withPolicy` sits in `packages/platform/src/net/resilience/` and no file says "retry" or "backoff" | whether the reuse step still finds the helper when its name and path give nothing away |
 | 74 canon lens | review the change at HEAD in a journaled TS repo whose config's Style section names a project skill, `typed-canon` | whether the review names both canon violations (a `switch` over a closed union; an unbranded id in a domain type) as must-fix findings before its verdict, and records `style` on the review entry (#11) |
 | 75 graph past route | review the change at HEAD in a journaled TS repo; the journal is at review with graph signals on its route-and-map entry; graph arm only | whether the graph still feeds the flow after route-and-map: `hotspots --diff` runs, the verdict carries `ranking` with `source: graph` and the hot file first, and the answer says it looked hardest at that file and why (#10) |
@@ -189,9 +189,11 @@ python3 $G results shipgate/evals/results/<timestamp>
   change at HEAD", so the seeds are the files that HEAD changes. In case 72 HEAD also
   changes a script that nothing imports; that seed adds no files.
 - `trace` reads a kept `trace.jsonl`. It scores the last Bash call that runs `signals.py`
-  with `blast` (or `hotspots --blast`) and `--json` and whose result holds the JSON. It
-  ignores other output in the same result, such as an advisory line. With no such call it
-  prints "no signals result in the trace" and exits 3.
+  with `blast` (or `hotspots --blast`) and `--json` and whose result holds the JSON. The
+  JSON's `blast.files` must be a list. A call whose `blast.files` is null, absent or not a
+  list is skipped, and the grader takes the call before it. It ignores other output in the
+  same result, such as an advisory line. With no such call it prints "no signals result in
+  the trace" and exits 3.
 - `results` runs `trace` for each run of each case with an `expected.json`. It prints one
   row per run: case, arm, run, files P/R, tests P/R and source. `run-case.sh` runs it after
   each such case, in both arms (also with `--no-codegraph`). The trace exists only with
@@ -205,19 +207,22 @@ a read of the imports in `fixture.sh`. HEAD changes only `src/util/round.ts`. `c
 and `percent.ts` import it, `lineItem.ts` and `tax.ts` import those, `invoice.ts` imports
 both, and `pdfSummary.ts` imports `invoice.ts`. The case has no test files.
 
-Offline result on 2026-11-06 (`fixture`, codegraph 1.6.2):
+Offline result on 2026-11-07 (`fixture`, codegraph 1.6.2, shipgate 0.24.0):
 
 | case | arm | `blast.files` P / R | tp / got / truth | `blast.tests` P / R | tp / got / truth |
 |---|---|---|---|---|---|
-| 72 | graph | 1.00 / 0.95 | 56 / 56 / 59 | 1.00 / 1.00 | 15 / 15 / 15 |
+| 72 | graph | 1.00 / 1.00 | 59 / 59 / 59 | 1.00 / 1.00 | 15 / 15 / 15 |
 | 72 | regex | 1.00 / 0.03 | 2 / 2 / 59 | 1.00 / 0.00 | 0 / null / 15 |
 | 13 | graph | 1.00 / 1.00 | 6 / 6 / 6 | 1.00 / 1.00 | 0 / 0 / 0 |
 | 13 | regex | 1.00 / 1.00 | 6 / 6 / 6 | 1.00 / 1.00 | 0 / null / 0 |
 
-In 72 the graph misses three files: the two barrels `money/src/index.ts` and
-`notify/src/index.ts`, and `core/src/config/scanRebateSet.ts`, which only a second barrel
-reaches. The regex scanner does not resolve the `@app/*` package names, and it finds no
-tests (`null`).
+Before 0.24.0 (2026-11-06, the same fixture) the graph arm of 72 gave 1.00 / 0.95 (56 of
+59). It missed the two barrels `money/src/index.ts` and `notify/src/index.ts`, and
+`core/src/config/scanRebateSet.ts`, which only a second barrel reaches: codegraph records
+no edge for `export * from`, and none from a bare `@app/<name>` import to the package
+entry (#7, ADR 0017). The re-export pass in `signals.py` adds those edges on the graph
+arm. The regex scanner does not resolve the `@app/*` package names, and it finds no tests
+(`null`); it is unchanged.
 
 ## Backlog
 

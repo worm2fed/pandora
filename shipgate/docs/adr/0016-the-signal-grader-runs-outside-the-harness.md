@@ -2,12 +2,12 @@
 type: adr
 title: "0016. The signal grader is a script outside the eval harness"
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-07
 tags:
   - adr
   - shipgate
   - evals
-status: accepted
+status: accepted (amended 2026-11-07, shipgate 0.24.0)
 date: 2026-11-06
 issue: "#6"
 related:
@@ -35,7 +35,9 @@ each grader as pass or fail. Its grader types are `regex`, `tool_used`, `tool_or
    `blast.tests` against the tests. Each gives precision and recall. An empty expected list
    gives a recall of 1.0; an empty or `null` result list gives a precision of 1.0.
 2. **Two sources.** `trace <trace.jsonl>` reads the last `signals.py blast --json` or
-   `hotspots --blast --json` result the agent obtained. `fixture <case dir> --arm
+   `hotspots --blast --json` result the agent obtained. *Amended 2026-11-07 (shipgate
+   0.24.0): it reads the last such result whose `blast.files` is a list; a call whose
+   `files` is null, absent or not a list is skipped, because only a list can be scored.* `fixture <case dir> --arm
    graph|regex` scaffolds the case and runs `signals.py blast` on the change at HEAD, with
    `--graph auto` or `--graph off`. `results <dir>` runs `trace` for every run of a case
    with an `expected.json` whose trace still exists.
