@@ -712,13 +712,13 @@
     },
     "72-graph-blast-radius-large": {
       "claude": "2.1.319",
-      "delta": -0.06,
+      "delta": 0.03,
       "judge": "sonnet",
-      "results": "2026-11-07T21-22-33-316Z",
+      "results": "2026-11-08T21-02-31-774Z",
       "runs": 6,
-      "version": "0.23.0",
-      "with": 0.89,
-      "without": 0.94
+      "version": "0.24.0",
+      "with": 1.0,
+      "without": 0.97
     },
     "73-graph-reuse-hidden-helper": {
       "claude": "2.1.304",
@@ -752,5 +752,5 @@
     }
   },
   "note": "Baselines are the latest full (3-run) result per case. 'version' is the plugin version at record time, not necessarily the version the run tested.",
-  "updated": "2026-11-07"
+  "updated": "2026-11-08"
 }
