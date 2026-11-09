@@ -9,11 +9,13 @@ Execution discipline is what separates a plan that ships from a plan that rots. 
 build plan one task at a time. Prove each task is done before you move on. Keep the worklog
 honest about what actually happened.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present. If its Style section names a style skill,
-> invoke that skill before writing code — and put the same instruction in every worker brief
-> (see `model-tiers`). Journaled, record the skills you named in the phase entry (see
-> **Record each task**).
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
+> If the config's Style section names a style skill, invoke that skill before writing code,
+> and put the same instruction in every worker brief (see `model-tiers`). Journaled,
+> record the skills you named in the phase entry (see **Record each task**).
 
 ## Who types the code
 
@@ -21,10 +23,11 @@ Check the `model-tiers` skill first. When the build is big enough to dispatch, t
 orchestrator does not work tasks inline. Each coherent unit goes to a worker with a
 self-contained worker brief. The orchestrator reviews the worker's diff against the design
 before anything is staged. Workers run one tier below the session, never below Opus. They
-delegate only very mechanical sub-work to Sonnet subagents. Every brief carries the config's
-**Worker guardrails** section pasted verbatim (see `model-tiers`), because the project's hard
-rules are not yours to compress. For small builds, work the tasks directly. Either way, the
-loop below is what "done" means for each task, whoever executes it.
+delegate only very mechanical sub-work to Sonnet subagents. Every brief carries the built-in
+worker discipline and the config's **Worker guardrails** section, pasted verbatim (see
+`model-tiers`), because the hard rules are not yours to compress. For small builds, work the
+tasks directly. Either way, the loop below is what "done" means for each task, whoever
+executes it.
 
 ## The loop (per task)
 
@@ -43,10 +46,12 @@ a placeholder, or `plain`, write them as before.
    that already does this. When you integrate a dependency, **read its API surface first**.
    Libraries usually ship the combinator for their own domain (timers, retries, interceptor
    lifecycles). A sibling function in the same module that uses that dependency is the
-   template to match. Consult the library-docs integration that the config's **Code
-   tooling** section names (if any), rather than trusting memory of the API. For symbol
-   navigation in typed code (who calls this, where is it defined), prefer the LSP tool the
-   config names over grep-and-read.
+   template to match. Consult a library-docs tool rather than trusting memory of the API.
+   When a context7-style MCP (resolve a library id, then query its docs) is present in the
+   session, use it by default. The **Library docs** line of the config's **Code tooling**
+   section is an override: it names the tool to use instead. For symbol navigation in typed
+   code (who calls this, where is it defined), prefer the LSP tool the config names over
+   grep-and-read.
 
    Search the code graph before you grep. Query the name you would give the new code, then
    two domain synonyms of it, one call each:

@@ -31,17 +31,49 @@ asks a handful of questions with recommended defaults, writes `.claude/shipgate.
 if you want one — initializes the flow journal. Re-running it enters update mode rather
 than clobbering what's there.
 
+`setup` writes a lean file: a one-line title and `- Key: value` bullets, with no template
+comments and no prose that explains the plugin. On a machine with no user file, it offers
+once per run to write one with your personal answers. In update mode it strips that
+boilerplate from an older config with `scripts/lean_config.py` (ADR 0019). A line the script
+does not recognise stays. The script removes a block only when every sentence in it is
+boilerplate it knows. A block that also holds a project sentence stays whole, and the script
+reports it as `mixed`, for you to split by hand. `setup` shows the diff, and the script
+writes only on a yes.
+
 Or do it by hand: copy `config-template.md` from this plugin into your project as
 **`.claude/shipgate.md`** and fill in what applies. Skills read it at the start of a flow and treat it as overriding
 their defaults; subagents get the relevant excerpts pasted into their briefs.
 Every section is optional — with no config at all, shipgate still works on sensible
-defaults (in-repo `docs/prd|adr/`, forge auto-detected from the git remote).
+defaults (in-repo `docs/prd|adr/`, forge auto-detected from the git remote). The template's
+comments and this section explain each section, so a project's config does not repeat them.
+
+**How the config files layer** (ADR 0018). This section and the header of
+`config-template.md` state the rule, and every skill cites them. shipgate reads these files,
+nearest first:
+
+1. the repo's `.claude/shipgate.md` files, from the working directory up to the repo root;
+2. the umbrella's `.claude/shipgate.md`, in an umbrella checkout;
+3. the user file: `$CLAUDE_CONFIG_DIR/shipgate.md` when that variable is set and not empty,
+   else `~/.claude/shipgate.md`.
+
+The built-in defaults come last. The config is resolved per section. For each `##` section,
+the nearest file where the section is present supplies the whole section. A section present
+in a nearer file replaces the farther one whole, and sections never merge line by line. A
+section is present when its heading exists and it holds at least one value that is not an
+angle-bracket placeholder. A section with placeholders only, or with no bullets, is absent,
+and the next layer shows through.
+
+The user file uses the same section names and keys as a project's config. It holds what is
+personal and the same in every project: usually Writing style, the Library docs line,
+Autonomy, and the ledger's promotion target for preferences. A nested config takes nothing
+from the umbrella's config when the line `Inherit: none` stands under its title, before its
+first section. The user file and the built-in defaults still apply.
 
 What the sections configure:
 
 | Section | Configures | Default without it |
 | --- | --- | --- |
-| Knowledge base | where PRDs/ADRs/worklogs and captured knowledge live (in-repo paths or an MCP-backed wiki), page conventions | `docs/prd/`, `docs/adr/`, capture to repo docs |
+| Knowledge base | where PRDs/ADRs/worklogs and captured knowledge live (in-repo paths or an MCP-backed wiki), page conventions, the ledger and its project promotion targets | `docs/prd/`, `docs/adr/`, capture to repo docs; ledger `docs/ledger.md`; at triage, personal workflow preferences go to the harness's built-in memory and everything else is dropped |
 | Journal | the append-only flow journal's database path (written by `/shipgate:setup`) | no journal — phase inferred from artifact shape |
 | Forge & tracker | GitLab/GitHub, CLI, MR/PR template + fetch command, issue-link form, AC source | auto-detect from `git remote` (`gh`/PR, `glab`/MR) |
 | Branching | branch naming pattern + examples | `<type>/<issue-id>-<slug>` |
@@ -52,12 +84,12 @@ What the sections configure:
 | Debug evidence sources | prod/QA log-query skill, CI-log integration | local logs, tests, debugger |
 | Epic workflow | epic decomposition command, ordering, delivery rules | issue-by-issue, manual decomposition |
 | MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR/PR opened" |
-| Code tooling | the library-docs tool/MCP to consult for a dependency's current API, and the LSP tool for symbol navigation | training knowledge / WebFetch; grep-and-read |
+| Code tooling | the library-docs tool/MCP to consult for a dependency's current API (an override), and the LSP tool for symbol navigation | library docs from a context7-style MCP when the session has one, else training knowledge / WebFetch; grep-and-read |
 | Code signals | window, fix-commit pattern, extra excludes and ranking excludes for the bundled risk signals (the one section a script reads, not the model) | 12-month window, built-in fix pattern, excludes and ranking excludes (release files) |
-| Worker guardrails | the project's hard rules, pasted verbatim into every worker brief | only the built-in worker discipline (branch check, no staging, evidence) |
+| Worker guardrails | the repo's own hard rules, pasted verbatim into every worker brief after the built-in worker discipline | only the built-in worker discipline in `model-tiers`: branch check, no staging, the git index, no `--no-verify`, no repo-wide formatter, stop-and-report, comments, evidence |
 | Orchestration | whether Review / Explore fan out via bundled `Workflow` scripts or `Agent` subagents | `agents` for both |
 | Thinking lenses | which lens *skills* to invoke at which phase, overriding the inline bullet (e.g. one from [cc-thinking-skills](https://github.com/tjboudreaux/cc-thinking-skills)); a large lens plugin costs skill-listing space in every session, so map only what you need | no lens skills invoked — the phase skills apply each lens inline |
-| Autonomy | `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them) | `ask` — every gate question goes to the user |
+| Autonomy | `Mode`: `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them); `Extra escalations`: the cases it must still ask about, on top of the executive contract, which lives in the `feature` skill | `ask` — every gate question goes to the user |
 
 ## What's inside
 
@@ -105,6 +137,7 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 **Scripts** (Python 3 stdlib)
 
 - `scripts/journal.py` — the flow journal CLI; `scripts/signals.py` — per-file risk signals, read by `route-and-map`, `review` and `structured-debug` (see [Code signals](#code-signals)).
+- `scripts/lean_config.py` — strips the boilerplate that explains the plugin from a config; prints a diff, and writes only with `--apply` (run by `setup` in update mode; ADR 0019).
 
 **Glossary** — [`docs/glossary.md`](docs/glossary.md): one term per shipgate concept, what it means and what it is not to be confused with. Prose in this plugin uses those terms and no synonyms. Every report a person reads follows the **Writing for people** rule (short sentences, one idea each, every fact kept; ADR 0006); the `Writing style` config section extends it to the documents shipgate writes into your repo.
 
@@ -153,7 +186,7 @@ compacted or resumed session was driving, branch or no branch), then the checked
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID` | what the flow still owes (the Stop hook's source) |
 | `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review" |
-| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses |
+| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
@@ -260,7 +293,10 @@ repository (or `--scope`), so `top` means top here; paths and `--diff` only filt
 
 Common flags: `--repo`, `--scope`, `--window`, `--fix-pattern`, `--exclude`, `--json`; they
 override the `## Code signals` config section. `--graph auto|off|root` overrides the
-`Code graph` bullet under `## Code tooling`. Consumers: `route-and-map` (a **Risk signals**
+`Code graph` bullet under `## Code tooling`. Both sections come from the layered config files
+(see [Configuration](#configuration)): `config.source` labels a value from the user file
+`user shipgate.md`, and `config.files` and `config.inherit` say which files were read.
+Consumers: `route-and-map` (a **Risk signals**
 block in the impact map, essentials in the journal), `review` (a per-file risk table in the
 brief, and `fileRisk` for the workflow's refuter ordering), `structured-debug` (a suspect
 list cited as `[signals]` evidence), `implement` and `design` (prefer the proven precedent),

@@ -55,13 +55,16 @@ through. Cover only what the config actually needs and detection could not settl
   - a custom path — for anything else. Never put it inside a container bind mount, because
     SQLite corrupts there.
 - **Autonomy** — `ask` *(default)*: every gate question goes to the user. `executive`: the
-  orchestrator answers routine gate questions itself and records them. It escalates only
-  one-way doors, scope changes, and security-sensitive areas.
-- **Worker guardrails** — any hard rules a worker must never compress. Examples: formatters or
-  linters that rewrite files (and the read-only gate to use instead), build scripts, staging
-  conventions, spend limits. Write one imperative line each into the config's
-  **Worker guardrails** section. Worker briefs paste that section verbatim. A rule that lives
-  only in the user's head is a rule no worker will ever see.
+  orchestrator answers routine gate questions itself and records them. It escalates only the
+  cases in `feature`'s executive contract, plus the config's **Extra escalations**.
+- **Worker guardrails** — any hard rules for this repo that a worker must never compress.
+  Examples: a build script that belongs to CI, a generated directory never edited by hand, a
+  schema dump refreshed by one command, the read-only lint gate to use instead of a fixer.
+  The built-in worker discipline in `model-tiers` already covers staging, `--no-verify`,
+  repo-wide formatters, spend limits and comments, so don't repeat those. Write one
+  imperative line each into the config's **Worker guardrails** section. Worker briefs paste
+  that section verbatim. A rule that lives only in the user's head is a rule no worker will
+  ever see.
 - **Orchestration** — how the Review and Explore fans run. `agents` *(default)* is the
   hand-driven Agent fan. `workflow` runs the fan through the `Workflow` tool and a bundled
   script. With `workflow`, findings come back schema-typed and verified, and the raw reports do
@@ -81,15 +84,39 @@ sensible default or get deleted. An absent section *means* the built-in default,
 whole point of the template. The user can add the watcher, style skill, debug sources, epic
 workflow and the rest later by editing the file.
 
+**Then offer the user file, once per setup run, on a machine with no user file.** The user
+file is `$CLAUDE_CONFIG_DIR/shipgate.md` when that variable is set and not empty, else
+`~/.claude/shipgate.md`. Check that it exists; this check needs existence only, not its
+content. The existence check is the only memory of the offer: a declined offer leaves no
+file, so a later `setup` run offers again. When there is no user file, offer once in this run
+to write it with the answers that are personal:
+
+- the Writing style section;
+- the Library docs line of the Code tooling section;
+- the Autonomy mode and its Extra escalations;
+- the ledger's promotion target for preferences.
+
+The user accepts or declines. On a yes, write those answers to the user file in the lean form
+of Step 3, and leave them out of the project file. Never copy a user-file section into the
+project file. The layering rule in `config-template.md`'s header makes the user file apply
+under every project config.
+
 ## Step 3 — Write
 
 Order matters. Never leave a sidecar pointing at a database that was not created.
 
-1. **`.claude/shipgate.md`** — a filled-in copy of `${CLAUDE_PLUGIN_ROOT}/config-template.md`.
-   Keep the section comments. Fill the sections the interview settled. **Delete the sections
-   that don't apply** rather than leaving them empty. No `<angle-bracket placeholder>` may
-   survive into the written file, because the skills will follow a placeholder literally as an
-   instruction.
+1. **`.claude/shipgate.md`** — a lean file, with the section names and keys of
+   `${CLAUDE_PLUGIN_ROOT}/config-template.md`:
+   - a one-line title: `# shipgate configuration — <project>`;
+   - the sections the interview filled, and no others. **Delete the sections that don't
+     apply** rather than leaving them empty;
+   - `- Key: value` bullets only. No template comments, and no prose that explains the
+     plugin;
+   - the Journal section as `- Database: <path>` only.
+
+   The template's comments and the README are the homes of the explanations, so the config
+   does not repeat them. No `<angle-bracket placeholder>` may survive into the written file,
+   because the skills will follow a placeholder literally as an instruction.
 2. **Initialize the journal** (skip if declined or no `python3`):
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" --db <chosen-path> init
@@ -141,8 +168,58 @@ Config and/or sidecar already present. **Never clobber.**
 
 1. Show what exists: the current artifact homes, journal path, autonomy mode. Ask what the
    user wants to change. Edit those lines **in place**. Leave the rest of the file alone,
-   including hand-written sections the template doesn't know about.
-2. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" doctor --json`. Apply any pending
+   including hand-written sections the template doesn't know about. Item 2 is the one
+   exception to this rule.
+2. **Strip the boilerplate.** A config written from the template, or by an earlier setup,
+   carries text that explains the plugin (ADR 0019). Run the recogniser on it. Add
+   `--user <user file>` when a user file exists. In a nested repo inside an umbrella
+   checkout, also add `--umbrella <umbrella config path>`, once per umbrella config:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lean_config.py" .claude/shipgate.md [--user <user file>] [--umbrella <path> …]
+   ```
+
+   The umbrella config paths come from `config.files` in the output of
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/signals.py" hotspots --json`. The entries with
+   role `umbrella` are the paths.
+
+   The script prints a summary line and the removals as a unified diff, and writes nothing.
+   Show the user the diff and ask. On a yes, run the same command with `--apply`. A line the
+   script does not recognise stays, always. The script removes a block only when every
+   sentence in it is boilerplate it knows. A block that also holds a project sentence stays
+   whole, and the script reports it as `mixed`, for the user to split by hand.
+
+   **Then handle the mixed blocks.** The summary counts them (`, M mixed block(s) kept`), and
+   the script prints one `mixed:` line for each, with its lines, its anchor and a hint. The
+   `mixed:` lines printed after an `--apply` run give the line numbers of the written file.
+   Name each mixed block to the user with its hint. Then offer the fix that fits it:
+   - A mixed `Executive contract` bullet names project-specific cases. Offer to add the extra
+     cases to an `Extra escalations` line, then delete the bullet. The same run may have
+     removed a placeholder `Extra escalations` bullet, so the line may need creating. On a
+     yes, make that edit by hand.
+   - A mixed prose block holds a project sentence beside the boilerplate. Offer to move the
+     project sentences to their own paragraph. On a yes, make that edit. Then run the script
+     again, show that diff, and on a yes run it with `--apply`. The gate repeats: a run
+     without `--apply` writes nothing.
+
+   **Then offer to drop the sections equal to the user file's.** With `--user`, the summary
+   reports each section whose body equals the user file's section. A section that an
+   umbrella config also holds is reported as shadowed: it must stay, because dropping it
+   would hand the section to the umbrella, not to the user file. When the summary reports
+   equal sections that are not shadowed, preview their removal with the same flags, without
+   `--apply`:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lean_config.py" .claude/shipgate.md --user <user file> --only-equal --drop-equal [--umbrella <path> …]
+   ```
+
+   `--only-equal` marks only the equal sections, so this run never carries the boilerplate
+   removal. Show that diff, name the equal sections that are not shadowed, and ask whether to
+   remove them from the project file. On a yes, run the same command with `--apply`.
+
+   The two offers are separate: each one applies only the diff it showed. A yes to one is
+   never a yes to the other.
+3. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" doctor --json`. Apply any pending
    schema migration with `init` (idempotent, safe to re-run). When a migration actually ran,
    append `--type schema-migrated` to the `shipgate` stream with the from/to schema versions.
    Read two more facts from its `sidecar` object:
@@ -150,16 +227,23 @@ Config and/or sidecar already present. **Never clobber.**
      Tell the user to update shipgate, then re-run setup. Never rewrite a newer sidecar down
      to this version.
    - `stray_keys` lists the sidecar's keys that the sidecar shape in Step 3 — Write
-     (item 3) does not name. Item 4 below drops them.
-3. **Reconcile drift.** The config's `## Journal` database path and the sidecar's `db` may
+     (item 3) does not name. Item 5 below drops them.
+
+   Then read its `config` object. `config.drift` lists each disagreement between the
+   config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` lines and the sidecar,
+   one line each. A ledger that the config names and the sidecar lacks is the common case.
+   `config.ledger` and `config.homes` give the value on each side.
+4. **Reconcile drift.** The config's `## Journal` database path and the sidecar's `db` may
    disagree. Then surface both and ask which is right. Fix the loser. Do the same for artifact
    homes that no longer exist on disk. Don't guess. The sidecar drives the hooks, the prose
-   drives the model, and a silent mismatch makes capture look broken.
-4. Regenerate the sidecar from the settled answers, with the keys of the sidecar shape in
-   Step 3 — Write (item 3) only: `version`, `db`, `ledger` (when the config names one),
-   `artifact_homes` and `enforce`. When `doctor` reported `stray_keys`, tell the user which
-   keys you dropped, one line. Append `setup-completed` with
-   `"mode":"update"`.
+   drives the model, and a silent mismatch makes capture look broken. For each
+   `config.drift` line, the config wins: it is the prose the model and the user read, and
+   the sidecar is generated. Item 5 fixes the sidecar from the config.
+5. Regenerate the sidecar from the settled answers and the config's Knowledge base values,
+   with the keys of the sidecar shape in Step 3 — Write (item 3) only: `version`, `db`,
+   `ledger` (when the config names one), `artifact_homes` and `enforce`. When `doctor`
+   reported `stray_keys`, tell the user which keys you dropped, one line. Append
+   `setup-completed` with `"mode":"update"`.
 
 ## Degradation
 
@@ -178,6 +262,7 @@ Config and/or sidecar already present. **Never clobber.**
 
 ## Output
 
-Report the files written, the journal path (or why there is none), what got gitignored, and
+Report the files written, the user file if you wrote one, and whether the boilerplate pass
+stripped anything. Report the journal path (or why there is none), what got gitignored, and
 the autonomy mode. Confirm nothing was staged. Then hand back. Setup does not start a flow;
 the user runs `/shipgate` when they're ready.

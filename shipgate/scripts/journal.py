@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import re
 import shlex
 import sqlite3
@@ -72,6 +73,27 @@ _hooks_common = _load_hooks_common()
 journaled_root = _hooks_common.journaled_root
 SIDECAR_RELPATH = _hooks_common.SIDECAR_RELPATH
 DEFAULT_DB_RELPATH = _hooks_common.DEFAULT_DB_RELPATH
+
+
+def _load_config_module():
+    """The config reader shared with `signals.py`, loaded by path: `scripts/` is not a
+    package. Without it the doctor cannot read `.claude/shipgate.md`, so it stops with an
+    infrastructure error (exit 1), as `_load_hooks_common` does.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_config.py"
+    try:
+        spec = importlib.util.spec_from_file_location("shipgate_config", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    except (OSError, ImportError) as exc:
+        sys.exit(f"error: cannot load {path} (shipgate install incomplete): {exc}")
+    return module
+
+
+_config = _load_config_module()
 
 # The phases in their declared order. `Phase` is the closed vocabulary the JSON contract
 # types against (ADR 0009); `PHASE_ORDER` is the same list at runtime, derived so the
@@ -3966,6 +3988,144 @@ def run_doctor(conn: sqlite3.Connection, resolution: Resolution) -> Dict[str, An
         "pending_migrations": pending_migrations(conn),
         "events": counts,
         "sidecar": sidecar_report,
+        "config": config_report(resolution),
+    }
+
+
+# The Knowledge base bullets the doctor compares with the sidecar's `artifact_homes`.
+_CONFIG_HOME_KEYS = (("prd", "prd home"), ("adr", "adr home"), ("worklog", "worklog home"))
+
+
+def _strip_path(value: str) -> str:
+    while value.startswith("./"):
+        value = value[2:]
+    return value.rstrip("/")
+
+
+def _config_home_dir(value: str) -> Optional[str]:
+    """The directory a config home names, `<...>` segments read as `*`; None when the
+    value does not read as a directory (no `/`, or a last segment with a `.`).
+    """
+    if "/" not in value:
+        return None
+    segments = _strip_path(value).split("/")
+    if "." in segments[-1]:
+        return None
+    return "/".join(
+        "*" if len(segment) > 2 and segment[0] == "<" and segment[-1] == ">" else segment
+        for segment in segments
+    )
+
+
+def _sidecar_home_dir(glob: str) -> str:
+    """The directory a sidecar glob covers; trailing `**` segments are a deliberate
+    recursive glob under it, not a different home."""
+    segments = _strip_path(posixpath.dirname(glob)).split("/")
+    while len(segments) > 1 and segments[-1] == "**":
+        segments.pop()
+    return "/".join(segments)
+
+
+def _ledger_drift(config_value: Optional[str], sidecar_value: Optional[str]) -> Optional[str]:
+    if config_value is not None and sidecar_value is None:
+        return f"config names ledger `{config_value}`; the sidecar has no ledger key"
+    if config_value is not None and sidecar_value is not None:
+        if _strip_path(config_value) != _strip_path(sidecar_value):
+            return f"ledger differs: config `{config_value}`, sidecar `{sidecar_value}`"
+        return None
+    if sidecar_value is not None and _strip_path(sidecar_value) != DEFAULT_LEDGER:
+        return (
+            f"sidecar names ledger `{sidecar_value}`; the config names none "
+            f"(default {DEFAULT_LEDGER})"
+        )
+    return None
+
+
+def config_report(resolution: Resolution) -> Dict[str, Any]:
+    """The project's `.claude/shipgate.md` Knowledge base against its sidecar.
+
+    `setup` writes both; a hand edit to one leaves the other behind, and the hooks and
+    `status` read only the sidecar. Drift is information for `setup`'s update mode: it
+    never changes the exit code.
+    """
+    path = resolution.project_dir / _config.CONFIG_RELPATH
+    try:
+        text: Optional[str] = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = None
+    if text is None:
+        return {
+            "found": False,
+            "path": str(path),
+            "inherit": None,
+            "section": "absent",
+            "ledger": {"config": None, "sidecar": None, "drift": None},
+            "homes": {
+                key: {"config": None, "sidecar": None, "compared": False, "drift": None}
+                for key, _ in _CONFIG_HOME_KEYS
+            },
+            "drift": [],
+        }
+
+    # ADR 0018: with no section here, an umbrella or user file owns it and the sidecar
+    # mirrors that file, so nothing in this file can disagree with it.
+    present = _config.section_present(text, _config.KNOWLEDGE_SECTION)
+    values: Dict[str, Optional[str]] = {}
+    if present:
+        for key, value in _config.section_bullets(text, _config.KNOWLEDGE_SECTION):
+            if key not in values:
+                values[key] = _config.bullet_value(value)
+
+    sidecar = resolution.sidecar
+    compare = sidecar is not None and present
+    sidecar_ledger = None
+    sidecar_homes: Dict[str, Any] = {}
+    if sidecar is not None:
+        declared = sidecar.config.get("ledger")
+        if isinstance(declared, str) and declared:
+            sidecar_ledger = declared
+        homes = sidecar.config.get("artifact_homes")
+        if isinstance(homes, dict):
+            sidecar_homes = homes
+
+    config_ledger = values.get("ledger")
+    ledger = {
+        "config": config_ledger,
+        "sidecar": sidecar_ledger,
+        "drift": _ledger_drift(config_ledger, sidecar_ledger) if compare else None,
+    }
+    drift = [ledger["drift"]] if ledger["drift"] else []
+
+    home_reports: Dict[str, Dict[str, Any]] = {}
+    for key, bullet in _CONFIG_HOME_KEYS:
+        config_value = values.get(bullet)
+        declared = sidecar_homes.get(key)
+        sidecar_glob = declared if isinstance(declared, str) else None
+        config_dir = _config_home_dir(config_value) if config_value is not None else None
+        compared = compare and config_dir is not None
+        home_drift = None
+        if compared:
+            glob = sidecar_glob if sidecar_glob is not None else DEFAULT_ARTIFACT_HOMES[key]
+            if config_dir != _sidecar_home_dir(glob):
+                home_drift = (
+                    f"{key} home differs: config `{config_value}`, sidecar glob `{glob}`"
+                )
+                drift.append(home_drift)
+        home_reports[key] = {
+            "config": config_value,
+            "sidecar": sidecar_glob,
+            "compared": compared,
+            "drift": home_drift,
+        }
+
+    return {
+        "found": True,
+        "path": str(path),
+        "inherit": _config.inherit_mode(text),
+        "section": "present" if present else "absent",
+        "ledger": ledger,
+        "homes": home_reports,
+        "drift": drift,
     }
 
 
@@ -3996,6 +4156,22 @@ def render_doctor(report: Dict[str, Any]) -> str:
         f"sidecar         : {sidecar_line}",
         *sidecar_lines,
     ]
+    config = report.get("config")
+    if config is not None:
+        if not config["found"]:
+            lines.append(f"config          : {config['path']} — not found")
+        else:
+            config_drift = config.get("drift") or []
+            if config_drift:
+                state = f"DRIFT ({len(config_drift)})"
+            elif config.get("section") == "absent":
+                state = "no Knowledge base section"
+            elif not sidecar["found"]:
+                state = "no sidecar to compare"
+            else:
+                state = "agrees"
+            lines.append(f"config          : {config['path']} — {state}")
+            lines.extend(f"drift           : {line}" for line in config_drift)
     drift = report.get("off_vocabulary") or []
     if drift:
         summary = ", ".join(f"{d['type']} x{d['count']}" for d in drift)

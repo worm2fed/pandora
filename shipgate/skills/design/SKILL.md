@@ -9,8 +9,10 @@ Design is where you decide *how*, with real alternatives, before you commit the 
 to building. The output is two things. One is a **design** the implementer can follow. The
 other is a **build plan** they can execute task by task. Both live in one worklog.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 > **Journaled project — name the stream before you start.** Three signs mark a journaled
 > project: a status brief headed "shipgate flow journal", a **Journal** section in the config,
@@ -74,9 +76,9 @@ honest. Present to the user:
 
 **Executive mode** (config Autonomy: `executive`): don't ask. **Commit to your recommendation
 and record it.** The ADR in Step 3 is the record; note that it was an executive decision.
-Escalate to the user only in three cases: the reversibility lens says one-way door, the choice
-changes user-visible scope, or you genuinely can't rank the approaches. Present the committed
-choice and its rationale in the phase summary, so the user can veto it.
+Escalate to the user only in the cases `feature`'s executive contract names. The reversibility
+lens below finds one of them, and an approach you genuinely can't rank is another. Present the
+committed choice and its rationale in the phase summary, so the user can veto it.
 
 Before you commit to the recommendation, run a few quick lenses on the leading approach. If
 the config's **Thinking lenses** section maps lens skills to Design, invoke them. Otherwise

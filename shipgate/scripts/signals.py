@@ -46,7 +46,6 @@ EXIT_USAGE = 2
 
 OUTPUT_VERSION = 1
 
-CONFIG_RELPATH = os.path.join(".claude", "shipgate.md")
 CONFIG_SECTION = "code signals"
 TOOLING_SECTION = "code tooling"  # holds the one `Code graph` bullet
 GRAPH_MODES = ("auto", "off", "root")
@@ -96,6 +95,27 @@ def _load_codegraph():
 
 
 _codegraph = _load_codegraph()
+
+
+def _load_config_module():
+    """`_config.py`, the private module that reads `.claude/shipgate.md` and its layers
+    (ADR 0018), loaded by path beside this script. It ships with the plugin; without
+    it the install is incomplete (exit 1), as with `_codegraph.py`."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_config.py"
+    try:
+        spec = importlib.util.spec_from_file_location("shipgate_config", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    except (OSError, ImportError) as exc:
+        sys.exit(f"error: cannot load {path} (shipgate install incomplete): {exc}")
+    return module
+
+
+_config = _load_config_module()
+CONFIG_RELPATH = _config.CONFIG_RELPATH
 
 DEFAULT_WINDOW_MONTHS = 12
 MAX_WINDOW_MONTHS = 1200  # 100 years; beyond it date arithmetic overflows
@@ -177,65 +197,13 @@ class Unavailable(Exception):
 # Config — the `## Code signals` section of .claude/shipgate.md
 # --------------------------------------------------------------------------
 
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
-_BULLET_RE = re.compile(r"^\s*[-*+]\s+([^:]+?)\s*:\s*(.*)$")
-_BACKTICK_RE = re.compile(r"`([^`]*)`")
-_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-# CommonMark: a backtick fence's info string holds no backtick (else it is inline
-# code); a closing fence is the bare marker. Indentation is checked by the caller.
-_FENCE_OPEN_RE = re.compile(r"^(\s*)(`{3,}(?!.*`)|~{3,})")
-_FENCE_CLOSE_RE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*$")
+# The walk, the placeholder test and the layers live in `_config.py` (ADR 0018).
+section_bullets = _config.section_bullets
+_is_placeholder = _config.is_placeholder
+_BACKTICK_RE = _config.BACKTICK_RE
+USER_SOURCE = "user shipgate.md"
 _CONFIG_KEYS = {"window": "window_months", "fix pattern": "fix_pattern",
                 "exclude": "exclude", "ranking exclude": "ranking_exclude"}
-
-
-def _is_placeholder(value: str) -> bool:
-    value = value.strip()
-    return not value or (value.startswith("<") and value.endswith(">"))
-
-
-def section_bullets(text: str, section: str) -> List[Tuple[str, str]]:
-    """The `- Key: value` bullets of one `## <section>` (lower-case name), in order.
-
-    Keys come back lower-cased; a wrapped continuation line joins its bullet. HTML
-    comments and fenced code are inert. The one walk every config reader uses.
-    """
-    text = _COMMENT_RE.sub("", text)
-    in_section = False
-    section_level = 0
-    bullets: List[Tuple[str, str]] = []
-    fence: Optional[str] = None  # the open fence's marker; its lines are inert
-    for raw in text.splitlines():
-        # Inside the section any indentation counts (a fence nested in a bullet).
-        indent_ok = (lambda m: in_section or len(m.group(1)) <= 3)
-        if fence is not None:
-            close = _FENCE_CLOSE_RE.match(raw)
-            if close and indent_ok(close) and close.group(2)[0] == fence[0] and \
-                    len(close.group(2)) >= len(fence):
-                fence = None
-            continue
-        opening = _FENCE_OPEN_RE.match(raw)
-        if opening and indent_ok(opening):
-            fence = opening.group(2)
-            continue
-        heading = _HEADING_RE.match(raw)
-        if heading:
-            level = len(heading.group(1))
-            if in_section and level <= section_level:
-                break
-            if heading.group(2).strip().lower() == section:
-                in_section = True
-                section_level = level
-            continue
-        if not in_section:
-            continue
-        bullet = _BULLET_RE.match(raw)
-        if bullet:
-            bullets.append((bullet.group(1).strip().lower(), bullet.group(2)))
-        elif bullets and raw[:1].isspace() and raw.strip():
-            key, value = bullets[-1]
-            bullets[-1] = (key, value + " " + raw.strip())  # wrapped continuation
-    return bullets
 
 
 def parse_code_signals(text: str) -> Dict[str, Any]:
@@ -323,55 +291,78 @@ def _umbrella_roots(repo: Path) -> List[Path]:
     return sorted(roots, key=lambda root: len(root.parts), reverse=True)
 
 
-def _config_candidates(repo: Path, start: Optional[Path]) -> List[Path]:
-    """`.claude/shipgate.md` from start up to the repo root, then the umbrella's."""
+def _config_candidates(repo: Path, start: Optional[Path]) -> List[Tuple[Path, str]]:
+    """`(path, role)` for `.claude/shipgate.md` from start up to the repo root (role
+    `project`), then the umbrella's (role `umbrella`), nearest first."""
     repo = repo.resolve()
-    candidates: List[Path] = []
+    candidates: List[Tuple[Path, str]] = []
     current = (start or repo).resolve()
     while True:
-        candidates.append(current / CONFIG_RELPATH)
+        candidates.append((current / CONFIG_RELPATH, _config.ROLE_PROJECT))
         if current == repo or current.parent == current:
             break
         current = current.parent
     umbrellas = _umbrella_roots(repo)
     if umbrellas:
-        candidates.append(repo.parent / CONFIG_RELPATH)
-        candidates.extend(root / CONFIG_RELPATH for root in umbrellas)
+        candidates.append((repo.parent / CONFIG_RELPATH, _config.ROLE_UMBRELLA))
+        candidates.extend((root / CONFIG_RELPATH, _config.ROLE_UMBRELLA)
+                          for root in umbrellas)
     seen = set()
     unique = []
-    for candidate in candidates:
-        if candidate not in seen:
-            seen.add(candidate)
-            unique.append(candidate)
+    for path, role in candidates:
+        if path not in seen:
+            seen.add(path)
+            unique.append((path, role))
     return unique
+
+
+class LoadedConfig(NamedTuple):
+    values: Dict[str, Any]  # only the keys some shipgate.md set
+    source: Dict[str, str]  # per key: `shipgate.md` or `user shipgate.md`
+    files: List[Dict[str, str]]  # the files read, precedence order: {path, role}
+    inherit: str  # umbrella | none
+
+
+def load_config_layers(repo: Path, start: Optional[Path] = None) -> LoadedConfig:
+    """Read the config layers (ADR 0018): each section comes whole from the nearest
+    file that holds it with a real value; the user file is the last layer. A `Code
+    graph` value outside GRAPH_MODES is a UsageError naming its file."""
+    files = _config.read_layers(_config_candidates(Path(repo), start),
+                                _config.user_config_path())
+    cfg: Dict[str, Any] = {}
+    source: Dict[str, str] = {}
+
+    def label(owner: Any) -> str:
+        return USER_SOURCE if owner.role == _config.ROLE_USER else "shipgate.md"
+
+    # Code signals is present only with a usable backticked value (the parser's rule).
+    owner = _config.section_owner(files, CONFIG_SECTION,
+                                  lambda text: bool(parse_code_signals(text)))
+    if owner is not None:
+        for key, value in parse_code_signals(owner.text).items():
+            cfg[key] = value
+            source[key] = label(owner)
+    owner = _config.section_owner(files, TOOLING_SECTION)
+    if owner is not None:
+        mode = parse_code_graph(owner.text).get("code_graph")
+        if mode is not None:
+            if mode not in GRAPH_MODES:
+                raise UsageError(f"{owner.path}: the Code graph value must be auto, off "
+                                 f"or root, not `{mode}`")
+            cfg["code_graph"] = mode
+            source["code_graph"] = label(owner)
+    decider = _config.nearest_project_side(files)
+    inherit = (_config.inherit_mode(decider.text) if decider is not None
+               else _config.INHERIT_UMBRELLA)
+    return LoadedConfig(cfg, source,
+                        [{"path": str(f.path), "role": f.role} for f in files], inherit)
 
 
 def load_config(repo: Path, start: Optional[Path] = None
                 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
-    """Read the file-level config. Returns (values, source) — values holds only the
-    keys some shipgate.md set; the nearest file wins per key (repo before umbrella).
-    A `Code graph` value outside GRAPH_MODES is a UsageError."""
-    cfg: Dict[str, Any] = {}
-    source: Dict[str, str] = {}
-    for path in _config_candidates(Path(repo), start):
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for key, value in parse_code_signals(text).items():
-            if key not in cfg:
-                cfg[key] = value
-                source[key] = "shipgate.md"
-        mode = parse_code_graph(text).get("code_graph")
-        if mode is not None and "code_graph" not in cfg:
-            if mode not in GRAPH_MODES:
-                raise UsageError(f"{path}: the Code graph value must be auto, off or "
-                                 f"root, not `{mode}`")
-            cfg["code_graph"] = mode
-            source["code_graph"] = "shipgate.md"
-    return cfg, source
+    """`(values, source)` of `load_config_layers`."""
+    loaded = load_config_layers(repo, start)
+    return loaded.values, loaded.source
 
 
 class Config(NamedTuple):
@@ -383,6 +374,8 @@ class Config(NamedTuple):
     ranking_exclude: List[str]
     code_graph: str  # auto | off | root
     source: Dict[str, str]
+    files: Sequence[Dict[str, str]] = ()  # the config files read: {path, role}
+    inherit: str = "umbrella"  # umbrella | none
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -392,11 +385,14 @@ class Config(NamedTuple):
             "ranking_exclude": list(self.ranking_exclude),
             "code_graph": self.code_graph,
             "source": dict(self.source),
+            "files": [dict(f) for f in self.files],
+            "inherit": self.inherit,
         }
 
 
 def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
-                     args: argparse.Namespace) -> Config:
+                     args: argparse.Namespace, files: Sequence[Dict[str, str]] = (),
+                     inherit: str = "umbrella") -> Config:
     """Flags override the file, the file overrides the defaults. Excludes are
     additive: defaults + file + flags. The ranking excludes are not: the file's list
     replaces the built-in one, and no flag sets them."""
@@ -442,7 +438,8 @@ def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
         source["code_graph"] = file_source.get("code_graph", "shipgate.md")
     if getattr(args, "graph", None) is not None:
         code_graph, source["code_graph"] = args.graph, "flag"
-    return Config(window, pattern, regex, exclude, ranking_exclude, code_graph, source)
+    return Config(window, pattern, regex, exclude, ranking_exclude, code_graph, source,
+                  [dict(f) for f in files], inherit)
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
@@ -1627,15 +1624,23 @@ exit codes:
   2  usage error
 
 configuration:
-  the `## Code signals` section of .claude/shipgate.md (the repository's, then
-  the umbrella's — a parent that holds the setup sidecar .claude/shipgate.json
-  or is itself a git work tree; a plain parent is not read) — backticked
-  values on the `Window`, `Fix pattern`, `Exclude` and `Ranking exclude`
-  bullets. Flags override the file; --exclude adds to the defaults. `Ranking
-  exclude` replaces the release files `ranking` leaves out (CHANGELOG.md,
-  plugin.json, marketplace.json); an empty value (``) leaves out none. The
-  `Code graph` bullet of `## Code tooling` takes auto, off or root, backticked
-  or bare (default auto). --graph overrides it. Any other value is a usage error.
+  the `## Code signals` section of .claude/shipgate.md — backticked values on
+  the `Window`, `Fix pattern`, `Exclude` and `Ranking exclude` bullets. The
+  files are read nearest first: the repository's, then the umbrella's (a
+  parent that holds the setup sidecar .claude/shipgate.json or is itself a git
+  work tree; a plain parent is not read), then the user file
+  $CLAUDE_CONFIG_DIR/shipgate.md (else ~/.claude/shipgate.md). Each section
+  comes whole from the nearest file that holds it with a value that is not a
+  <placeholder>; sections never merge. `## Code signals` counts as present
+  only with a usable backticked value. `Inherit: none` before the first
+  section of the nearest project-side file (the repository's, else the
+  umbrella's) drops the umbrella's files. --json lists the files read in
+  `config.files`. Flags override the file; --exclude adds to the defaults.
+  `Ranking exclude` replaces the release files `ranking` leaves out
+  (CHANGELOG.md, plugin.json, marketplace.json); an empty value (``) leaves
+  out none. The `Code graph` bullet of `## Code tooling` takes auto, off or
+  root, backticked or bare (default auto). --graph overrides it. Any other
+  value is a usage error.
   Labels are quartiles over the whole repository (or --scope); zero is always
   `low` and the quartiles run over the non-zero values (fewer than four, or no
   spread: `mid`). Positional paths and --diff only filter the rows shown;
@@ -1810,15 +1815,22 @@ class Analysis(NamedTuple):
     selection: Any = None  # the code graph preflight (`_codegraph.Selection`)
 
 
+def _configure(args: argparse.Namespace, repo: Path, start: Optional[Path] = None
+               ) -> Config:
+    loaded = load_config_layers(repo, start)
+    return effective_config(loaded.values, loaded.source, args, loaded.files,
+                            loaded.inherit)
+
+
 def analyse(args: argparse.Namespace, want_traj: bool, want_struct: bool) -> Analysis:
     start = _start_dir(args)
     try:
         repo = probe(start)
     except Unavailable as exc:
-        cfg = effective_config(*load_config(start), args)
+        cfg = _configure(args, start)
         return Analysis(None, cfg, exc.reason, [], None,
                         _unavailable_trajectory(exc.reason), None)
-    cfg = effective_config(*load_config(repo.root, start), args)
+    cfg = _configure(args, repo.root, start)
     reason = "empty-history" if repo.head is None else (
         "shallow" if repo.shallow else None)
     tracked = tracked_files(repo)
@@ -2081,7 +2093,7 @@ def cmd_graph(args: argparse.Namespace) -> int:
         repo = probe(start)
     except Unavailable as exc:
         return _graph_unavailable(args, exc.reason)
-    cfg = effective_config(*load_config(repo.root, start), args)
+    cfg = _configure(args, repo.root, start)
     selection = graph_select(repo.root, cfg.code_graph)
     if not selection.available:
         return _graph_unavailable(args, selection.reason, selection.advisory)

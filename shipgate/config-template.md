@@ -1,21 +1,49 @@
 # shipgate configuration — template
 
-Copy this file into your project as **`.claude/shipgate.md`** and fill in what applies.
-This is how shipgate adapts to a project without forking the plugin: the skills read this
-file at the start of a flow and treat it as overriding their built-in defaults. It's prose
-read by the model, not parsed config — write it the way you'd brief a new teammate.
+Copy this file into your project as **`.claude/shipgate.md`** and fill in what applies, or
+run `/shipgate:setup`. This is how shipgate adapts to a project without forking the plugin.
+The skills read the config at the start of a flow and treat it as overriding their built-in
+defaults. It is prose the model reads, not parsed config. Write it the way you would brief a
+new teammate.
 
-Every section is **optional**. Delete what you don't need; anything absent falls back to
-the defaults noted per section. Keep entries short and imperative — each line here is an
-instruction the skills will follow verbatim.
+Every section is **optional**. Delete what you don't need. An absent section falls back to
+the next layer below, and in the end to the default noted per section. Keep entries short
+and imperative. Each line here is an instruction the skills follow verbatim.
+
+**How the config files layer.** This header and the README's Configuration section are the
+two homes of the rule; every skill cites them. The layers, nearest first:
+
+1. the repo's `.claude/shipgate.md` files, from the working directory up to the repo root;
+2. the umbrella's `.claude/shipgate.md`, in an umbrella checkout;
+3. the user file: `$CLAUDE_CONFIG_DIR/shipgate.md` when that variable is set and not empty,
+   else `~/.claude/shipgate.md`;
+4. the built-in defaults noted per section.
+
+The config is resolved per section. For each `##` section, the nearest file where the
+section is present supplies the whole section. A section present in a nearer file replaces
+the farther one whole. Sections never merge line by line. A section is present when its
+heading exists and it holds at least one value that is not an angle-bracket placeholder. A
+section with placeholders only, or with no bullets, is absent, and the next layer shows
+through.
+
+A nested config can take nothing from the umbrella. To do that, put the line `Inherit: none`
+under its title, before the first section (bare or as a bullet, backticks optional, any
+case). The user file and the built-in defaults still apply.
+
+The user file uses the same section vocabulary as this template. It holds what is personal
+and the same in every project. The sections marked "Usually personal" below belong there.
 
 Division of labor with `CLAUDE.md`: the repo's `CLAUDE.md` files stay the source of truth
-for *routing and code conventions* (where code belongs, build/test commands); this file
-carries the *process tooling* — where artifacts live, which forge/tracker, branch naming,
+for *routing and code conventions*: where code belongs, build and test commands. The config
+carries the *process tooling*: where artifacts live, which forge and tracker, branch naming,
 which integrations to reach for. Don't duplicate CLAUDE.md content here.
 
-Subagents don't read this file themselves — the dispatching skill pastes the relevant
-excerpt into each brief. So write sections to be liftable on their own.
+Subagents don't read these files themselves. The dispatching skill pastes the relevant
+excerpt into each brief, so write each section to be liftable on its own.
+
+`setup` writes a lean file: a one-line title and `- Key: value` bullets only, with no
+comments and no prose that explains the plugin. The comments in this template and the
+README explain each section; a project's config does not repeat them.
 
 ---
 
@@ -33,11 +61,13 @@ excerpt into each brief. So write sections to be liftable on their own.
 - Page conventions: <frontmatter shape, filename rules, link style, where templates live>
 - Store-specific skills: <any project/vault skills to prefer for reading/writing the store>
 - Ledger: <path of the project's append-cheap staging inbox for mid-flow learnings.
-  Default when absent: `docs/ledger.md`. Optionally map promotion targets by entry type —
-  destinations may be stores above, specific wiki pages, a repo CLAUDE.md, an ADR home, a
-  skill's SKILL.md (e.g. a personal code-style skill), or the harness's personal memory
-  for workflow preferences. Entries are promoted or dropped at triage and then removed —
-  see the `knowledge-base` skill>
+  Default when absent: `docs/ledger.md`. Optionally map project promotion targets by entry
+  type: destinations may be stores above, specific wiki pages, a repo CLAUDE.md, an ADR
+  home, or a skill's SKILL.md (e.g. a personal code-style skill). List project targets only.
+  The built-in promotion defaults in the `knowledge-base` skill cover the rest: personal
+  workflow preferences go to the harness's built-in memory, everything else is dropped, and
+  promoted and dropped entries are removed. The promotion target for preferences is usually
+  personal: it belongs in the user file>
 
 ## Journal
 
@@ -166,6 +196,8 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 
 ## Writing style
 
+<!-- Usually personal: belongs in the user file. -->
+
 <!-- Default when absent: plain — the documents shipgate writes into this repo and forge
      (PRD, ADR, worklog, ledger lines, MR/PR body, tracker comments) keep the prose style
      they have today. `ste-80` applies the same "Writing for people" rule the reports to
@@ -205,12 +237,18 @@ in the sidecar (both default true). Run `journal.py doctor` when anything looks 
 
 ## Code tooling
 
-<!-- Default when absent: no library-docs integration (training knowledge / WebFetch);
-     no LSP preference (grep/read); code graph `auto`. -->
+<!-- Usually personal: belongs in the user file. -->
+
+<!-- Default when absent: library docs from a context7-style MCP (resolve a library id,
+     then query its docs) when the session has one, else training knowledge / WebFetch; no
+     LSP preference (grep/read); code graph `auto`. The Library docs line is the personal
+     one. A project file that declares this section replaces the user file's section whole,
+     so repeat the Library docs line there when you add a project line. -->
 
 - Library docs: <the docs tool/MCP to consult for a dependency's current API before
-  hand-rolling around it or answering from memory — e.g. a context7-style MCP
-  (resolve library id → query docs). Used by implement's reuse step and structured-debug.>
+  hand-rolling around it or answering from memory. Leave it out to use a context7-style
+  MCP when the session has one; this line overrides that default. Used by implement's
+  reuse step and structured-debug.>
 - Code navigation: <the LSP tool, if one is configured for the language — prefer
   goToDefinition / findReferences / hover over grep-and-read for symbol work in typed
   code; note any workspace quirks (root, server version) here>
@@ -238,22 +276,21 @@ compute the same numbers.
 
 ## Worker guardrails
 
-<!-- Default when absent: no project-specific guardrails — worker briefs carry only the
-     built-in discipline from `model-tiers` (branch check, no commit/staging, evidence in
-     the report). -->
+<!-- Default when absent: no project-specific guardrails. Every worker brief still carries
+     the built-in worker discipline block in the `model-tiers` skill, word for word: branch
+     check, no commit or staging, the git index, no --no-verify, no repo-wide formatter,
+     stop and report, comments, evidence in the report. This section adds the rules only
+     this repo needs. Never repeat a built-in rule here. -->
 
 Hard rules for anyone editing this repo, written to be pasted **verbatim** into every worker
 brief — `model-tiers` requires them word-for-word, because a summarized guardrail is a
 broken one. One imperative line per rule, no rationale, no grouping:
 
-- <e.g. "Never run a repo-wide formatter or a linter with --fix; the read-only gate is
-  `<script>`">
-- <e.g. "Build with `<dev build script>`; the release script belongs to CI, never to a
-  worker">
-- <e.g. "The git index is the user's review record: never run `git add`, `git reset`,
-  `git stash` or `git checkout -- <path>`; leave every change in the working tree">
-- <e.g. "Stop and report when a spend or time limit is close, leaving finished work on
-  disk — never abandon a run mid-edit">
+- <e.g. "Build with `<dev build script>`; the release build script belongs to CI, never to
+  a worker">
+- <e.g. "Never edit `<generated dir>/` by hand; `<generate command>` writes it">
+- <e.g. "Refresh `<schema dump file>` only with `<one command>`; never edit it by hand">
+- <e.g. "Recreate the test database with `<one script>`; never migrate it in place">
 
 ## Orchestration
 
@@ -292,15 +329,13 @@ harness or the user refuses the call, the phase runs its `agents` path and recor
 
 ## Autonomy
 
+<!-- Usually personal: belongs in the user file. -->
+
 <!-- Default when absent: `ask` — every gate question goes to the user, exactly the
-     skills' built-in behavior. -->
+     skills' built-in behavior. `executive`: the orchestrator answers routine gate
+     questions itself, records them and escalates the rest, by the executive contract in
+     the `feature` skill. The contract is the plugin's, so this section never restates it.
+     Extra escalations add cases to it. -->
 
 - Mode: <ask | executive>
-- Executive contract (applies only when mode is `executive`): the orchestrator makes and
-  RECORDS routine decisions itself — clarify answers land in the PRD's "Assumptions
-  (executive)" list, design choices in the ADR, small calls in the ledger — and reports
-  them in each phase summary so the user can veto. It still escalates: one-way doors
-  (schema, public API, shared write paths, data migrations), user-visible scope changes,
-  anything in Security-sensitive areas, and genuine 50/50s where it cannot form a
-  recommendation.
-- Extra escalations: <project-specific decisions that must always go to the user, if any>
+- Extra escalations: <decisions that must always go to the user, if any>

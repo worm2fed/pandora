@@ -29,6 +29,7 @@ from test_signals import (
     TESTS_DIR,
     FixtureRepo,
     SignalsCase,
+    empty_config_dir,
     hermetic_env,
     load_signals_module,
     make_codegraph_shim,
@@ -94,6 +95,7 @@ class TestHermeticHarness(unittest.TestCase):
             self.assertFalse(os.access(os.path.join(entry or ".", "codegraph"), os.X_OK),
                              entry)
         self.assertNotIn("SHIPGATE_CODEGRAPH_BIN", env)
+        self.assertEqual(env["CLAUDE_CONFIG_DIR"], empty_config_dir())
 
     def test_run_signals_uses_the_hermetic_env_unless_a_test_passes_its_own(self):
         seen = []
@@ -1861,7 +1863,7 @@ class TestLiveCodegraph(SignalsCase):
         root = TESTS_DIR.parent.parent
         proc = test_signals.run_signals(
             ["blast", "shipgate/hooks/_common.py", "--json"], cwd=root,
-            env=dict(os.environ))
+            env=dict(os.environ, CLAUDE_CONFIG_DIR=empty_config_dir()))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stderr, "")
         payload = json.loads(proc.stdout)

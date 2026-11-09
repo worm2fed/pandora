@@ -11,6 +11,7 @@ fixed 2020 commit dates so the numbers are exact.
 
 from __future__ import annotations
 
+import atexit
 import importlib.util
 import json
 import os
@@ -24,6 +25,7 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 TESTS_DIR = Path(__file__).resolve().parent
 SIGNALS = TESTS_DIR.parent / "scripts" / "signals.py"
@@ -51,13 +53,28 @@ def _holds_codegraph(directory: str) -> bool:
     return os.path.isfile(candidate) and os.access(candidate, os.X_OK)
 
 
+_EMPTY_CONFIG_DIR = []
+
+
+def empty_config_dir() -> str:
+    """A directory that holds no `shipgate.md`, for `CLAUDE_CONFIG_DIR` (SC-007): the
+    maintainer's real user file must never reach a test."""
+    if not _EMPTY_CONFIG_DIR:
+        path = tempfile.mkdtemp(prefix="shipgate-no-user-config-")
+        atexit.register(shutil.rmtree, path, True)
+        _EMPTY_CONFIG_DIR.append(path)
+    return _EMPTY_CONFIG_DIR[0]
+
+
 def hermetic_env(base=None):
-    """The environment with no `codegraph` in reach: a real binary on the
-    maintainer's PATH must not change what these tests see."""
+    """The environment with no `codegraph` in reach and no user config file: a real
+    binary on the maintainer's PATH, or their `shipgate.md`, must not change what these
+    tests see."""
     env = dict(os.environ if base is None else base)
     env.pop("SHIPGATE_CODEGRAPH_BIN", None)
     entries = env.get("PATH", "").split(os.pathsep)
     env["PATH"] = os.pathsep.join(e for e in entries if not _holds_codegraph(e))
+    env["CLAUDE_CONFIG_DIR"] = empty_config_dir()
     return env
 
 
@@ -289,7 +306,7 @@ class TestDegradation(SignalsCase):
         source.commit("one", ts(2020, 1, 1), writes={"a.py": "1\n"})
         empty_bin = self.tmp / "bin"
         empty_bin.mkdir()
-        env = dict(os.environ, PATH=str(empty_bin))
+        env = dict(hermetic_env(), PATH=str(empty_bin))
         self.assert_unavailable(source.path, "no-git", env=env,
                                 commands=("hotspots", "blast", "suspects"))
 
@@ -320,25 +337,51 @@ class TestDegradation(SignalsCase):
         self.assertEqual(payload["files"][0]["structure"], "unknown")
 
 
+class TestHermeticUserConfig(unittest.TestCase):
+    """SC-007: no test reads a real user file."""
+
+    def test_hermetic_env_points_claude_config_dir_at_a_directory_without_a_config(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": "/real/config"}):
+            env = hermetic_env()
+        directory = Path(env["CLAUDE_CONFIG_DIR"])
+        self.assertTrue(directory.is_dir())
+        self.assertFalse((directory / "shipgate.md").exists())
+        self.assertEqual(hermetic_env({"PATH": ""})["CLAUDE_CONFIG_DIR"], str(directory))
+
+
 class TestConfig(SignalsCase):
-    """FR-002 / FR-008: `## Code signals` in .claude/shipgate.md, flags win."""
+    """FR-002 / FR-008: `## Code signals` in .claude/shipgate.md, flags win. ADR 0018:
+    the layers resolve per section, nearest first, the user file last."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name).resolve()
+        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": empty_config_dir()})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.umbrella = Path(tmp.name) / "umbrella"
         FixtureRepo(self.umbrella)  # an umbrella is itself a git work tree
         self.repo = FixtureRepo(self.umbrella / "repo")
         self.repo.commit("one", ts(2020, 1, 1), writes={
             "a.py": "1\n", "generated/g.py": "g\n", "b.snap": "s\n"})
 
-    def config(self, *args):
-        return self.signals_json("hotspots", "--repo", self.repo.path, *args)["config"]
+    def config(self, *args, env=None):
+        return self.signals_json("hotspots", "--repo", self.repo.path, *args,
+                                 env=env)["config"]
 
     def write_config(self, where: Path, body: str):
         target = where / ".claude" / "shipgate.md"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(body, encoding="utf-8")
+        return target
+
+    def user_env(self, body: str):
+        """An environment whose `CLAUDE_CONFIG_DIR` holds a user file with BODY."""
+        directory = self.tmp / "config-dir"
+        directory.mkdir(exist_ok=True)
+        (directory / "shipgate.md").write_text(body, encoding="utf-8")
+        return dict(hermetic_env(), CLAUDE_CONFIG_DIR=str(directory))
 
     def test_defaults_when_no_config_file(self):
         mod = load_signals_module()
@@ -351,6 +394,7 @@ class TestConfig(SignalsCase):
                                          "exclude": "default",
                                          "ranking_exclude": "default",
                                          "code_graph": "default"})
+        self.assertEqual((cfg["files"], cfg["inherit"]), ([], "umbrella"))
 
     def test_file_values_are_read_from_the_code_signals_section(self):
         self.write_config(self.repo.path, (
@@ -423,8 +467,9 @@ class TestConfig(SignalsCase):
                                          "code_graph": "default"})
 
     def test_a_sidecar_below_a_git_umbrella_adds_a_config_without_dropping_the_umbrellas(self):
-        """A sidecar between the repo and the umbrella's git toplevel: both configs
-        apply, the nearer one first per key."""
+        """A sidecar between the repo and the umbrella's git toplevel: both configs are
+        read, nearer first, and the nearer one's section replaces the farther one's
+        whole (ADR 0018)."""
         repo = FixtureRepo(self.umbrella / "source" / "repo")
         repo.commit("one", ts(2020, 1, 1), writes={"a.py": "1\n"})
         sidecar = self.umbrella / "source" / ".claude" / "shipgate.json"
@@ -434,12 +479,15 @@ class TestConfig(SignalsCase):
         self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
                                          "- Fix pattern: `^umbrella`\n")
         cfg = self.signals_json("hotspots", "--repo", repo.path)["config"]
-        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (5, "^umbrella"))
+        mod = load_signals_module()
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]),
+                         (5, mod.DEFAULT_FIX_PATTERN))
+        self.assertEqual([f["role"] for f in cfg["files"]], ["umbrella", "umbrella"])
 
     def test_a_sidecar_above_a_git_umbrella_is_read_after_the_umbrella(self):
         """The sidecar walk passes the umbrella's git toplevel, as the hooks' and
         journal.py's walk does: the journal's project is the one whose config applies.
-        The git umbrella is nearer, so it wins per key."""
+        The git umbrella is nearer, so its section wins whole."""
         outer = self.umbrella.parent
         sidecar = outer / ".claude" / "shipgate.json"
         sidecar.parent.mkdir(parents=True)
@@ -448,7 +496,9 @@ class TestConfig(SignalsCase):
                                  "- Fix pattern: `^outer`\n")
         self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n")
         cfg = self.config()
-        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (9, "^outer"))
+        mod = load_signals_module()
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]),
+                         (9, mod.DEFAULT_FIX_PATTERN))
 
     def test_the_sidecar_is_found_above_a_nested_parent_directory(self):
         """`source/<service>` layouts: the sidecar sits two levels up, not in the parent."""
@@ -462,13 +512,172 @@ class TestConfig(SignalsCase):
         cfg = self.signals_json("hotspots", "--repo", repo.path)["config"]
         self.assertEqual(cfg["window_months"], 7)
 
-    def test_the_repo_config_wins_over_the_umbrella(self):
+    def test_the_repo_section_replaces_the_umbrellas_section_whole(self):
+        """SC-002: a repo `## Code signals` with one value hides the umbrella's other
+        values of that section."""
+        mod = load_signals_module()
         self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
                                          "- Fix pattern: `^umbrella`\n")
         self.write_config(self.repo.path, "## Code signals\n- Window: `3`\n")
         cfg = self.config()
-        self.assertEqual(cfg["window_months"], 3)
-        self.assertEqual(cfg["fix_pattern"], "^umbrella")
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]),
+                         (3, mod.DEFAULT_FIX_PATTERN))
+        self.assertEqual((cfg["source"]["window_months"], cfg["source"]["fix_pattern"]),
+                         ("shipgate.md", "default"))
+
+    def test_a_repo_section_with_placeholders_only_lets_the_umbrellas_section_through(self):
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
+                                         "- Fix pattern: `^umbrella`\n")
+        self.write_config(self.repo.path, "# Repo\n\n## Code signals\n\n"
+                                          "- Window: `<months>`\n- Fix pattern: <regex>\n"
+                                          "- Exclude:\n")
+        cfg = self.config()
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (9, "^umbrella"))
+
+    def test_a_repo_code_tooling_section_copied_from_the_template_keeps_the_umbrellas(self):
+        template = (TESTS_DIR.parent / "config-template.md").read_text(encoding="utf-8")
+        section = template[template.index("## Code tooling"):]
+        section = section[:section.index("\n## ", 3) + 1]
+        self.assertIn("- Code graph: <", section)
+        self.write_config(self.umbrella, "## Code tooling\n- Code graph: `off`\n")
+        self.write_config(self.repo.path, "# Repo\n\n" + section)
+        cfg = self.config()
+        self.assertEqual((cfg["code_graph"], cfg["source"]["code_graph"]),
+                         ("off", "shipgate.md"))
+
+    def test_a_repo_code_signals_section_with_no_usable_value_lets_the_umbrellas_through(self):
+        """`## Code signals` counts as present only with a usable backticked value."""
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n")
+        self.write_config(self.repo.path, "## Code signals\n- Window: 18\n")
+        cfg = self.config()
+        self.assertEqual((cfg["window_months"], cfg["source"]["window_months"]),
+                         (9, "shipgate.md"))
+
+    def test_a_repo_empty_ranking_exclude_alone_still_owns_code_signals(self):
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
+                                         "- Ranking exclude: `x/`\n")
+        self.write_config(self.repo.path, "## Code signals\n- Ranking exclude: ``\n")
+        cfg = self.config()
+        self.assertEqual((cfg["window_months"], cfg["ranking_exclude"]), (12, []))
+        self.assertEqual(cfg["source"]["ranking_exclude"], "shipgate.md")
+
+    def test_the_module_shares_the_config_readers_names(self):
+        mod = load_signals_module()
+        self.assertEqual(mod.CONFIG_RELPATH, mod._config.CONFIG_RELPATH)
+        self.assertIs(mod._BACKTICK_RE, mod._config.BACKTICK_RE)
+        self.assertIs(mod.section_bullets, mod._config.section_bullets)
+
+    def test_sections_resolve_independently(self):
+        """The repo owns `## Code signals`; the umbrella still owns `## Code tooling`."""
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
+                                         "## Code tooling\n- Code graph: `off`\n")
+        self.write_config(self.repo.path, "## Code signals\n- Window: `3`\n")
+        cfg = self.config()
+        self.assertEqual((cfg["window_months"], cfg["code_graph"]), (3, "off"))
+
+    def test_the_user_file_applies_when_no_project_file_has_the_section(self):
+        """SC-001: `$CLAUDE_CONFIG_DIR/shipgate.md`, labelled `user shipgate.md`."""
+        env = self.user_env("# Me\n\n## Code signals\n- Window: `4`\n"
+                            "- Fix pattern: `^user`\n\n## Code tooling\n"
+                            "- Code graph: off\n")
+        self.write_config(self.repo.path, "## Code signals\n- Window: `<months>`\n")
+        cfg = self.config(env=env)
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"], cfg["code_graph"]),
+                         (4, "^user", "off"))
+        self.assertEqual(cfg["source"], {"window_months": "user shipgate.md",
+                                         "fix_pattern": "user shipgate.md",
+                                         "exclude": "default",
+                                         "ranking_exclude": "default",
+                                         "code_graph": "user shipgate.md"})
+        user = Path(env["CLAUDE_CONFIG_DIR"]) / "shipgate.md"
+        self.assertEqual(cfg["files"][-1], {"path": str(user), "role": "user"})
+
+    def test_the_home_user_file_applies_when_the_variable_is_unset(self):
+        home = self.tmp / "home"
+        self.write_config(home, "## Code signals\n- Window: `6`\n")
+        env = dict(hermetic_env(), HOME=str(home))
+        del env["CLAUDE_CONFIG_DIR"]
+        cfg = self.config(env=env)
+        self.assertEqual((cfg["window_months"], cfg["source"]["window_months"]),
+                         (6, "user shipgate.md"))
+        self.assertEqual(cfg["files"], [{"path": str(home / ".claude" / "shipgate.md"),
+                                         "role": "user"}])
+        env["CLAUDE_CONFIG_DIR"] = ""  # empty is unset
+        self.assertEqual(self.config(env=env)["window_months"], 6)
+
+    def test_a_set_variable_with_no_file_does_not_fall_back_to_the_home_file(self):
+        home = self.tmp / "home"
+        self.write_config(home, "## Code signals\n- Window: `6`\n")
+        empty = self.tmp / "empty-config-dir"
+        empty.mkdir()
+        env = dict(hermetic_env(), HOME=str(home), CLAUDE_CONFIG_DIR=str(empty))
+        cfg = self.config(env=env)
+        self.assertEqual((cfg["window_months"], cfg["files"]), (12, []))
+
+    def test_a_project_section_replaces_the_user_section_whole(self):
+        mod = load_signals_module()
+        env = self.user_env("## Code signals\n- Window: `4`\n- Fix pattern: `^user`\n")
+        self.write_config(self.repo.path, "## Code signals\n- Window: `3`\n")
+        cfg = self.config(env=env)
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]),
+                         (3, mod.DEFAULT_FIX_PATTERN))
+        self.assertEqual(cfg["source"]["window_months"], "shipgate.md")
+
+    def test_an_umbrella_section_replaces_the_user_section_whole(self):
+        mod = load_signals_module()
+        env = self.user_env("## Code signals\n- Window: `4`\n- Fix pattern: `^user`\n")
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n")
+        cfg = self.config(env=env)
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]),
+                         (9, mod.DEFAULT_FIX_PATTERN))
+        self.assertEqual(cfg["source"]["window_months"], "shipgate.md")
+
+    def test_inherit_none_drops_the_umbrellas_sections_and_keeps_the_users(self):
+        """SC-003, FR-005: bare, as a bullet, backticked, any case."""
+        umbrella = self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n"
+                                                    "## Code tooling\n- Code graph: `off`\n")
+        env = self.user_env("## Code signals\n- Window: `4`\n")
+        user = Path(env["CLAUDE_CONFIG_DIR"]) / "shipgate.md"
+        for line in ("Inherit: none", "- Inherit: none", "- Inherit: `none`",
+                     "inherit: NONE"):
+            with self.subTest(line=line):
+                repo = self.write_config(self.repo.path,
+                                         f"# Repo\n\n{line}\n\n## Other\n- Key: `v`\n")
+                cfg = self.config(env=env)
+                self.assertEqual((cfg["window_months"], cfg["code_graph"]), (4, "auto"))
+                self.assertEqual(cfg["source"]["window_months"], "user shipgate.md")
+                self.assertEqual(cfg["inherit"], "none")
+                self.assertEqual(
+                    [(Path(f["path"]).resolve(), f["role"]) for f in cfg["files"]],
+                    [(repo.resolve(), "project"), (user.resolve(), "user")])
+        self.assertTrue(umbrella.is_file())
+
+    def test_config_files_lists_the_files_read_in_precedence_order(self):
+        """SC-003: `files` holds each file read with its role; `inherit` is `umbrella`
+        without the line."""
+        umbrella = self.write_config(self.umbrella, "# Umbrella\n")
+        repo = self.write_config(self.repo.path, "# Repo\n- Inherit: umbrella\n")
+        env = self.user_env("# Me\n")
+        user = Path(env["CLAUDE_CONFIG_DIR"]) / "shipgate.md"
+        cfg = self.config(env=env)
+        self.assertEqual(
+            [(Path(f["path"]).resolve(), f["role"]) for f in cfg["files"]],
+            [(repo.resolve(), "project"), (umbrella.resolve(), "umbrella"),
+             (user.resolve(), "user")])
+        self.assertEqual(cfg["inherit"], "umbrella")
+        self.assertEqual(set(cfg["source"].values()), {"default"})
+
+    def test_load_config_layers_returns_the_files_and_inherit(self):
+        mod = load_signals_module()
+        self.write_config(self.repo.path, "# Repo\nInherit: none\n"
+                                          "## Code signals\n- Window: `3`\n")
+        self.write_config(self.umbrella, "## Code tooling\n- Code graph: `off`\n")
+        loaded = mod.load_config_layers(self.repo.path)
+        self.assertEqual((loaded.values, loaded.source),
+                         ({"window_months": 3}, {"window_months": "shipgate.md"}))
+        self.assertEqual([f["role"] for f in loaded.files], ["project"])
+        self.assertEqual(loaded.inherit, "none")
+        self.assertEqual(mod.load_config(self.repo.path), (loaded.values, loaded.source))
 
     def test_load_config_returns_values_and_sources(self):
         mod = load_signals_module()

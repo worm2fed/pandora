@@ -14,8 +14,10 @@ feature branched off the wrong base does not.
 **Never silently operate on the checked-out branch. Always confirm before switching or
 creating a branch.**
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 ## Which repo — resolve this FIRST if repos are nested
 

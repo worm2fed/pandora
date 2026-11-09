@@ -24,8 +24,10 @@ candidate files and one line of evidence each: fix history, proximity to the rep
 symptom, what the code there does. Skip the ledger jot and the fix plan, and edit nothing.
 The suspect ranking is where to look first, not a verdict. Say so.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 > **Journaled project — name the stream before you start.** Any one of three signs means this
 > bug's events are owed to a stream: a status brief headed "shipgate flow journal", a
@@ -76,8 +78,10 @@ The suspect ranking is where to look first, not a verdict. Say so.
    - Symbol-level (who calls this, what's this type, where is it defined) → the LSP tool
      when the config's **Code tooling** section names one. In typed code,
      `findReferences`/`goToDefinition`/`hover` beat grep-plus-read.
-   - A dependency's actual behavior/API → the library-docs integration the config's
-     **Code tooling** section names (if any), before you trust memory of the API.
+   - A dependency's actual behavior/API → a library-docs tool, before you trust memory of
+     the API. When a context7-style MCP (resolve a library id, then query its docs) is
+     present in the session, use it by default. The **Library docs** line of the config's
+     **Code tooling** section is an override: it names the tool to use instead.
 
    **Pull the suspect list** before you form hypotheses. Seed it with the files that the
    stack trace or the report names:

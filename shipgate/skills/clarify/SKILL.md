@@ -16,8 +16,10 @@ move is to answer fast, not to skip. Surface the questions with recommendations 
 can accept each one with one tap. When the config's **Autonomy** section declares
 `executive`, you answer your own questions. See the Executive mode section below.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 > **Journaled project — name the stream before you start.** Three signs mark a journaled
 > project: a status brief headed "shipgate flow journal", a **Journal** section in the config,
@@ -92,11 +94,9 @@ and a one-sentence rationale. Report the list in the phase summary, so the user 
 answer after the fact.
 
 In this mode, `[NEEDS CLARIFICATION]` markers are for escalations only. Still ask when a
-question hits the escalation contract. The contract covers four cases: a one-way door (schema,
-public API, shared write path, data migration), a user-visible scope change, a configured
-security-sensitive area, and a genuine 50/50 where you cannot form a recommendation.
-Executive mode changes who answers routine questions. It does not change the bar for the
-consequential ones.
+question hits a case that `feature`'s executive contract escalates. The config's **Extra
+escalations** line adds to those cases. Executive mode changes who answers routine questions.
+It does not change the bar for the consequential ones.
 
 ## Step 3 — Write the PRD
 

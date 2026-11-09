@@ -10,8 +10,10 @@ re-derive what's already known. **Capture** after, so the next session inherits 
 judgment is *which store* a piece of knowledge belongs in. The wrong home pollutes a store
 that has a different job.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 > **Not Claude's built-in session memory.** The harness has its own personal/session memory
 > feature. This skill is different. It takes precedence for anything a *teammate or future
@@ -116,11 +118,15 @@ something worth keeping surfaces.
   not ask for reads as a change applied, not a learning kept.
 - **Promotion (triage) is where curation happens.** Walk the entries. Route each one through
   the type-routing above to its durable home, or **drop it**. The homes include any
-  **promotion targets the config declares**. These may be unconventional stores: a style
-  skill's SKILL.md, specific wiki pages, a repo `CLAUDE.md`, an ADR, or the harness's built-in
-  personal memory. Personal workflow preferences are the one place routing *may* target the
-  built-in memory. Most raw entries don't survive triage, and that's healthy. Apply the capture
-  quality gate to each promotion.
+  **promotion targets the config's `Ledger:` line declares**. These may be unconventional
+  stores: a style skill's SKILL.md, specific wiki pages, a repo `CLAUDE.md`, an ADR. A
+  config's `Ledger:` line lists project targets only. Most raw entries don't survive triage,
+  and that's healthy. Apply the capture quality gate to each promotion.
+- **The built-in promotion defaults** cover an entry that neither the type-routing above nor
+  a config target gives a home:
+  - A personal workflow preference goes to the harness's built-in memory. It is the one
+    place routing *may* target the built-in memory.
+  - Everything else is dropped.
 - **Promoted and dropped entries are removed from the ledger.** It is an inbox, not a landfill.
   A ledger that only grows has failed.
 - **Triage triggers:** the flow's Capture phase; the user asking ("triage the ledger"). Also

@@ -10,8 +10,10 @@ You coordinate the lean feature flow. You don't do the deep work yourself. You f
 does it*. Think of yourself as the tech lead who keeps the work moving through the right
 gates, not the engineer heads-down in one file.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 ## The flow
 
@@ -25,8 +27,8 @@ review → implement (code wrong), design → clarify (requirements gap), implem
 (approach wrong).
 
 Gates honor the config's **Autonomy** section. In `executive` mode the orchestrator answers
-gate questions itself and records the decisions. It escalates only what the config's
-escalation contract names (see `clarify` / `design`). The default is `ask`.
+gate questions itself and records the decisions. It escalates only what **The executive
+contract** below names. The default is `ask`.
 
 | Phase | Skill | Produces |
 |-------|-------|----------|
@@ -38,6 +40,34 @@ escalation contract names (see `clarify` / `design`). The default is `ask`.
 | Implement | `implement` | code + ticked Build Plan |
 | Review | `review` | verdict + verified evidence |
 | Capture | `knowledge-base` (invoke it explicitly) | ledger triaged + durable learnings, routed by type (see `knowledge-base`) |
+
+## The executive contract
+
+This section is the contract for `executive` mode (config **Autonomy**: `Mode: executive`).
+`clarify`, `design`, `setup` and the glossary cite it. A config does not restate it. A config
+adds to it only through its **Extra escalations** line.
+
+In `executive` mode the orchestrator answers routine gate questions itself and records each
+decision:
+
+- Clarify answers go in the PRD's "Assumptions (executive)" list (see `clarify`).
+- Design choices go in the ADR, with a note that the decision was executive (see `design`).
+- Small calls go in the ledger.
+- On a journaled project, every decision is a `gate-decision` with `raised_by: orchestrator`.
+- Each phase summary reports these decisions, so the user can veto any of them.
+
+The orchestrator still escalates these cases to the user:
+
+- A one-way door: a schema change, a public API, a shared write path, a data migration.
+- A user-visible scope change.
+- Anything in the config's **Security-sensitive areas** section.
+- A true 50/50, where the orchestrator cannot form a recommendation.
+- Each case the config's **Extra escalations** line names.
+
+Each phase skill says how it escalates. `clarify` keeps a `[NEEDS CLARIFICATION]` marker for
+the question. `design` leaves the ADR of an escalated one-way door `proposed`. Executive mode
+changes who answers the routine questions. It does not change the bar for the consequential
+ones.
 
 ## Running the Explore phase
 
@@ -62,7 +92,7 @@ For a feature, do it the feature-dev way:
    This is what keeps Clarify and Design honest.
 3. Carry that grounded context (plus the impact map) into Clarify.
 
-Subagents don't read `.claude/shipgate.md` themselves. So paste the config excerpts they need
+Subagents don't read the config files themselves. So paste the config excerpts they need
 into each explorer brief (e.g. the knowledge base's stores to recall from, the
 security-sensitive areas).
 
@@ -197,6 +227,11 @@ way:
 
 Propose the next phase in one line, then proceed. For the heavier phases, proceed once the user
 confirms.
+
+Sometimes you read more than one config file: a repo's file and its umbrella's, or a project
+file and the user file. Then, before the first phase, say which file each section in play came
+from. Write one line per section, for example `Autonomy: user file`. The layering rule in the
+config callout above decides which file supplies a section.
 
 ## Scale ceremony to the change
 

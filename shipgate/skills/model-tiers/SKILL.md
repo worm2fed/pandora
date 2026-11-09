@@ -11,8 +11,10 @@ tiers. The roles are relative. They are not tied to specific model names, becaus
 rotate with subscriptions. The *orchestrator* directs. *Workers* one tier down implement, but
 never below Opus. The cheapest capable tier does only the mechanical grind.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 | Role | Who | Does | Never does |
 |------|-----|------|------------|
@@ -86,6 +88,29 @@ skip it when it doesn't. The sink-to-Sonnet rule still applies either way.
 
 ## The worker brief — every dispatch includes
 
+Item 7 pastes this block into every worker brief, word for word, before the config's **Worker
+guardrails** section. The rules hold in every project, so a config does not restate them. The
+config's Worker guardrails section keeps the repo-specific rules only.
+
+> **Built-in worker discipline.** Every worker brief carries these rules word for word:
+> 1. Check the branch before you edit. You must be on the branch the brief names; stop and
+>    report if you are not.
+> 2. No commit and no staging. Leave every change in the working tree for the orchestrator's
+>    review.
+> 3. The git index is the user's review record. Never run `git add`, `git reset`,
+>    `git stash`, `git restore --staged` or `git checkout -- <path>`. Leave the index exactly
+>    as you found it, even if the whole tree appears staged. If the index blocks you, stop
+>    and report.
+> 4. Never pass `--no-verify`, and never kill a running pre-commit hook.
+> 5. Never run a repo-wide formatter or a linter with `--fix`. Format only the paths you
+>    touched.
+> 6. Stop and report when you are blocked or near a spend or time limit. Leave finished work
+>    on disk. Never improvise a different design.
+> 7. Comments only for what the code cannot say and that is local to the file. No narration.
+>    Decisions go to the worklog.
+> 8. Report with evidence: real command output, not "tests pass"; deviations from the brief
+>    with reasons; blockers quoted verbatim.
+
 Item 8 pastes this callout into the brief when the config's **Writing style** says `ste-80`:
 
 > **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
@@ -113,8 +138,8 @@ A worker starts with zero context, so the worker brief must be self-contained:
    your call per dispatch. The table is context on which files are fragile or load-bearing,
    not an instruction to rank by it. If it is unavailable (see the JSON's `reason`,
    `trajectory.reason`, `structure.reason`), leave it out.
-3. **Branch check** — the worker must verify it is on the expected branch before editing, and
-   stop if not.
+3. **The branch** — name the branch the worker must be on. Rule 1 of the built-in worker
+   discipline makes the worker check it before editing, and stop if it is not on it.
 4. **Validation commands** — the exact lint/test/build commands that prove the task done, and
    the instruction to run them and read the output. Use **workspace-level scripts** (the
    repo's `lint:check`-style commands), never per-file tool invocations. Per-file runs miss
@@ -122,7 +147,8 @@ A worker starts with zero context, so the worker brief must be self-contained:
    runtime, include a **baseline**: run the affected suite once before changes, and compare
    after. The bar is zero *new* failures. Also name the config's **Code tooling**
    integrations, so workers use them instead of grep-and-memory: the library-docs tool for
-   dependency APIs, the LSP tool for symbol navigation. The code graph is available when a
+   dependency APIs (by default a context7-style MCP when the session has one, see
+   `implement`), the LSP tool for symbol navigation. The code graph is available when a
    signals call in this flow returned `structure.source` `graph`. A `Code graph: off` bullet
    in the config means it is absent. When it is available, name three graph commands as the
    worker's first move, before grep:
@@ -135,19 +161,21 @@ A worker starts with zero context, so the worker brief must be self-contained:
 
    Say that an `explore` or `node` result counts as a Read of the files it prints, so the
    worker does not Read them again. When the code graph is absent, say nothing about codegraph.
-5. **No commit, no staging** — the worker leaves changes in the working tree for orchestrator
-   review.
-6. **Report-back format** — evidence (real command output, not "tests pass"), deviations from
-   the brief with reasons, and blockers quoted verbatim. A worker that hit a wall reports the
-   wall. It does not improvise a different design.
-7. **The config's Worker guardrails section, pasted word-for-word.** Do not summarize it, trim
-   it to the rules you judge relevant, or rephrase it in your own voice. Compression of a
-   guardrail is how every recorded worker incident happened: a repo-wide formatter run over
-   unrelated files, a release build where a dev build was meant, a user's staged review
-   markers reset. The paste is the mechanism; your paraphrase is the failure. No such section
-   in the config ⇒ say so in the brief rather than inventing rules. A section still holding
-   the template's `<e.g. …>` placeholders counts as absent. Say that too. Never paste a
-   placeholder into a brief as though it were this project's rule.
+5. **No commit, no staging** — rules 2 and 3 of the built-in worker discipline. The worker
+   leaves changes in the working tree for orchestrator review, and the index as it found it.
+6. **Report-back format** — rule 8 of the built-in worker discipline: evidence (real command
+   output, not "tests pass"), deviations from the brief with reasons, and blockers quoted
+   verbatim. Rule 6 covers the wall: a worker that hit one reports it. It does not improvise
+   a different design.
+7. **Paste the built-in worker discipline above, then the config's Worker guardrails section,
+   word for word.** Do not summarize either one, trim it to the rules you judge relevant, or
+   rephrase it in your own voice. Compression of a guardrail is how every recorded worker
+   incident happened: a repo-wide formatter run over unrelated files, a release build where a
+   dev build was meant, a user's staged review markers reset. The paste is the mechanism; your
+   paraphrase is the failure. The discipline block goes into every brief, always. No Worker
+   guardrails section in the config ⇒ say so in the brief rather than inventing rules. A
+   section still holding the template's `<e.g. …>` placeholders counts as absent. Say that
+   too. Never paste a placeholder into a brief as though it were this project's rule.
 8. **Writing style excerpt** — when the task writes a PRD, ADR, worklog line, ledger line,
    MR/PR text or tracker comment, paste the config's **Writing style** section
    (`Docs: plain | ste-80`). When it says `ste-80`, also paste the Writing for people

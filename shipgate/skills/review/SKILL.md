@@ -56,8 +56,10 @@ what it is: ``- F1 MEDIUM `src/a.ts:12` — <one sentence>.``, or for a rejected
 ``- `src/a.ts:30` (LOW 40): <one sentence>.`` The HUD's verdict-only round shows that sentence
 under the finding's key.
 
-> **Project config:** `.claude/shipgate.md` (project root — and umbrella root in an umbrella
-> checkout) overrides the defaults below; read it first if present.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
 
 > **Journaled project — name the stream before you start.** Three signs mark a journaled
 > project: a status brief headed "shipgate flow journal", a **Journal** section in the config,

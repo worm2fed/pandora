@@ -2,6 +2,100 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.25.0 — lean project configs: a user file under the project config, the plugin owns its own rules, and `setup` writes and maintains a lean file.
+
+**The layering rule, and a user-level config (#15, #18, ADR 0018).** A config is now a stack
+of files, read nearest first: the repo's `.claude/shipgate.md`, the umbrella's, the user file
+at `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`), then the built-in
+defaults. The stack resolves **per section**: the nearest file that holds a `##` section with
+one value that is not a placeholder supplies the whole section, and sections never merge
+line by line. The rule has two homes, the template's header and the README's Configuration
+section; every config-reading skill cites it with one shared callout and does not restate
+it. The user file uses the project file's section vocabulary; the template marks the
+sections that are usually personal.
+- `Inherit: none` under a nested config's title (bare or a bullet, backticks optional, any
+  case) takes nothing from the umbrella's config. The user file and the defaults still apply.
+- `scripts/_config.py` is the one reader, loaded by path from `signals.py`, `journal.py`
+  and `lean_config.py` (the `_codegraph.py` precedent). It also holds the one placeholder
+  rule: a balanced `<…>` group, or several joined by whitespace with an optional separator
+  or `Label:`; `<type>/<slug>`, an autolink and a mention are real values. `signals.py` reads the user file as its last layer and
+  resolves `## Code signals` and `## Code tooling` per section. **Changed rule:** a repo
+  section that sets only `Window` no longer takes `Fix pattern` from the umbrella's section.
+  `config.source` labels a value from the user file `user shipgate.md`; a project or
+  umbrella value keeps `shipgate.md`. `config` gains `files` (the files read, in precedence
+  order, each with its `role`: `project`, `umbrella`, `user`) and `inherit` (`umbrella` or
+  `none`).
+- `feature`'s route step says which file each section came from when more than one config
+  file was read.
+
+**Built-in worker discipline, and a plugin-owned executive contract (#16).**
+- `model-tiers` carries a **Built-in worker discipline** block that every worker brief
+  pastes word for word, before the config's Worker guardrails. It holds the three rules it
+  had (branch check, no commit and no staging, evidence) and five more: the git index is the
+  user's review record (never `git add`, `git reset`, `git stash`, `git restore --staged`,
+  `git checkout -- <path>`; leave the index as found; stop and report if it blocks you);
+  never `--no-verify`, never kill a running pre-commit hook; never a repo-wide formatter or
+  a linter with `--fix`; stop and report when blocked or near a spend or time limit, never
+  improvise a different design; comments only for what the code cannot say, decisions go to
+  the worklog. The config's Worker guardrails section keeps repo-specific rules only.
+- `feature` owns **The executive contract**: what the orchestrator records where, and what it
+  escalates (one-way doors, user-visible scope changes, Security-sensitive areas, true
+  50/50s, the config's Extra escalations). `clarify`, `design`, `setup` and the glossary
+  point at it. The config's Autonomy section is `Mode` and `Extra escalations` only; the
+  template drops the contract bullet. A config that still carries it is read as redundant
+  text.
+- `knowledge-base` carries the promotion defaults: a personal workflow preference goes to
+  the harness's built-in memory, everything else is dropped, promoted and dropped entries
+  are removed. A config's `Ledger:` line lists project targets only.
+- `implement` and `structured-debug` use a context7-style MCP for library docs by default
+  when the session has one; the config's Library docs line is an override.
+
+**A lean setup, and `doctor` checks the config against the sidecar (#17, ADR 0019).**
+- `setup` writes a lean file: a one-line title, the sections the interview filled,
+  `- Key: value` bullets only, the Journal section as `- Database: <path>`, no template
+  comments and no prose that explains the plugin. On a machine with no user file it offers
+  once to write one with the personal answers, and never copies a user-file section into a
+  project file.
+- `scripts/lean_config.py <path> [--apply] [--user <path>] [--umbrella <path>]…
+  [--drop-equal] [--only-equal] [--json]` strips the boilerplate the template and earlier
+  setups wrote: the header paragraphs of both template generations, the
+  `<!-- Default when absent … -->` and `<!-- Usually personal … -->` comments, the Journal
+  prose, the Code signals, Worker guardrails and Orchestration explanations, the MR watcher
+  bullets, the `Executive contract` bullet, and placeholder bullets. It matches whole
+  blocks by anchor and removes a block only when every sentence in it is catalogued
+  boilerplate (the template's prose in each of its versions, the header `setup` wrote, the
+  `Executive contract` bullet in its known wordings); a block with any other sentence stays
+  whole and is listed as `mixed` with a hint, so a contract bullet that names
+  project-specific escalations is never removed. It prints a unified diff, keeps each
+  line's own ending, and writes only with `--apply`, through a temporary file and
+  `os.replace`. A block it does not recognise stays; a bullet with a real value is never
+  removed. With `--user` it
+  reports the sections equal to the user file's; `--drop-equal` removes them, `--only-equal`
+  touches nothing else, and `--umbrella` keeps a section an umbrella config also holds
+  (dropping it would hand the section to the umbrella). `setup`'s update mode runs it,
+  shows each diff and applies on a yes.
+- `journal.py doctor` gains a `config` block: the project's `.claude/shipgate.md` `Ledger:`,
+  `PRD home:`, `ADR home:` and `Worklog home:` against the sidecar's `ledger` and
+  `artifact_homes`, one line per drift (a ledger the config names and the sidecar lacks is
+  the common case). `section` says whether the project file holds the section; when
+  another layer owns it, nothing is compared. The text form prints `config` and `drift`
+  lines. Every existing key is unchanged, and the exit code does not change on drift.
+  `setup` update mode fixes the sidecar from the report.
+- This repository's own config is the worked example: `lean_config.py` removed its setup
+  header, a stale `signals.py` comment and the executive-contract bullet; two hand edits
+  dropped a generic Orchestration comment and the built-in promotion targets from the
+  `Ledger:` line.
+
+**Tests.** `test_config.py` (the reader), `test_lean_config.py` (the recogniser on the
+template filled in, on this repository's earlier config, and on a hand-written config that
+comes back byte-identical), the user file at both locations, per-section replacement,
+`Inherit: none`, the doctor drift cases, and contract tests that pin the shared config
+callout, the discipline block and `feature`'s contract. The test environment points
+`CLAUDE_CONFIG_DIR` at an empty directory, so no test reads a real user file.
+
+shipgate-hud does not change: the doctor's new keys are additive and the HUD does not read
+`doctor`.
+
 v0.24.0 — the graph reaches a file behind two barrel re-exports, and the grader scores the last call that listed files.
 
 **Re-export edges beside the graph (#7, ADR 0017).** codegraph 1.6.2 records no edge for

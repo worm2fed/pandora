@@ -8,8 +8,12 @@ Drive the feature-development flow using the `feature` orchestrator skill.
 
 User input: $ARGUMENTS
 
-Read the project config `.claude/shipgate.md` first if it is present. It declares the
-project's tooling: artifact homes, forge, branching.
+> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
+> below. They layer per section by the rule in `config-template.md`'s header and the
+> README's Configuration section; read them first if present.
+
+The config declares the project's tooling: artifact homes, forge, branching.
 
 Do this:
 
