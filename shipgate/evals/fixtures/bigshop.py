@@ -811,10 +811,6 @@ def write_config():
 
         ## Autonomy
         - Mode: executive
-        - Executive contract: the orchestrator makes and RECORDS routine decisions itself (clarify answers in the
-          PRD's "Assumptions (executive)" list, design choices in the ADR) and reports them so the user can veto. It
-          still escalates one-way doors (schema, public API, shared write paths, data migrations), user-visible
-          scope changes, and genuine 50/50s.
     ''')
     write(".claude/shipgate.json", json.dumps({
         "version": 1, "db": ".claude/shipgate.db",

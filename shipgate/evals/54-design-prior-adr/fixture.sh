@@ -153,6 +153,5 @@ cat > .claude/shipgate.md <<'EOF_F'
 
 ## Autonomy
 - Mode: executive
-- Executive contract: the orchestrator makes and RECORDS routine decisions itself — design choices in the ADR — and reports them in the phase summary so the user can veto. It still escalates one-way doors (schema, public API, shared write paths, data migrations), user-visible scope changes, and genuine 50/50s.
 EOF_F
 c 2026-09-15 "feat: billing base with PRDs and ADRs"

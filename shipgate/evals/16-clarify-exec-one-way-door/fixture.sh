@@ -275,9 +275,5 @@ cat > .claude/shipgate.md <<'MD'
 ## Autonomy
 
 - Mode: executive
-- Executive contract: the orchestrator makes and RECORDS routine decisions itself — clarify
-  answers land in the PRD's "Assumptions (executive)" list — and reports them in each phase
-  summary so the user can veto. It still escalates one-way doors (schema, public API, shared
-  write paths, data migrations), user-visible scope changes, and genuine 50/50s.
 MD
 c 2026-09-02 "chore: shipgate config (executive autonomy)"
