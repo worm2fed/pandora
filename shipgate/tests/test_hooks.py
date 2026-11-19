@@ -293,6 +293,166 @@ class TestSessionStart(HookTestCase):
         self.assertEqual(result.stdout.strip(), SESSION)
 
 
+# Every `source` Claude Code documents for SessionStart (the hooks reference, "Matcher
+# patterns"). The matcher in core.json is an exact-match list, so a source left out of it
+# never reaches the hook.
+SESSION_START_SOURCES = ("startup", "resume", "clear", "compact", "fork")
+
+
+class TestSessionStartSources(HookTestCase):
+    """The hook script serves every source value: `/clear` and a compaction drop the
+    context that held the brief, so they need it most.
+
+    These tests run the script directly, so they do not go through the matcher. The test
+    that guards the matcher is `TestHookWiring`'s, which reads `core.json`."""
+
+    def start(self, source: str, session: str = SESSION):
+        result = run_hook(
+            "session_start",
+            {"session_id": session, "cwd": str(self.root), "source": source},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        return json.loads(result.stdout)["hookSpecificOutput"]
+
+    def test_every_source_gets_the_brief_and_the_watch_list(self):
+        appended = journal(
+            self.db, "append", "--stream", STREAM, "--type", "phase-entered",
+            "--data", json.dumps({"phase": "workspace"}),
+        )
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+        for source in SESSION_START_SOURCES:
+            with self.subTest(source=source):
+                specific = self.start(source)
+                self.assertEqual(specific["hookEventName"], "SessionStart")
+                self.assertIn("shipgate flow journal", specific["additionalContext"])
+                self.assertIn(STREAM, specific["additionalContext"])
+                self.assertIn(str(self.worklog), specific["watchPaths"])
+
+    def test_every_source_is_recorded_on_its_own_row(self):
+        for source in SESSION_START_SOURCES:
+            self.start(source)
+        rows = self.events(event_type="session-started")
+        self.assertEqual(
+            [row["data"]["source"] for row in rows], list(SESSION_START_SOURCES)
+        )
+        self.assertEqual({row["stream"] for row in rows}, {"shipgate"})
+        self.assertEqual({row["data"]["session"] for row in rows}, {SESSION})
+
+    def test_a_clear_moves_attribution_to_the_new_session(self):
+        """`/clear` may hand the hook a new session id. The stored session follows it,
+        and so does an append from a shell that has no session id of its own."""
+        self.start("startup")
+        self.start("clear", session="sess-after-clear")
+        result = journal(self.db, "session", "--get")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "sess-after-clear")
+
+        # `append` reads the stored session only when its shell names none (ADR 0005).
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        appended = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
+             "--stream", STREAM, "--type", "phase-entered",
+             "--data", json.dumps({"phase": "workspace"})],
+            capture_output=True, text=True, cwd=str(self.root), env=env, timeout=60,
+        )
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+        row = self.events(event_type="phase-entered")[0]
+        self.assertEqual(row["actor"], "orchestrator@sess-after-clear")
+
+
+class TestASecondSessionStartedRow(HookTestCase):
+    """A compaction or a `/clear` adds a `session-started` row to a session that has one.
+    `check` reads rows by their session id, not by position after that row, and `stats`
+    counts sessions as a set, so the extra row changes neither."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        started = journal(
+            self.db, "append", "--stream", STREAM, "--type", "phase-entered",
+            "--actor", f"orchestrator@{SESSION}",
+            "--data", json.dumps({"phase": "workspace"}),
+        )
+        self.assertEqual(started.returncode, 0, started.stderr)
+
+    def start(self, source: str, session: str = SESSION) -> None:
+        result = run_hook(
+            "session_start",
+            {"session_id": session, "cwd": str(self.root), "source": source},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def tick_and_capture(self) -> None:
+        self.worklog.write_text(WORKLOG_ONE_TICKED, encoding="utf-8")
+        run_hook(
+            "post_tool_use",
+            {
+                "session_id": SESSION,
+                "cwd": str(self.root),
+                "tool_name": "Edit",
+                "tool_input": {"file_path": str(self.worklog)},
+            },
+            self.root,
+        )
+
+    def check(self):
+        # From the project's directory, as the Stop hook runs it: `check` resolves a
+        # worklog path against the project it finds from there.
+        result = journal(
+            self.db, "check", "--session", SESSION, "--json", cwd=self.root
+        )
+        return result.returncode, json.loads(result.stdout)["findings"]
+
+    def stats(self, *args: str):
+        result = journal(self.db, "stats", "--json", *args, cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_a_write_before_the_compaction_still_blocks_the_stop(self):
+        """A window that opened at the newest `session-started` would lose this write."""
+        self.start("startup")
+        self.tick_and_capture()
+        before = self.check()
+        self.assertEqual(before[0], 5, "rule A must find the ticked box")
+
+        self.start("compact")
+        self.assertEqual(len(self.events(event_type="session-started")), 2)
+        self.assertEqual(self.check(), before)
+
+        payload = json.loads(self.stop().stdout)
+        self.assertEqual(payload["decision"], "block")
+        self.assertIn("T001", payload["reason"])
+
+    def test_a_clean_session_stays_clean_after_each_restart(self):
+        self.start("startup")
+        for source in ("compact", "clear", "resume", "fork"):
+            with self.subTest(source=source):
+                self.start(source)
+                self.assertEqual(self.check(), (0, []))
+                self.assertEqual(self.stop().stdout.strip(), "")
+
+    def test_stats_do_not_count_the_extra_rows(self):
+        self.start("startup")
+        self.tick_and_capture()
+        before = self.stats()
+        self.assertEqual(before["totals"]["sessions"], 1)
+
+        self.start("compact")
+        self.start("clear", session="sess-after-clear")
+        self.assertEqual(self.stats(), before)
+
+    def test_the_meta_stream_counts_rows_but_one_session_per_id(self):
+        """Named outright, the tool's own stream reports its rows as they are."""
+        self.start("startup")
+        self.start("compact")
+        self.start("compact")
+        row = self.stats("--stream", "shipgate")["streams"][0]
+        self.assertEqual(row["events"], 3)
+        self.assertEqual(row["sessions"], 1)
+
+
 class TestSessionStartSidecarVersion(HookTestCase):
     """A sidecar from a newer shipgate: the session hears it once, at start."""
 
@@ -1621,6 +1781,23 @@ if "--batch" in sys.argv[1:]:
 
 
 class TestHookWiring(unittest.TestCase):
+    def test_session_start_fires_on_every_documented_source(self):
+        """An exact-match list, one entry per source: a source missing here never gets
+        the brief (`clear` and `compact` did not, before 0.25.1)."""
+        config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
+        entries = config["hooks"]["SessionStart"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(
+            sorted(entries[0]["matcher"].split("|")), sorted(SESSION_START_SOURCES)
+        )
+        # Only letters and `|`: any other character would turn the matcher into an
+        # unanchored regular expression.
+        self.assertRegex(entries[0]["matcher"], r"\A[a-z]+(\|[a-z]+)*\Z")
+        self.assertEqual(
+            entries[0]["hooks"][0]["args"],
+            ["${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py"],
+        )
+
     def test_post_tool_use_fires_on_the_file_tools_and_bash(self):
         config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
         matchers = [entry["matcher"] for entry in config["hooks"]["PostToolUse"]]
@@ -1666,6 +1843,21 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
                 self.assertEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
                 self.assertEqual(result.stderr, "")
+
+    def test_session_start_is_inert_on_every_source(self):
+        """The hook now runs after `/clear` and each compaction too: still nothing."""
+        for source in SESSION_START_SOURCES:
+            with self.subTest(source=source):
+                result = run_hook(
+                    "session_start",
+                    {"session_id": "s", "cwd": str(self.root), "source": source},
+                    self.root,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
+                self.assertFalse((self.root / ".claude").exists())
+                self.assertEqual(list(self.root.rglob("*.db")), [])
 
     def test_a_bash_call_is_silent_and_creates_nothing(self):
         result = run_hook(

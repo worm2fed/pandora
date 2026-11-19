@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """SessionStart hook — hand the session its position before it thinks to ask.
 
-Injects the journal's resume brief as context, and opens the session's event window by
-recording `session-started`. That window is what `journal.py check` measures against at
-Stop time: everything appended after this event belongs to this session.
+Injects the journal's resume brief as context and records `session-started`. It runs on
+every source Claude Code names for the event: `startup`, `resume`, `clear`, `compact` and
+`fork`. A `/clear` and a compaction drop the context that held the brief, so they get it
+again. One session can therefore hold several `session-started` rows. Nothing reads them
+as a window: `journal.py check` selects a session's rows by their session id, and `stats`
+counts sessions as a set.
 
 The session id is also handed to `journal.py session --set`, because a skill's shell
 cannot see it and `append` needs it to attribute skill-written events (ADR 0003).

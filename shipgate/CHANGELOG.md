@@ -2,6 +2,36 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.25.1 — the status brief returns after `/clear` and after a compaction.
+
+**The SessionStart hook runs on every source (#20).** `hooks/core.json` registered the hook
+with the matcher `startup|resume|fork`. Claude Code names five sources for the event:
+`startup`, `resume`, `clear`, `compact` and `fork`. The matcher is an exact-match list, so
+the hook never ran after `/clear` or after a compaction, and the session lost the status
+brief exactly when its context was dropped. The matcher is now
+`startup|resume|clear|compact|fork`.
+- After `/clear` and after an automatic or manual compaction, the session gets the status
+  brief and the artifact watch list again. The hook passes on the session id it receives.
+  A session that keeps its id still gets the brief led by the stream it drives
+  (`· this session`).
+- The hook passes the session id to `journal.py session --set` on every source. `append`
+  reads that value only when its shell has no `CLAUDE_CODE_SESSION_ID` (ADR 0005). In
+  such a shell, an append after a `/clear` that changed the id now carries the new id.
+  Before, it kept the id of the cleared session. With two sessions open on one project, a
+  `/clear` or a compaction in one of them also moves that stored id to it, as a startup
+  or a resume always did. Only a shell without the variable reads the stored id.
+- One session can now hold several `session-started` rows, one per source that fired. This
+  changes no result: `check` selects a session's rows by their session id, not by their
+  position after a `session-started` row, and `stats` counts sessions as a set and skips
+  the tool's own stream unless `--stream shipgate` names it.
+- The hook's code is unchanged. It runs more often: once more per `/clear` and per
+  compaction. A project with no journal still pays nothing on any source.
+
+Tests: one row per source with the brief and the watch list, attribution after `/clear`, a
+write made before a compaction still blocks the stop, `stats` equal before and after the
+extra rows, the hook silent on every source in a project with no journal, and a wiring test
+that pins the matcher to the five documented sources.
+
 v0.25.0 — lean project configs: a user file under the project config, the plugin owns its own rules, and `setup` writes and maintains a lean file.
 
 **The layering rule, and a user-level config (#15, #18, ADR 0018).** A config is now a stack
