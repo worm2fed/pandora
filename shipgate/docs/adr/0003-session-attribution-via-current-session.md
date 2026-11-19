@@ -33,7 +33,7 @@ is not visible to the skill's shell, but the SessionStart hook does see it.
 Two facts, one field: `role@label`. Roles are a closed set, validated by `append` (usage
 error otherwise); `orchestrator` is the default. The label is free text; when absent,
 `append` reads `meta.current_session` — written by `session_start.py` on every
-startup/resume — and suffixes it. `event_session()` returns `data.session` when present,
+startup/resume (since 0.25.1, on every SessionStart source) — and suffixes it. `event_session()` returns `data.session` when present,
 else the part after `@`. *Amended by ADR 0010:* a `user` row's session is its
 `data.recorded_by`, and the label of a `user` or `watcher` actor is never read as a
 session. Hook-written events keep `actor=hook` and carry `data.session`
