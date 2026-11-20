@@ -427,6 +427,11 @@ class TestHudContract(unittest.TestCase):
         # The marked user decision authorizes it (shipgate 0.23.0, ADR 0015).
         publish = [d for d in flow["decisions"] if d["gate"] == "publish"]
         self.assertEqual([d["seq"] for d in publish], [flow["publish"]["seq"]])
+        # shipgate 0.28.0 (ADR 0023): `go` is an additive key, the user's go per gate. The
+        # dialog's publish go satisfies both gates.
+        self.assertEqual(flow["go"], {"commit": flow["publish"], "publish": flow["publish"]})
+        self.assertEqual(self.position["started"]["go"],
+                         {"commit": {"kind": "held"}, "publish": {"kind": "held"}})
         status_flow = next(f for f in self.status["all"]["features"]
                            if f["stream"] == FLOW)
         self.assertIn("dialog", [d.get("source") for d in status_flow["gate_decisions"]])
@@ -480,6 +485,8 @@ class TestHudContract(unittest.TestCase):
         verdict = position["verdict"]
         self.assertEqual((verdict["verdict"], verdict["note"], verdict["round"]),
                          ("ready", "the round closes", 1))
+        # shipgate 0.28.0 (ADR 0023 §17): this verdict is forced, so it opens no publish.
+        self.assertEqual(position["publish"], {"kind": "held"})
         states = {key: d["state"] for key, d in position["dispositions"].items()}
         self.assertEqual(states, {"src/golden.py:12": "fixed",
                                   "src/other.py:?": "fixing",

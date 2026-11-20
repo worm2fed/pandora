@@ -2,6 +2,97 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.28.0 — the user's go is recorded where the user answers, and a commit waits for it: a recorder hook writes the go from a question answer or a typed reply, a command gate holds a model's commit, push and MR/PR creation, and no forced event opens a publish.
+
+**The approval checked nothing (#22, ADR 0023).** Since 0.23.0 the user approved a publish
+in the shipgate-hud dialog or with a `!` command. Seven journals held 3 dialog approvals and
+0 shell approvals. The flow asked 152 commit or publish questions through `AskUserQuestion`,
+the PreToolUse hook refused 21 appends that tried to record such an answer, and 13
+`mr-opened` events were forced. A commit had no gate: 6 of 40 user interrupts came while the
+agent announced a commit, an amend or a push.
+
+- **The go.** A go is the user's approval of one gate (`commit` or `publish`) on one stream:
+  a `gate-decision` with `decision` equal to the gate, `raised_by: user` and a `source`
+  marker. A publish go also satisfies the commit gate, and one publish go covers the push,
+  the MR/PR creation and the commit. A go lasts until the stream's next `task-done`. The
+  markers are `question` and `prompt` (the recorder), `read` (the model, from a witness),
+  and `dialog` and `shell` as before.
+- **The go request.** A new event, `go-requested {gate, question}`, records that the flow
+  put a gate of a live stream to the user. `append` refuses it on a missing or finished
+  stream, with `--force` too, and leaves an empty marker file for the session at
+  `<journal db>.requests/<session id>`.
+- **The recorder** (`hooks/reply.py`, new) runs on UserPromptSubmit and on PostToolUse for
+  `AskUserQuestion`. `journal.py reply` (new) plans the rows; the hook writes them with
+  `append --batch`. An exact go: the gate word as the answer to a question with the header
+  `Commit` or `Publish`, a stream name selected in a multi-select, or a typed reply from a
+  built-in list (`commit`; `publish`, `push`; `all`, `yes`, `y`, `ok`, `go`, `approve`),
+  case and one closing `.` or `!` ignored. Any other reply to an open request leaves a
+  `reply-witnessed` row, which holds no text. A reply answers every open request of its
+  own session. A prompt that starts with a tag (a subagent report, a relayed message)
+  is no reply. A gate word with no open request is a go for the stream the session drives.
+  With no marker file, a prompt over 32 characters runs no journal.
+- **The read go.** After a witness, the model reads the reply and, when it approves,
+  appends a `gate-decision` with `source: read`, `witness: <seq>` and the user's `words`
+  (at most 200 characters). It asks no confirming question. `append` accepts it only with
+  a witness of the same stream, gate and session, written by the hook, newer than the last
+  `task-done` and named by no other go. `--force` does not waive this.
+- **The command gate.** The PreToolUse hook holds a model's `git commit` until the stream of
+  the branch holds a commit go, and `git push`, `git subtree push`, `gh pr create` and
+  `glab mr create` until it holds a publish go. It reads the branch of the command's
+  directory (git's `-C`, a `cd` in the line, the cwd) and asks `journal.py authorize`
+  (new). A ready verdict is no go. A subagent is told to hand the question back. The gate
+  does nothing on a project with no sidecar, on a branch with no stream or a finished
+  one, or with `enforce.command_gate: false` in the sidecar. A dry run is held like any
+  commit or push. A failure of git or the journal passes the command.
+- **The forgery net grows.** The PreToolUse hook now also refuses a model's append of a
+  user decision at the commit gate, any append of a `reply-witnessed` row, an append
+  whose `--type` it cannot read, any `journal.py import` (ADR 0023 §20): `import`
+  writes rows with no check, so a model could write the user's go with it, a journal
+  write whose line sets or clears `CLAUDE_CODE_SESSION_ID`, and a command that runs the
+  recorder script `hooks/reply.py` (ADR 0023 §21), which would write the go from a forged
+  payload. A read go passes the hook unless its actor is `user`.
+- **These rows bind no session.** A go request, a witness and a go with the marker
+  `question`, `prompt` or `read` do not move the session's position, its Stop gate or its
+  `stats` sessions. A go request or a read go whose actor label names another session than
+  the appending one is refused, and so is one that carries a label at all when
+  `CLAUDE_CODE_SESSION_ID` is empty.
+- **`status --json` and `position --json`** gain `go: {commit, publish}`, the user's go per
+  gate in the shape of `publish`. **`stats --json`** counts the go records by marker.
+- `setup` writes `enforce.command_gate: true`. The config template and the glossary name
+  the knob and the new terms.
+
+**Breaking.**
+- `--force` no longer waives the `mr-opened` rule, and the refusal no longer offers it.
+- A forced `review-verdict` with `verdict: ready` no longer authorizes a publish, in
+  `mr-opened`, `status --json` or `position --json`. A caller that forced either event to
+  publish now meets a refusal.
+- A project with a running flow meets the command gate at upgrade: its next commit needs a
+  go. An unattended project turns the gate off with `enforce.command_gate: false`.
+- A model's `journal.py import` is refused. The user runs an import with `!` when moving a
+  journal between machines.
+- A model's command that runs `hooks/reply.py` is refused.
+
+**Cost.** Measured over 20 runs per case: the recorder off a journaled project, median
+29 ms; on a journaled project with no open request and a long prompt, 39 ms; with an open
+request (a `reply` run and a one-row write), 252 ms, above the budget of 200 ms, which the
+user accepted; the command gate on a held commit, 168 ms. A follow-up starts the journal as
+a cached module from every hook.
+
+**Known limits** (ADR 0023): a commit that another command makes (`git merge`, an alias, a
+script) is not held; a push is judged against the branch of its directory, not its refspec;
+a program that pastes a bare word into the terminal forges a reply; the model's reading of a
+free-language reply is audited after the fact, not prevented. A line with a `cd` asks for
+the cwd's branch as well, so `cd other-repo && git commit` from a stream's checkout needs
+that stream's go too.
+
+Tests: the go rule, the read-go check with each refusal and `--force`, the reply plan
+(each word, five requests and `all`, another session's request, no request, a witnessed
+request, no prompt text in any output), `authorize` as a table, the marker file, `stats`,
+the forgery net (commit gate, witness, read go), `gated_commands` as a table, the command
+gate per command with its knob, failure policy and no-file-read path, the recorder against
+a real journal with synthetic payloads in the probe's shapes, and three end-to-end runs. The
+security review's findings on the working-tree diff are fixed or listed in the worklog.
+
 v0.27.1 — an append from a shell with no session id records no session, so it no longer binds another session to its stream.
 
 **An append borrowed the id of the session that started last (#46, ADR 0005 amended).**

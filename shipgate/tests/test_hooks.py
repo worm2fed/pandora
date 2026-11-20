@@ -517,6 +517,192 @@ class TestSidecarVersionNote(unittest.TestCase):
                          ("version", "db", "ledger", "artifact_homes", "enforce"))
 
 
+class TestMarkerPath(unittest.TestCase):
+    """ADR 0023 §12: the request marker of a session sits beside the journal database.
+
+    journal.py writes the file and the recorder reads it, so both take the path from this
+    one helper. A session id is a file name here: only a plain token gets a path.
+    """
+
+    DB = os.path.join(os.sep, "p", ".claude", "shipgate.db")
+
+    def test_a_plain_session_id_names_a_file_beside_the_db(self):
+        from _common import marker_path
+
+        for session in ("sess-integration-1", "0b6f1c2e-5d4a-4f3b-9a8e-1c2d3e4f5a6b",
+                        "a", "A_b-9", "-leading-dash", "s" * 128):
+            with self.subTest(session=session):
+                self.assertEqual(
+                    marker_path(self.DB, session),
+                    os.path.join(self.DB + ".requests", session),
+                )
+
+    def test_an_id_that_is_no_plain_token_gets_no_path(self):
+        from _common import marker_path
+
+        for session in ("a/b", "../x", "..", ".", "", "s" * 129, "a b", "a.b", "x\n",
+                        "x\ny", "x\0", "é", None, 42, b"abc", ["a"]):
+            with self.subTest(session=session):
+                self.assertIsNone(marker_path(self.DB, session))
+
+    def test_the_pattern_is_the_one_the_helper_applies(self):
+        from _common import SESSION_ID_RE
+
+        self.assertTrue(SESSION_ID_RE.match("a" * 128))
+        for session in ("a" * 129, "x\n", "a/b", ""):
+            with self.subTest(session=session):
+                self.assertIsNone(SESSION_ID_RE.match(session))
+
+    def test_the_helper_creates_nothing(self):
+        from _common import marker_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "shipgate.db")
+            # The db path is resolved (review round 1, F22): /var is /private/var on macOS.
+            self.assertEqual(marker_path(db, "s1"),
+                             os.path.join(os.path.realpath(db) + ".requests", "s1"))
+            self.assertEqual(os.listdir(tmp), [])
+
+    def test_importing_the_helpers_loads_no_regex_engine(self):
+        """Rule 2 of `_common`: every hook imports it, in every project. `re` costs
+        milliseconds, so the pattern is compiled on first use, not at import."""
+        probe = (
+            "import sys\n"
+            "before = 're' in sys.modules\n"
+            f"sys.path.insert(0, {str(HOOKS)!r})\n"
+            "import _common\n"
+            "print('loaded' if 're' in sys.modules and not before else 'clean')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-S", "-c", probe], capture_output=True, text=True, timeout=60
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "clean")
+
+
+class TestMarkerPathFollowsTheDbFile(unittest.TestCase):
+    """Review round 1, F22: the journal and the recorder name one marker for one db,
+    whichever path to it they hold."""
+
+    def test_a_symlinked_db_gives_the_markers_of_its_target(self):
+        from _common import marker_path
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "main" / "shipgate.db"
+            real.parent.mkdir()
+            real.write_bytes(b"")
+            link = Path(tmp) / "wt" / "shipgate.db"
+            link.parent.mkdir()
+            link.symlink_to(real)
+            self.assertEqual(marker_path(str(link), "s1"), marker_path(str(real), "s1"))
+
+
+class TestRunJournalOptions(unittest.TestCase):
+    """`run_journal` takes a timeout and a session id for the child's environment.
+
+    The recorder and the command gate run the journal for another session's reply or with
+    a shorter budget than the default; every other caller keeps the inherited environment.
+    """
+
+    STUB = (
+        "import os, sys, time\n"
+        "if '--sleep' in sys.argv:\n"
+        "    time.sleep(5)\n"
+        "print(os.environ.get('CLAUDE_CODE_SESSION_ID', '<unset>'))\n"
+    )
+
+    def setUp(self) -> None:
+        from unittest import mock
+
+        import _common
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name).resolve()
+        stub = root / "journal.py"
+        stub.write_text(self.STUB, encoding="utf-8")
+        patcher = mock.patch.object(_common, "journal_script", return_value=str(stub))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.common = _common
+        self.project = _common.Project(str(root), {"db": str(root / "shipgate.db")})
+
+    def child_session(self, env, **options):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, env, clear=False):
+            if "CLAUDE_CODE_SESSION_ID" not in env:
+                os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            result = self.common.run_journal(self.project, ["status"], **options)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_a_session_sets_the_childs_session_id(self):
+        self.assertEqual(self.child_session({}, session="sess-b"), "sess-b")
+        self.assertEqual(
+            self.child_session({"CLAUDE_CODE_SESSION_ID": "sess-a"}, session="sess-b"),
+            "sess-b",
+        )
+
+    def test_no_session_inherits_the_environment_unchanged(self):
+        self.assertEqual(
+            self.child_session({"CLAUDE_CODE_SESSION_ID": "sess-a"}), "sess-a"
+        )
+        self.assertEqual(self.child_session({}), "<unset>")
+
+    def test_the_session_does_not_leak_into_the_hooks_own_environment(self):
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "sess-a"}):
+            self.common.run_journal(self.project, ["status"], session="sess-b")
+            self.assertEqual(os.environ["CLAUDE_CODE_SESSION_ID"], "sess-a")
+
+    def test_a_timeout_bounds_the_run(self):
+        import time
+
+        started = time.monotonic()
+        result = self.common.run_journal(self.project, ["status", "--sleep"], timeout=0.5)
+        self.assertIsNone(result)
+        self.assertLess(time.monotonic() - started, 4)
+
+    def test_the_defaults_keep_the_old_call(self):
+        from unittest import mock
+
+        with mock.patch("subprocess.run") as run:
+            self.common.run_journal(self.project, ["status"])
+        options = run.call_args.kwargs
+        self.assertEqual(options["timeout"], self.common.JOURNAL_TIMEOUT_SECONDS)
+        self.assertNotIn("env", options)
+
+
+class TestCurrentBranchIsShared(unittest.TestCase):
+    """The SessionStart brief and the command gate read a branch through one helper."""
+
+    def test_current_branch_lives_in_common(self):
+        import _common
+        import importlib.util
+
+        self.assertTrue(callable(_common.current_branch))
+        self.assertIsNone(_common.current_branch(42))
+        self.assertEqual(_common.branch_name("feature/x"), "feature/x")
+        for odd in ("", "HEAD", "x\0y", "x\x1by", "b" * 256):
+            with self.subTest(name=odd):
+                self.assertIsNone(_common.branch_name(odd))
+        # session_start uses the shared helper; it keeps no copy of its own.
+        spec = importlib.util.spec_from_file_location("ss", HOOKS / "session_start.py")
+        source = Path(spec.origin).read_text(encoding="utf-8")
+        self.assertNotIn("def current_branch", source)
+        self.assertNotIn("def _branch_name", source)
+
+    def test_it_reads_a_checkout(self):
+        import _common
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            init_git_checkout(root, "feature/x")
+            self.assertEqual(_common.current_branch(str(root)), "feature/x")
+
+
 class StubJournalMixin:
     """Stands a stub in for the journal CLI, in a throwaway copy of the plugin tree.
 
@@ -2130,7 +2316,24 @@ class TestHookWiring(unittest.TestCase):
     def test_post_tool_use_fires_on_the_file_tools_and_bash(self):
         config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
         matchers = [entry["matcher"] for entry in config["hooks"]["PostToolUse"]]
-        self.assertEqual(matchers, ["Write|Edit|NotebookEdit|Bash"])
+        self.assertEqual(matchers, ["Write|Edit|NotebookEdit|Bash", "AskUserQuestion"])
+
+    def test_the_recorder_runs_on_a_question_answer_and_on_a_prompt(self):
+        """ADR 0023 §11: two entries, each with the timeout of 10 seconds."""
+        config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
+        recorder = ["${CLAUDE_PLUGIN_ROOT}/hooks/reply.py"]
+        question = config["hooks"]["PostToolUse"][1]
+        self.assertEqual(question["matcher"], "AskUserQuestion")
+        self.assertEqual(question["hooks"][0]["args"], recorder)
+        self.assertEqual(question["hooks"][0]["timeout"], 10)
+        prompt = config["hooks"]["UserPromptSubmit"]
+        self.assertEqual(len(prompt), 1)
+        self.assertNotIn("matcher", prompt[0])
+        self.assertEqual(prompt[0]["hooks"][0]["args"], recorder)
+        self.assertEqual(prompt[0]["hooks"][0]["timeout"], 10)
+        self.assertEqual(sorted(config["hooks"]),
+                         ["PostToolUse", "PreToolUse", "SessionStart", "Stop",
+                          "UserPromptSubmit"])
 
     def test_pre_tool_use_fires_on_bash(self):
         config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
@@ -2172,6 +2375,26 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
                 self.assertEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
                 self.assertEqual(result.stderr, "")
+
+    def test_the_recorder_is_silent_on_both_events_and_creates_nothing(self):
+        """ADR 0023, FR-025: a prompt and a question answer, off a journaled project."""
+        payloads = [
+            {"hook_event_name": "UserPromptSubmit", "prompt": "commit",
+             "prompt_id": "p1"},
+            {"hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+             "tool_use_id": "t1", **question_payload("Commit", "Commit")},
+        ]
+        for extra in payloads:
+            with self.subTest(event=extra["hook_event_name"]):
+                result = run_hook(
+                    "reply", {"session_id": "s", "cwd": str(self.root), **extra},
+                    self.root,
+                )
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (0, "", ""))
+                self.assertFalse((self.root / ".claude").exists())
+                self.assertEqual(sorted(p.name for p in self.root.rglob("*")),
+                                 ["docs", "notes.md"])
 
     def test_session_start_is_inert_on_every_source(self):
         """The hook now runs after `/clear` and each compaction too: still nothing."""
@@ -2233,7 +2456,7 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
         self.assertEqual(list(self.root.rglob("*.db")), [])
 
     def test_malformed_input_is_survived_quietly(self):
-        for hook in ("session_start", "post_tool_use", "stop", "file_changed"):
+        for hook in ("session_start", "post_tool_use", "stop", "file_changed", "reply"):
             for raw in ("", "not json", "[]", "null"):
                 with self.subTest(hook=hook, raw=raw):
                     result = subprocess.run(
@@ -2263,6 +2486,18 @@ CLARIFY_BY_USER = (
 )
 USER_LINE = '{"type":"gate-decision","data":%s,"actor":"user"}' % PUBLISH
 APPEND = f"{J} append --stream feature/x"
+# ADR 0023: the commit gate, the witness the recorder writes, and the read go that names it.
+COMMIT = '{"gate":"commit","question":"commit T001?","decision":"commit","mode":"ask"}'
+COMMIT_BY_USER = (
+    '{"gate":"commit","question":"commit T001?","decision":"commit","mode":"ask",'
+    '"raised_by":"user"}'
+)
+SCOPE = '{"gate":"scope","question":"narrow it?","decision":"narrow","mode":"ask"}'
+WITNESS = '{"request":3,"gate":"commit","via":"prompt","session":"sess-a"}'
+READ_GO = (
+    '{"gate":"commit","question":"commit T001?","decision":"commit","mode":"ask",'
+    '"raised_by":"user","source":"read","witness":4,"words":"it can go"}'
+)
 
 
 class PreToolUseCase(unittest.TestCase):
@@ -2290,6 +2525,13 @@ class PreToolUseCase(unittest.TestCase):
         self.assertEqual(output["permissionDecision"], "deny")
         reason = output["permissionDecisionReason"]
         self.assertIn(fragment, reason)
+        # FR-024: every refusal names the paths of this release (ADR 0023): the gate
+        # question or the typed gate word, the read go of a witness, the HUD dialog, `!`.
+        self.assertIn("a commit or a publish", reason)
+        self.assertIn("header `Commit` or `Publish`", reason)
+        self.assertIn("type the gate word", reason)
+        self.assertIn('"source": "read"', reason)
+        self.assertIn("witness", reason)
         self.assertIn("Approve publishing", reason)
         self.assertIn('"source": "shell"', reason)
         self.assertIn("Never record it on their behalf", reason)
@@ -2417,6 +2659,177 @@ class TestPreToolUseRefusesAForgedApproval(PreToolUseCase):
         ):
             with self.subTest(command=command):
                 self.assertDenied(command, self.USER)
+
+
+class TestPreToolUseRefusesAnImport(PreToolUseCase):
+    """ADR 0023 §20, the user's ruling on the security review's finding 1: `import` writes
+    rows with no check, so a model's `journal.py import` is refused whatever the file."""
+
+    IMPORT = "runs `journal.py import`"
+
+    def test_every_spelling_of_an_import_is_refused(self):
+        imp = "imp" + "ort"
+        for command in (
+            f"{J} {imp} f.jsonl",
+            f"{J} --db .claude/shipgate.db {imp} f.jsonl",
+            f"{J} --db=x {imp} --json f.jsonl",
+            f"python3 /abs/path/journal.py {imp} f.jsonl",
+            f"cd x && {J} {imp} f.jsonl",
+            f"timeout 5 {J} {imp} f.jsonl",
+            f"bash -c '{J} {imp} f.jsonl'",
+            f"bash <<'EOF'\n{J} {imp} f.jsonl\nEOF",
+            f"cat > f.jsonl <<'EOF'\n{{}}\nEOF\n{J} {imp} f.jsonl",
+        ):
+            with self.subTest(command=command):
+                result = self.run_bash(command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)["hookSpecificOutput"]
+                self.assertEqual(output["permissionDecision"], "deny")
+                reason = output["permissionDecisionReason"]
+                self.assertIn(self.IMPORT, reason)
+                self.assertIn("`!`", reason)
+
+    def test_an_unread_script_path_or_db_value_is_still_an_import(self):
+        """Security recheck, finding 1: the spellings the skills use for the script."""
+        imp = "imp" + "ort"
+        for command in (
+            f'python3 /x/journal.py --db="$DB" {imp} f.jsonl',
+            f'python3 /x/journal.py --d="$DB" {imp} f.jsonl',
+            f'python3 "${{CLAUDE_PLUGIN_ROOT}}/scripts/journal.py" {imp} f.jsonl',
+            f'J=/x/journal.py; python3 "$J" {imp} f.jsonl',
+        ):
+            with self.subTest(command=command):
+                result = self.run_bash(command)
+                output = json.loads(result.stdout)["hookSpecificOutput"]
+                self.assertIn(self.IMPORT, output["permissionDecisionReason"])
+        self.assertSilent('python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" export')
+
+    def test_reads_and_mentions_of_import_pass(self):
+        imp = "imp" + "ort"
+        for command in (
+            f"{J} export > f.jsonl",
+            f"{J} status --json",
+            f"grep -n {imp} shipgate/scripts/journal.py",
+            f"git commit -m 'docs: journal.py {imp} merges a dump'",
+            f"python3 -c '{imp} json'",
+            f"{J} log --json | python3 -c '{imp} json, sys'",
+        ):
+            with self.subTest(command=command):
+                self.assertSilent(command)
+
+
+class TestPreToolUseRefusesTheRecorder(PreToolUseCase):
+    """ADR 0023 §21, the user's ruling on the security review of the commit: the recorder
+    hook script writes the user's go, so a model's command that runs it is refused, by
+    name or through a path the hook cannot read."""
+
+    RECORDER = "runs the recorder hook"
+    PAYLOAD = "'{\"prompt\":\"publish\"}'"
+
+    def test_every_way_of_running_the_recorder_is_refused(self):
+        for command in (
+            f"printf '%s' {self.PAYLOAD} | python3 /x/shipgate/hooks/reply.py",
+            f'echo {self.PAYLOAD} | python3 "${{CLAUDE_PLUGIN_ROOT}}/hooks/reply.py"',
+            f"R=/x/hooks/reply.py; echo {self.PAYLOAD} | python3 \"$R\"",
+            "python3 -u hooks/reply.py < payload.json",
+            "/usr/bin/python3.12 ./reply.py < payload.json",
+            "./shipgate/hooks/reply.py < payload.json",
+            "timeout 5 python3 hooks/reply.py < payload.json",
+            "bash -c 'python3 hooks/reply.py < payload.json'",
+            "cd shipgate && python3 hooks/reply.py <<'EOF'\n{}\nEOF",
+            # The lead's hardening after the security review of 274c99a: a runner module
+            # runs the path after it, and two wrappers outside the old table.
+            "python3 -m cProfile -o /dev/null hooks/reply.py < payload.json",
+            "python3 -m profile hooks/reply.py < payload.json",
+            "python3 -m trace --count hooks/reply.py < payload.json",
+            "python3 -m pdb hooks/reply.py < payload.json",
+            "arch -arm64 python3 hooks/reply.py < payload.json",
+            "xcrun python3 hooks/reply.py < payload.json",
+            # The delta review: `-m` glued to its module or inside a flag cluster, and
+            # xcrun's single-dash value options.
+            "python3 -mcProfile -o out hooks/reply.py < payload.json",
+            "python3 -um cProfile hooks/reply.py < payload.json",
+            "python3 -Im pdb hooks/reply.py",
+            "xcrun -sdk macosx python3 hooks/reply.py < payload.json",
+            "xcrun -toolchain x python3 hooks/reply.py < payload.json",
+        ):
+            with self.subTest(command=command):
+                result = self.run_bash(command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)["hookSpecificOutput"]
+                self.assertEqual(output["permissionDecision"], "deny")
+                self.assertIn(self.RECORDER, output["permissionDecisionReason"])
+
+    def test_reads_and_mentions_of_the_recorder_pass(self):
+        for command in (
+            "cat shipgate/hooks/reply.py",
+            "grep -n session_of shipgate/hooks/reply.py",
+            "python3 -m py_compile shipgate/hooks/reply.py",
+            "python3 -c 'import ast; ast.parse(open(\"shipgate/hooks/reply.py\").read())'",
+            "git commit -m 'fix(shipgate): reply.py reads the header'",
+            "python3 -m unittest discover -s shipgate/tests -p test_hooks.py -k TestReplyHook",
+            "git diff -- shipgate/hooks/reply.py",
+            "python3 -m cProfile -o out.prof tools/bench.py",
+            "arch -arm64 python3 -m unittest discover -s shipgate/tests",
+            "python3 -mpy_compile shipgate/hooks/reply.py",
+            "python3 -um py_compile shipgate/hooks/reply.py",
+        ):
+            with self.subTest(command=command):
+                self.assertSilent(command)
+
+
+class TestPreToolUseRefusesASessionOverride(PreToolUseCase):
+    """Security recheck, finding 3: a journal write may not set or clear the session id,
+    because a go request and a read go count for the session that appends them."""
+
+    SESSION = "sets or clears `CLAUDE_CODE_SESSION_ID`"
+    REQUEST = '{"gate":"commit","question":"q"}'
+
+    def test_every_override_is_refused(self):
+        tail = f"{APPEND} --type go-requested --data '{self.REQUEST}'"
+        for command in (
+            f"CLAUDE_CODE_SESSION_ID=sess-A {tail}",
+            f"env CLAUDE_CODE_SESSION_ID=sess-A {tail}",
+            f"env -u CLAUDE_CODE_SESSION_ID {tail} --actor orchestrator@sess-A",
+            f"export CLAUDE_CODE_SESSION_ID=sess-A; {tail}",
+            f"unset CLAUDE_CODE_SESSION_ID; {tail} --actor orchestrator@sess-A",
+            f"env -i PATH=/usr/bin {tail}",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.SESSION)
+
+    def test_a_nested_or_text_only_override_is_refused(self):
+        """Review round 1, F2: a nested script and `printf -v` set the variable too."""
+        tail = f"{APPEND} --type go-requested --data '{self.REQUEST}'".replace('"', '\\"')
+        for command in (
+            f'sh -c "export CLAUDE_CODE_SESSION_ID=o; {tail}"',
+            f"printf -v CLAUDE_CODE_SESSION_ID %s o; {APPEND} --type go-requested "
+            f"--data '{self.REQUEST}'",
+            f"read CLAUDE_CODE_SESSION_ID <<< o; {APPEND} --type go-requested "
+            f"--data '{self.REQUEST}'",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.SESSION)
+
+    def test_the_unset_and_clear_spellings_of_env_are_refused(self):
+        """Review round 2, N2."""
+        tail = f"{APPEND} --type go-requested --data '{self.REQUEST}'"
+        for prefix in ("env -uCLAUDE_CODE_SESSION_ID", "env --unset=CLAUDE_CODE_SESSION_ID",
+                       "env -iv", "env -v -i", "env -u FOO -i"):
+            with self.subTest(prefix=prefix):
+                self.assertDenied(f"{prefix} {tail}", self.SESSION)
+
+    def test_a_read_only_search_for_the_variable_passes(self):
+        """Review round 2, N3: naming the variable in a search sets nothing."""
+        self.assertSilent(
+            "grep -n CLAUDE_CODE_SESSION_ID shipgate/scripts/journal.py | grep "
+            + "app" + "end")
+
+    def test_a_note_that_names_the_variable_passes(self):
+        self.assertSilent(
+            f"{APPEND} --type deviation "
+            "--data '{\"note\":\"CLAUDE_CODE_SESSION_ID was empty in a cron job\"}'"
+        )
 
 
 class TestPreToolUseRefusesAnOpaquePayload(PreToolUseCase):
@@ -2566,6 +2979,328 @@ class TestPreToolUseAllowsEverythingElse(PreToolUseCase):
                 self.assertSilent(command)
 
 
+class TestPreToolUseGuardsTheCommitGate(PreToolUseCase):
+    """ADR 0023 §18, FR-022, SC-009: a user decision at the commit gate is the user's to
+    record, as at the publish gate. A decision at another gate stays the model's."""
+
+    USER = "as the user's"
+
+    def test_a_commit_decision_with_a_user_actor_is_refused(self):
+        for actor in ("--actor user", "--actor=user", "--act user@alice",
+                      "--actor ' User '"):
+            with self.subTest(actor=actor):
+                self.assertDenied(
+                    f"{APPEND} --type gate-decision --data '{COMMIT}' {actor}", self.USER
+                )
+
+    def test_raised_by_user_the_kind_alias_and_a_padded_gate(self):
+        for data in (COMMIT_BY_USER, '{"kind":"commit","raised_by":"user"}',
+                     '{"gate":" Commit ","raised_by":"user"}'):
+            with self.subTest(data=data):
+                self.assertDenied(f"{APPEND} --type gate-decision --data '{data}'",
+                                  self.USER)
+
+    def test_a_batch_line(self):
+        line = '{"type":"gate-decision","data":%s,"actor":"user"}' % COMMIT
+        for command in (
+            f"{APPEND} --batch <<'EOF'\n{line}\nEOF",
+            f"echo '{line}' | {APPEND} --batch",
+            f"{APPEND} --actor user --batch <<< '%s'"
+            % ('{"type":"gate-decision","data":%s}' % COMMIT),
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.USER)
+
+    def test_the_same_append_at_another_gate_passes(self):
+        for command in (
+            f"{APPEND} --type gate-decision --data '{SCOPE}' --actor user",
+            f"{APPEND} --type gate-decision --data '{COMMIT}' --actor orchestrator",
+            f"{APPEND} --type gate-decision --data '{COMMIT}'",
+        ):
+            with self.subTest(command=command):
+                self.assertSilent(command)
+
+
+class TestPreToolUseRefusesAWitness(PreToolUseCase):
+    """ADR 0023 §7 and §18, FR-031, SC-014: only the recorder hook writes a witness, so a
+    model's append of one is refused, whatever its actor or payload."""
+
+    WITNESS_REASON = "Only the recorder hook writes a witness"
+    OPAQUE = "cannot read"
+
+    def test_the_flag_form(self):
+        for spelling in ("--type reply-witnessed", "--type=reply-witnessed",
+                         "--ty reply-witnessed", "--type ' Reply-Witnessed '"):
+            for actor in ("", " --actor hook", " --actor user", " --actor orchestrator"):
+                with self.subTest(type=spelling, actor=actor):
+                    self.assertDenied(
+                        f"{APPEND} {spelling} --data '{WITNESS}'{actor}",
+                        self.WITNESS_REASON,
+                    )
+        for command in (f"{APPEND} --type reply-witnessed",
+                        f"{APPEND} --type reply-witnessed --data '{{}}'",
+                        f'{APPEND} --type reply-witnessed --data "$D"'):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.WITNESS_REASON)
+
+    def test_the_batch_form(self):
+        line = '{"type":"reply-witnessed","data":%s,"actor":"hook"}' % WITNESS
+        padded = '{"type":" Reply-Witnessed ","data":%s}' % WITNESS
+        for command in (
+            f"{APPEND} --batch <<'EOF'\n{line}\nEOF",
+            f"{APPEND} --batch <<< '{line}'",
+            f"echo '{line}' | {APPEND} --batch",
+            f"{APPEND} --batch <<'EOF'\n{padded}\nEOF",
+            f"{APPEND} --batch <<'EOF'\n"
+            '{"type":"task-done","data":{"task_id":"T001"}}\n'
+            f"{line}\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.WITNESS_REASON)
+
+    def test_hidden_in_a_shell_or_behind_a_wrapper(self):
+        forged = f"{APPEND} --type reply-witnessed --data '{WITNESS}'"
+        escaped = forged.replace('"', '\\"')
+        for command in (
+            f'bash -c "{escaped}"',
+            f'eval "{escaped}"',
+            f"timeout 5 bash <<'EOF'\n{forged}\nEOF",
+            f"unknown-wrapper --flag bash <<'EOF'\n{forged}\nEOF",
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.WITNESS_REASON)
+
+    def test_an_opaque_type_could_be_a_witness(self):
+        """A type the hook cannot read could be either refused event, so the payload no
+        longer decides: a witness is refused whatever its payload."""
+        for command in (
+            f'{APPEND} --type "$T" --data \'{WITNESS}\'',
+            f'{APPEND} --type="$T" --data \'{{"phase":"design"}}\'',
+            f'{APPEND} --type task-done --type "$T" --data \'{WITNESS}\'',
+            f'{APPEND} --type "$T" --data \'{PUBLISH_BY_USER}\'',
+        ):
+            with self.subTest(command=command):
+                self.assertDenied(command, self.OPAQUE)
+
+    def test_a_later_literal_type_of_another_event_passes(self):
+        # argparse keeps the last --type: the append is that event, not a witness.
+        for command in (
+            f'{APPEND} --type "$T" --type task-done --data \'{{"task_id":"T001"}}\'',
+            f"{APPEND} --type reply-witnessed --type task-done "
+            "--data '{\"task_id\":\"T001\"}'",
+        ):
+            with self.subTest(command=command):
+                self.assertSilent(command)
+
+
+class TestPreToolUseLetsAReadGoThrough(PreToolUseCase):
+    """ADR 0023 §8 and §18: a read go (`source: read`) passes the hook under any actor that
+    is not the user; the journal then checks its witness. Every other marker is refused."""
+
+    MARKER = "carries `source`"
+    OPAQUE = "cannot read"
+
+    def test_a_read_go_with_an_actor_that_is_not_the_user_passes(self):
+        publish_read = READ_GO.replace('"commit"', '"publish"')
+        for data in (READ_GO, publish_read):
+            for actor in ("", " --actor orchestrator", " --actor sess-a",
+                          " --actor=worker@impl"):
+                with self.subTest(data=data, actor=actor):
+                    self.assertSilent(
+                        f"{APPEND} --type gate-decision --data '{data}'{actor}"
+                    )
+
+    def test_a_read_go_in_a_batch_passes(self):
+        for line, flag in (
+            ('{"type":"gate-decision","data":%s,"actor":"orchestrator"}' % READ_GO, ""),
+            ('{"type":"gate-decision","data":%s}' % READ_GO, ""),
+            ('{"type":"gate-decision","data":%s}' % READ_GO, " --actor orchestrator"),
+        ):
+            with self.subTest(line=line, flag=flag):
+                self.assertSilent(f"{APPEND}{flag} --batch <<'EOF'\n{line}\nEOF")
+
+    def test_a_read_go_as_the_user_is_refused(self):
+        for actor in ("--actor user", "--actor=user", "--act user@alice",
+                      "--actor ' User '"):
+            with self.subTest(actor=actor):
+                self.assertDenied(
+                    f"{APPEND} --type gate-decision --data '{READ_GO}' {actor}",
+                    self.MARKER,
+                )
+        for line, flag in (
+            ('{"type":"gate-decision","data":%s,"actor":"user"}' % READ_GO, ""),
+            ('{"type":"gate-decision","data":%s}' % READ_GO, " --actor user"),
+        ):
+            with self.subTest(line=line, flag=flag):
+                self.assertDenied(f"{APPEND}{flag} --batch <<'EOF'\n{line}\nEOF",
+                                  self.MARKER)
+
+    def test_a_read_go_with_an_opaque_actor_is_refused(self):
+        self.assertDenied(
+            f"{APPEND} --type gate-decision --data '{READ_GO}' --actor \"$A\"", self.OPAQUE
+        )
+
+    def test_every_other_marker_stays_refused(self):
+        for source in ('"dialog"', '"shell"', '"question"', '"prompt"', '"reads"',
+                       '"read go"', '""', '["read"]', "null"):
+            data = '{"gate":"commit","raised_by":"user","source":%s}' % source
+            with self.subTest(source=source):
+                self.assertDenied(
+                    f"{APPEND} --type gate-decision --data '{data}' --actor orchestrator",
+                    self.MARKER,
+                )
+
+
+class TestGatedCommands(unittest.TestCase):
+    """ADR 0023 §14: the commands the command gate holds, found in the lexed line.
+
+    `gated_commands` returns one `(gate, directory)` pair per command, in the order the
+    lexer finds them: `commit` for `git commit`; `publish` for `git push`, `git subtree
+    push`, `gh pr create|new` and `glab mr create|new`. The directory is git's `-C` path,
+    composed as git composes it, or None for the command's own cwd.
+    """
+
+    HOME = os.path.expanduser("~")
+
+    MATCHES = (
+        # the five commands
+        ("git commit -m x", [("commit", None)]),
+        ("git commit", [("commit", None)]),
+        ("git push", [("publish", None)]),
+        ("git push origin feature/x", [("publish", None)]),
+        ("git subtree push --prefix=docs origin pages", [("publish", None)]),
+        ("git subtree -P docs push origin pages", [("publish", None)]),
+        ("gh pr create --fill", [("publish", None)]),
+        ("gh pr new", [("publish", None)]),
+        ("gh -R owner/repo pr create", [("publish", None)]),
+        ("glab mr create --fill", [("publish", None)]),
+        ("glab mr new", [("publish", None)]),
+        ("/usr/bin/git commit -m x", [("commit", None)]),
+        ("\\git push", [("publish", None)]),
+        # git's -C, composed like git: relative to the previous one, absolute resets
+        ("git -C sub commit -m x", [("commit", "sub")]),
+        ("git -C /abs/repo push", [("publish", "/abs/repo")]),
+        ("git -C a -C b commit", [("commit", os.path.join("a", "b"))]),
+        ("git -C a -C /abs commit", [("commit", "/abs")]),
+        ("git -C '' commit", [("commit", None)]),
+        ("git -C ~/repo commit", [("commit", os.path.join(HOME, "repo"))]),
+        ("git -C '~/repo' commit", [("commit", "~/repo")]),
+        # an opaque -C: the directory is unknown, the command is still found
+        ('git -C "$REPO" commit -m x', [("commit", None)]),
+        ('git -C "$REPO" -C sub commit', [("commit", None)]),
+        ('git -C "$REPO" -C /abs commit', [("commit", "/abs")]),
+        # git's other global options before the subcommand
+        ("git -c user.name=x -c core.editor=true commit", [("commit", None)]),
+        ("git --git-dir=.git --work-tree=. commit", [("commit", None)]),
+        ("git --git-dir .git --work-tree . commit", [("commit", None)]),
+        ('git --git-dir="$D" commit', [("commit", None)]),
+        ("git --namespace=x push", [("publish", None)]),
+        ("git --namespace x push", [("publish", None)]),
+        ("git --config-env core.editor=EDITOR commit", [("commit", None)]),
+        ("git --exec-path=/usr/lib/git-core commit", [("commit", None)]),
+        ("git -p commit", [("commit", None)]),
+        ("git -P commit", [("commit", None)]),
+        ("git --paginate commit", [("commit", None)]),
+        ("git --no-pager push", [("publish", None)]),
+        ("git --bare push", [("publish", None)]),
+        ("git --no-replace-objects commit", [("commit", None)]),
+        ("git --literal-pathspecs commit", [("commit", None)]),
+        ("git --no-optional-locks -C sub commit", [("commit", "sub")]),
+        # wrappers and assignments
+        ("timeout 5 git commit -m x", [("commit", None)]),
+        ("sudo -u alice git push", [("publish", None)]),
+        ("env A=1 git commit", [("commit", None)]),
+        ("A=1 git commit", [("commit", None)]),
+        ("nice -n 5 git push", [("publish", None)]),
+        ("command git commit", [("commit", None)]),
+        ("time gh pr create", [("publish", None)]),
+        # hidden in a shell, eval, a substitution
+        ("sh -c 'git commit -m x'", [("commit", None)]),
+        ('bash -c "git push origin x"', [("publish", None)]),
+        ("bash -lc 'git -C sub push'", [("publish", "sub")]),
+        ("eval 'git commit -m x'", [("commit", None)]),
+        ("timeout 5 bash -c 'glab mr create'", [("publish", None)]),
+        ("bash <<'EOF'\ngit push\nEOF", [("publish", None)]),
+        ("echo 'git push' | bash", [("publish", None)]),
+        ("X=$(git commit -m y)", [("commit", None)]),
+        ("echo `git push`", [("publish", None)]),
+        # several in one line, in order, each distinct pair once
+        ("git add . && git commit -m x && git push", [("commit", None), ("publish", None)]),
+        ("git commit -m a && git commit -m b", [("commit", None)]),
+        ("git commit -m a && git -C sub commit -m b", [("commit", None), ("commit", "sub")]),
+        ("git commit -m x; gh pr create --fill", [("commit", None), ("publish", None)]),
+        ("git -C sub commit -m x | tee log", [("commit", "sub")]),
+        # a message that names a command is text, not a command
+        ("git commit -m 'git push'", [("commit", None)]),
+        ("git commit -m \"$(cat <<'EOF'\nfix: then git push\nEOF\n)\"", [("commit", None)]),
+        # a shell script the hook cannot see costs that script, not the rest of the line
+        ("cat script.sh | bash && git commit -m x", [("commit", None)]),
+    )
+
+    NON_MATCHES = (
+        "echo git commit",
+        "git commit-tree HEAD^{tree}",
+        "git stash push",
+        "git log --grep commit",
+        "git push-foo",
+        "gh pr list",
+        "gh pr view 1234",
+        "glab mr list",
+        "gh pr createx",
+        "grep commit",
+        "grep -r 'git push' docs",
+        "git status",
+        "git",
+        "",
+        "ls -la",
+        "ls  # git commit",
+        "git help commit",
+        "git --help commit",
+        "git --version",
+        "git --exec-path",
+        "git subtree split -P docs",
+        "git config alias.ci commit",
+        "git -C sub",
+        "cat <<'EOF'\ngit push\nEOF",
+        "echo 'git commit' > notes.md",
+        "printf 'git push\\n'",
+        "git $SUB",
+        'git "$CMD" -m x',
+        "git $FLAGS commit",
+        'sh -c "$X"',
+        'eval "$X"',
+        "gh $NOUN create",
+    )
+
+    def gated(self, line):
+        import pre_tool_use
+
+        return pre_tool_use.gated_commands(line)
+
+    def test_each_gated_command(self):
+        for line, expected in self.MATCHES:
+            with self.subTest(line=line):
+                self.assertEqual(self.gated(line), expected)
+
+    def test_each_other_command(self):
+        for line in self.NON_MATCHES:
+            with self.subTest(line=line):
+                self.assertEqual(self.gated(line), [])
+
+    def test_a_line_the_lexer_refuses_finds_nothing(self):
+        deep = "$(" * 20 + "git commit" + ")" * 20
+        self.assertEqual(self.gated(f"echo {deep}"), [])
+
+    def test_any_other_error_finds_nothing(self):
+        from unittest import mock
+
+        import pre_tool_use
+
+        with mock.patch.object(pre_tool_use, "lex", side_effect=RuntimeError("boom")):
+            self.assertEqual(pre_tool_use.gated_commands("git commit -m x"), [])
+        self.assertEqual(self.gated(None), [])
+
+
 class TestPreToolUseNoOpPath(PreToolUseCase):
     """FR-005, SC-002: not applicable means no output, exit 0, and no file read."""
 
@@ -2624,6 +3359,568 @@ class TestPreToolUseNoOpPath(PreToolUseCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "", "the fast path opened a file")
+
+
+class TestPreToolUseOnAJournaledProject(HookTestCase):
+    """T001 of the approval path (ADR 0023): a commit with no stream passes silently."""
+
+    def test_a_git_commit_passes_with_no_output(self):
+        result = run_hook(
+            "pre_tool_use",
+            {"session_id": SESSION, "cwd": str(self.root), "tool_name": "Bash",
+             "tool_input": {"command": "git commit -m x"}},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "")
+
+
+def question_payload(header, answer, question="Commit T003-T005?", options=None):
+    """The tool fields of a PostToolUse payload on `AskUserQuestion`, in the shape the
+    probe recorded (Claude Code 2.1.329): `tool_response.answers` maps the question text
+    to the selected label, a multi-select joins labels with ", "."""
+    options = options or [header, "Not yet"]
+    return {
+        "tool_input": {"questions": [{
+            "question": question, "header": header, "multiSelect": False,
+            "options": [{"label": label, "description": "d"} for label in options],
+        }]},
+        "tool_response": {"answers": {question: answer}},
+    }
+
+
+GATED = {
+    "git commit -m x": "commit",
+    "git push origin HEAD": "publish",
+    "gh pr create --fill": "publish",
+    "glab mr create --fill": "publish",
+}
+
+
+class CommandGateCase(HookTestCase):
+    """A journaled git checkout on `feat/1-x`, whose stream is live (ADR 0023 §14)."""
+
+    BRANCH = "feat/1-x"
+
+    def setUp(self) -> None:
+        super().setUp()
+        init_git_checkout(self.root, self.BRANCH)
+        self.assertEqual(
+            journal(self.db, "append", "--stream", self.BRANCH, "--type",
+                    "flow-started", "--data", '{"request":"x"}').returncode, 0)
+
+    def bash(self, command, cwd=None, **extra):
+        return run_hook(
+            "pre_tool_use",
+            {"session_id": SESSION, "cwd": str(cwd or self.root), "tool_name": "Bash",
+             "tool_input": {"command": command}, **extra},
+            self.root,
+        )
+
+    def assertHeld(self, command, gate, *fragments, **extra):
+        result = self.bash(command, **extra)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout, f"passed: {command!r}")
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        reason = output["permissionDecisionReason"]
+        self.assertIn(f"held this {gate}", reason)
+        self.assertIn(self.BRANCH, reason)
+        for fragment in fragments:
+            self.assertIn(fragment, reason)
+        return reason
+
+    def assertPassed(self, command, **extra):
+        result = self.bash(command, **extra)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "", f"held: {command!r}")
+        self.assertEqual(result.stderr, "")
+
+    def go(self, gate):
+        data = json.dumps({"gate": gate, "question": "q", "decision": gate, "mode": "ask",
+                           "raised_by": "user", "source": "question"})
+        self.assertEqual(
+            journal(self.db, "append", "--stream", self.BRANCH, "--type",
+                    "gate-decision", "--actor", "user", "--data", data).returncode, 0)
+
+
+class TestCommandGate(CommandGateCase):
+    def test_each_command_is_held_then_passes_after_its_go(self):
+        for command, gate in GATED.items():
+            with self.subTest(command=command):
+                self.assertHeld(command, gate, "go-requested")
+        self.go("commit")
+        self.assertPassed("git commit -m x")
+        for command, gate in GATED.items():
+            if gate == "publish":
+                with self.subTest(command=command):
+                    self.assertHeld(command, gate)
+        self.go("publish")
+        for command in GATED:
+            with self.subTest(command=command):
+                self.assertPassed(command)
+
+    def test_a_ready_verdict_is_no_go(self):
+        for event, data in (("verify-run", '{"outcome":"pass","task_ids":["T1"]}'),
+                            ("review-verdict", '{"verdict":"ready"}')):
+            journal(self.db, "append", "--stream", self.BRANCH, "--type", event,
+                    "--data", data)
+        self.assertHeld("git push", "publish")
+
+    def test_the_knob_turns_the_gate_off(self):
+        sidecar = self.root / ".claude" / "shipgate.json"
+        config = json.loads(sidecar.read_text(encoding="utf-8"))
+        config["enforce"]["command_gate"] = False
+        sidecar.write_text(json.dumps(config), encoding="utf-8")
+        for command in GATED:
+            with self.subTest(command=command):
+                self.assertPassed(command)
+
+    def test_a_branch_with_no_stream_passes(self):
+        subprocess.run(["git", "checkout", "-q", "-b", "main"], cwd=str(self.root),
+                       capture_output=True, check=True)
+        for command in GATED:
+            with self.subTest(command=command):
+                self.assertPassed(command)
+
+    def test_a_finished_stream_passes(self):
+        journal(self.db, "append", "--stream", self.BRANCH, "--type", "flow-completed",
+                "--data", "{}")
+        self.assertPassed("git commit -m x")
+
+    def test_a_subagent_is_told_to_hand_the_question_back(self):
+        reason = self.assertHeld("git commit -m x", "commit", "hand the question back",
+                                 agent_id="a1", agent_type="general-purpose")
+        self.assertIn("subagent", reason)
+        self.assertNotIn("hand the question back",
+                         self.assertHeld("git commit -m x", "commit"))
+
+    def test_the_wrapped_and_hidden_forms_are_held(self):
+        for command in ("timeout 30 git commit -m x", "bash -c 'git commit -m x'",
+                        "git -c user.name=x commit -m x", "cd . && git commit -m x",
+                        "true; git push"):
+            with self.subTest(command=command):
+                self.assertHeld(command, "publish" if "push" in command else "commit")
+
+    def test_the_directory_of_the_command_decides_the_branch(self):
+        other = self.root / "other"
+        other.mkdir()
+        init_git_checkout(other, "main")
+        self.assertPassed("git -C other commit -m x")
+        self.assertHeld("git -C other -C .. commit -m x", "commit")
+        self.assertHeld("cd other && cd .. && git commit -m x", "commit")
+        # Security review T021, finding 4: the lexer cannot tell a `cd` inside `( )` or
+        # `$( )` from one that moves the line, so a line with a `cd` also asks for the
+        # cwd's branch, and holds when either holds.
+        for command in ("cd other && git commit -m x", f"cd {other} && git push",
+                        "(cd /tmp) && git commit -m x",
+                        "TOP=$(cd .. && pwd); git commit -m x",
+                        "(cd other && git status) && git commit -m x"):
+            with self.subTest(command=command):
+                self.assertHeld(command, "publish" if "push" in command else "commit")
+
+    def test_a_dry_run_is_held_like_any_commit_or_push(self):
+        """Review round 2, N1: an exemption read from the words let a real commit or push
+        through (`--dry-run --no-dry-run`, `-m --dry-run`), so every dry run is held."""
+        for command, gate in (("git commit --dry-run -m x", "commit"),
+                              ("git commit --dry-run --no-dry-run -m x", "commit"),
+                              ("git commit -m --dry-run", "commit"),
+                              ("git push --dry-run", "publish"),
+                              ("git push -o -n origin main", "publish")):
+            with self.subTest(command=command):
+                self.assertHeld(command, gate)
+
+    def test_an_assignment_prefix_hides_no_command(self):
+        """Security recheck, N1: a non-literal assignment before the command."""
+        for command, gate in (('X="$Y" git commit -m x', "commit"),
+                              ('GIT_AUTHOR_DATE="$(date -R)" git commit -m x', "commit"),
+                              ('env X="$Y" git push', "publish"),
+                              ('A=1 B="$C" gh pr create --fill', "publish")):
+            with self.subTest(command=command):
+                self.assertHeld(command, gate)
+
+    def test_a_git_dir_reads_as_the_cwd_not_the_c_path(self):
+        """Security recheck, N2: `-C` with `--git-dir` or `GIT_DIR`."""
+        for command in ("git -C /tmp --git-dir=.git commit -m x",
+                        "git -C /tmp --git-dir .git commit -m x",
+                        "git -C /tmp --work-tree=. commit -m x",
+                        "GIT_DIR=.git git -C /tmp commit -m x",
+                        "env GIT_WORK_TREE=. git -C /tmp commit -m x"):
+            with self.subTest(command=command):
+                self.assertHeld(command, "commit")
+
+    def test_a_directory_that_is_no_path_reads_as_the_cwd(self):
+        self.assertHeld("git -C $'\\x00' commit -m x", "commit")
+
+    def test_the_session_that_works_on_the_stream_reads_another_sessions_go(self):
+        """The go is the stream's, whoever recorded it (FR-013)."""
+        data = json.dumps({"gate": "commit", "question": "q", "decision": "commit",
+                           "mode": "ask", "raised_by": "user", "source": "prompt"})
+        result = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append", "--stream",
+             self.BRANCH, "--type", "gate-decision", "--actor", "user", "--data", data],
+            capture_output=True, text=True,
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": "lead-session"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertPassed("git commit -m x")
+
+
+class TestCommandGateFailurePolicy(StubJournalMixin, CommandGateCase):
+    """ADR 0023 §15: a journal that fails or answers nonsense passes the command."""
+
+    def run_with_stub(self, stub):
+        (self.plugin / "scripts" / "journal.py").write_text(stub, encoding="utf-8")
+        return run_hook(
+            "pre_tool_use",
+            {"session_id": SESSION, "cwd": str(self.root), "tool_name": "Bash",
+             "tool_input": {"command": "git commit -m x"}},
+            self.root, hooks_dir=self.plugin / "hooks",
+        )
+
+    def test_a_failing_journal_passes(self):
+        for stub in ("import sys\nsys.exit(1)\n",
+                     "print('not json')\n",
+                     "print('{\"verdict\": \"maybe\"}')\n",
+                     "raise SystemExit(4)\n",
+                     "import json\nprint(json.dumps([1, 2]))\n"):
+            with self.subTest(stub=stub):
+                result = self.run_with_stub(stub)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
+
+    def test_the_stubbed_hold_is_what_denies(self):
+        result = self.run_with_stub(
+            "import json\nprint(json.dumps({'verdict': 'hold', 'message': 'held by stub'}))\n")
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn("held by stub", output["permissionDecisionReason"])
+
+
+class TestCommandGateReadsNoFile(PreToolUseCase):
+    """SC-007: a command that is no commit and no publish opens no file."""
+
+    def test_the_fast_path_reads_no_file(self):
+        driver = (
+            "import os, runpy, sys, sysconfig\n"
+            "hook = sys.argv[1]\n"
+            "roots = {os.path.realpath(sysconfig.get_paths()[k])\n"
+            "         for k in ('stdlib', 'platstdlib')}\n"
+            "seen = []\n"
+            "def audit(event, args):\n"
+            "    if event in ('open', 'os.listdir', 'os.scandir', 'os.stat') and args:\n"
+            "        if isinstance(args[0], (str, bytes)):\n"
+            "            seen.append(os.path.realpath(os.fsdecode(args[0])))\n"
+            "sys.addaudithook(audit)\n"
+            "runpy.run_path(hook, run_name='__main__')\n"
+            "stray = [p for p in seen if p != os.path.realpath(hook)\n"
+            "         and not any(p == r or p.startswith(r + os.sep) for r in roots)]\n"
+            "sys.stderr.write('\\n'.join(stray))\n"
+        )
+        for command in ("ls -la", "echo commit", "git log --grep commit",
+                        "echo git push", "git commit-tree x"):
+            with self.subTest(command=command):
+                payload = json.dumps({"tool_name": "Bash", "cwd": str(self.cwd),
+                                      "tool_input": {"command": command}})
+                result = subprocess.run(
+                    [sys.executable, "-c", driver, str(HOOKS / "pre_tool_use.py")],
+                    input=payload, capture_output=True, text=True, cwd=str(self.cwd),
+                    timeout=60,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "", "the hook opened a file")
+
+    def test_an_unjournaled_commit_is_silent_and_creates_nothing(self):
+        result = self.run_bash("git commit -m x")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+        self.assertEqual(list(self.cwd.iterdir()), [])
+
+
+class ReplyHookCase(CommandGateCase):
+    """The recorder against a real journal, with synthetic payloads in the probe's shapes."""
+
+    def request(self, gate="commit", stream=None, session=SESSION):
+        result = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append", "--stream",
+             stream or self.BRANCH, "--type", "go-requested", "--data",
+             json.dumps({"gate": gate, "question": "Commit T003-T005?"})],
+            capture_output=True, text=True,
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": session},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return self.events()[-1]["seq"]
+
+    @property
+    def marker(self):
+        return Path(str(self.db) + ".requests") / SESSION
+
+    def prompt(self, text, session=SESSION, **kwargs):
+        return run_hook("reply", {
+            "hook_event_name": "UserPromptSubmit", "session_id": session,
+            "prompt_id": "p-1", "cwd": str(self.root), "permission_mode": "auto",
+            "prompt": text}, self.root, **kwargs)
+
+    def answer(self, header, answer, **kwargs):
+        return run_hook("reply", {
+            "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+            "session_id": SESSION, "prompt_id": "p-1", "tool_use_id": "t-1",
+            "cwd": str(self.root), **question_payload(header, answer)},
+            self.root, **kwargs)
+
+    def context(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        if not result.stdout:
+            return None
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        return output["hookEventName"], output["additionalContext"]
+
+    def rows(self, event_type):
+        return [e for e in self.events(event_type=event_type) if e["stream"] == self.BRANCH]
+
+
+class TestReplyHook(ReplyHookCase):
+    def test_the_recorder_passes_the_multi_select_flag(self):
+        """Security review T021, finding 2: a single-select label that names the stream
+        after a refusal is no go."""
+        self.request("publish")
+        payload = question_payload("Publish", f"Not yet, {self.BRANCH}",
+                                   options=["Publish", f"Not yet, {self.BRANCH}"])
+        result = run_hook("reply", {
+            "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+            "session_id": SESSION, "tool_use_id": "t-1", "cwd": str(self.root),
+            **payload}, self.root)
+        self.context(result)
+        self.assertEqual(self.rows("gate-decision"), [])
+        self.assertEqual(len(self.rows("reply-witnessed")), 1)
+
+    def test_a_gate_header_with_a_closing_mark_is_a_gate_header(self):
+        """Review round 1, F4: the hook reads a header as the journal does."""
+        self.request()
+        self.context(self.answer("Commit.", "Commit"))
+        [go] = self.rows("gate-decision")
+        self.assertEqual(go["data"]["source"], "question")
+
+    def test_a_long_typed_answer_leaves_the_hook_as_null(self):
+        """Review round 1, F16: a typed answer over 32 characters never leaves the hook;
+        a selected option label does."""
+        import reply  # noqa: E402 — the hook module, for its pure helper
+        long_text = "it can go, and start the next batch right after it"
+        payload = {"tool_input": {"questions": [{
+            "question": "q", "header": "Commit", "multiSelect": False,
+            "options": [{"label": "Commit", "description": "d"}]}]},
+            "tool_response": {"answers": {"q": long_text}}}
+        sent = reply.question_reply(payload, True)
+        self.assertIsNone(sent["answers"][0]["answer"])
+        labels = ", ".join(f"feat/{n}-stream-with-a-long-name" for n in range(3))
+        payload = {"tool_input": {"questions": [{
+            "question": "q", "header": "Publish", "multiSelect": True,
+            "options": [{"label": f"feat/{n}-stream-with-a-long-name", "description": "d"}
+                        for n in range(3)]}]},
+            "tool_response": {"answers": {"q": labels}}}
+        self.assertEqual(reply.question_reply(payload, True)["answers"][0]["answer"], labels)
+
+    def test_a_question_answer_commit_records_the_go(self):
+        """SC-001: the answer `Commit` gives one go with the question marker."""
+        request = self.request()
+        self.assertHeld("git commit -m x", "commit")
+        event, context = self.context(self.answer("Commit", "Commit"))
+        self.assertEqual(event, "PostToolUse")
+        self.assertIn(f"go recorded for commit on {self.BRANCH}", context)
+        [go] = self.rows("gate-decision")
+        self.assertEqual((go["data"]["source"], go["data"]["request"], go["actor"]),
+                         ("question", request, "user"))
+        self.assertEqual(go["data"]["recorded_by"], SESSION)
+        self.assertPassed("git commit -m x")
+
+    def test_the_typed_gate_words_record_a_go(self):
+        """SC-002, the exact half."""
+        for text, gate in (("commit", "commit"), ("Commit.", "commit"),
+                           ("publish", "publish")):
+            with self.subTest(text=text):
+                self.request(gate)
+                event, context = self.context(self.prompt(text))
+                self.assertEqual(event, "UserPromptSubmit")
+                self.assertIn(f"go recorded for {gate}", context)
+                go = self.rows("gate-decision")[-1]
+                self.assertEqual((go["data"]["source"], go["data"]["gate"]),
+                                 ("prompt", gate))
+                self.assertFalse(self.marker.exists())
+
+    def test_free_language_and_no_record_one_witness_and_no_go(self):
+        """SC-002, the witness half. The context names the witness seq."""
+        for text in ("it can go", "no",
+                     "it can go, and then start the next batch of tasks"):
+            with self.subTest(text=text):
+                before = len(self.rows("gate-decision"))
+                request = self.request()
+                _, context = self.context(self.prompt(text))
+                witness = self.rows("reply-witnessed")[-1]
+                self.assertEqual(witness["data"]["request"], request)
+                self.assertEqual(witness["data"]["via"], "prompt")
+                self.assertEqual(witness["actor"], "hook")
+                self.assertIn(f"witness seq {witness['seq']}", context)
+                self.assertIn(f'"witness": {witness["seq"]}', context)
+                self.assertNotIn("<seq:", context)
+                self.assertEqual(len(self.rows("gate-decision")), before)
+                self.assertNotIn("next batch", json.dumps(self.events()))
+
+    def test_input_that_is_no_reply_records_nothing_and_closes_nothing(self):
+        """SC-004: a subagent report, a relayed message, a bash-mode line."""
+        self.request()
+        before = len(self.events())
+        for prompt in (
+            '<agent-message from="worker-1">done: T003 passes</agent-message>',
+            '<cross-session-message from="lead">commit</cross-session-message>',
+            "<bash-input>git status</bash-input>",
+            "  <agent-message>yes</agent-message>",
+        ):
+            with self.subTest(prompt=prompt[:20]):
+                self.assertIsNone(self.context(self.prompt(prompt)))
+        self.assertEqual(len(self.events()), before)
+        self.assertTrue(self.marker.exists())
+        self.context(self.prompt("commit"))
+        self.assertEqual(self.rows("gate-decision")[-1]["data"]["source"], "prompt")
+
+    def test_a_reply_with_no_open_request_records_nothing(self):
+        before = len(self.events())
+        for text in ("yes", "it can go", "all"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.context(self.prompt(text)))
+        self.assertEqual(len(self.events()), before)
+
+    def test_the_marker_is_removed_once_no_request_is_open(self):
+        self.request()
+        self.assertTrue(self.marker.exists())
+        self.context(self.prompt("it can go"))
+        self.assertFalse(self.marker.exists())
+
+    def test_a_stale_marker_costs_one_run_and_is_removed(self):
+        self.marker.parent.mkdir(parents=True, exist_ok=True)
+        self.marker.touch()
+        self.assertIsNone(self.context(self.prompt("x" * 40)))
+        self.assertFalse(self.marker.exists())
+
+
+class TestApprovalPathEndToEnd(ReplyHookCase):
+    """T016: the recorder, the forgery net, the journal and the command gate together."""
+
+    LEAD = "lead-session"
+
+    def test_a_go_recorded_in_one_session_lets_another_commit(self):
+        """SC-005: the lead (session A) asks; the teammate (session B) commits. The lead
+        keeps its own position."""
+        journal(self.db, "append", "--stream", "epic-1", "--type", "flow-started",
+                "--actor", f"orchestrator@{self.LEAD}", "--data", '{"request":"x"}')
+        status = json.loads(journal(self.db, "status", "--json", "--session",
+                                    self.LEAD).stdout)
+        self.assertEqual(status["session_match"], "epic-1")
+        self.assertHeld("git commit -m x", "commit")
+        self.request(session=self.LEAD)
+        self.context(self.prompt("commit", session=self.LEAD))
+        self.assertPassed("git commit -m x")  # the payload's session is the teammate's
+        status = json.loads(journal(self.db, "status", "--json", "--session",
+                                    self.LEAD).stdout)
+        self.assertEqual(status["session_match"], "epic-1")
+        self.assertEqual(status["features"][0]["stream"], "epic-1")
+
+    def test_a_question_answer_opens_the_commit(self):
+        """SC-001, end to end."""
+        self.request()
+        self.assertHeld("git commit -m x", "commit", "go-requested")
+        self.context(self.answer("Commit", "Commit"))
+        self.assertPassed("git commit -m x")
+        self.assertHeld("git push", "publish")
+
+    def test_a_read_go_from_a_witnessed_reply_opens_the_commit(self):
+        """SC-012, end to end: `it can go` leaves a witness; the model runs the read go
+        the context names; the forgery net lets it through; the commit passes."""
+        import shlex
+
+        self.request()
+        _, context = self.context(self.prompt("it can go"))
+        reason = self.assertHeld("git commit -m x", "commit")
+        self.assertIn("witness seq", reason)
+        command = re.search(r"`(python3 [^`]+ append [^`]+)`", context).group(1)
+        argv = shlex.split(command)
+        data = json.loads(argv[argv.index("--data") + 1])
+        data["words"] = "it can go"
+        argv[argv.index("--data") + 1] = json.dumps(data)
+        line = shlex.join(argv)
+        net = self.bash(line)
+        self.assertEqual((net.returncode, net.stdout), (0, ""), "the net refused it")
+        result = subprocess.run(
+            argv,
+            capture_output=True, text=True, cwd=str(self.root),
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": SESSION},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        [go] = self.rows("gate-decision")
+        self.assertEqual((go["data"]["source"], go["data"]["words"]), ("read", "it can go"))
+        self.assertPassed("git commit -m x")
+
+    def test_a_read_go_with_the_user_actor_is_refused_by_the_net(self):
+        self.request()
+        self.context(self.prompt("it can go"))
+        witness = self.rows("reply-witnessed")[-1]["seq"]
+        data = json.dumps({"gate": "commit", "question": "q", "decision": "commit",
+                           "mode": "ask", "raised_by": "user", "source": "read",
+                           "witness": witness, "words": "it can go"})
+        name = "jour" + "nal.py"
+        result = self.bash(f"python3 {name} {'app' + 'end'} --stream {self.BRANCH} "
+                           f"--type gate-decision --actor user --data '{data}'")
+        self.assertEqual(json.loads(result.stdout)["hookSpecificOutput"]
+                         ["permissionDecision"], "deny")
+
+
+class TestReplyHookRunsTheJournalOnlyWhenItMayAnswer(StubJournalMixin, ReplyHookCase):
+    """SC-015: with no open request of the session, a long prompt runs no journal."""
+
+    STUB = StubJournalMixin.STUB + (
+        "if 'reply' in sys.argv[1:]:\n"
+        "    print('{\"events\": [], \"open\": 0, \"context\": null}')\n"
+    )
+
+    def run_prompt(self, text):
+        return self.prompt(text, hooks_dir=self.plugin / "hooks")
+
+    def calls_or_none(self):
+        log = self.plugin / "calls.log"
+        return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+    def test_a_long_prompt_with_no_marker_runs_no_journal(self):
+        result = self.run_prompt("x" * 33)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+        self.assertEqual(self.calls_or_none(), [])
+
+    def test_a_short_prompt_runs_one_reply(self):
+        self.run_prompt("x" * 32)
+        self.assertEqual(len(self.calls_or_none()), 1)
+        self.assertIn("reply", self.calls_or_none()[0].split("\t"))
+
+    def test_a_long_prompt_with_a_marker_runs_one_reply_and_sends_no_text(self):
+        self.marker.parent.mkdir(parents=True, exist_ok=True)
+        self.marker.touch()
+        self.run_prompt("y" * 33)
+        self.assertEqual(len(self.calls_or_none()), 1)
+
+    def test_a_failed_write_says_nothing_was_recorded(self):
+        stub = (
+            "import json, sys\n"
+            "if 'reply' in sys.argv[1:]:\n"
+            "    print(json.dumps({'events': [{'stream': 'feat/1-x', 'type': "
+            "'gate-decision', 'data': {}, 'actor': 'user'}], 'open': 0, "
+            "'context': 'shipgate: go recorded for commit on feat/1-x.'}))\n"
+            "else:\n"
+            "    sys.exit(4)\n"
+        )
+        (self.plugin / "scripts" / "journal.py").write_text(stub, encoding="utf-8")
+        _, context = self.context(self.run_prompt("commit"))
+        self.assertIn("nothing was recorded", context)
+        self.assertNotIn("go recorded", context)
 
 
 class TestPreToolUseFailurePolicy(unittest.TestCase):

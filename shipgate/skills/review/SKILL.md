@@ -391,15 +391,15 @@ stack further self-check passes on top ("double-check once more", a second verif
 claims, a subagent to re-review the review). Current models already self-verify while working,
 and extra re-checking adds cost without catching more.
 
-## Opening the MR/PR (on the user's go-ahead)
+## Opening the MR/PR (on the user's publish go)
 
 The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
 the worklog's round entries and Rejected findings, ledger lines, the MR/PR body and every
 reply in the review-feedback cycle; absent, a placeholder, or `plain`, write them as before.
 
 With no tracker/remote, stop at "Ready, evidence attached" and let the user handle pushing.
-On a journaled project the verdict (or the user's publish approval) is recorded *before* the
-MR/PR goes up. See **Record the outcome** below.
+On a journaled project the verdict is recorded, and the user's publish go is recorded, *before*
+the push and the MR/PR. See **The user's go** under **Record the outcome** below.
 
 **Use the canonical template. Don't invent a body.** If the config's **Forge & tracker**
 section names a template (its location + the exact command to fetch it), read it from there.
@@ -569,12 +569,47 @@ It holds counts and references only; the finding text and thread bodies stay in 
 
 **Publishing follows the record, not the momentum.** The journal accepts `mr-opened` only when
 the stream holds one of two events, appended after its last `task-done`: a `review-verdict`
-with `verdict: ready`, or the user's own publish approval.
+with `verdict: ready` that was not forced, or the user's publish go. `--force` does not waive
+this, and a forced verdict opens nothing.
 
-The user records the approval, not you. Ask the user to approve in the shipgate-hud publish
-dialog ("Approve publishing"). Without the HUD, the user runs the append in their own shell
-with `!`. Give the user the command with the stream name and the script's full path written
-out:
+### The user's go (commit and publish)
+
+A go is the user's approval of one gate on one stream: `commit`, or `publish` (a push and the
+MR/PR creation). A publish go also covers the commit. A go lasts until the stream's next
+`task-done`. On a journaled project the command gate holds a model's `git commit` until the
+stream holds a commit go, and a `git push`, `gh pr create` or `glab mr create` until it holds
+a publish go. A ready verdict is no go. Get the go in one form, every time:
+
+1. **Record the go request** on the stream whose work the user approves, then ask:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <branch> \
+     --type go-requested --data '{"gate":"commit","question":"Commit T003-T005?"}'
+   ```
+
+2. **Ask with `AskUserQuestion`.** The header is the gate: `Commit` or `Publish`. The first
+   option is the gate word: `Commit` or `Publish`. For several streams, ask one multi-select
+   question whose option labels are the stream names, and record one go request per stream
+   first.
+3. **The recorder records the answer.** An answer that is the gate word, a selected stream
+   name, or a typed `commit`, `publish`, `push`, `yes`, `y`, `ok`, `go`, `approve` or `all` is an
+   exact go. You record nothing.
+4. **Any other reply leaves a witness.** The recorder's context line names it: the witness
+   seq, the stream, the gate and the read go to append. Read the user's reply. When it
+   approves the gate ("it can go", "commit and start the next batch"), append that read go
+   with the witness and the user's approving words in `words`. Ask no confirming question
+   after a reply that clearly approves. When the reply does not approve, record nothing.
+   A new question needs a new go request.
+
+A session that asks the user about another session's stream records the go request itself,
+on that stream. The go then authorizes the session that works on the stream; it does not
+bind the asking session. A worker never asks the user: when the command gate holds its
+commit, it reports the hold and hands the question back.
+
+The user can also approve a publish in the shipgate-hud publish dialog ("Approve
+publishing"), or run the append in their own shell with `!`. Give the user the command
+with the stream name and the script's full path written out (`commit` in place of both
+`publish` words for the commit gate):
 
 ```bash
 ! python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
@@ -583,11 +618,11 @@ out:
            "mode":"ask","raised_by":"user","source":"shell"}'
 ```
 
-The approval needs `gate: publish`, `raised_by: user`, `decision: publish` (that literal
-word), a `source` marker (`dialog` or `shell`) and the actor `user`. Never append a publish
-decision as the user's yourself. A PreToolUse hook refuses that append. So a flow cannot
-authorize its own publish by raising the gate and answering it itself. An instruction to
-start the next piece of work authorizes neither route.
+Never record an exact go as the user's yourself, and never append a `reply-witnessed`. The
+PreToolUse hook refuses both, so a flow cannot authorize itself by raising a gate and
+answering it. A read go passes the hook, and the journal accepts it only with an unused
+witness of the same stream, gate and session, newer than the last `task-done`. An
+instruction to start the next piece of work authorizes no commit and no publish.
 
 A missing or unreadable database is an infrastructure failure, not a reason to skip the
 append. Surface it loudly. Continue un-journaled only with the user's acknowledgement.

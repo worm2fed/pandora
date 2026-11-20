@@ -26,13 +26,55 @@ import sys
 SIDECAR_RELPATH = os.path.join(".claude", "shipgate.json")
 DEFAULT_DB_RELPATH = os.path.join(".claude", "shipgate.db")
 JOURNAL_TIMEOUT_SECONDS = 15
+GIT_TIMEOUT_SECONDS = 2
+MAX_BRANCH_LENGTH = 255
 MAX_WATCH_PATHS = 500
 MAX_GIT_POINTER_BYTES = 4096
+# ADR 0023 §12: a session's request marker is a file named by its session id. Only a
+# plain token is a file name here: no `/`, no `.`, no empty name, at most 128 characters.
+# `\A`/`\Z`, not `^`/`$`: `$` also matches before a trailing newline.
+# The variable Claude Code sets to the session id in every hook and shell it starts.
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+SESSION_ID_PATTERN = r"\A[A-Za-z0-9_-]{1,128}\Z"
+REQUESTS_SUFFIX = ".requests"
+_SESSION_ID_RE = None
 # The sidecar format this shipgate writes and reads, and every key a shipgate reader uses:
 # the hooks read `db`, `artifact_homes` and `enforce`; journal.py reads `ledger` too. A
 # newer shipgate may write a higher version: this one warns and reads only these keys.
 SIDECAR_VERSION = 1
 SIDECAR_KEYS = ("version", "db", "ledger", "artifact_homes", "enforce")
+
+
+def _session_id_re():
+    """The compiled SESSION_ID_PATTERN, built on first use (rule 2: `re` costs ms)."""
+    global _SESSION_ID_RE
+    if _SESSION_ID_RE is None:
+        import re
+
+        _SESSION_ID_RE = re.compile(SESSION_ID_PATTERN)
+    return _SESSION_ID_RE
+
+
+def __getattr__(name):
+    """`SESSION_ID_RE` is compiled when a reader first asks for it, not at import."""
+    if name == "SESSION_ID_RE":
+        return _session_id_re()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def marker_path(db_path, session_id):
+    """The request marker of `session_id`: `<db_path>.requests/<session_id>`, or None.
+
+    None when the session id is not a str or is no plain token (SESSION_ID_PATTERN): it
+    becomes a file name, so `/`, `..` and an empty name must never reach the path. The db
+    path is resolved first, so the journal and the recorder name one marker for one db
+    file whichever path to it they hold (a linked worktree's symlink). It creates
+    nothing. journal.py writes the file at a `go-requested` append,
+    and the recorder reads and removes it.
+    """
+    if not isinstance(session_id, str) or not _session_id_re().match(session_id):
+        return None
+    return os.path.join(os.path.realpath(str(db_path)) + REQUESTS_SUFFIX, session_id)
 
 
 def sidecar_version_note(sidecar):
@@ -155,6 +197,53 @@ def main_worktree(directory):
     if main == real_directory:
         return None
     return main
+
+
+def current_branch(cwd):
+    """The branch checked out in `cwd`, or None when there is no name worth passing.
+
+    A detached HEAD answers with the literal `HEAD`, which is not a branch and matches
+    no stream. No git, no repository and a hung git all land here as None as well: the
+    branch is evidence the journal matches a stream on, and failing to read it loses that
+    evidence, never the hook's answer. The SessionStart brief and the command gate read
+    the branch here.
+    """
+    import subprocess
+
+    if not isinstance(cwd, str):
+        return None
+    # `GIT_DIR`/`GIT_WORK_TREE` inherited from the session point git at whatever
+    # repository set them, not at `cwd`; drop the whole family rather than guess.
+    env = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return branch_name((result.stdout or "").strip())
+
+
+def branch_name(text):
+    """`text` as a branch name worth passing on, else None.
+
+    The name travels as one argv token: a NUL would make `subprocess` refuse the whole
+    call, a control character has no business in a branch. Over-long names are noise.
+    """
+    if not text or len(text) > MAX_BRANCH_LENGTH or text == "HEAD":
+        return None
+    if "\0" in text or not text.isprintable():
+        return None
+    return text
 
 
 def _declared_db(sidecar):
@@ -320,11 +409,14 @@ def journal_script():
     )
 
 
-def run_journal(project, args, stdin_text=None):
+def run_journal(project, args, stdin_text=None, *, timeout=None, session=None):
     """Invoke the journal CLI. Returns None when it could not be run at all.
 
     `stdin_text` feeds `append --batch`; without it the child's stdin is closed, so a
-    journal that ever tried to read it could not hang the hook.
+    journal that ever tried to read it could not hang the hook. `timeout` is in seconds,
+    JOURNAL_TIMEOUT_SECONDS when not given. `session` sets the child's
+    `CLAUDE_CODE_SESSION_ID`, the id journal.py labels and scopes its work by; without it
+    the child inherits the hook's environment unchanged.
     """
     import subprocess
 
@@ -332,17 +424,19 @@ def run_journal(project, args, stdin_text=None):
     if not os.path.isfile(script):
         return None
     command = [sys.executable, script, "--db", project.db_path, *args]
-    feed = (
+    options = (
         {"stdin": subprocess.DEVNULL} if stdin_text is None else {"input": stdin_text}
     )
+    if session is not None:
+        options["env"] = {**os.environ, SESSION_ENV: session}
     try:
         return subprocess.run(
             command,
             capture_output=True,
             text=True,
-            timeout=JOURNAL_TIMEOUT_SECONDS,
+            timeout=JOURNAL_TIMEOUT_SECONDS if timeout is None else timeout,
             cwd=project.root,
-            **feed,
+            **options,
         )
     except (OSError, subprocess.SubprocessError):
         return None

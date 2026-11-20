@@ -207,6 +207,8 @@ BOILERPLATE_SENTENCES = frozenset({
     "Delete what you don't need",
     "Delete what you don't need; anything absent falls back to the defaults noted per section",
     'Dial enforcement down by setting `enforce.stop_gate` or `enforce.auto_capture` to false in the sidecar (both default true)',
+    'Dial enforcement down by setting `enforce.stop_gate`, `enforce.auto_capture` or `enforce.command_gate` to false in the sidecar (all three default true)',
+    'With `enforce.command_gate` false, a model commits, pushes and opens an MR/PR with no recorded go from the user; an unattended project, which has no user to answer, needs that',
     "Division of labor with `CLAUDE.md`: the repo's `CLAUDE.md` files stay the source of truth for routing and code conventions (where code belongs, build/test commands); this file carries the process tooling — where artifacts live, which forge/tracker, branch naming, which integrations to reach for",
     "Division of labor with `CLAUDE.md`: the repo's `CLAUDE.md` files stay the source of truth for routing and code conventions: where code belongs, build and test commands",
     "Don't duplicate CLAUDE.md content here",

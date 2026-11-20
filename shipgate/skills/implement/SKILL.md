@@ -191,9 +191,11 @@ it loudly. Continue un-journaled only with the user's acknowledgement.
 
 ## Committing
 
-- **Don't commit unless the user asks.** Default to leaving the change for them to review.
-  The repo may be dirty in unrelated areas, so the user, not the plugin, decides when a
-  commit happens.
+- **Commit only on the user's go.** Default to leaving the change for them to review. The
+  repo may be dirty in unrelated areas, so the user, not the plugin, decides when a commit
+  happens. On a journaled project, record a `go-requested` for the commit gate and ask with
+  the header `Commit` (form: `review`, **The user's go**). The command gate holds
+  `git commit` until the go is recorded.
 - **Stage only the files you actually changed.** Never use `git add -A` / `git add .` here,
   because you'll sweep up someone else's in-flight work. Add explicit paths.
 - **Keep commits atomic.** Each commit is one complete, self-contained change that builds
