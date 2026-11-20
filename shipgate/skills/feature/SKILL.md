@@ -174,6 +174,12 @@ The status brief hides completed streams and collapses long-dormant ones to a li
 shows everything. The SessionStart hook usually hands you this status brief before you ask. In
 that case use what you already have; don't re-run the command.
 
+**A fresh session past design starts from the handoff brief.** This applies when the stream is
+in implement or later and this session holds none of its context: a new session, a `/clear`
+or a compaction. Run
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" handoff --stream <stream>` before you
+route. It names the artifacts to open, the next task, the open gates and the rules that bind.
+
 Three rules follow because the journal is the position of record:
 
 - **One stream per issue, named for its branch.** The stream name *is* the branch name, so

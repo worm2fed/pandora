@@ -121,6 +121,62 @@ class TestSectionBullets(unittest.TestCase):
         self.assertEqual(cfg.section_bullets(text, "code signals"), [("window", "`2`")])
 
 
+class TestSectionLines(unittest.TestCase):
+    """`section_lines`: a section's lines as written, for the handoff brief (ADR 0021)."""
+
+    def test_prose_bullets_and_wrapped_lines_read_whole(self):
+        text = ("# T\n\n## Security-sensitive areas\n\n<!-- default: auth -->\n"
+                "- **Hooks.** They run everywhere, so the\n  no-op path matters.\n"
+                "- Reads outside the plugin.\n\n## Next\n- x\n")
+        self.assertEqual(cfg.section_lines(text, "security-sensitive areas"), [
+            "- **Hooks.** They run everywhere, so the", "  no-op path matters.",
+            "- Reads outside the plugin.",
+        ])
+
+    def test_placeholder_items_drop_with_their_continuations(self):
+        text = ("## Autonomy\n- Mode: <ask | executive>\n- Extra escalations: <cases,\n"
+                "  if any>\n- <domains, e.g.\n  billing>\n")
+        self.assertEqual(cfg.section_lines(text, "autonomy"), [])
+
+    def test_a_real_value_beside_a_placeholder_stays(self):
+        text = "## Autonomy\n- Mode: executive\n- Extra escalations: <cases>\n"
+        self.assertEqual(cfg.section_lines(text, "autonomy"), ["- Mode: executive"])
+
+    def test_a_subheading_stays_and_a_sibling_heading_ends_it(self):
+        text = "## A\n### sub\n- x\n## B\n- y\n"
+        self.assertEqual(cfg.section_lines(text, "a"), ["### sub", "- x"])
+
+    def test_a_fenced_heading_is_content_not_an_end(self):
+        text = "## A\n```\n## not a heading\n```\n- x\n## B\n"
+        self.assertEqual(cfg.section_lines(text, "a"),
+                         ["```", "## not a heading", "```", "- x"])
+
+    def test_an_absent_section_is_empty(self):
+        self.assertEqual(cfg.section_lines("## A\n- x\n", "b"), [])
+
+    def test_a_lead_in_bullet_ending_in_a_colon_stays(self):
+        text = "## A\n- Anything under hooks/:\n  - the no-op path\n"
+        self.assertEqual(cfg.section_lines(text, "a"),
+                         ["- Anything under hooks/:", "  - the no-op path"])
+
+    def test_a_heading_that_repeats_the_section_name_narrows_it(self):
+        """The walk before 0.27.0 did this; `_walk_section` keeps it for every reader."""
+        text = "## Review\n- A: 1\n### Review\n- B: 2\n### Other\n- C: 3\n"
+        self.assertEqual(cfg.section_bullets(text, "review"), [("a", "1"), ("b", "2")])
+        self.assertEqual(cfg.section_lines(text, "review"), ["- A: 1", "- B: 2"])
+
+    def test_a_fence_under_a_placeholder_bullet_drops_with_it(self):
+        text = "## A\n- <domains, e.g.\n  billing>\n  ```\n  code\n  ```\n- real\n"
+        self.assertEqual(cfg.section_lines(text, "a"), ["- real"])
+
+    def test_both_readers_walk_fences_alike(self):
+        """A fence indented four spaces outside a section is not a fence (CommonMark),
+        for section_bullets and section_lines alike: one walker."""
+        text = "# T\n    ```\n## A\n- Key: v\n## B\n- x\n"
+        self.assertEqual(cfg.section_bullets(text, "a"), [("key", "v")])
+        self.assertEqual(cfg.section_lines(text, "a"), ["- Key: v"])
+
+
 class TestTitleBullets(unittest.TestCase):
     def test_stops_at_the_first_level_two_heading(self):
         text = "# Title\n\n- Inherit: none\n- Owner: `x`\n\n## Section\n- Inherit: other\n"

@@ -10,7 +10,9 @@ Every hook here obeys three rules, and they are the whole reason this module exi
    every single edit. So the fast path is ordered cheapest-first: locate the sidecar with
    a few `stat` calls before parsing stdin, and import nothing heavy until we know the
    project is journaled. `subprocess` (~10ms) and `pathlib` (~7ms) dominate this script's
-   startup, so both are imported lazily — measured, not guessed.
+   startup, so both are imported lazily — measured, not guessed. A hook script runs as
+   `__main__`, so Python compiles its whole source on every run, with no `.pyc`: code that
+   only a rare path needs lives in a module imported on that path (`_nudge.py`, ADR 0022).
 3. **Hold no policy.** Hooks locate the journal and shell out; every rule about what is
    valid lives in `scripts/journal.py`, so the event taxonomy can grow without touching
    a single hook.

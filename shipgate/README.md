@@ -65,7 +65,7 @@ and the next layer shows through.
 
 The user file uses the same section names and keys as a project's config. It holds what is
 personal and the same in every project: usually Writing style, the Library docs line,
-Autonomy, and the ledger's promotion target for preferences. A nested config takes nothing
+Autonomy, Session, and the ledger's promotion target for preferences. A nested config takes nothing
 from the umbrella's config when the line `Inherit: none` stands under its title, before its
 first section. The user file and the built-in defaults still apply.
 
@@ -90,6 +90,7 @@ What the sections configure:
 | Orchestration | whether Review / Explore fan out via bundled `Workflow` scripts or `Agent` subagents | `agents` for both |
 | Thinking lenses | which lens *skills* to invoke at which phase, overriding the inline bullet (e.g. one from [cc-thinking-skills](https://github.com/tjboudreaux/cc-thinking-skills)); a large lens plugin costs skill-listing space in every session, so map only what you need | no lens skills invoked — the phase skills apply each lens inline |
 | Autonomy | `Mode`: `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them); `Extra escalations`: the cases it must still ask about, on top of the executive contract, which lives in the `feature` skill | `ask` — every gate question goes to the user |
+| Session | `Handoff`: the context size, in tokens, past which the PostToolUse hook recommends a fresh session after a design commit or a not-ready review verdict (`500k`, `1m`, `300000` or `off`) | `500k` |
 
 ## What's inside
 
@@ -183,6 +184,7 @@ compacted or resumed session was driving, branch or no branch), then the checked
 | --- | --- |
 | `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. Dormant streams take one line, and completed ones are hidden unless `--all`. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each stream also carries `publish`, `lifecycle` and `current`, and the top level carries `nested_matches` |
 | `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). Each entry also carries `label`: the newest name a `review-disposition`'s `labels` gave that key, or null. An unknown stream exits 1 |
+| `handoff --stream S` | the brief a fresh session continues one stream from (ADR 0021): its role, the request, the phase and the next one, where to report (the newest `report_to` an event names, else the user), the artifacts to open in reading order, the next Build Plan task, the open gates (an ADR still `proposed`, a `not-ready` verdict, findings still `fixing`, ticked tasks with no `task-done`, a failed verify, the publish gate), the last five gate decisions, and the config's **Autonomy** and **Security-sensitive areas** sections through the layers. Built from the journal, the files its events name and the config, never from the session; `design` prints it at `design-committed` and `/shipgate` reads it on a resume. Text for a model, no `--json`. An unknown stream exits 1 |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `check --session ID [--json] [--record]` | what the flow still owes (the Stop hook's source): `findings`, the worklogs it `skipped` and why, and the `waivers` that would clear the findings. `--record` stamps the run as the last check: one `meta` value, no event |
@@ -294,6 +296,16 @@ Some writes have no author:
 - a Bash call that failed.
 
 These are recorded as observed, and they gate no session.
+
+**The context nudge (ADR 0022).** A flow that runs every phase in one session pays for the
+whole context on every later turn. After a Bash call that appended `design-committed`, or
+a `review-verdict` that is `not-ready`, the PostToolUse hook reads the session's context
+size from the tail of its transcript: input, cache-creation and cache-read tokens of the
+last main-thread assistant record. Past the threshold it prints one line, as a
+`systemMessage` for you and as context for the model, that recommends a fresh session from
+`journal.py handoff`. The threshold is the config's **Session** section, `Handoff:`
+(default `500k`, `off` turns it off). The line is advice: it never blocks. Any other Bash
+call pays two substring checks and does not import the nudge's code.
 
 ## Code signals
 
