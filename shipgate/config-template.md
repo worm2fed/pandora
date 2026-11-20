@@ -339,3 +339,15 @@ harness or the user refuses the call, the phase runs its `agents` path and recor
 
 - Mode: <ask | executive>
 - Extra escalations: <decisions that must always go to the user, if any>
+
+## Session
+
+<!-- Usually personal: belongs in the user file. -->
+
+<!-- Default when absent: `Handoff: 500k`. After a design-committed append, and after a
+     not-ready review verdict, the PostToolUse hook reads this session's context size from
+     its transcript. Past the threshold it adds one line that recommends a fresh session
+     from the handoff brief (`journal.py handoff`). The value is a token count such as
+     `500k`, `1m` or `300000`, or `off`. -->
+
+- Handoff: <tokens, e.g. `500k` | off>

@@ -22,10 +22,17 @@ which catches what no tool call claims (an external editor, a sync).
 Nothing here can block — the tool has already run by the time this fires, which is
 exactly right. Capture is a recording, never a veto.
 
+After a Bash call whose stdout shows an append of `design-committed` or `review-verdict`,
+the hook also measures the session's context from the tail of `transcript_path` and asks
+`journal.py nudge` whether it is past the handoff threshold (ADR 0022). When it is, one
+line goes out as a `systemMessage` for the user and as `additionalContext` for the model.
+That is advice: it never blocks.
+
 This hook fires on every Write, Edit and Bash call in every project, so the ordering
 below is deliberate: gate on the sidecar before reading stdin, and return before
 importing anything heavy when the project isn't journaled. A Bash call runs
-`journal.py` only when it has a claim to record.
+`journal.py` only when it has a claim to record or a boundary append to measure; any
+other Bash call pays two substring checks for the nudge, and never imports `_nudge.py`.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import (  # noqa: E402
     append_event,
     append_events,
+    emit,
     find_project,
     likely_journaled,
     mtime_of,
@@ -311,6 +319,18 @@ def record_bash_claims(payload):
     append_events(project, "shipgate", "artifact-written", claims)
 
 
+# The words a boundary append prints (ADR 0022). A Bash call whose stdout holds neither
+# skips the nudge without importing it. `_nudge.BOUNDARY_EVENTS` and journal.py's
+# `NUDGE_EVENTS` name the same two; a test holds the three equal.
+NUDGE_WORDS = ("design-committed", "review-verdict")
+
+
+def maybe_boundary(payload):
+    response = payload.get("tool_response")
+    stdout = response.get("stdout") if isinstance(response, dict) else None
+    return isinstance(stdout, str) and any(word in stdout for word in NUDGE_WORDS)
+
+
 def main() -> None:
     if likely_journaled() is None:
         sys.exit(0)
@@ -318,6 +338,21 @@ def main() -> None:
     payload = read_hook_input()
     if payload.get("tool_name") == "Bash":
         record_bash_claims(payload)
+        line = None
+        if maybe_boundary(payload):
+            from _nudge import context_nudge
+
+            line = context_nudge(payload)
+        if line:
+            # Advice, never a block: no `decision` key and exit 0. The user sees the
+            # systemMessage; the model reads the same line as context.
+            emit({
+                "systemMessage": line,
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": line,
+                },
+            })
         sys.exit(0)
     if payload.get("tool_name") not in WRITE_TOOLS:
         sys.exit(0)

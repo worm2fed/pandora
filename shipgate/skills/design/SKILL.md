@@ -222,6 +222,22 @@ listed as queued forever.
 A missing or unreadable database is an infrastructure failure, not a reason to skip the
 append. Surface it loudly. Continue un-journaled only with the user's acknowledgement.
 
+## Step 5 — Hand off to a fresh session
+
+The build runs best in a new session. Every later turn pays for the design context, and the
+artifacts now hold the state. Journaled: once `design-committed` lands, print the handoff
+brief:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" handoff --stream <branch>
+```
+
+Show it in the phase summary and recommend a fresh session: `/clear`, then `/shipgate`. The
+new session builds the same brief from the journal, so it does not need this conversation.
+A nuance that lives only in the conversation must go into the worklog first. Un-journaled,
+write the same items from the worklog by hand: role, phase, artifact paths, next task, open
+gates, the rules that bind, where to report.
+
 ## Guardrails
 
 - **Honor the impact map and CLAUDE.md.** The design must respect where code belongs and

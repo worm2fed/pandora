@@ -94,6 +94,7 @@ to write it with the answers that are personal:
 - the Writing style section;
 - the Library docs line of the Code tooling section;
 - the Autonomy mode and its Extra escalations;
+- the Session section's Handoff threshold, when the user set one;
 - the ledger's promotion target for preferences.
 
 The user accepts or declines. On a yes, write those answers to the user file in the lean form

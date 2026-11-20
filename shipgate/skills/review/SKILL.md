@@ -375,6 +375,12 @@ verdict while a key is still `fixing` and its own `dispositions` does not close 
 refusal lists the open keys and prints the `review-disposition` row that closes them. The
 verdict's `dispositions` stays the final word.
 
+**Before a fix round, offer a fresh session.** This applies after a `not-ready` verdict when
+this session also ran design or implement, or when a shipgate line said the context is past
+the handoff threshold. Print the brief with
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" handoff --stream <branch>`, and
+recommend `/clear`, then `/shipgate`. The brief names the open findings and the fix round.
+
 **Cap the internal loop at two rounds.** Not-ready → fix → re-review is normal once. A second
 round should close the gap. If blockers still stand after two rounds, surface the open list
 to the user instead of looping. A review that can't converge signals a design or requirements

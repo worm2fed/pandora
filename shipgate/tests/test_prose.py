@@ -207,10 +207,10 @@ class TestConfigCallout(unittest.TestCase):
 
     def test_the_template_marks_the_usually_personal_sections(self):
         text = (SHIPGATE / "config-template.md").read_text()
-        for heading in ("## Writing style", "## Code tooling", "## Autonomy"):
+        for heading in ("## Writing style", "## Code tooling", "## Autonomy", "## Session"):
             with self.subTest(section=heading):
                 self.assertIn(USUALLY_PERSONAL, section(text, heading))
-        self.assertEqual(text.count(USUALLY_PERSONAL), 3)
+        self.assertEqual(text.count(USUALLY_PERSONAL), 4)
 
 
 class TestBuiltInWorkerDiscipline(unittest.TestCase):
@@ -283,6 +283,33 @@ class TestExecutiveContract(unittest.TestCase):
         self.assertEqual(bullets, ["Mode", "Extra escalations"])
         self.assertNotIn("Executive contract", body)
         self.assertIn("`feature`", body)
+
+
+class TestHandoffText(unittest.TestCase):
+    """#23 / ADR 0021: the skills print the handoff brief and recommend a fresh session
+    (FR-011 to FR-013)."""
+
+    COMMAND = 'journal.py" handoff --stream'
+
+    def test_design_prints_the_brief_once_the_design_lands(self):
+        body = flat(section((SHIPGATE / "skills/design/SKILL.md").read_text(),
+                            "## Step 5 — Hand off to a fresh session"))
+        self.assertIn(self.COMMAND, body)
+        self.assertIn("`design-committed`", body)
+        self.assertIn("`/clear`, then `/shipgate`", body)
+
+    def test_review_prints_it_before_a_fix_round(self):
+        body = flat(paragraph((SHIPGATE / "skills/review/SKILL.md").read_text(),
+                              "**Before a fix round, offer a fresh session.**"))
+        self.assertIn(self.COMMAND, body)
+        self.assertIn("`not-ready`", body)
+        self.assertIn("`/clear`, then `/shipgate`", body)
+
+    def test_feature_routes_a_fresh_session_from_the_brief(self):
+        body = flat(paragraph((SHIPGATE / "skills/feature/SKILL.md").read_text(),
+                              "**A fresh session past design starts from the handoff "
+                              "brief.**"))
+        self.assertIn(self.COMMAND, body)
 
 
 if __name__ == "__main__":

@@ -2701,5 +2701,217 @@ class TestHooksStayOffTheCodeGraph(unittest.TestCase):
             ])
 
 
+def usage_record(tokens: int, *, sidechain: bool = False, model: str = "claude-x") -> dict:
+    """A main-thread (or sidechain) assistant record with `tokens` of context."""
+    return {
+        "type": "assistant", "isSidechain": sidechain,
+        "message": {"model": model, "usage": {
+            "input_tokens": 2, "cache_creation_input_tokens": 1000,
+            "cache_read_input_tokens": tokens - 1002, "output_tokens": 50,
+        }},
+    }
+
+
+class TestContextNudge(HookTestCase):
+    """ADR 0022: after a Bash call that appended `design-committed` or a `not-ready`
+    `review-verdict`, the PostToolUse hook reads the context size from the transcript
+    and, past the handoff threshold, adds one line for the user and the model."""
+
+    STREAM = "feature/nudge"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.user_dir = self.root / "user-config"
+        self.user_dir.mkdir()
+        self.transcript = self.root / "transcript.jsonl"
+        self.append("flow-started", {"request": "x"})
+
+    def append(self, event_type, data):
+        result = journal(self.db, "append", "--stream", self.STREAM, "--type", event_type,
+                         "--data", json.dumps(data))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def write_transcript(self, *records, tail: str = "") -> None:
+        lines = [json.dumps({"type": "user", "message": {"content": "hi"}})]
+        lines += [json.dumps(record) for record in records]
+        self.transcript.write_text("\n".join(lines) + "\n" + tail, encoding="utf-8")
+
+    def post(self, stdout, *, transcript=None, cwd=None):
+        payload = {
+            "session_id": SESSION, "cwd": str(cwd or self.root), "tool_name": "Bash",
+            "tool_input": {"command": "python3 journal.py append ..."},
+            "tool_response": {"stdout": stdout, "stderr": "", "interrupted": False},
+            "transcript_path": str(self.transcript) if transcript is None else transcript,
+        }
+        result = run_hook("post_tool_use", payload, cwd or self.root,
+                          env_extra={"CLAUDE_CONFIG_DIR": str(self.user_dir)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout) if result.stdout.strip() else None
+
+    def committed(self):
+        return self.append("design-committed", {"worklog": "docs/prd/feat.worklog.md"})
+
+    def assert_nudged(self, output, tokens_k):
+        self.assertIsNotNone(output)
+        line = output["systemMessage"]
+        self.assertEqual(output["hookSpecificOutput"],
+                         {"hookEventName": "PostToolUse", "additionalContext": line})
+        self.assertEqual(len(line.splitlines()), 1)
+        self.assertIn(f"about {tokens_k}k tokens", line)
+        self.assertIn(f"journal.py handoff --stream={self.STREAM}", line)
+        self.assertNotIn("decision", output)
+
+    def test_a_design_commit_past_the_threshold_nudges(self):
+        stdout = self.committed()
+        self.assertIn("appended design-committed to", stdout)
+        self.write_transcript(usage_record(612_000))
+        self.assert_nudged(self.post(stdout), 612)
+
+    def newest_seq(self, event_type):
+        return [e["seq"] for e in self.events(event_type=event_type)
+                if e["stream"] == self.STREAM][-1]
+
+    def test_the_json_batch_form_is_read_too(self):
+        self.committed()
+        stdout = json.dumps([{"line": 1, "seq": self.newest_seq("design-committed"),
+                              "stream": self.STREAM, "type": "design-committed",
+                              "duplicate": False}])
+        self.write_transcript(usage_record(700_000))
+        self.assert_nudged(self.post(stdout), 700)
+
+    def test_below_the_threshold_prints_nothing(self):
+        stdout = self.committed()
+        self.write_transcript(usage_record(400_000))
+        self.assertIsNone(self.post(stdout))
+
+    def test_the_session_section_moves_the_threshold(self):
+        stdout = self.committed()
+        (self.root / ".claude" / "shipgate.md").write_text(
+            "# p\n\n## Session\n\n- Handoff: 300k\n", encoding="utf-8")
+        self.write_transcript(usage_record(400_000))
+        self.assert_nudged(self.post(stdout), 400)
+
+    def test_a_not_ready_verdict_nudges_a_ready_one_does_not(self):
+        self.write_transcript(usage_record(800_000))
+        self.append("verify-run", {"outcome": "pass", "task_ids": []})
+        stdout = self.append("review-verdict", {"verdict": "not-ready"})
+        self.assert_nudged(self.post(stdout), 800)
+        self.append("verify-run", {"outcome": "pass", "task_ids": []})
+        stdout = self.append("review-verdict", {"verdict": "ready"})
+        self.assertIsNone(self.post(stdout))
+
+    def test_any_other_bash_call_prints_nothing(self):
+        self.committed()
+        self.write_transcript(usage_record(900_000))
+        for stdout in ("", "all tests passed", "appended task-done to feature/nudge: seq 3, "
+                       "version 4"):
+            with self.subTest(stdout=stdout):
+                self.assertIsNone(self.post(stdout))
+
+    def nested_repo(self, session_section):
+        repo = self.root / "svc"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "shipgate.md").write_text(
+            "# svc\n\n## Session\n\n" + session_section, encoding="utf-8")
+        return repo
+
+    def test_a_nested_repo_session_section_is_read(self):
+        """ADR 0018: the session's own repo file comes before the journal root's."""
+        stdout = self.committed()
+        self.write_transcript(usage_record(900_000))
+        repo = self.nested_repo("- Handoff: off\n")
+        self.assertIsNone(self.post(stdout, cwd=repo))
+        (repo / ".claude" / "shipgate.md").write_text(
+            "# svc\n\n## Session\n\n- Handoff: 100k\n", encoding="utf-8")
+        self.write_transcript(usage_record(200_000))
+        self.assert_nudged(self.post(stdout, cwd=repo), 200)
+
+    def test_a_design_commit_in_a_batch_wins_over_a_later_ready_verdict(self):
+        self.committed()
+        design = self.newest_seq("design-committed")
+        self.append("verify-run", {"outcome": "pass", "task_ids": []})
+        self.append("review-verdict", {"verdict": "ready"})
+        verdict = self.newest_seq("review-verdict")
+        stdout = json.dumps([
+            {"line": 1, "seq": design, "stream": self.STREAM, "type": "design-committed"},
+            {"line": 2, "seq": verdict, "stream": self.STREAM, "type": "review-verdict"},
+        ])
+        self.write_transcript(usage_record(700_000))
+        self.assert_nudged(self.post(stdout), 700)
+
+    def test_a_refused_json_append_prints_nothing(self):
+        """`append --json` prints a gate violation to stdout, with `type` and `stream`."""
+        self.committed()
+        self.write_transcript(usage_record(900_000))
+        stdout = json.dumps({"error": "gate-violation", "stream": self.STREAM,
+                             "type": "design-committed", "message": "refused"})
+        self.assertIsNone(self.post(stdout))
+
+    def test_a_quoted_older_append_line_prints_nothing(self):
+        old = self.committed()
+        self.committed()
+        self.write_transcript(usage_record(900_000))
+        self.assertIsNone(self.post("log excerpt:\n" + old))
+
+    def test_the_boundary_words_agree_in_hook_nudge_and_journal(self):
+        hook = (HOOKS / "post_tool_use.py").read_text(encoding="utf-8")
+        words = re.search(r"NUDGE_WORDS = \(([^)]*)\)", hook).group(1)
+        import importlib.util
+
+        sys.path.insert(0, str(HOOKS))
+        import _nudge
+        spec = importlib.util.spec_from_file_location("sg_journal_words", JOURNAL)
+        journal_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(journal_module)
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', words)), _nudge.BOUNDARY_EVENTS)
+        self.assertEqual(_nudge.BOUNDARY_EVENTS, journal_module.NUDGE_EVENTS)
+
+    def test_the_words_alone_without_the_event_print_nothing(self):
+        """`cat` of a file that mentions the append line must not nudge."""
+        self.write_transcript(usage_record(900_000))
+        stdout = "appended design-committed to feature/other: seq 1, version 2"
+        self.assertIsNone(self.post(stdout))
+
+    def test_a_newer_sidechain_or_synthetic_record_is_skipped(self):
+        stdout = self.committed()
+        self.write_transcript(usage_record(650_000), usage_record(10_000, sidechain=True),
+                              usage_record(5_000, model="<synthetic>"))
+        self.assert_nudged(self.post(stdout), 650)
+
+    def test_a_usage_record_behind_a_large_tail_is_still_found(self):
+        stdout = self.committed()
+        big = json.dumps({"type": "user", "message": {"content": "x" * 400_000}}) + "\n"
+        self.write_transcript(usage_record(640_000), tail=big)
+        self.assert_nudged(self.post(stdout), 640)
+
+    def test_an_unusable_transcript_prints_nothing(self):
+        stdout = self.committed()
+        fifo = self.root / "fifo.jsonl"
+        os.mkfifo(str(fifo))
+        directory = self.root / "a-dir"
+        directory.mkdir()
+        self.write_transcript(usage_record(900_000))
+        for transcript in (str(fifo), str(directory), str(self.root / "missing.jsonl"),
+                           "transcript.jsonl", ""):
+            with self.subTest(transcript=transcript):
+                self.assertIsNone(self.post(stdout, transcript=transcript))
+
+    def test_a_malformed_response_prints_nothing(self):
+        self.committed()
+        payload = {"session_id": SESSION, "cwd": str(self.root), "tool_name": "Bash",
+                   "tool_input": {"command": "x"}, "tool_response": {"stdout": ["x"]},
+                   "transcript_path": 7}
+        result = run_hook("post_tool_use", payload, self.root)
+        self.assertEqual((result.returncode, result.stdout), (0, ""))
+
+    def test_an_unjournaled_project_prints_nothing(self):
+        stdout = self.committed()
+        self.write_transcript(usage_record(900_000))
+        with tempfile.TemporaryDirectory() as other:
+            self.assertIsNone(self.post(stdout, cwd=Path(other).resolve()))
+
+
 if __name__ == "__main__":
     unittest.main()

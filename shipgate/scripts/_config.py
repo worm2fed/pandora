@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Callable, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Callable, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 
 CONFIG_RELPATH = os.path.join(".claude", "shipgate.md")
 USER_CONFIG_NAME = "shipgate.md"
@@ -109,40 +109,62 @@ def is_placeholder(value: str) -> bool:
 _is_angle_placeholder = is_placeholder_value
 
 
-def section_bullets(text: str, section: str) -> List[Tuple[str, str]]:
-    """The `- Key: value` bullets of one `## <section>` (lower-case name), in order.
+def _walk_section(text: str, section: str) -> Iterator[Tuple[str, bool]]:
+    """Yield `(line, fenced)` for each line of one `## <section>` (lower-case name): the
+    one walk every config reader uses.
 
-    Keys come back lower-cased; a wrapped continuation line joins its bullet. HTML
-    comments and fenced code are inert. The one walk every config reader uses.
+    HTML comments are removed first. A fence opens outside the section only at an indent
+    of three spaces or less (CommonMark); inside it, at any indent (a fence nested in a
+    bullet). A fence's marker lines and its content come back with `fenced` True, and a
+    heading inside a fence does not end the section. The section ends at the next
+    heading of its level or higher; a deeper heading comes back as a line, except one
+    that repeats the section's name, which narrows the section to itself.
     """
     text = _COMMENT_RE.sub("", text)
     in_section = False
     section_level = 0
-    bullets: List[Tuple[str, str]] = []
-    fence: Optional[str] = None  # the open fence's marker; its lines are inert
+    fence: Optional[str] = None  # the open fence's marker
     for raw in text.splitlines():
-        # Inside the section any indentation counts (a fence nested in a bullet).
         indent_ok = (lambda m: in_section or len(m.group(1)) <= 3)
         if fence is not None:
             close = _FENCE_CLOSE_RE.match(raw)
             if close and indent_ok(close) and close.group(2)[0] == fence[0] and \
                     len(close.group(2)) >= len(fence):
                 fence = None
+            if in_section:
+                yield raw, True
             continue
         opening = _FENCE_OPEN_RE.match(raw)
         if opening and indent_ok(opening):
             fence = opening.group(2)
+            if in_section:
+                yield raw, True
             continue
         heading = _HEADING_RE.match(raw)
         if heading:
             level = len(heading.group(1))
             if in_section and level <= section_level:
-                break
+                return
             if heading.group(2).strip().lower() == section:
+                # A deeper heading that repeats the name narrows the section to it.
                 in_section = True
                 section_level = level
-            continue
-        if not in_section:
+                continue
+            if not in_section:
+                continue
+        if in_section:
+            yield raw, False
+
+
+def section_bullets(text: str, section: str) -> List[Tuple[str, str]]:
+    """The `- Key: value` bullets of one `## <section>` (lower-case name), in order.
+
+    Keys come back lower-cased; a wrapped continuation line joins its bullet. HTML
+    comments and fenced code are inert (`_walk_section`).
+    """
+    bullets: List[Tuple[str, str]] = []
+    for raw, fenced in _walk_section(text, section):
+        if fenced:
             continue
         bullet = _BULLET_RE.match(raw)
         if bullet:
@@ -151,6 +173,63 @@ def section_bullets(text: str, section: str) -> List[Tuple[str, str]]:
             key, value = bullets[-1]
             bullets[-1] = (key, value + " " + raw.strip())  # wrapped continuation
     return bullets
+
+
+_LIST_MARKER_RE = re.compile(r"^\s*[-*+]\s+")
+_KEY_VALUE_RE = re.compile(r"^([^:]+?)\s*:\s*(.*)$")
+
+
+def _placeholder_item(item: str) -> bool:
+    """True when one list item or paragraph line (marker stripped, continuation lines
+    joined) is a placeholder: wholly `<…>`, or `Key: <…>`. A `Key:` with no value is
+    text (a lead-in to the bullets under it), not a placeholder."""
+    if is_placeholder_value(item):
+        return True
+    key_value = _KEY_VALUE_RE.match(item)
+    if key_value is None or not key_value.group(2).strip():
+        return False
+    return not _value_present(key_value.group(2))
+
+
+def section_lines(text: str, section: str) -> List[str]:
+    """The lines of one `## <section>` (lower-case name), as written, for quoting.
+
+    The same walk as `section_bullets` (`_walk_section`). Blank lines are dropped. An
+    item whose text is a placeholder (`- <domains, e.g. billing>`, `- Mode: <ask |
+    executive>`) is dropped with its continuation lines. Fenced code is kept as written.
+    [] when the section is absent or holds only placeholders. Unlike `section_bullets`,
+    a bullet need not be `Key: value`, so a prose section (Security-sensitive areas)
+    reads whole.
+    """
+    items: List[List[Tuple[str, bool]]] = []  # each item's lines, with `fenced`
+    in_fence = False
+    for raw, fenced in _walk_section(text, section):
+        if fenced:
+            # An indented fence belongs to the item above it, and drops with it.
+            if in_fence or (items and raw[:1].isspace()):
+                items[-1].append((raw, True))
+            else:
+                items.append([(raw, True)])
+            in_fence = True
+            continue
+        in_fence = False
+        if not raw.strip():
+            continue
+        if items and raw[:1].isspace() and not _LIST_MARKER_RE.match(raw):
+            items[-1].append((raw, False))  # a wrapped continuation of the item above
+        else:
+            items.append([(raw, False)])
+    lines: List[str] = []
+    for item in items:
+        text_lines = [line for line, fenced in item if not fenced]
+        # An item that is only a fence is code, never a placeholder.
+        if text_lines and _placeholder_item(" ".join(
+            [_LIST_MARKER_RE.sub("", text_lines[0], count=1).strip()]
+            + [line.strip() for line in text_lines[1:]]
+        )):
+            continue
+        lines.extend(line.rstrip() for line, _fenced in item)
+    return lines
 
 
 def title_bullets(text: str) -> List[Tuple[str, str]]:

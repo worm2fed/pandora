@@ -2,6 +2,74 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.27.0 — hand off to a fresh session at a phase gate: `journal.py handoff` prints the brief, `design` and `review` recommend `/clear`, and a hook says when the context is past a threshold.
+
+**Phases share one session (#23, ADRs 0021 and 0022).** A flow usually ran clarify, design,
+implement and review in one session. Session cost tracks the maximum context size
+(Spearman 0.97). 22 sessions that ran three or more phases carried about 41% of the cost,
+at a median maximum context of 702k tokens. Only 6 of 36 streams moved to a new session
+between `design-committed` and the first `task-done`. When a session did move, the agent
+wrote the brief from its memory of the conversation.
+
+- **`journal.py handoff --stream S`** prints the brief a fresh session continues from: its
+  role, the request, the phase and the next one, where to report, the artifacts in reading
+  order (PRD, worklog, ADRs), the next Build Plan task, the open gates, the last five gate
+  decisions, and the rules that still bind. The open gates are an ADR still `proposed`, a
+  `not-ready` verdict, findings still `fixing`, ticked tasks with no `task-done`, a failed
+  verify, and the publish gate. An ADR counts as open unless its status (front matter, a
+  `Status:` line or a `## Status` heading) says accepted, superseded, rejected or
+  deprecated. The rules are the config's **Autonomy** and **Security-sensitive areas**
+  sections through the config layers (the repo's files, then the umbrella's, then the user
+  file), a line that the repo's
+  `CLAUDE.md` files stay binding, and the rule to commit only when the user asks. The
+  brief comes from the journal, the files its events name and the config, never from the
+  session, so the new session builds the same one. It is at most 60 lines on a typical
+  stream. A zero-context `claude -p` run on Sonnet, given only a fixture brief, named the
+  next task, the first file, a binding rule, the report target and what not to do yet.
+- **Where to report.** `flow-started` and `deviation` take an optional string
+  `report_to`. The brief prints the newest one, else "the user". A teammate that a lead
+  dispatched records the lead here.
+- **The skills hand off.** `design` (new Step 5) prints the brief once `design-committed`
+  lands and recommends `/clear`, then `/shipgate`. `review` does the same before a fix
+  round when the session also ran design or implement, or when the nudge fired. `feature`
+  runs `handoff` when a fresh session finds the stream in implement or later.
+
+**Changed behaviour: the PostToolUse hook can print a line (ADR 0022).** After a Bash call
+that appended `design-committed`, or a `review-verdict` that is `not-ready`, the hook reads
+the session's context size from the tail of its transcript. Past the threshold it prints
+one line, as a `systemMessage` for the user and as context for the model, that recommends
+a fresh session from `journal.py handoff`. A `ready` verdict does not fire it. The hook
+reads the append's own output, with the row's `seq`, and `journal.py nudge` checks that the
+seq is the stream's newest event of that type. So a refused append and a quoted old append
+line say nothing. The line is advice: the hook never blocks.
+
+- **The threshold** is the config's new **Session** section, `- Handoff: <tokens | off>`:
+  `500k` by default, `off` to turn it off. It is usually personal, so the user file can set
+  it once for every project. `journal.py nudge` reads it through the config layers, from
+  the session's directory up, and decides; the hook only measures (hooks hold no policy).
+- **What the hook reads.** The last 256 KB of `transcript_path`, and the last 4 MB only
+  when a large record follows the last usage. The path must be absolute and the file a
+  regular file, opened non-blocking. Context tokens are the input, cache-creation and
+  cache-read tokens of the last main-thread assistant record; sidechain and synthetic
+  records are skipped.
+- **Cost.** Any other Bash call pays two substring checks on its stdout: 1.6 µs on 2 KB, 89
+  µs on 200 KB. The nudge's code sits in `hooks/_nudge.py` and is imported only after a
+  match, so the hook process costs what it did in 0.26.0. A boundary call takes about
+  234 ms, two to four times per flow.
+- `_config.section_lines` reads a config section as written, so a section of prose
+  bullets (Security-sensitive areas) is quoted whole. It and `section_bullets` share one
+  walk over the section (`_walk_section`), so both read fences alike. `section_bullets`
+  reads every config the same as before.
+- `setup` offers the Session section's Handoff threshold for the user file, beside the
+  other personal answers.
+
+Tests: `handoff` against each brief item, the 60-line cap, two identical runs, a payload
+that tries to add lines and unsafe refs; `nudge` against the default, the Session section,
+`off`, the user file, a ready and a not-ready verdict and a stream without the event; the
+hook against both append output forms, below the threshold, other Bash calls, sidechain and
+synthetic records, a usage record behind a large tail, a FIFO, a directory, a relative or
+missing transcript, a malformed payload and an unjournaled project; the skill text.
+
 v0.26.0 — the Stop gate can block: it finds a worklog's stream the way `position` does, a waiver clears a finding, and `doctor` shows the last check.
 
 **The Stop gate never blocked (#21, ADR 0020).** The Stop hook runs `journal.py check`, which

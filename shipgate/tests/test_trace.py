@@ -206,8 +206,9 @@ class TestDeviationShape(TraceCase):
         self.assertIn("data.kind must be a string", proc.stderr)
 
     def test_vocab_prints_kind(self):
+        # `report_to` joined in 0.27.0: the target `handoff` prints (ADR 0021).
         proc = self.journal("--db", self.db, "vocab", "--shape", "deviation", rc=OK)
-        self.assertEqual(json.loads(proc.stdout)["strings"], ["kind"])
+        self.assertEqual(json.loads(proc.stdout)["strings"], ["kind", "report_to"])
 
 
 class TestSignalsMissingDeviation(TraceCase):
