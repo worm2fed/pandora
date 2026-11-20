@@ -30,9 +30,8 @@ can accept each one with one tap. When the config's **Autonomy** section declare
 > `flow-started {request, branch}` in the same append as the first decision. This gate owes
 > two kinds of event. Append one `gate-decision` per resolved question, as it is decided.
 > Append `clarify-passed` when the PRD's last marker goes (Step 3). Append each event in the
-> turn where it happens, in the form under **Record the gate**. The Stop hook catches only a
-> PRD written with no `gate-decision` behind it. So Step 3 is the only thing that writes
-> `clarify-passed`.
+> turn where it happens, in the form under **Record the gate**. The Stop hook checks
+> neither. So these steps are the only thing that writes them.
 
 ## Step 1 — Coverage scan
 

@@ -352,10 +352,13 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
     the user's decisions still bind this session to the stream.
 
   Hooks capture what the harness can see: artifact writes, session start and end. The Stop
-  hook blocks a session that did one of three things:
-  - ticked build-plan boxes without `task-done`;
-  - recorded `task-done` without a passing `verify-run`;
-  - wrote a PRD in clarify with no `gate-decision`.
+  hook blocks a session that did one of two things:
+  - ticked build-plan boxes without `task-done`, in a worklog that a live stream owns
+    (the stream's events or its slug name the worklog);
+  - recorded a forced `task-done` that no passing `verify-run` names.
+
+  A finding that is not warranted takes a waiver: a `deviation` with `kind: gate-waived`,
+  the `task_ids` it clears and the reason in `note`. The block text prints the command.
 
   Nothing checks the phase events (`phase-entered`, `bug-reproduced`, `debug-root-cause`,
   `design-committed`, `review-verdict`). The phase skill's own step writes them, in the turn

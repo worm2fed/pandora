@@ -185,9 +185,9 @@ compacted or resumed session was driving, branch or no branch), then the checked
 | `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). Each entry also carries `label`: the newest name a `review-disposition`'s `labels` gave that key, or null. An unknown stream exits 1 |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
-| `check --session ID` | what the flow still owes (the Stop hook's source) |
+| `check --session ID [--json] [--record]` | what the flow still owes (the Stop hook's source): `findings`, the worklogs it `skipped` and why, and the `waivers` that would clear the findings. `--record` stamps the run as the last check: one `meta` value, no event |
 | `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review" |
-| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift |
+| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, current session id, schema, health, portability. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
@@ -233,7 +233,28 @@ the status brief lists no such stream (`workspace` then continues on it) — and
 step that establishes the fact: the map emitted, the defect reproduced, the root cause
 confirmed, the worklog written, the verdict stated. Not at the end of the turn, and never
 skipped for want of a branch. The Stop hook enforces the build-side gates only (`task-done`,
-`verify-run`, clarify's `gate-decision`); the phase events rely on those steps.
+`verify-run`); the phase events rely on those steps.
+
+**The Stop gate.** The Stop hook runs `check --session ID --json --record` and blocks the stop while
+`check` has findings. It has two rules (ADR 0020):
+
+- A Build Plan box is ticked in a worklog this session wrote, and no stream that owns the
+  worklog holds its `task-done`. A stream owns a worklog the way `position` shows one: its
+  committing events name it (the worklog refs `position` reads, ADR 0009), or it has no
+  worklog ref and its slug names the file. A journal from before v0.11 also binds by the
+  stream name `feature/<worklog name>`. The most exact binding wins: an event ref beats a
+  name, and `<slug>.worklog.md` beats a prefix match.
+- The session recorded a forced `task-done` that no passing `verify-run` names. `append`
+  refuses the plain one, so only `--force` reaches this rule.
+
+A worklog that no stream owns is not judged, and neither is one that only a finished stream
+owns. `check --json` lists each under `skipped` with its reason (`no-stream`, `finished`,
+`not-found`), so a skip is visible. A finding that is not warranted takes a waiver: a
+`deviation` with `kind: gate-waived`, `task_ids` and the reason in `note`, on the stream.
+`check --json` prints one command per stream under `waivers`, and the block text carries it.
+The command holds a placeholder note. `append` refuses an empty note or a `<...>` placeholder,
+with `--force` too, until the reason replaces it.
+`doctor` prints the last recorded check and the last block.
 
 **The user's publish approval.** Only the user approves a publish. The approval is a
 `gate-decision` with `gate=publish`, `decision=publish`, `raised_by=user`, the actor `user`

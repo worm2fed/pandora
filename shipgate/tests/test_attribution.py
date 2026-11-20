@@ -358,7 +358,7 @@ WORKLOG_ONE_TICKED = """# Worklog: demo
 
 
 class TestCheckReadsTheFold(JournalCase):
-    """Rules A and B of the Stop gate follow the fold's author, never the raw rows."""
+    """Rule A of the Stop gate follows the fold's author, never the raw rows."""
 
     def setUp(self):
         super().setUp()
@@ -395,13 +395,10 @@ class TestCheckReadsTheFold(JournalCase):
         self.assertEqual(self.missing("A"), [])
         self.assertEqual(self.missing("B"), [])
 
-    def test_the_better_claim_decides_whom_rule_b_gates(self):
-        self.append({"phase": "clarify", "skipped": ["route-and-map", "explore"]},
-                    stream="feature/demo", event_type="phase-entered",
-                    actor="orchestrator")
-        self.append(bash("window", OBSERVER))
-        self.append(bash("diff", WRITER))
-        self.assertEqual(self.missing(WRITER), ["gate-decision"])
+    def test_the_better_claim_decides_whom_the_gate_blocks(self):
+        self.append(bash("window", OBSERVER, path=WORKLOG))
+        self.append(bash("diff", WRITER, path=WORKLOG))
+        self.assertEqual(self.missing(WRITER), ["task-done"])
         self.assertEqual(self.missing(OBSERVER), [])
 
     def test_a_row_that_makes_no_claim_gates_nobody(self):

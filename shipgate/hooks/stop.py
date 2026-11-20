@@ -35,7 +35,25 @@ CHECK_FINDINGS_EXIT = 5
 META_STREAM = "shipgate"
 
 
-def format_reason(findings: list) -> str:
+NO_COMMAND = "(no command: a name in it holds a character that does not print on one line)"
+
+
+def single_line_command(command) -> str:
+    """A command as `check` printed it, or the stand-in. `check` prints none for a stream
+    name it cannot put on one line; anything else that is not one line is refused here
+    too, because collapsing a command would change what it does."""
+    if isinstance(command, str) and command and command.isprintable():
+        return command
+    return NO_COMMAND
+
+
+def one_line(value) -> str:
+    """The reason reaches the session as prose. A path or a stream name comes from the
+    journal, so a line break in one must not add lines to the block text."""
+    return " ".join(str(value).split())
+
+
+def format_reason(findings: list, waivers: list) -> str:
     lines = [
         "shipgate: this session changed flow artifacts without recording the matching "
         "journal events. Append them, then finish.",
@@ -44,17 +62,25 @@ def format_reason(findings: list) -> str:
     for finding in findings:
         if not isinstance(finding, dict):
             continue
-        missing = finding.get("missing") or "event"
-        detail = finding.get("detail") or ""
+        missing = one_line(finding.get("missing") or "event")
+        detail = one_line(finding.get("detail") or "")
         lines.append(f"- missing `{missing}` — {detail}".rstrip(" —"))
-        command = finding.get("suggested_command")
-        if command:
-            lines.append(f"      {command}")
-    lines.append("")
-    lines.append(
-        "If one of these is genuinely not warranted, record why instead of skipping it: "
-        "append a `deviation` event saying so."
-    )
+        lines.append(f"      {single_line_command(finding.get('suggested_command'))}")
+    commands = [
+        single_line_command(waiver.get("command")) for waiver in waivers
+        if isinstance(waiver, dict)
+    ]
+    if commands:
+        # `check` reads this waiver (ADR 0020). A `deviation` of any other kind clears
+        # nothing, and the same block would come back on the next turn.
+        lines.append("")
+        lines.append(
+            "If one of these is genuinely not warranted, record a waiver instead of "
+            "skipping it: a `deviation` of kind `gate-waived` that names the task ids. "
+            "Write the reason in `note` first: `append` refuses the placeholder, "
+            "with `--force` too."
+        )
+        lines.extend(f"      {command}" for command in commands)
     return "\n".join(lines)
 
 
@@ -73,7 +99,11 @@ def main() -> None:
         sys.exit(0)
 
     session_id = payload.get("session_id") or "unknown"
-    result = run_journal(project, ["check", "--session", session_id, "--json"])
+    # `--record` stamps the run, so `journal.py doctor` can tell a gate that runs and
+    # finds nothing from one that never runs.
+    result = run_journal(
+        project, ["check", "--session", session_id, "--json", "--record"]
+    )
 
     # Unreachable journal must not trap the user in an unendable session.
     if result is None or result.returncode != CHECK_FINDINGS_EXIT:
@@ -82,11 +112,21 @@ def main() -> None:
     import json
 
     try:
-        findings = (json.loads(result.stdout or "{}") or {}).get("findings") or []
+        report = json.loads(result.stdout or "{}") or {}
     except ValueError:
-        findings = []
+        report = {}
+    if not isinstance(report, dict):
+        report = {}
+    findings = report.get("findings")
+    # Only a finding the reason can print blocks: a block with no text helps nobody.
+    findings = [
+        finding for finding in (findings if isinstance(findings, list) else [])
+        if isinstance(finding, dict)
+    ]
     if not findings:
         sys.exit(0)
+    waivers = report.get("waivers")
+    waivers = waivers if isinstance(waivers, list) else []
 
     append_event(
         project,
@@ -94,7 +134,7 @@ def main() -> None:
         "gate-blocked",
         {"session": session_id, "findings": len(findings)},
     )
-    emit({"decision": "block", "reason": format_reason(findings)})
+    emit({"decision": "block", "reason": format_reason(findings, waivers)})
 
 
 safe_main(main)
