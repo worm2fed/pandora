@@ -6,7 +6,7 @@ updated: 2026-10-30
 tags:
   - adr
   - shipgate
-status: accepted
+status: accepted (Stop gate consequences amended by 0020)
 date: 2026-10-30
 issue: "#9"
 related: ["0003-session-attribution-via-current-session.md", "0005-session-label-from-the-shell-environment.md"]
@@ -72,6 +72,8 @@ sees the key in `data`.
 The Stop gate now reads a session's `user` rows. Rule B accepts a user gate decision the
 session recorded. Rule C checks a `task-done` the session recorded for the user: a forced one
 with no passing `verify-run` before it blocks that session, as an orchestrator's always did.
+*Amended by ADR 0020:* rule B is retired, and a passing `verify-run` at any position in the
+stream clears rule C.
 
 A `user@<session id>` or `watcher@<label>` actor no longer binds or counts a session. Before,
 `stats` counted a `watcher@` label as a session, and `status --session` matched a `user@`

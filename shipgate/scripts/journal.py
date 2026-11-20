@@ -292,8 +292,10 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         "required": ["note"],
         "aliases": {"correction": "note", "what": "note"},
         # `kind` groups deviations in `stats` (`signals-missing`, `style-missing`); `auto`
-        # marks the one `append` writes itself (ADR 0011).
+        # marks the one `append` writes itself (ADR 0011). `gate-waived` with `task_ids`
+        # waives those boxes at the Stop gate (ADR 0020).
         "strings": ["kind"],
+        "lists": ["task_ids"],
     },
     "gate-decision": {
         "required": ["gate", "question", "decision", "mode"],
@@ -1628,6 +1630,37 @@ def validate_event_type(event_type: str, allow_new: bool) -> None:
     )
 
 
+def _waiver_reason(data: Dict[str, Any]) -> Optional[str]:
+    """The reason a waiver gives, or None when it gives none: an empty note, or one that
+    is still a ``<...>`` placeholder, the shape the printed command carries."""
+    note = data.get("note")
+    note = note.strip() if isinstance(note, str) else ""
+    if not note or (note.startswith("<") and note.endswith(">")):
+        return None
+    return note
+
+
+def _validate_waiver(data: Dict[str, Any]) -> None:
+    """A `deviation` of kind ``gate-waived`` clears Stop gate findings (ADR 0020), so it
+    names the tasks it clears and gives a reason. Any other deviation passes. `--force`
+    does not skip this: a waiver with no reason is not a waiver, and `check` reads it
+    as none."""
+    if data.get("kind") != GATE_WAIVED:
+        return
+    task_ids = data.get("task_ids")
+    if (not isinstance(task_ids, list) or not task_ids
+            or not all(isinstance(t, str) and t for t in task_ids)):
+        raise GateViolation(
+            "a gate-waived deviation names the tasks it waives: data.task_ids is a "
+            "non-empty list of task ids"
+        )
+    if _waiver_reason(data) is None:
+        raise GateViolation(
+            "a gate-waived deviation says why: write the reason in data.note, in place "
+            "of an empty note or a <...> placeholder"
+        )
+
+
 def validate_gate(
     conn: sqlite3.Connection,
     stream: str,
@@ -1646,6 +1679,8 @@ def validate_gate(
         _validate_review_verdict(conn, stream, data)
     elif event_type == "mr-opened":
         _validate_mr_opened(conn, stream, data)
+    elif event_type == "deviation":
+        _validate_waiver(data)
 
 
 # --------------------------------------------------------------------------
@@ -1859,6 +1894,8 @@ def append_event(
                 _require_closure_reason(
                     conn, stream, event_type, payload, force_reason
                 )
+                if event_type == "deviation":
+                    _validate_waiver(payload)
 
             version = existing + 1
             implied_phase = PHASE_OF_EVENT.get(event_type)
@@ -2709,7 +2746,7 @@ def artifact_authors(events: Iterable[Event]) -> Dict[ArtifactKey, Optional[str]
     ``bash`` with ``window`` evidence. The session at the best rank is the author when
     it is one session; two different sessions there give None, and so does a group with
     no ranked claim (``disk`` only). Every key a claim names is in the result. The Stop
-    gate's rules A and B and ``stats`` read authors from this, never from raw rows.
+    gate's rule A and ``stats`` read authors from this, never from raw rows.
     """
     best: Dict[ArtifactKey, Tuple[int, Set[str]]] = {}
     for event in events:
@@ -2771,18 +2808,180 @@ def _slug_from_artifact(path: str) -> str:
 
 
 def _suggest(db_path: Path, stream: str, event_type: str,
-             data: Dict[str, Any]) -> str:
+             data: Dict[str, Any]) -> Optional[str]:
+    """A ready `append` for ``stream``, or None when its name cannot be printed.
+
+    The command reaches the session inside the Stop block text. A stream name comes from
+    the journal, so two shapes need care. A name that starts with ``-`` goes as
+    ``--stream=<name>``: as a separate token argparse would read it as a flag and the
+    command would fail. A name that holds a line break, or any other character that
+    does not print on one line (``str.isprintable``), gets no command: collapsing a line
+    break would address another stream, and printing it would add lines to the block
+    text. The same holds for the whole command, whose db path comes from the sidecar.
+    """
     from shlex import quote
 
     script = str(Path(__file__).resolve())
-    return " ".join([
+    command = " ".join([
         "python3", quote(script),
         "--db", quote(str(db_path)),
         "append",
-        "--stream", quote(stream),
+        "--stream=" + quote(stream),
         "--type", quote(event_type),
         "--data", quote(json.dumps(data, sort_keys=True)),
     ])
+    return command if command.isprintable() else None
+
+
+# The `deviation` kind that waives a Stop gate finding, and the meta key that holds the
+# last recorded check (ADR 0020).
+GATE_WAIVED = "gate-waived"
+LAST_CHECK_KEY = "last_check"
+# The note a printed waiver command carries. `append` refuses it: a waiver records a
+# reason, and the session writes one before the command runs.
+WAIVER_NOTE_PLACEHOLDER = "<why these tasks need no task-done or verify-run>"
+# What stands in for a command `_suggest` would not print.
+NO_COMMAND = "(no command: a name in it holds a character that does not print on one line)"
+
+# Why `check` did not judge a worklog the session wrote: the file is gone, no stream
+# owns it, or only finished streams do.
+SkipReason = Literal["not-found", "no-stream", "finished"]
+
+
+class CheckSkip(TypedDict):
+    path: str
+    reason: SkipReason
+    detail: str
+
+
+class CheckWaiver(TypedDict):
+    """One ready `deviation` append that waives every finding on ``stream``; ``command``
+    is None when ``_suggest`` would not print one."""
+
+    stream: str
+    task_ids: List[str]
+    command: Optional[str]
+
+
+class CheckReport(TypedDict):
+    """``check --json``. Every finding carries ``missing``, ``detail``,
+    ``suggested_command`` (or None, see ``_suggest``), ``stream`` and ``task_id``."""
+
+    findings: List[Dict[str, Any]]
+    skipped: List[CheckSkip]
+    waivers: List[CheckWaiver]
+
+
+def _names_artifact(path: str, ref: str) -> bool:
+    """True when an event's ``ref`` names the artifact a hook recorded at ``path``.
+
+    The hook's path is relative to the project. A nested repo's stream names its worklog
+    relative to that repo, so the ref may be a tail of the path (the rule
+    ``_free_slug_named_worklog`` applies to a claim).
+    """
+    path, ref = _normalized_ref(path), _normalized_ref(ref)
+    return bool(ref) and (path == ref or path.endswith("/" + ref))
+
+
+def _slug_names_file(slug: str, name: str) -> bool:
+    """``<slug>.worklog.md``, or a name that starts with ``<slug>-`` or ``<slug>.``: a
+    substring match would let a short slug take another feature's worklog."""
+    return bool(slug) and (
+        name == f"{slug}.worklog.md"
+        or name.startswith(f"{slug}-")
+        or name.startswith(f"{slug}.")
+    )
+
+
+def _has_flow_event(events: Sequence[Event]) -> bool:
+    """`artifact-written` is the capture hook's own footprint, so it never makes a
+    stream a tracked flow: counting it would mark every observed file as tracked."""
+    return any(e.type != "artifact-written" for e in events)
+
+
+def worklog_owners(
+    conn: sqlite3.Connection,
+    by_stream: Dict[str, List[Event]],
+    path: str,
+    project_dir: Path,
+    homes: Dict[str, str],
+) -> Tuple[List[str], List[str]]:
+    """The work streams that own the worklog at ``path``: (live or dormant, finished).
+
+    A stream owns a worklog the way ``position`` shows one (ADR 0020):
+    - ``event``: its last worklog ref names the path;
+    - ``name``: it has no worklog ref, and the path is the slug-named worklog
+      ``position`` would pick for it;
+    - ``legacy``: it has no worklog ref and is named ``feature/<worklog file name>``
+      (journals from before v0.11).
+    The most exact binding wins. A stream whose events name the worklog, live or
+    finished, leaves nothing to a name. Among names, ``<slug>.worklog.md`` beats a
+    prefix, then the longer slug: a parent stream ``epic/auth`` does not take the child's
+    ``auth-login.worklog.md``. A stream with no flow event owns nothing. Streams come
+    back in name order.
+    """
+    relative = path
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        try:
+            relative = candidate.relative_to(project_dir).as_posix()
+        except ValueError:
+            relative = path
+    name = relative.replace(os.sep, "/").rsplit("/", 1)[-1]
+    legacy = FEATURE_STREAM_PREFIX + _slug_from_artifact(path)
+
+    by_event: List[str] = []
+    by_name: List[Tuple[Tuple[bool, int], str]] = []
+    for stream in sorted(by_stream):
+        events = by_stream[stream]
+        if not _has_flow_event(events):
+            continue
+        bound = _event_bound_worklog(events, homes)
+        if bound is not None:
+            if _names_artifact(relative, bound):
+                by_event.append(stream)
+            continue
+        slug = stream.rsplit("/", 1)[-1]
+        if not _slug_names_file(slug, name):
+            continue
+        owns = stream == legacy
+        if not owns:
+            found = _free_slug_named_worklog(conn, stream, project_dir, homes, None)
+            owns = found is not None and _normalized_ref(found) == _normalized_ref(
+                relative
+            )
+        if owns:
+            by_name.append(((name == f"{slug}.worklog.md", len(slug)), stream))
+
+    owning = by_event
+    if not owning and by_name:
+        best = max(rank for rank, _ in by_name)
+        owning = [stream for rank, stream in by_name if rank == best]
+    owners: List[str] = []
+    finished: List[str] = []
+    for stream in owning:
+        (finished if fold_stream(by_stream[stream])["terminal"] else owners).append(stream)
+    return owners, finished
+
+
+def _waived_task_ids(events: Iterable[Event]) -> Set[str]:
+    """The task ids a `deviation` of kind ``gate-waived`` names (ADR 0020). A waiver
+    that gives no reason waives nothing, however the row got into the journal."""
+    waived: Set[str] = set()
+    for event in events:
+        if (event.type == "deviation" and event.data.get("kind") == GATE_WAIVED
+                and _waiver_reason(event.data) is not None):
+            waived.update(_string_list(event.data.get("task_ids")))
+    return waived
+
+
+def _passed_task_ids(events: Iterable[Event]) -> Set[str]:
+    """The task ids a passing `verify-run` names."""
+    passed: Set[str] = set()
+    for event in events:
+        if event.type == "verify-run" and event.data.get("outcome") == "pass":
+            passed.update(_string_list(event.data.get("task_ids")))
+    return passed
 
 
 def run_check(
@@ -2791,81 +2990,102 @@ def run_check(
     db_path: Path,
     project_dir: Path,
     homes: Dict[str, str],
-) -> List[Dict[str, Any]]:
-    """Detect semantic events missing for ``session``. Returns findings."""
+) -> CheckReport:
+    """Detect semantic events missing for ``session`` (the Stop gate, ADR 0020).
+
+    Two rules. Rule A: a Build Plan box is ticked in a worklog this session wrote, and
+    no stream that owns the worklog holds its `task-done`. Rule C: this session recorded
+    a `task-done` that no passing `verify-run` in its stream names. A `deviation` of kind
+    ``gate-waived`` on the stream clears the task ids it names, for both rules.
+
+    ``skipped`` lists each worklog the session wrote that rule A did not judge, with the
+    reason, so a rule that cannot fire is visible. ``waivers`` holds one ready append per
+    stream that would clear every finding there.
+    """
     all_events = read_events(conn)
     session_events = [e for e in all_events if event_session(e) == session]
+    by_stream: Dict[str, List[Event]] = {}
+    for event in all_events:
+        if is_work_stream(event.stream):
+            by_stream.setdefault(event.stream, []).append(event)
+    # The work streams this session itself appended to: where a finding's command points
+    # when several streams own one worklog.
+    driven = {
+        e.stream for e in session_events
+        if _actor_role(e) != "hook" and is_work_stream(e.stream)
+    }
     findings: List[Dict[str, Any]] = []
+    skipped: List[CheckSkip] = []
 
     # -- rule A: ticked build-plan boxes with no task-done ------------------
     # The artifacts this session wrote, as the fold decides it (ADR 0008): a row's own
     # `session` may name a session that only saw the write.
     authors = artifact_authors(all_events)
-    worklog_paths: List[Tuple[str, str]] = []  # (path, stream)
-    prd_paths: List[Tuple[str, str]] = []
+    worklog_paths: List[str] = []
     for event in all_events:
         if claim_of(event) is None:
             continue
         if authors.get(_artifact_key(event.data)) != session:
             continue
         path = event.data["path"]
-        if not path:
-            continue
-        kind = classify_artifact(path, homes)
-        if kind == "worklog" and (path, event.stream) not in worklog_paths:
-            worklog_paths.append((path, event.stream))
-        elif kind == "prd" and (path, event.stream) not in prd_paths:
-            prd_paths.append((path, event.stream))
+        if (path and classify_artifact(path, homes) == "worklog"
+                and path not in worklog_paths):
+            worklog_paths.append(path)
 
-    for path, event_stream in worklog_paths:
+    for path in worklog_paths:
         resolved = _resolve_artifact(project_dir, path)
-        if not resolved.is_file():
-            continue
-        try:
-            text = resolved.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = None
+        if resolved.is_file():
+            try:
+                text = resolved.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = None
+        if text is None:
+            skipped.append({
+                "path": path, "reason": "not-found",
+                "detail": "the file is not readable under the project directory",
+            })
             continue
         ticked = parse_ticked_tasks(text)
         if not ticked:
             continue
-        target_stream = FEATURE_STREAM_PREFIX + _slug_from_artifact(path)
-        candidate_streams = {event_stream, target_stream}
 
         # Only gate a flow the journal is actually tracking. A worklog can be written
         # without any flow behind it — a legacy artifact from before this journal
         # existed, or a vault sync pulling in someone else's edit — and blocking a
         # session over ticked boxes the user never touched would make the gate a
-        # nuisance rather than a safeguard. `artifact-written` is excluded on purpose:
-        # it is the capture hook's own footprint, so counting it would mark every
-        # observed file as tracked and defeat the check.
-        feature_streams = {s for s in candidate_streams if is_work_stream(s)}
-        if not any(
-            e.stream in feature_streams and e.type != "artifact-written"
-            for e in all_events
-        ):
+        # nuisance rather than a safeguard. So there is no fallback to "the stream this
+        # session drives", and a finished flow's worklog stays closed.
+        owners, finished = worklog_owners(conn, by_stream, path, project_dir, homes)
+        if not owners:
+            skipped.append({
+                "path": path,
+                "reason": "finished" if finished else "no-stream",
+                "detail": (
+                    "owned only by finished stream(s): " + ", ".join(finished)
+                    if finished else
+                    "no stream names this worklog in its events, and it is not the "
+                    "newest worklog that a stream's slug names"
+                ),
+            })
             continue
 
+        owned = [e for stream in owners + finished for e in by_stream[stream]]
         covered = {
-            e.data.get("task_id")
-            for e in all_events
-            if e.type == "task-done" and e.stream in candidate_streams
-        }
+            e.data.get("task_id") for e in owned if e.type == "task-done"
+        } | _waived_task_ids(owned)
+        target_stream = next((s for s in owners if s in driven), owners[0])
+        # `append` looks for the passing verify-run on the stream it appends to, so the
+        # hint reads that stream only.
+        verified = _passed_task_ids(by_stream[target_stream])
         for task_id in ticked:
             if task_id in covered:
                 continue
-            has_verify = any(
-                e.type == "verify-run"
-                and e.stream in candidate_streams
-                and e.data.get("outcome") == "pass"
-                and isinstance(e.data.get("task_ids"), list)
-                and task_id in e.data["task_ids"]
-                for e in all_events
-            )
             detail = (
                 f"{path}: Build Plan box {task_id} is ticked but no task-done event "
                 f"records it"
             )
-            if not has_verify:
+            if task_id not in verified:
                 detail += (
                     f" — record a verify-run (outcome=pass) naming {task_id} first, "
                     "or append with --force and a reason"
@@ -2873,67 +3093,37 @@ def run_check(
             findings.append({
                 "missing": "task-done",
                 "detail": detail,
+                "stream": target_stream,
+                "task_id": task_id,
                 "suggested_command": _suggest(
                     db_path, target_stream, "task-done", {"task_id": task_id}
                 ),
             })
 
-    # -- rule B: PRD written at clarify with no gate-decision this session --
-    session_has_gate_decision = any(
-        e.type == "gate-decision" for e in session_events
-    )
-    for path, event_stream in prd_paths:
-        if session_has_gate_decision:
-            break
-        target_stream = FEATURE_STREAM_PREFIX + _slug_from_artifact(path)
-        phase = None
-        for stream in (target_stream, event_stream):
-            events = [e for e in all_events if e.stream == stream]
-            if events:
-                phase = fold_stream(events)["phase"]
-                if phase is not None:
-                    break
-        if phase != "clarify":
-            continue
-        findings.append({
-            "missing": "gate-decision",
-            "detail": (
-                f"{path} was written while {target_stream} is in the clarify phase, "
-                "but this session recorded no gate-decision event"
-            ),
-            "suggested_command": _suggest(db_path, target_stream, "gate-decision", {
-                "gate": "clarify",
-                "question": "<what was decided>",
-                "decision": "<the answer>",
-                "mode": "executive",
-                "rationale": "<why>",
-            }),
-        })
-
-    # -- rule C: task-done this session with no preceding passing verify-run
+    # -- rule C: task-done this session with no passing verify-run naming it
+    # `append` refuses such a task-done, so only a forced one gets here. A verify-run
+    # recorded afterwards counts: the command this finding suggests must clear it.
+    judged: Set[Tuple[str, str]] = set()
     for event in session_events:
         if event.type != "task-done":
             continue
         task_id = event.data.get("task_id")
         if not isinstance(task_id, str) or not task_id:
             continue
-        covered = any(
-            e.type == "verify-run"
-            and e.stream == event.stream
-            and e.seq < event.seq
-            and e.data.get("outcome") == "pass"
-            and isinstance(e.data.get("task_ids"), list)
-            and task_id in e.data["task_ids"]
-            for e in all_events
-        )
-        if covered:
+        if (event.stream, task_id) in judged:
+            continue
+        judged.add((event.stream, task_id))
+        stream_events = [e for e in all_events if e.stream == event.stream]
+        if task_id in _passed_task_ids(stream_events) | _waived_task_ids(stream_events):
             continue
         findings.append({
             "missing": "verify-run",
             "detail": (
                 f"{event.stream}: task-done {task_id} (seq {event.seq}) has no "
-                "preceding verify-run with outcome=pass naming it"
+                "verify-run with outcome=pass naming it"
             ),
+            "stream": event.stream,
+            "task_id": task_id,
             "suggested_command": _suggest(db_path, event.stream, "verify-run", {
                 "scope": "<what was run>",
                 "commands": [{"cmd": "<command>", "exit": 0}],
@@ -2942,7 +3132,92 @@ def run_check(
             }),
         })
 
-    return findings
+    per_stream: Dict[str, List[str]] = {}
+    for finding in findings:
+        ids = per_stream.setdefault(finding["stream"], [])
+        if finding["task_id"] not in ids:
+            ids.append(finding["task_id"])
+    waivers: List[CheckWaiver] = [
+        {
+            "stream": stream,
+            "task_ids": ids,
+            "command": _suggest(db_path, stream, "deviation", {
+                "kind": GATE_WAIVED,
+                "task_ids": ids,
+                "note": WAIVER_NOTE_PLACEHOLDER,
+            }),
+        }
+        for stream, ids in per_stream.items()
+    ]
+    return {"findings": findings, "skipped": skipped, "waivers": waivers}
+
+
+def record_check(conn: sqlite3.Connection, session: str, report: CheckReport) -> None:
+    """Overwrite the one `meta` value that says when the gate last ran (ADR 0020).
+
+    The Stop hook asks for it, so `doctor` can tell a gate that runs and finds nothing
+    from one that never runs. A failed write is ignored: the result does not depend on it.
+    """
+    try:
+        if not _table_exists(conn, "meta"):
+            return
+        _set_meta(conn, LAST_CHECK_KEY, json.dumps({
+            "at": utc_now(),
+            "session": session,
+            "findings": len(report["findings"]),
+            "skipped": len(report["skipped"]),
+        }, sort_keys=True))
+    except sqlite3.Error:
+        return
+
+
+def stop_gate_trace(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """``doctor``'s view of the Stop gate: the last recorded check and the last block."""
+    last_check = None
+    if _table_exists(conn, "meta"):
+        try:
+            stored = json.loads(get_meta(conn, LAST_CHECK_KEY) or "null")
+        except ValueError:
+            stored = None
+        # A value this code did not write reads as "no check recorded".
+        if (isinstance(stored, dict)
+                and isinstance(stored.get("at"), str)
+                and isinstance(stored.get("session"), str)
+                and _is_count(stored.get("findings"))
+                and _is_count(stored.get("skipped"))):
+            last_check = {key: stored[key] for key in
+                          ("at", "session", "findings", "skipped")}
+    last_block = None
+    row = conn.execute(
+        "SELECT ts, data FROM events WHERE type = 'gate-blocked' "
+        "ORDER BY seq DESC LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        try:
+            data = json.loads(row["data"] or "{}")
+        except ValueError:
+            data = {}
+        data = data if isinstance(data, dict) else {}
+        last_block = {
+            "at": row["ts"],
+            "session": _string_or_none(data.get("session")),
+            "findings": data.get("findings") if _is_count(data.get("findings")) else None,
+        }
+    return {"last_check": last_check, "last_block": last_block}
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def render_skipped(skipped: Sequence[CheckSkip]) -> str:
+    lines = [f"{len(skipped)} worklog(s) this session wrote were not judged:"]
+    for skip in skipped:
+        reason = skip["reason"].replace("-", " ")
+        lines.append(
+            f"  • {_one_line(skip['path'])}: {reason} — {_one_line(skip['detail'])}"
+        )
+    return "\n".join(lines)
 
 
 def render_findings(findings: Sequence[Dict[str, Any]]) -> str:
@@ -2954,7 +3229,7 @@ def render_findings(findings: Sequence[Dict[str, Any]]) -> str:
         lines.append(
             f"  • missing {finding['missing']}: {_one_line(finding['detail'])}"
         )
-        lines.append(f"      {finding['suggested_command']}")
+        lines.append(f"      {finding['suggested_command'] or NO_COMMAND}")
     return "\n".join(lines)
 
 
@@ -3174,13 +3449,10 @@ def build_position(
         )
     folded = fold_stream(events, now=now)
 
-    worklog: Optional[str] = None
+    worklog = _event_bound_worklog(events, homes)
     adrs: List[str] = []
     for ref in _committed_refs(events):
-        kind = classify_artifact(ref, homes)
-        if kind == "worklog":
-            worklog = ref
-        elif kind == "adr" and ref not in adrs:
+        if classify_artifact(ref, homes) == "adr" and ref not in adrs:
             adrs.append(ref)
     worklog_from: Optional[WorklogFrom] = "event" if worklog is not None else None
     if worklog is None:
@@ -3275,6 +3547,16 @@ def _committed_refs(events: Sequence[Event]) -> List[str]:
     return refs
 
 
+def _event_bound_worklog(events: Sequence[Event], homes: Dict[str, str]) -> Optional[str]:
+    """The last worklog a stream's committing events name, or None: the worklog
+    ``position`` shows as ``worklog_from: event`` and the Stop gate judges (ADR 0020)."""
+    worklog: Optional[str] = None
+    for ref in _committed_refs(events):
+        if classify_artifact(ref, homes) == "worklog":
+            worklog = ref
+    return worklog
+
+
 _GLOB_MAGIC_RE = re.compile(r"[*?[]")
 
 
@@ -3341,12 +3623,7 @@ def _free_slug_named_worklog(
             continue
         for entry in entries:
             name = entry.name
-            named = (
-                name == f"{slug}.worklog.md"
-                or name.startswith(f"{slug}-")
-                or name.startswith(f"{slug}.")
-            )
-            if not named or not fnmatch(name, pattern):
+            if not _slug_names_file(slug, name) or not fnmatch(name, pattern):
                 continue
             try:
                 if not entry.is_file():
@@ -3983,6 +4260,7 @@ def run_doctor(conn: sqlite3.Connection, resolution: Resolution) -> Dict[str, An
         "db_source": resolution.source,
         "integrity_check": integrity,
         "off_vocabulary": off_vocabulary,
+        "stop_gate": stop_gate_trace(conn),
         "journal_mode": str(mode).lower(),
         "schema_version": schema_version,
         "pending_migrations": pending_migrations(conn),
@@ -4172,6 +4450,28 @@ def render_doctor(report: Dict[str, Any]) -> str:
                 state = "agrees"
             lines.append(f"config          : {config['path']} — {state}")
             lines.extend(f"drift           : {line}" for line in config_drift)
+    gate = report.get("stop_gate")
+    if gate is not None:
+        check, block = gate.get("last_check"), gate.get("last_block")
+        def shown(value: Any) -> str:
+            return "?" if value is None else _one_line(value)
+
+        lines.append(
+            "stop gate       : last check: "
+            + (
+                f"{shown(check['at'])} — session {shown(check['session'])}, "
+                f"{check['findings']} finding(s), {check['skipped']} skipped"
+                if check else "never recorded"
+            )
+        )
+        lines.append(
+            "                  last block: "
+            + (
+                f"{shown(block['at'])} — session {shown(block['session'])}, "
+                f"{shown(block['findings'])} finding(s)"
+                if block else "never"
+            )
+        )
     drift = report.get("off_vocabulary") or []
     if drift:
         summary = ", ".join(f"{d['type']} x{d['count']}" for d in drift)
@@ -4455,6 +4755,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="session id (matched against data.session, a user row's "
                               "data.recorded_by, or a machine role's actor label)")
     p_check.add_argument("--json", action="store_true", help="machine-readable output")
+    p_check.add_argument("--record", action="store_true",
+                         help="stamp this run as the last check (one meta value, no "
+                              "event); the Stop hook passes it, `doctor` prints it")
 
     p_log = subparsers.add_parser("log", help="raw events, newest last")
     _add_db_flag(p_log)
@@ -4831,22 +5134,28 @@ def cmd_stats(args, resolution: Resolution) -> int:
 def cmd_check(args, resolution: Resolution) -> int:
     conn = connect(resolution.db_path)
     try:
-        findings = run_check(
+        report = run_check(
             conn,
             session=args.session,
             db_path=resolution.db_path,
             project_dir=resolution.project_dir,
             homes=artifact_homes(resolution.sidecar),
         )
+        if args.record:
+            record_check(conn, args.session, report)
     finally:
         conn.close()
 
+    findings = report["findings"]
     if args.json:
-        print(json.dumps({"findings": findings}, sort_keys=True))
-    elif findings:
-        print(render_findings(findings))
+        print(json.dumps(report, sort_keys=True))
     else:
-        print("no missing semantic events for this session")
+        print(
+            render_findings(findings) if findings
+            else "no missing semantic events for this session"
+        )
+        if report["skipped"]:
+            print(render_skipped(report["skipped"]))
     return EXIT_CHECK if findings else EXIT_OK
 
 

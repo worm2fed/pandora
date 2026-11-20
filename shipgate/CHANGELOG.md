@@ -2,6 +2,64 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.26.0 — the Stop gate can block: it finds a worklog's stream the way `position` does, a waiver clears a finding, and `doctor` shows the last check.
+
+**The Stop gate never blocked (#21, ADR 0020).** The Stop hook runs `journal.py check`, which
+should block a session that ticked Build Plan boxes and recorded no `task-done`. In real use
+it never did: 0 `gate-blocked` rows in 9,449 events of seven journals, across 3,171 hook
+runs. `check` looked for the flow on a stream named `feature/<worklog file name>`. Since
+v0.11 a stream is named for its branch, so the lookup never matched and the rule skipped
+with no finding. The hook tests used the one stream name that works.
+
+**Changed behaviour: a session can now be blocked at Stop.** After the update, a session
+that writes a worklog is blocked while a ticked box of that worklog has no `task-done` on
+the stream that owns it. This includes boxes ticked in earlier sessions. The exits are the
+`task-done` rows, or one waiver (below).
+
+- **One binding for the gate and the HUD.** A stream owns a worklog when its events name it:
+  the last worklog ref of `design-committed`, `design-queued`, `task-done`, `verify-run`,
+  `review-verdict` and `gate-decision`, as `position` reads them. A stream with no worklog
+  ref owns the worklog its slug names, the one `position` shows for it. The stream name
+  `feature/<worklog file name>` still binds, for a journal from before v0.11. The most
+  exact binding wins: an event ref beats a name, even from a finished stream, and
+  `<slug>.worklog.md` beats a prefix match. So a parent stream does not take a child's
+  worklog.
+- **No block without an owner.** A worklog that no stream owns is not judged, and neither
+  is one that only a finished stream owns. `check --json` lists each under `skipped` with
+  its reason: `no-stream`, `finished` or `not-found`. The text output prints the same. A
+  rule that cannot fire is now visible.
+- **A waiver clears a finding.** A `deviation` with `kind: gate-waived`, `task_ids` and a
+  reason in `note`, on the owning stream, clears those task ids. `check --json` carries
+  `waivers`: one command per stream. The block text prints it. The command holds a
+  placeholder note. `append` refuses a waiver with no task ids, with an empty note or
+  with a `<...>` placeholder note, with `--force` too, and `check` reads such a waiver
+  as none. Before, the block text said to record a `deviation`, `check` read none, and
+  the same block came back on the next turn. The `deviation` shape gains the list
+  `task_ids`.
+- **A printed command survives an odd stream name.** The commands use `--stream=<name>`, so
+  a name that starts with `-` still runs. A stream name that holds a line break, or
+  another character that does not print on one line, gets no command. The block text
+  keeps each finding on one line.
+- **The forced-`task-done` rule can be cleared.** `append` refuses a `task-done` with no
+  passing `verify-run`, so only a forced one reaches this rule. A passing `verify-run`
+  that names the task now counts wherever it sits in the stream. Before, only an earlier
+  one counted, so the command the finding suggested could not clear it.
+- **Retired: the PRD rule.** `check` no longer reports a PRD written in clarify with no
+  `gate-decision`. No event names a PRD before `clarify-passed`, so the binding cannot
+  reach it, and the old lookup never matched. Nothing in the Stop hook checks
+  `gate-decision` now; `clarify` writes it in its own step.
+- **`check --record`, and `doctor` shows the gate.** The Stop hook passes `--record`. It
+  overwrites one `meta` value with the time, the session, the finding count and the skip
+  count. No event row is written per stop. `doctor` prints that value and the last
+  `gate-blocked` row, and `doctor --json` carries both under `stop_gate`. Plain `check`
+  stays read-only.
+- Each finding in `check --json` also carries `stream` and `task_id`.
+
+Tests: end-to-end probes with SessionStart, the capture hook and the Stop hook on streams
+named `feat/<slug>` and `fix/<id>-<slug>`: each rule blocks, the suggested events unblock,
+a worklog with no owner and a finished stream are skipped and reported, the waiver command
+clears the block, and `doctor` reports the last check and the last block.
+
 v0.25.1 — the status brief returns after `/clear` and after a compaction.
 
 **The SessionStart hook runs on every source (#20).** `hooks/core.json` registered the hook

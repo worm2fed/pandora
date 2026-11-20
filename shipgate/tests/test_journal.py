@@ -3271,59 +3271,369 @@ class TestCheck(JournalTestCase):
     def test_session_with_no_artifacts_passes(self):
         self.check(rc=OK, session="nothing-happened")
 
-    def test_prd_written_at_clarify_without_gate_decision_blocks(self):
+    def test_a_prd_written_in_clarify_is_not_gated(self):
+        """Rule B is retired (ADR 0020): no event names a PRD before `clarify-passed`,
+        so no binding reaches it, and the old lookup by stream name never matched."""
         self.write("docs/prd/demo.md", "# PRD\n")
         self.append_event("feature/demo", "phase-entered", {"phase": "workspace"})
         self.append_event("feature/demo", "phase-entered", {
             "phase": "clarify", "skipped": ["route-and-map", "explore"],
         })
-        self.artifact_written("docs/prd/demo.md")
-        findings = json.loads(self.check(rc=CHECK).stdout)["findings"]
-        self.assertEqual([f["missing"] for f in findings], ["gate-decision"])
-        self.assertIn("gate-decision", findings[0]["suggested_command"])
+        self.artifact_written("docs/prd/demo.md", stream="shipgate")
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual(report["findings"], [])
+        self.assertEqual(report["skipped"], [])
 
-    def test_prd_with_gate_decision_in_session_passes(self):
-        self.write("docs/prd/demo.md", "# PRD\n")
-        self.append_event("feature/demo", "phase-entered", {"phase": "workspace"})
-        self.append_event("feature/demo", "phase-entered", {
-            "phase": "clarify", "skipped": ["route-and-map", "explore"],
-        })
-        self.append_event("feature/demo", "gate-decision", {
-            "gate": "clarify", "question": "q", "decision": "d", "mode": "ask",
-        }, "--actor", "orchestrator@" + self.SESSION)
-        self.artifact_written("docs/prd/demo.md")
-        self.check(rc=OK)
+    # -- the binding (ADR 0020) ------------------------------------------
+    def captured(self, path="docs/prd/demo.worklog.md"):
+        """What the hooks record: the claim sits on the tool's own stream."""
+        self.artifact_written(path, stream="shipgate")
 
-    def test_prd_with_a_default_actor_gate_decision_passes(self):
-        """Rule B was inert for skills: they pass no actor, `session --set` does."""
-        self.write("docs/prd/demo.md", "# PRD\n")
-        self.journal("--db", self.db, "session", "--set", self.SESSION, rc=OK)
-        self.append_event("feature/demo", "phase-entered", {"phase": "workspace"})
-        self.append_event("feature/demo", "phase-entered", {
-            "phase": "clarify", "skipped": ["route-and-map", "explore"],
+    def names_the_worklog(self, stream, path="docs/prd/demo.worklog.md"):
+        self.append_event(stream, "phase-entered", {"phase": "workspace"})
+        self.append_event(stream, "design-committed", {
+            "worklog": path, "skipped": ["route-and-map", "explore", "clarify"],
         })
-        self.append_event("feature/demo", "gate-decision", {
-            "gate": "clarify", "question": "q", "decision": "d", "mode": "ask",
-        })
-        self.artifact_written("docs/prd/demo.md")
-        self.check(rc=OK)
 
-    def test_prd_with_a_user_gate_decision_from_this_session_passes(self):
-        """Issue #9: the user's own decision, recorded by this session, satisfies rule B."""
-        self.write("docs/prd/demo.md", "# PRD\n")
-        self.append_event("feature/demo", "phase-entered", {"phase": "workspace"})
-        self.append_event("feature/demo", "phase-entered", {
-            "phase": "clarify", "skipped": ["route-and-map", "explore"],
-        })
-        self.journal(
-            "--db", self.db, "append", "--stream", "feature/demo",
-            "--type", "gate-decision", "--actor", "user",
-            "--data", json.dumps({"gate": "clarify", "question": "q", "decision": "d",
-                                  "mode": "ask", "raised_by": "user"}),
-            rc=OK, session_env=self.SESSION,
+    def test_a_branch_named_stream_is_gated_through_its_slug(self):
+        self.worklog("- [x] T001 — first")
+        self.append_event("feat/demo", "phase-entered", {"phase": "workspace"})
+        self.captured()
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual(
+            [(f["missing"], f["stream"], f["task_id"]) for f in report["findings"]],
+            [("task-done", "feat/demo", "T001")],
         )
-        self.artifact_written("docs/prd/demo.md")
+        self.assertIn("--stream=feat/demo ", report["findings"][0]["suggested_command"])
+        self.assertEqual(report["skipped"], [])
+
+    def test_a_slug_names_a_worklog_only_at_a_boundary(self):
+        """`position`'s rule: `demo` names `demo.worklog.md` and `demo-2.worklog.md`,
+        never `demolition.worklog.md`."""
+        self.write("docs/prd/demolition.worklog.md",
+                   WORKLOG_TEMPLATE.format(tasks="- [x] T001 — first"))
+        self.append_event("feat/demo", "phase-entered", {"phase": "workspace"})
+        self.captured("docs/prd/demolition.worklog.md")
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual([s["reason"] for s in report["skipped"]], ["no-stream"])
+
+    def test_a_stream_is_gated_through_the_worklog_its_events_name(self):
+        self.worklog("- [x] T001 — first\n- [x] T002 — second")
+        self.names_the_worklog("fix/1290-date-off-by-one")
+        self.append_event("fix/1290-date-off-by-one", "verify-run", {
+            "outcome": "pass", "task_ids": ["T001"],
+        })
+        self.append_event("fix/1290-date-off-by-one", "task-done", {"task_id": "T001"})
+        self.captured()
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual(
+            [(f["stream"], f["task_id"]) for f in report["findings"]],
+            [("fix/1290-date-off-by-one", "T002")],
+        )
+
+    def test_a_nested_repos_stream_names_its_worklog_from_that_repo(self):
+        """The hook's path is relative to the project, the ref to the nested repo."""
+        self.write("api/docs/prd/demo.worklog.md",
+                   WORKLOG_TEMPLATE.format(tasks="- [x] T001 — first"))
+        self.names_the_worklog("fix/7-x")
+        self.captured("api/docs/prd/demo.worklog.md")
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual([f["stream"] for f in report["findings"]], ["fix/7-x"])
+
+    def test_the_last_worklog_a_stream_names_is_the_one_it_owns(self):
+        self.worklog("- [x] T001 — first")
+        self.write("docs/prd/later.worklog.md", WORKLOG_TEMPLATE.format(tasks=""))
+        self.names_the_worklog("fix/7-x")
+        self.append_event("fix/7-x", "gate-decision", {
+            "gate": "design", "question": "q", "decision": "d", "mode": "ask",
+            "refs": ["docs/prd/later.worklog.md"],
+        })
+        self.captured()
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual([s["reason"] for s in report["skipped"]], ["no-stream"])
+
+    def test_a_worklog_no_stream_owns_is_reported_as_skipped(self):
+        self.worklog("- [x] T001 — first")
+        self.append_event("feat/other", "phase-entered", {"phase": "workspace"})
+        self.captured()
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual(report["findings"], [])
+        self.assertEqual(
+            [(s["path"], s["reason"]) for s in report["skipped"]],
+            [("docs/prd/demo.worklog.md", "no-stream")],
+        )
+
+    def test_a_worklog_with_no_ticked_box_is_not_a_skip(self):
+        self.worklog("- [ ] T001 — first")
+        self.captured()
+        self.assertEqual(json.loads(self.check(rc=OK).stdout)["skipped"], [])
+
+    def test_a_worklog_that_is_gone_is_reported_as_skipped(self):
+        self.append_event("feat/demo", "phase-entered", {"phase": "workspace"})
+        self.captured()
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual([s["reason"] for s in report["skipped"]], ["not-found"])
+
+    def test_a_finished_stream_is_skipped(self):
+        self.worklog("- [x] T001 — first")
+        self.names_the_worklog("fix/7-x")
+        self.append_event("fix/7-x", "flow-completed", {"reason": "merged"})
+        self.captured()
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual([s["reason"] for s in report["skipped"]], ["finished"])
+        self.assertIn("fix/7-x", report["skipped"][0]["detail"])
+
+    def test_a_waiver_clears_the_boxes_it_names(self):
+        self.worklog("- [x] T001 — first\n- [x] T002 — second")
+        self.names_the_worklog("fix/7-x")
+        self.captured()
+        self.append_event("fix/7-x", "deviation", {
+            "kind": "gate-waived", "task_ids": ["T001"], "note": "ticked before tracking",
+        })
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual([f["task_id"] for f in report["findings"]], ["T002"])
+        self.assertEqual(
+            [(w["stream"], w["task_ids"]) for w in report["waivers"]],
+            [("fix/7-x", ["T002"])],
+        )
+
+    def test_a_waiver_on_another_stream_clears_nothing(self):
+        self.worklog("- [x] T001 — first")
+        self.names_the_worklog("fix/7-x")
+        self.captured()
+        self.append_event("feat/other", "deviation", {
+            "kind": "gate-waived", "task_ids": ["T001"], "note": "n",
+        })
+        self.check(rc=CHECK)
+
+    def test_the_waiver_command_resolves_every_finding(self):
+        self.worklog("- [x] T001 — first\n- [x] T002 — second")
+        self.names_the_worklog("fix/7-x")
+        self.captured()
+        self.append_event("fix/7-x", "task-done", {"task_id": "T009"},
+                          "--force", "--actor", "orchestrator@" + self.SESSION)
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual(len(report["findings"]), 3)
+        self.assertEqual(
+            [(w["stream"], w["task_ids"]) for w in report["waivers"]],
+            [("fix/7-x", ["T001", "T002", "T009"])],
+        )
+        waived = self.run_waiver(report["waivers"][0]["command"])
+        self.assertEqual(waived.returncode, OK, msg=waived.stderr)
+        self.assertEqual(json.loads(self.check(rc=OK).stdout)["waivers"], [])
+
+    WAIVER_PLACEHOLDER = "<why these tasks need no task-done or verify-run>"
+
+    def run_waiver(self, command, reason="ticked before the flow was tracked"):
+        self.assertIn(self.WAIVER_PLACEHOLDER, command)
+        return subprocess.run(
+            command.replace(self.WAIVER_PLACEHOLDER, reason), shell=True,
+            cwd=str(self.root), capture_output=True, text=True,
+        )
+
+    def test_a_waiver_with_the_placeholder_note_is_refused(self):
+        self.worklog("- [x] T001 — first")
+        self.names_the_worklog("fix/7-x")
+        self.captured()
+        command = json.loads(self.check(rc=CHECK).stdout)["waivers"][0]["command"]
+        pasted = subprocess.run(
+            command, shell=True, cwd=str(self.root), capture_output=True, text=True,
+        )
+        self.assertEqual(pasted.returncode, GATE, msg=pasted.stderr)
+        self.assertIn("data.note", pasted.stderr)
+        self.check(rc=CHECK)
+
+    def test_force_does_not_skip_the_waivers_shape(self):
+        for data in (
+            {"kind": "gate-waived", "task_ids": ["T001"], "note": "<why>"},
+            {"kind": "gate-waived", "task_ids": ["T001"], "note": " "},
+            {"kind": "gate-waived", "task_ids": [], "note": "a reason"},
+        ):
+            with self.subTest(data=data):
+                self.append_event("fix/7-x", "deviation", data, "--force", rc=GATE)
+
+    def test_a_waiver_with_no_reason_in_the_journal_waives_nothing(self):
+        """A row that reached the journal some other way (an import, an older shipgate)
+        is read by the same rule `append` applies."""
+        module = load_journal_module()
+        self.worklog("- [x] T001 — first")
+        self.names_the_worklog("fix/7-x")
+        self.captured()
+        conn = module.connect(Path(self.db))
+        try:
+            conn.execute(
+                "INSERT INTO events (stream, version, type, data, ts, actor) "
+                "SELECT 'fix/7-x', MAX(version) + 1, 'deviation', ?, ?, 'orchestrator' "
+                "FROM events WHERE stream = 'fix/7-x'",
+                (json.dumps({"kind": "gate-waived", "task_ids": ["T001"],
+                             "note": "<why>"}), module.utc_now()),
+            )
+        finally:
+            conn.close()
+        self.check(rc=CHECK)
+
+    def test_a_waiver_names_at_least_one_task(self):
+        for task_ids in ([], [""], [7]):
+            with self.subTest(task_ids=task_ids):
+                proc = self.append_event("fix/7-x", "deviation", {
+                    "kind": "gate-waived", "task_ids": task_ids, "note": "n",
+                }, rc=GATE)
+                self.assertIn("task_ids", proc.stderr)
+
+    def test_a_deviation_of_another_kind_needs_no_task_ids(self):
+        self.append_event("fix/7-x", "deviation", {"note": "<n>", "kind": "other"})
+
+    # -- the most exact binding wins --------------------------------------
+    def test_a_parent_stream_does_not_take_a_childs_worklog(self):
+        """`epic/auth` prefixes `auth-login.worklog.md`; the child names it exactly."""
+        self.write("docs/prd/auth-login.worklog.md",
+                   WORKLOG_TEMPLATE.format(tasks="- [x] T001 — first"))
+        self.append_event("epic/auth", "phase-entered", {"phase": "workspace"})
+        self.append_event("feat/auth-login", "phase-entered", {"phase": "workspace"})
+        self.captured("docs/prd/auth-login.worklog.md")
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual([f["stream"] for f in report["findings"]], ["feat/auth-login"])
+
+    def test_a_parent_stream_does_not_reopen_a_finished_childs_worklog(self):
+        self.write("docs/prd/auth-login.worklog.md",
+                   WORKLOG_TEMPLATE.format(tasks="- [x] T001 — first"))
+        self.append_event("epic/auth", "phase-entered", {"phase": "workspace"})
+        for child_names_it_by in ("slug", "event"):
+            with self.subTest(child_names_it_by=child_names_it_by):
+                stream = f"feat/auth-login" if child_names_it_by == "slug" else "fix/9-y"
+                if child_names_it_by == "slug":
+                    self.append_event(stream, "phase-entered", {"phase": "workspace"})
+                else:
+                    self.names_the_worklog(stream, "docs/prd/auth-login.worklog.md")
+                self.append_event(stream, "flow-completed", {"reason": "merged"})
+                self.captured("docs/prd/auth-login.worklog.md")
+                report = json.loads(self.check(rc=OK).stdout)
+                self.assertEqual([s["reason"] for s in report["skipped"]], ["finished"])
+
+    def test_a_capture_row_on_a_work_stream_binds_nothing(self):
+        """Only an event ref or a name binds: where a hook filed the row says nothing."""
+        self.worklog("- [x] T001 — first")
+        self.append_event("chore/other", "phase-entered", {"phase": "workspace"})
+        self.artifact_written("docs/prd/demo.worklog.md", stream="chore/other")
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual([s["reason"] for s in report["skipped"]], ["no-stream"])
+
+    def test_a_legacy_stream_whose_events_name_another_worklog_owns_only_that(self):
+        """The gate and `position` agree: an event ref decides before any name."""
+        self.worklog("- [x] T001 — first")
+        self.write("docs/prd/other.worklog.md", WORKLOG_TEMPLATE.format(tasks=""))
+        self.names_the_worklog("feature/demo", "docs/prd/other.worklog.md")
+        self.captured()
+        report = json.loads(self.check(rc=OK).stdout)
+        self.assertEqual([s["reason"] for s in report["skipped"]], ["no-stream"])
+
+    def test_the_hint_reads_the_stream_the_command_appends_to(self):
+        """Two streams own one worklog by name. A verify-run on the other one does not
+        let `task-done` through on the target, so the hint still asks for one."""
+        self.worklog("- [x] T001 — first")
+        self.append_event("feat/demo", "phase-entered", {"phase": "workspace"})
+        self.append_event("fix/demo", "phase-entered", {"phase": "workspace"})
+        self.append_event("fix/demo", "verify-run", {
+            "outcome": "pass", "task_ids": ["T001"],
+        })
+        self.captured()
+        finding = json.loads(self.check(rc=CHECK).stdout)["findings"][0]
+        self.assertEqual(finding["stream"], "feat/demo")
+        self.assertIn("record a verify-run", finding["detail"])
+
+    def test_doctor_reads_a_foreign_last_check_as_never_recorded(self):
+        module = load_journal_module()
+        conn = module.connect(Path(self.db))
+        try:
+            for stored in ("not json", "[]", '{"at": 1}',
+                           '{"at": "t", "session": "s", "findings": true, "skipped": 0}'):
+                with self.subTest(stored=stored):
+                    module._set_meta(conn, module.LAST_CHECK_KEY, stored)
+                    self.assertIsNone(module.stop_gate_trace(conn)["last_check"])
+        finally:
+            conn.close()
+        text = self.journal("--db", self.db, "doctor", rc=OK).stdout
+        self.assertIn("last check: never recorded", text)
+        self.assertIn("last block: never", text)
+        self.assertNotIn("None", text)
+
+    def test_a_waiver_takes_a_list_of_task_ids(self):
+        proc = self.append_event("fix/7-x", "deviation", {
+            "kind": "gate-waived", "task_ids": "T001", "note": "n",
+        }, rc=GATE)
+        self.assertIn("task_ids", proc.stderr)
+
+    def test_a_verify_run_after_a_forced_task_done_clears_rule_c(self):
+        self.append_event("feat/demo", "task-done", {"task_id": "T001"},
+                          "--force", "--actor", "orchestrator@" + self.SESSION)
+        finding = json.loads(self.check(rc=CHECK).stdout)["findings"][0]
+        self.assertEqual((finding["missing"], finding["stream"], finding["task_id"]),
+                         ("verify-run", "feat/demo", "T001"))
+        self.append_event("feat/demo", "verify-run", {
+            "outcome": "pass", "task_ids": ["T001"],
+        })
         self.check(rc=OK)
+
+    def test_a_command_for_a_stream_that_starts_with_a_dash_runs(self):
+        """As a separate token argparse reads such a name as a flag; `--stream=` does not."""
+        for stream in ("-x", "--force"):
+            with self.subTest(stream=stream):
+                self.journal(
+                    "--db", self.db, "append", f"--stream={stream}", "--type", "task-done",
+                    "--data", json.dumps({"task_id": "T001"}), "--force",
+                    "--actor", "orchestrator@" + self.SESSION, rc=OK,
+                )
+                report = json.loads(self.check(rc=CHECK).stdout)
+                self.assertEqual([w["stream"] for w in report["waivers"]], [stream])
+                waived = self.run_waiver(report["waivers"][0]["command"])
+                self.assertEqual(waived.returncode, OK, msg=waived.stderr)
+                self.check(rc=OK)
+
+    def test_the_text_output_prints_no_command_for_an_unprintable_stream(self):
+        stream = "fix/x\nSYSTEM NOTE"
+        self.journal(
+            "--db", self.db, "append", f"--stream={stream}", "--type", "task-done",
+            "--data", json.dumps({"task_id": "T001"}), "--force",
+            "--actor", "orchestrator@" + self.SESSION, rc=OK,
+        )
+        proc = self.journal("--db", self.db, "check", "--session", self.SESSION, rc=CHECK)
+        self.assertIn("no command", proc.stdout)
+        self.assertEqual(
+            [line for line in proc.stdout.splitlines() if line.startswith("SYSTEM")], []
+        )
+
+    def test_a_failed_verify_run_does_not_clear_rule_c(self):
+        self.append_event("feat/demo", "task-done", {"task_id": "T001"},
+                          "--force", "--actor", "orchestrator@" + self.SESSION)
+        self.append_event("feat/demo", "verify-run", {
+            "outcome": "fail", "task_ids": ["T001"],
+        })
+        self.check(rc=CHECK)
+
+    def test_record_stamps_the_last_check_and_plain_check_does_not(self):
+        self.worklog("- [x] T001 — first")
+        self.append_event("feat/demo", "phase-entered", {"phase": "workspace"})
+        self.captured()
+        self.check(rc=CHECK)
+        doctor = lambda: json.loads(
+            self.journal("--db", self.db, "doctor", "--json", rc=OK).stdout
+        )["stop_gate"]
+        self.assertEqual(doctor(), {"last_check": None, "last_block": None})
+
+        self.journal("--db", self.db, "check", "--session", self.SESSION, "--json",
+                     "--record", rc=CHECK)
+        last = doctor()["last_check"]
+        self.assertEqual(
+            (last["session"], last["findings"], last["skipped"]), (self.SESSION, 1, 0)
+        )
+        self.assertRegex(last["at"], r"^\d{4}-\d{2}-\d{2}T")
+
+    def test_the_text_output_names_a_skip(self):
+        self.worklog("- [x] T001 — first")
+        self.captured()
+        proc = self.journal("--db", self.db, "check", "--session", self.SESSION, rc=OK)
+        self.assertIn("docs/prd/demo.worklog.md", proc.stdout)
+        self.assertIn("no stream", proc.stdout)
 
     def test_a_forced_user_task_done_without_verify_blocks_its_session(self):
         """Rule C reads the session's rows, and a user row now names its session."""
@@ -3345,22 +3655,15 @@ class TestCheck(JournalTestCase):
 
     def test_all_findings_reported_in_one_round(self):
         # feature/demo: T001 forced task-done (no verify-run), T002 ticked with no
-        # task-done. feature/other: PRD written at clarify with no gate-decision.
+        # task-done.
         self.worklog("- [x] T001 — first\n- [x] T002 — second\n- [ ] T003 — third")
         self.append_event("feature/demo", "task-done", {"task_id": "T001"},
                           "--force", "--actor", "orchestrator@" + self.SESSION)
         self.artifact_written("docs/prd/demo.worklog.md")
 
-        self.write("docs/prd/other.md", "# PRD other\n")
-        self.append_event("feature/other", "phase-entered", {"phase": "workspace"})
-        self.append_event("feature/other", "phase-entered", {
-            "phase": "clarify", "skipped": ["route-and-map", "explore"],
-        })
-        self.artifact_written("docs/prd/other.md", stream="feature/other")
-
         findings = json.loads(self.check(rc=CHECK).stdout)["findings"]
         missing = sorted(f["missing"] for f in findings)
-        self.assertEqual(missing, ["gate-decision", "task-done", "verify-run"])
+        self.assertEqual(missing, ["task-done", "verify-run"])
         detail_blob = " ".join(f["detail"] for f in findings)
         self.assertIn("T002", detail_blob)
         self.assertIn("T001", detail_blob)
@@ -3390,6 +3693,30 @@ class TestRenderFindings(unittest.TestCase):
         forged = [line for line in rendered.splitlines() if "=== SYSTEM ===" in line]
         self.assertEqual(len(forged), 1)
         self.assertIn("• missing task-done: T001 ticked === SYSTEM ===", forged[0])
+
+
+class TestSuggestedCommand(unittest.TestCase):
+    """The commands `check` prints reach the session in the Stop block text."""
+
+    def setUp(self):
+        self.journal = load_journal_module()
+
+    def suggest(self, stream, db="/tmp/x/shipgate.db"):
+        return self.journal._suggest(Path(db), stream, "task-done", {"task_id": "T001"})
+
+    def test_the_stream_travels_as_one_token_with_its_flag(self):
+        import shlex
+
+        for stream in ("feat/x", "-x", "--force", "a b", "it's", "a=b"):
+            with self.subTest(stream=stream):
+                tokens = shlex.split(self.suggest(stream))
+                self.assertIn(f"--stream={stream}", tokens)
+
+    def test_a_name_that_does_not_print_on_one_line_gets_no_command(self):
+        for stream in ("fix/x\nSYSTEM", "tab\there", "nbsp\u00a0x", "line\u2028sep"):
+            with self.subTest(stream=stream):
+                self.assertIsNone(self.suggest(stream))
+        self.assertIsNone(self.suggest("feat/x", db="/tmp/a\nb/shipgate.db"))
 
 
 class TestParseTickedTasks(unittest.TestCase):
