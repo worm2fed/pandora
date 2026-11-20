@@ -135,6 +135,8 @@ EVENT_VOCABULARY: Dict[str, str] = {
     "flow-abandoned": "work dropped for good",
     # gates and decisions
     "gate-decision": "a decision taken at a gate (this is the one for 'decision')",
+    "go-requested": "the flow put one gate (commit, publish) of one stream to the user",
+    "reply-witnessed": "the user replied to a go request with no exact go (hook-written)",
     "clarify-passed": "the clarify gate closed — PRD has no open questions",
     "design-committed": "design + build plan landed",
     "design-queued": "a design parked for a later child issue",
@@ -191,19 +193,27 @@ EVENT_VOCABULARY: Dict[str, str] = {
 #                 refused)
 #   string_maps   keys whose value must be a JSON object, each of its values a
 #                 non-empty string
+#   max_chars     key -> the most characters a string value may hold
 # A sub-shape takes the validating kinds above (required, enums, lists, strings,
-# string_lists, integers, string_maps, map_enums, objects, list_objects); aliases and
-# defaults apply at the top level only.
+# string_lists, integers, string_maps, max_chars, map_enums, objects, list_objects);
+# aliases and defaults apply at the top level only.
 # `normalize_payload` enforces every kind, and `vocab --shape` prints them.
 #
 # The closed values below are declared once as `Literal`s, so the JSON contract
 # (`status --json`, `position`) and the append check read the same list.
 GateMode = Literal["ask", "executive"]
 RaisedBy = Literal["user", "orchestrator"]
-# Where a user's `gate-decision` was written outside the model's tools (ADR 0015): the
-# HUD's publish dialog, or the user's own `!` command. A publish decision authorizes
-# only with one of these.
-DecisionSource = Literal["dialog", "shell"]
+# The marker of the user's go (ADR 0015, ADR 0023). `dialog`: the HUD's publish dialog.
+# `shell`: the user's own `!` command. `question`: the recorder, from a question answer.
+# `prompt`: the recorder, from a typed reply. `read`: the model, after it read a
+# witnessed reply; such a row names its witness (`_validate_read_go`).
+DecisionSource = Literal["dialog", "shell", "question", "prompt", "read"]
+# The gates a go answers (ADR 0023 §1). A publish go also satisfies the commit gate.
+GoGate = Literal["commit", "publish"]
+# How a reply reached the recorder: a typed prompt, or a question answer.
+ReplyVia = Literal["prompt", "question"]
+# The most characters a read go quotes of the user's approving words (FR-027).
+WORDS_MAX_CHARS = 200
 VerifyOutcome = Literal["pass", "fail"]
 ReviewVerdict = Literal["ready", "not-ready"]
 # A `review-verdict`'s optional maps (ADR 0009): a PRD success criterion's status, and
@@ -264,6 +274,7 @@ class EventShape(TypedDict, total=False):
     string_lists: List[str]
     integers: List[str]
     string_maps: List[str]
+    max_chars: Dict[str, int]
     map_enums: Dict[str, List[str]]
     objects: Dict[str, Dict[str, Any]]
     list_objects: Dict[str, Dict[str, Any]]
@@ -308,7 +319,24 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         },
         "aliases": {"chosen": "decision", "kind": "gate"},
         "defaults": {"raised_by": "orchestrator"},
-        "strings": ["decision"],
+        # ADR 0023: an exact go names the go request it answers, a read go names its
+        # witness and quotes the user's approving words.
+        "strings": ["decision", "words"],
+        "integers": ["request", "witness"],
+        "max_chars": {"words": WORDS_MAX_CHARS},
+    },
+    # ADR 0023 §3: one gate of one live stream, put to the user. No implied phase.
+    "go-requested": {
+        "required": ["gate", "question"],
+        "enums": {"gate": list(get_args(GoGate))},
+        "strings": ["question"],
+    },
+    # ADR 0023 §7: the recorder's record of a reply that is no exact go. No text.
+    "reply-witnessed": {
+        "required": ["request", "gate", "via", "session"],
+        "enums": {"gate": list(get_args(GoGate)), "via": list(get_args(ReplyVia))},
+        "integers": ["request"],
+        "strings": ["session", "prompt_id", "tool_use_id"],
     },
     "clarify-passed": {"required": ["prd"]},
     "design-committed": {
@@ -368,11 +396,16 @@ class GateDecisionPayload(_GateDecisionKeys, total=False):
     (audit D6). ``raised_by`` is always present, because the shape's default fills it.
     Rows written before T010 may break any of this; readers of old rows type them as
     ``Dict[str, Any]``. ``source`` is optional: the HUD's publish dialog writes
-    ``dialog``, the user's own ``!`` command writes ``shell`` (ADR 0015).
+    ``dialog``, the user's own ``!`` command writes ``shell`` (ADR 0015). The recorder
+    writes ``question`` or ``prompt`` with ``request``, the seq of the go request the
+    reply answers; the model writes ``read`` with ``witness`` and ``words`` (ADR 0023).
     """
 
     rationale: str
     source: DecisionSource
+    request: int
+    witness: int
+    words: str
 
 
 class _ReviewVerdictKeys(TypedDict):
@@ -1234,25 +1267,139 @@ def _require_closure_reason(
         )
 
 
-def _authorizes_publish(data: Dict[str, Any]) -> bool:
-    """Whether a ``gate-decision`` payload is the user's deliberate call to publish.
+# The markers of a go the user's own row carries (actor role `user`), and the marker of
+# a go the model records after it read a witnessed reply (ADR 0023 §2).
+USER_MARKERS = ("dialog", "shell", "question", "prompt")
+READ_MARKER = "read"
 
-    All four conditions matter: the orchestrator can raise a publish gate and answer
-    it itself, so a decision that only *sits at* the gate — or records "no" there —
-    would otherwise let the flow authorize its own MR. A ``decision`` that is not a string
-    (a row from before the ``strings`` rule) never authorizes. The ``source`` marker says
-    the decision was written outside the model's tools, by the HUD's publish dialog or
-    the user's own ``!`` command (ADR 0015); an unmarked decision, older rows included,
-    never authorizes. ``publish_authorization`` also reads the event's actor role.
+
+def _is_seq(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def writer_session(event: Event) -> Optional[str]:
+    """The session that appended a row, whether or not the row binds it to its stream.
+
+    A ``user`` row names it under ``recorded_by`` (ADR 0010); a machine role's row in
+    its actor label. A ``watcher`` row and an unlabelled actor name none. A read go
+    and a go request are read this way (ADR 0023 §8, §13), never by ``event_session``.
     """
+    role = _actor_role(event)
+    if role in RECORDED_BY_ROLES:
+        recorded_by = event.data.get(RECORDED_BY_KEY)
+        return recorded_by if isinstance(recorded_by, str) and recorded_by else None
+    if role in SESSIONLESS_ROLES:
+        return None
+    if event.actor and "@" in event.actor:
+        return event.actor.split("@", 1)[1] or None
+    return None
+
+
+def _go_gate(data: Dict[str, Any]) -> Optional[str]:
+    """The gate a ``gate-decision`` payload is a go for, or None (ADR 0023 §1).
+
+    The gate is ``commit`` or ``publish``, the user raised it, the ``decision`` names
+    the gate (trimmed, any case) and ``source`` is one of the five markers. Every
+    condition matters: the orchestrator can raise a gate and answer it itself, so a row
+    that only *sits at* the gate, or records "no" there, would otherwise let the flow
+    authorize itself. A ``decision`` that is not a string (a row from before the
+    ``strings`` rule) is no go (audit D6); an unmarked row, older rows included, is none
+    either (ADR 0015). The actor and the witness are ``_user_go_events``'s to check.
+    """
+    gate = data.get("gate")
     decision = data.get("decision")
-    return (
-        data.get("gate") == "publish"
-        and data.get("raised_by") == "user"
-        and isinstance(decision, str)
-        and decision.strip().lower() == "publish"
-        and data.get("source") in get_args(DecisionSource)
+    if gate not in get_args(GoGate) or data.get("raised_by") != "user":
+        return None
+    if not isinstance(decision, str) or decision.strip().lower() != gate:
+        return None
+    if data.get("source") not in get_args(DecisionSource):
+        return None
+    return gate
+
+
+# Why a witness cannot back a read go (ADR 0023 §8), in the order the rule checks.
+WitnessFault = Literal["missing", "not-hook", "gate", "stale", "used", "session"]
+_ANY_SESSION = object()
+
+
+def witness_fault(
+    witness: Optional[Event], gate: Any, session: Any, last_task_done_seq: int,
+    named: Set[int],
+) -> Optional[WitnessFault]:
+    """The first condition of §8 that ``witness`` breaks for a read go, or None.
+
+    The witness is a ``reply-witnessed`` row of the stream, written by the hook, at
+    ``gate``, later than the last ``task-done``, named by no read go in ``named``, and of
+    ``session`` (``_ANY_SESSION`` skips that check). `_witness_holds`,
+    `_validate_read_go` and `_waiting_witness` all read this one rule.
+    """
+    if witness is None or witness.type != "reply-witnessed":
+        return "missing"
+    if _actor_role(witness) != "hook":
+        return "not-hook"
+    if witness.data.get("gate") != gate:
+        return "gate"
+    if witness.seq <= last_task_done_seq:
+        return "stale"
+    if witness.seq in named:
+        return "used"
+    if session is not _ANY_SESSION and (
+        session is None or witness.data.get("session") != session
+    ):
+        return "session"
+    return None
+
+
+def _witness_holds(
+    go: Event, by_seq: Dict[int, Event], named: Set[int], last_task_done_seq: int
+) -> bool:
+    """Whether a read go's witness is a real reply to a request at its gate (§8).
+
+    The witness is an earlier ``reply-witnessed`` row of the same stream, written by the
+    hook, at the gate of the go, later than the last ``task-done``, named by no earlier
+    read go, and of the session that appended the go.
+    """
+    seq = go.data.get("witness")
+    if not isinstance(seq, int) or not _is_seq(seq) or seq >= go.seq:
+        return False
+    return witness_fault(
+        by_seq.get(seq), go.data.get("gate"), writer_session(go), last_task_done_seq,
+        named,
+    ) is None
+
+
+def _user_go_events(events: Sequence[Event]) -> List[Tuple[Event, str]]:
+    """Each go after the stream's last ``task-done``, with its gate, in seq order.
+
+    A row with a user marker counts with the actor role ``user``. A read go counts only
+    with a witness that ``_witness_holds`` accepts, whatever its actor: the journal
+    checked the witness at append (``_validate_read_go``), and checks it again here.
+    """
+    ordered = sorted(events, key=lambda event: event.seq)
+    last_task_done_seq = max(
+        (event.seq for event in ordered if event.type == "task-done"), default=0
     )
+    by_seq = {event.seq: event for event in ordered}
+    named: Set[int] = set()
+    found: List[Tuple[Event, str]] = []
+    for event in ordered:
+        if event.type != "gate-decision":
+            continue
+        gate = _go_gate(event.data)
+        if event.data.get("source") == READ_MARKER:
+            holds = event.seq > last_task_done_seq and _witness_holds(
+                event, by_seq, named, last_task_done_seq
+            )
+            if _is_seq(event.data.get("witness")):
+                named.add(event.data["witness"])
+            if gate is not None and holds:
+                found.append((event, gate))
+            continue
+        if gate is None or event.seq <= last_task_done_seq:
+            continue
+        if event.data.get("source") in USER_MARKERS and _actor_role(event) == "user":
+            found.append((event, gate))
+    return found
 
 
 PublishBy = Literal["review-verdict", "gate-decision"]
@@ -1278,16 +1425,50 @@ class PublishAuthorized(TypedDict):
 PublishAuthorization = Union[PublishHeld, PublishAuthorized]
 
 
+class GoAnswer(TypedDict):
+    """``go`` in ``status --json`` and ``position --json`` (ADR 0023 §16): the user's
+    go for each gate, in the shape of ``publish``. ``by`` is always ``gate-decision``."""
+
+    commit: PublishAuthorization
+    publish: PublishAuthorization
+
+
+def user_go(events: Sequence[Event], gate: str) -> PublishAuthorization:
+    """The user's go for ``gate`` on one stream, and the row that gives it (ADR 0023).
+
+    ``events`` are one stream's, in any order. The first go after the last
+    ``task-done`` at ``gate`` gives ``{kind: authorized, by: gate-decision, seq, at}``;
+    a publish go also satisfies the commit gate. A ready verdict is no go. None gives
+    ``{kind: held}``. The command gate (``authorize``), ``status`` and ``position`` read
+    this one helper, and ``publish_authorization`` reads it for its go branch.
+    """
+    for event, go_gate in _user_go_events(events):
+        if go_gate == gate or (gate == "commit" and go_gate == "publish"):
+            return {
+                "kind": "authorized", "by": "gate-decision",
+                "seq": event.seq, "at": event.ts,
+            }
+    return {"kind": "held"}
+
+
+def commit_authorization(events: Sequence[Event]) -> PublishAuthorization:
+    """May a model commit on this stream? Only with the user's go (ADR 0023 §14)."""
+    return user_go(events, "commit")
+
+
+def go_answer(events: Sequence[Event]) -> GoAnswer:
+    return {"commit": user_go(events, "commit"), "publish": user_go(events, "publish")}
+
+
 def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
     """Whether one stream's events authorize publishing, and which event did.
 
     ``events`` are one stream's, in any order; the rule reads them in seq order. After
     the last ``task-done`` (seq 0 when there is none), the first event that is either a
-    ``review-verdict`` with ``verdict: ready`` or a ``gate-decision`` that
-    ``_authorizes_publish`` accepts and whose actor role is ``user`` gives ``{kind:
-    authorized, by: <its type>, seq, at: <its ts>}``. No such event gives ``{kind:
-    held}``. A ``decision`` that is not a string never authorizes (audit D6), and neither
-    does a decision without the ``source`` marker or with another actor (ADR 0015).
+    ``review-verdict`` with ``verdict: ready`` that was not forced (ADR 0023 §17) or
+    the user's publish go (``user_go``)
+    gives ``{kind: authorized, by: <its type>, seq, at: <its ts>}``. No such event gives
+    ``{kind: held}``.
 
     ``_validate_mr_opened`` raises when this is held, ``fold_stream`` prints it as
     ``publish`` and ``build_position`` copies it, so the gate and the HUD cannot
@@ -1297,41 +1478,49 @@ def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
     last_task_done_seq = max(
         (event.seq for event in ordered if event.type == "task-done"), default=0
     )
-    for event in ordered:
-        if event.seq <= last_task_done_seq:
-            continue
-        by: PublishBy
-        if event.type == "review-verdict" and event.data.get("verdict") == "ready":
-            by = "review-verdict"
-        elif (
-            event.type == "gate-decision"
-            and _authorizes_publish(event.data)
-            and _actor_role(event) == "user"
-        ):
-            by = "gate-decision"
-        else:
-            continue
-        return {"kind": "authorized", "by": by, "seq": event.seq, "at": event.ts}
+    verdict = next(
+        (
+            event for event in ordered
+            if event.seq > last_task_done_seq
+            and event.type == "review-verdict"
+            and event.data.get("verdict") == "ready"
+            and not event.data.get("forced")
+        ),
+        None,
+    )
+    go = user_go(ordered, "publish")
+    if go["kind"] == "authorized" and (verdict is None or go["seq"] < verdict.seq):
+        return go
+    if verdict is not None:
+        return {
+            "kind": "authorized", "by": "review-verdict",
+            "seq": verdict.seq, "at": verdict.ts,
+        }
     return {"kind": "held"}
+
+
+MR_OPENED_REFUSAL = (
+    "mr-opened in stream {stream} needs, recorded after the last task-done, either a "
+    "review-verdict with verdict=ready that was not forced, or the user's publish go: a "
+    "gate-decision with gate=publish, raised_by=user and decision=publish, marked with "
+    "source question|prompt|read|dialog|shell. The recorder writes `question` when the "
+    "user answers the publish question and `prompt` when the user types `publish`; the "
+    "flow records `read` with the witness of a reply it read; the HUD's publish dialog "
+    "writes `dialog`; the user's own `!` command writes `shell`. Record the review's "
+    "outcome, or record a go-requested and ask the user. --force does not waive this."
+)
 
 
 def _validate_mr_opened(
     conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
 ) -> None:
     events = read_events(
-        conn, stream=stream, types=("task-done", "review-verdict", "gate-decision")
+        conn, stream=stream,
+        types=("task-done", "review-verdict", "gate-decision", "reply-witnessed"),
     )
     if publish_authorization(events)["kind"] == "authorized":
         return
-    raise GateViolation(
-        f"mr-opened in stream {stream!r} needs, recorded after the last task-done, "
-        "either a review-verdict with verdict=ready, or the user's publish approval: a "
-        "gate-decision with gate=publish, raised_by=user and decision=publish, recorded "
-        "by the HUD's publish dialog or by the user's own `!` command (source: "
-        "dialog|shell, --actor user) — record the review's outcome, ask the user to "
-        "approve in the publish dialog or to run that append with `!`, or append with "
-        "--force and a reason"
-    )
+    raise GateViolation(MR_OPENED_REFUSAL.format(stream=repr(stream)))
 
 
 def suggest_event_types(event_type: str) -> List[str]:
@@ -1526,6 +1715,13 @@ def _validate_shape(
                 f"{event_type}: each value of {where}.{key} must be a non-empty string, "
                 f"got {json.dumps(wrong, sort_keys=True)}" + _shape_hint(event_type)
             )
+    for key, most in shape.get("max_chars", {}).items():
+        value = payload.get(key)
+        if isinstance(value, str) and len(value) > most:
+            raise GateViolation(
+                f"{event_type}: {where}.{key} must be at most {most} characters, got "
+                f"{len(value)}" + _shape_hint(event_type)
+            )
     for key, allowed in shape.get("enums", {}).items():
         if key in payload and payload[key] not in allowed:
             raise GateViolation(
@@ -1663,6 +1859,137 @@ def _validate_waiver(data: Dict[str, Any]) -> None:
         )
 
 
+def _actor_session(conn: sqlite3.Connection, actor: str) -> Optional[str]:
+    """The session an append runs in, as its canonical actor says (``writer_session``)."""
+    role, _, label = actor.partition("@")
+    if role in RECORDED_BY_ROLES:
+        return appending_session(conn)
+    if role in SESSIONLESS_ROLES:
+        return None
+    return label or None
+
+
+def _validate_read_go(
+    conn: sqlite3.Connection, stream: str, data: Dict[str, Any], actor: str
+) -> None:
+    """A read go names a real reply of the user to a request (ADR 0023 §8, FR-029).
+
+    The row is a go (``_go_gate``), and its ``witness`` is a ``reply-witnessed`` row of
+    this stream that the hook wrote, at the gate of the go, later than the stream's last
+    ``task-done``, named by no other go, of the session that appends the go. ``--force``
+    does not skip this: a forced read go would be the forged path under a new name.
+    """
+    if data.get("source") != READ_MARKER:
+        return
+    if _go_gate(data) is None:
+        raise GateViolation(
+            "a read go is the user's go: gate commit or publish, decision equal to the "
+            "gate, raised_by=user, source=read"
+        )
+    seq = data.get("witness")
+    if not isinstance(seq, int) or not _is_seq(seq):
+        raise GateViolation(
+            "a read go names its witness: data.witness is the seq of the "
+            "reply-witnessed row that the recorder wrote for the user's reply"
+        )
+    events = read_events(conn, stream=stream)
+    witness = next((e for e in events if e.seq == seq), None)
+    last_task_done = max((e.seq for e in events if e.type == "task-done"), default=0)
+    namers = {
+        e.data.get("witness"): e.seq for e in events
+        if e.type == "gate-decision" and e.data.get("source") == READ_MARKER
+    }
+    fault = witness_fault(
+        witness, data.get("gate"), _actor_session(conn, actor), last_task_done,
+        set(namers),
+    )
+    if fault == "missing":
+        raise GateViolation(
+            f"a read go needs its witness: stream {stream!r} holds no reply-witnessed "
+            f"at seq {seq}. Only a reply the recorder witnessed can be read as a go"
+        )
+    if fault == "not-hook":
+        raise GateViolation(
+            f"the witness at seq {seq} was not written by the recorder hook"
+        )
+    if fault == "gate":
+        raise GateViolation(
+            f"the witness at seq {seq} answers the "
+            f"{witness.data.get('gate') if witness else None} gate, "
+            f"not the {data.get('gate')} gate"
+        )
+    if fault == "stale":
+        raise GateViolation(
+            f"the witness at seq {seq} is older than the last task-done (seq "
+            f"{last_task_done}): record a new go request and ask again"
+        )
+    if fault == "used":
+        raise GateViolation(
+            f"the go at seq {namers[seq]} already names the witness at seq {seq}: a "
+            "witness gives one go"
+        )
+    if fault == "session":
+        raise GateViolation(
+            f"the witness at seq {seq} records a reply in another session: only the "
+            "session that got the reply records its read go"
+        )
+
+
+def _validate_own_session(
+    conn: sqlite3.Connection, event_type: str, data: Dict[str, Any], actor: str,
+    raw_actor: Optional[str] = None,
+) -> None:
+    """A go request and a read go count for the session that appends them (§4, §8).
+
+    Their actor label says which session that is. When the shell names the appending
+    session (``CLAUDE_CODE_SESSION_ID``), a label that names another session is refused,
+    with or without ``--force``: it would let one session ask, or read a reply, in
+    another's name.
+    """
+    if event_type == "gate-decision":
+        if data.get("source") != READ_MARKER:
+            return
+    elif event_type != "go-requested":
+        return
+    if "session" in data:
+        raise GateViolation(
+            f"{event_type}: data.session is not taken; the journal records the session "
+            "that appends the row"
+        )
+    running = os.environ.get(SESSION_ENV, "").strip()
+    if not running:
+        if raw_actor and "@" in raw_actor and raw_actor.partition("@")[2]:
+            raise GateViolation(
+                f"{event_type}: the actor label names a session, but "
+                f"{SESSION_ENV} is empty, so no one can check it. Append it from the "
+                "session's own shell, with no label"
+            )
+        return
+    named = _actor_session(conn, actor)
+    if named is not None and named != running:
+        raise GateViolation(
+            f"{event_type}: the actor label names another session ({named}) than the "
+            f"one appending ({running}); a session asks and reads replies only in its "
+            "own name — drop the label"
+        )
+
+
+def _validate_go_request(conn: sqlite3.Connection, stream: str) -> None:
+    """A go request puts a gate of a live stream to the user (ADR 0023 §3). A stream
+    with no events, or a finished one, has nothing to commit or publish. `--force` does
+    not skip this: a request on no stream would wait for a reply that answers nothing."""
+    events = read_events(conn, stream=stream)
+    if not events:
+        raise GateViolation(
+            f"go-requested needs a live stream: {stream!r} has no events. Record the "
+            "request on the stream whose work the user approves"
+        )
+    if fold_stream(events)["terminal"]:
+        raise GateViolation(
+            f"go-requested needs a live stream: {stream!r} is finished"
+        )
+
+
 def validate_gate(
     conn: sqlite3.Connection,
     stream: str,
@@ -1671,6 +1998,8 @@ def validate_gate(
     project_dir: Path,
 ) -> None:
     """Raise GateViolation when an append's precondition is unmet."""
+    if event_type == "go-requested":
+        _validate_go_request(conn, stream)
     if event_type == "clarify-passed":
         _validate_clarify_passed(conn, stream, data, project_dir)
     elif event_type == "task-done":
@@ -1890,6 +2219,10 @@ def append_event(
                         repeated[0], repeated[1], duplicate=True,
                         version_before=existing,
                     )
+            _validate_own_session(conn, event_type, payload, canonical_actor, actor)
+            if event_type == "gate-decision":
+                # On the forced path too (ADR 0023 §8).
+                _validate_read_go(conn, stream, payload, canonical_actor)
             if not force:
                 validate_gate(conn, stream, event_type, payload, project_dir)
             else:
@@ -1898,6 +2231,11 @@ def append_event(
                 )
                 if event_type == "deviation":
                     _validate_waiver(payload)
+                elif event_type == "go-requested":
+                    _validate_go_request(conn, stream)
+                elif event_type == "mr-opened":
+                    # No forced event opens a publish (ADR 0023 §17).
+                    _validate_mr_opened(conn, stream, payload)
 
             version = existing + 1
             implied_phase = PHASE_OF_EVENT.get(event_type)
@@ -1930,6 +2268,8 @@ def append_event(
                     conn, stream, version, "deviation", deviation, canonical_actor
                 )
             conn.execute("COMMIT")
+            if event_type == "go-requested":
+                _touch_request_marker(conn, canonical_actor)
             return AppendResult(
                 seq, version, implied_phase, version_before=existing,
                 deviation_seq=deviation_seq,
@@ -1946,6 +2286,29 @@ def append_event(
             raise
 
     raise InfraError(f"could not append to stream {stream!r} after a retry")
+
+
+def _touch_request_marker(conn: sqlite3.Connection, actor: str) -> None:
+    """Leave the empty marker file of the session that recorded a go request (§12).
+
+    The recorder runs the journal for a long prompt only when its session's marker
+    exists. The file is a hint, never a rule: a write that fails costs one warning line,
+    and the append it follows has already landed.
+    """
+    row = conn.execute("PRAGMA database_list").fetchone()
+    db_file = row[2] if row is not None else None
+    session = _actor_session(conn, actor)
+    path = _hooks_common.marker_path(db_file, session) if db_file else None
+    if path is None:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8"):
+            pass
+    except Exception as error:  # noqa: BLE001 — a hint never fails a landed append
+        print(f"warning: the go request landed, but its marker file could not be "
+              f"written ({error}); the recorder then reads only short prompts",
+              file=sys.stderr)
 
 
 def _insert_event(
@@ -2016,10 +2379,12 @@ class StatusFeatureAdditions(TypedDict):
     ``terminal`` and ``dormant`` as one closed value; ``current`` restates the three
     phase keys and is null exactly when ``phase`` is (audit D7); ``publish`` is
     ``publish_authorization`` over the stream's events. Bodies: T010 (``publish``),
-    T011 (``lifecycle``, ``current``).
+    T011 (``lifecycle``, ``current``). ``go`` is ``go_answer``: the user's go for each
+    gate, which the command gate reads (ADR 0023).
     """
 
     publish: PublishAuthorization
+    go: GoAnswer
     lifecycle: Lifecycle
     current: Optional[CurrentPhase]
 
@@ -2185,6 +2550,7 @@ def fold_stream(
         "tasks_done": len(task_ids),
         "task_ids": task_ids,
         "publish": publish_authorization(events),
+        "go": go_answer(events),
         "lifecycle": stream_lifecycle(terminal, age_days),
         "current": current_phase(phase, phase_entered_at, phase_implied),
     }
@@ -2367,6 +2733,380 @@ def build_status(
         "session_match": driven,
         "nested_matches": nested_matches,
     }
+
+
+# --------------------------------------------------------------------------
+# The reply (ADR 0023): which rows a user's reply gives. `reply` plans, never writes.
+# --------------------------------------------------------------------------
+
+# The exact go of a typed reply (§6): a whole reply from these lists, after case folding,
+# with outer space and one closing `.` or `!` removed. Built in: no config adds words.
+GATE_WORDS: Dict[str, str] = {"commit": "commit", "publish": "publish", "push": "publish"}
+GENERAL_WORDS = frozenset({"all", "yes", "y", "ok", "go", "approve"})
+# What the read go's command quotes in place of the witness seq: `reply` plans before the
+# rows exist, and the recorder puts in the seq that `append --batch --json` printed for
+# the row at that index of `events`.
+SEQ_PLACEHOLDER = "<seq:{index}>"
+
+
+
+
+def reply_word(text: Any) -> Optional[str]:
+    """The reply as the word lists read it, or None for no text (§6)."""
+    if not isinstance(text, str):
+        return None
+    word = text.strip()
+    if word[-1:] in (".", "!"):
+        word = word[:-1].rstrip()
+    return word.casefold() or None
+
+
+def _closes_request(event: Event, request: Event) -> bool:
+    """A later row that answers a go request: a marked go row at its gate, or a witness
+    that names it (the worklog's "open request")."""
+    if event.seq <= request.seq:
+        return False
+    if event.type == "reply-witnessed":
+        return event.data.get("request") == request.seq
+    return (
+        event.type == "gate-decision"
+        and event.data.get("gate") == request.data.get("gate")
+        and event.data.get("source") in get_args(DecisionSource)
+    )
+
+
+def open_requests(
+    with_events: Sequence[Tuple[Dict[str, Any], Sequence[Event]]], session: str
+) -> List[Event]:
+    """The session's open go requests on live streams, in seq order (§3, §4)."""
+    found: List[Event] = []
+    for entry, events in with_events:
+        if entry["terminal"]:
+            continue
+        for request in events:
+            if request.type != "go-requested" or request_session(request) != session:
+                continue
+            if request.data.get("gate") not in get_args(GoGate):
+                continue
+            if not any(_closes_request(e, request) for e in events):
+                found.append(request)
+    return sorted(found, key=lambda event: event.seq)
+
+
+def _fold_work_streams(
+    conn: sqlite3.Connection,
+) -> List[Tuple[Dict[str, Any], List[Event]]]:
+    folded = []
+    for stream in list_streams(conn):
+        if not is_work_stream(stream):
+            continue
+        events = read_events(conn, stream=stream)
+        if events:
+            folded.append((fold_stream(events), events))
+    return folded
+
+
+class ReplyInput(NamedTuple):
+    via: str
+    text: Optional[str]
+    # (header, answer, multi_select) per question.
+    answers: List[Tuple[Optional[str], Optional[str], bool]]
+    prompt_id: Optional[str]
+    tool_use_id: Optional[str]
+
+
+def parse_reply_input(raw: str) -> ReplyInput:
+    """The recorder's stdin for `reply` (the worklog's API section), or UsageError."""
+    try:
+        payload = json.loads(raw)
+    except ValueError as error:
+        raise UsageError(f"reply reads one JSON object on stdin: {error}")
+    if not isinstance(payload, dict):
+        raise UsageError("reply reads one JSON object on stdin")
+
+    def text_of(key: str) -> Optional[str]:
+        value = payload.get(key)
+        return value if isinstance(value, str) and value else None
+
+    via = payload.get("via")
+    if via == "prompt":
+        return ReplyInput("prompt", text_of("text"), [], text_of("prompt_id"), None)
+    if via == "question":
+        answers = payload.get("answers")
+        if not isinstance(answers, list):
+            raise UsageError("a question reply carries `answers`, a list")
+        pairs: List[Tuple[Optional[str], Optional[str], bool]] = []
+        for item in answers:
+            if not isinstance(item, dict):
+                raise UsageError("each answer is an object {header, answer}")
+            header, answer = item.get("header"), item.get("answer")
+            pairs.append((
+                header if isinstance(header, str) else None,
+                answer if isinstance(answer, str) else None,
+                item.get("multi_select") is True,
+            ))
+        return ReplyInput(
+            "question", None, pairs, text_of("prompt_id"), text_of("tool_use_id")
+        )
+    raise UsageError("reply's `via` is `prompt` or `question`")
+
+
+def _exact_go_row(
+    stream: str, gate: str, source: str, request: Optional[Event]
+) -> Dict[str, Any]:
+    data: Dict[str, Any] = {
+        "gate": gate,
+        "question": (
+            request.data.get("question") if request is not None
+            else f"the user typed `{gate}` with no open go request"
+        ),
+        "decision": gate,
+        "mode": "ask",
+        "raised_by": "user",
+        "source": source,
+    }
+    if request is not None:
+        data["request"] = request.seq
+    return {"stream": stream, "type": "gate-decision", "data": data, "actor": "user"}
+
+
+def _matched_requests(
+    reply: ReplyInput, requests: Sequence[Event], live: Set[str]
+) -> List[Event]:
+    """The open requests the reply states an exact go for (§5, §6)."""
+    if reply.via == "prompt":
+        word = reply_word(reply.text)
+        if word in GENERAL_WORDS:
+            return list(requests)
+        gate = GATE_WORDS.get(word or "")
+        return [r for r in requests if r.data.get("gate") == gate] if gate else []
+    matched: List[Event] = []
+    for header, answer, multi_select in reply.answers:
+        gate = reply_word(header)
+        if gate not in get_args(GoGate) or answer is None:
+            continue
+        if GATE_WORDS.get(reply_word(answer) or "") == gate:
+            matched.extend(r for r in requests if r.data.get("gate") == gate)
+            continue
+        if not multi_select:
+            continue  # a stream label is a go only in a multi-select (§5)
+        labels = {label.strip() for label in answer.split(", ")} & live
+        matched.extend(
+            r for r in requests
+            if r.data.get("gate") == gate and r.stream in labels
+        )
+    return [r for r in requests if r in matched]
+
+
+# A witness seq no journal reaches: `_read_go_command` swaps it for the placeholder after
+# `_suggest` has quoted the payload, so the placeholder sits where the number goes.
+_WITNESS_SENTINEL = 987654321987
+
+
+def _read_go_command(
+    db_path: Path, stream: str, gate: str, question: Any, witness: Union[int, str]
+) -> Optional[str]:
+    """The append a read go takes, through `_suggest` (``--db``, ``--stream=``).
+
+    ``witness`` is the witness seq, or the ``<seq:N>`` placeholder of a planned row.
+    None when `_suggest` cannot print the stream.
+    """
+    data = {
+        "gate": gate, "question": question if isinstance(question, str) else gate,
+        "decision": gate, "mode": "ask", "raised_by": "user", "source": "read",
+        "witness": witness if isinstance(witness, int) else _WITNESS_SENTINEL,
+        "words": f"<the approving words of the user, at most {WORDS_MAX_CHARS} "
+                 "characters>",
+    }
+    command = _suggest(db_path, stream, "gate-decision", data)
+    if command is not None and not isinstance(witness, int):
+        command = command.replace(str(_WITNESS_SENTINEL), witness)
+    return command
+
+
+def plan_reply(
+    conn: sqlite3.Connection, session: str, reply: ReplyInput, db_path: Path
+) -> Dict[str, Any]:
+    """The rows a reply gives, and the context line (ADR 0023 §4-§9). Writes nothing.
+
+    Every open request of the session gets one row: an exact go when the reply matches
+    it, a witness otherwise. With no open request, a gate word is a go for the stream
+    the session drives, and any other reply plans nothing. No output holds the text.
+    """
+    with_events = _fold_work_streams(conn)
+    requests = open_requests(with_events, session)
+    live = {entry["stream"] for entry, _ in with_events if not entry["terminal"]}
+    source = "prompt" if reply.via == "prompt" else "question"
+    events: List[Dict[str, Any]] = []
+    recorded: List[Dict[str, Any]] = []
+    witnessed: List[Dict[str, Any]] = []
+    lines: List[str] = []
+
+    if not requests:
+        gate = None
+        if reply.via == "prompt":
+            gate = GATE_WORDS.get(reply_word(reply.text) or "")
+        else:
+            for header, answer, _ in reply.answers:
+                folded = reply_word(header)
+                if folded in get_args(GoGate) and GATE_WORDS.get(
+                    reply_word(answer) or ""
+                ) == folded:
+                    gate = folded
+                    break
+        driven = session_stream(with_events, session) if gate else None
+        if gate and driven:
+            events.append(_exact_go_row(driven, gate, source, None))
+            recorded.append({"stream": driven, "gate": gate, "request": None})
+            lines.append(f"go recorded for {gate} on {driven}")
+    else:
+        matched = _matched_requests(reply, requests, live)
+        for request in requests:
+            gate = request.data["gate"]
+            if request in matched:
+                events.append(_exact_go_row(request.stream, gate, source, request))
+                recorded.append(
+                    {"stream": request.stream, "gate": gate, "request": request.seq}
+                )
+                lines.append(f"go recorded for {gate} on {request.stream}")
+                continue
+            data: Dict[str, Any] = {
+                "request": request.seq, "gate": gate, "via": reply.via,
+                "session": session,
+            }
+            if reply.prompt_id:
+                data["prompt_id"] = reply.prompt_id
+            if reply.tool_use_id:
+                data["tool_use_id"] = reply.tool_use_id
+            index = len(events)
+            events.append({
+                "stream": request.stream, "type": "reply-witnessed", "data": data,
+                "actor": "hook",
+            })
+            witnessed.append(
+                {"stream": request.stream, "gate": gate, "request": request.seq}
+            )
+            placeholder = SEQ_PLACEHOLDER.format(index=index)
+            command = _read_go_command(
+                db_path, request.stream, gate, request.data.get("question"),
+                placeholder,
+            )
+            lines.append(
+                f"the user's reply is witnessed for the {gate} gate of "
+                f"{request.stream} (witness seq {placeholder}, request seq "
+                f"{request.seq}). Read the reply: if it approves the {gate}, record "
+                "the read go with the user's words and ask no confirming question"
+                + (f": `{command}`" if command else ", naming that witness seq")
+                + ". If it does not approve, record nothing"
+            )
+
+    return {
+        "events": events,
+        "recorded": recorded,
+        "witnessed": witnessed,
+        # Every open request got a row, so none of the session's is left open.
+        "open": 0,
+        "context": ("shipgate: " + "; ".join(lines) + ".") if lines else None,
+    }
+
+
+def _waiting_witness(events: Sequence[Event], gate: str) -> Optional[Event]:
+    """The newest witness that a read go could still name for ``gate``, or None.
+
+    It is later than the last ``task-done``, written by the hook, at ``gate`` (or at the
+    publish gate, whose go covers a commit), and named by no read go yet.
+    """
+    last_task_done = max((e.seq for e in events if e.type == "task-done"), default=0)
+    named = {
+        e.data.get("witness") for e in events
+        if e.type == "gate-decision" and e.data.get("source") == READ_MARKER
+    }
+    gates = ("commit", "publish") if gate == "commit" else (gate,)
+    waiting = [
+        e for e in events
+        if e.type == "reply-witnessed" and any(
+            witness_fault(e, g, _ANY_SESSION, last_task_done, named) is None
+            for g in gates
+        )
+    ]
+    return waiting[-1] if waiting else None
+
+
+AUTHORIZE_SUBAGENT = (
+    " You are a subagent: you cannot ask the user. Stop, and hand the question back "
+    "to the session that started you; it records the go request and asks."
+)
+
+
+def _hold_message(
+    db_path: Path, stream: str, gate: str, witness: Optional[Event]
+) -> str:
+    word = gate
+    if witness is not None:
+        command = _read_go_command(
+            db_path, stream, str(witness.data.get("gate")), "<the question asked>",
+            witness.seq,
+        )
+        return (
+            f"shipgate held this {gate}: stream {stream!r} holds no go for the {gate} "
+            f"gate since its last task-done. The user's reply waits as witness seq "
+            f"{witness.seq}. The session that got the reply reads it: if it "
+            "approves, it records the read go and asks no confirming question"
+            + (f": `{command}`" if command else "")
+            + ". If it does not approve, record a new go-requested and ask again."
+        )
+    return (
+        f"shipgate held this {gate}: stream {stream!r} holds no go for the {gate} gate "
+        f"since its last task-done. A ready verdict is no go. Ways forward: record a "
+        f"go-requested {{\"gate\": \"{gate}\", \"question\": \"...\"}} on the stream, "
+        f"then ask with the header `{word.capitalize()}` and `{word.capitalize()}` as "
+        f"the first option; or let the user type `{word}`; or, when the recorder "
+        f"witnessed a reply, record the read go that names the witness. The user may "
+        f"also approve in the shipgate-hud publish dialog or with their own `!` "
+        f"command. Never record the go on their behalf."
+    )
+
+
+def authorize(
+    conn: sqlite3.Connection, gate: str, branch: str, db_path: Path,
+    subagent: bool = False,
+) -> Dict[str, Any]:
+    """The command gate's answer for a branch (ADR 0023 §14-§16).
+
+    The branch names its stream as ``status`` matches one, live streams first. No stream
+    passes (``no-stream``), and so does a finished one (``not-live``). Otherwise the
+    user's go for ``gate`` (``user_go``) passes, and its absence holds: ``witness-waits``
+    when a witness waits for its read go, ``no-go`` otherwise. A ready verdict is no go.
+    """
+    with_events = _fold_work_streams(conn)
+    live = [entry["stream"] for entry, _ in with_events if not entry["terminal"]]
+    stream = branch_match(branch, live)
+    reason = None
+    if stream is None:
+        stream = branch_match(branch, [entry["stream"] for entry, _ in with_events])
+        reason = "not-live" if stream is not None else "no-stream"
+    answer: Dict[str, Any] = {"gate": gate, "stream": stream}
+    if reason is not None:
+        answer.update({"verdict": "pass", "reason": reason, "message": ""})
+        return answer
+    events = next(e for entry, e in with_events if entry["stream"] == stream)
+    go = commit_authorization(events) if gate == "commit" else user_go(events, gate)
+    if go["kind"] == "authorized":
+        answer.update({
+            "verdict": "pass", "reason": "authorized",
+            "message": f"the user's go for {gate} on {stream} is seq {go['seq']}",
+        })
+        return answer
+    witness = _waiting_witness(events, gate)
+    message = _hold_message(db_path, stream, gate, witness)
+    if subagent:
+        message += AUTHORIZE_SUBAGENT
+    answer.update({
+        "verdict": "hold",
+        "reason": "witness-waits" if witness is not None else "no-go",
+        "message": message,
+    })
+    return answer
 
 
 def _render_decision(decision: Dict[str, Any]) -> str:
@@ -2639,6 +3379,25 @@ def parse_build_plan(text: str) -> List[PlanTask]:
     return tasks
 
 
+NON_BINDING_TYPES = frozenset({"go-requested", "reply-witnessed"})
+NON_BINDING_MARKERS = frozenset({"question", "prompt", READ_MARKER})
+
+
+def binds_session(event: Event) -> bool:
+    """False for a row of the approval path, which binds no session (ADR 0023 §13)."""
+    if event.type in NON_BINDING_TYPES:
+        return False
+    return not (
+        event.type == "gate-decision"
+        and event.data.get("source") in NON_BINDING_MARKERS
+    )
+
+
+def request_session(event: Event) -> Optional[str]:
+    """The session that recorded a go request: the one whose reply answers it (§4)."""
+    return writer_session(event)
+
+
 def event_session(event: Event) -> Optional[str]:
     """Which session an event belongs to.
 
@@ -2650,7 +3409,15 @@ def event_session(event: Event) -> Optional[str]:
 
     Who wrote an artifact is a different question: an ``artifact-written`` row may name
     only the session that saw the write, so its author comes from ``artifact_authors``.
+
+    The rows of the approval path belong to no session here (ADR 0023 §13): a
+    ``go-requested``, a ``reply-witnessed`` and a ``gate-decision`` with the marker
+    ``question``, ``prompt`` or ``read``. A lead that asks the user about five streams
+    drives none of them, so ``session_stream``, ``check`` and ``stats`` skip these rows.
+    ``request_session`` and ``writer_session`` still read who wrote them.
     """
+    if not binds_session(event):
+        return None
     session = event.data.get("session")
     if isinstance(session, str) and session:
         return session
@@ -3387,6 +4154,7 @@ class PositionDoc(TypedDict):
     lifecycle: Lifecycle
     current: Optional[CurrentPhase]
     publish: PublishAuthorization
+    go: "GoAnswer"
     phases: Dict[Phase, PhaseMark]
     artifacts: PositionArtifacts
     tasks: Optional[List[PositionTask]]
@@ -3409,8 +4177,9 @@ def build_position(
     ``stream`` is an exact stream name. A stream with no events raises ``InfraError``,
     so ``position`` exits 1: exit 2 stays reserved for argparse's usage errors, which
     the HUD reads as an unknown flag.
-    - ``version``, ``lifecycle``, ``current`` and ``publish`` are ``fold_stream``'s for
-      the stream, with ``now`` as there. ``phases`` is ``phase_marks``.
+    - ``version``, ``lifecycle``, ``current``, ``publish`` and ``go`` are
+      ``fold_stream``'s for the stream, with ``now`` as there. ``phases`` is
+      ``phase_marks``.
     - ``artifacts``: the refs are ``data.worklog``, ``data.refs`` and ``data.adrs`` of
       the ``POSITION_ARTIFACT_EVENTS`` events, a ``#fragment`` dropped, unsafe refs
       dropped (see ``PositionArtifacts``), classified by ``classify_artifact`` with
@@ -3493,6 +4262,7 @@ def build_position(
         "lifecycle": folded["lifecycle"],
         "current": folded["current"],
         "publish": folded["publish"],
+        "go": folded["go"],
         "phases": phase_marks(events),
         "artifacts": {
             "worklog": worklog, "worklog_from": worklog_from, "prd": prd, "adrs": adrs,
@@ -4431,6 +5201,8 @@ def _stream_stats(
     }
     implied = 0
     deviation_kinds: Dict[str, int] = {}
+    # The go records by marker (ADR 0023 §19): a retro audits the read ones.
+    go: Dict[str, int] = dict.fromkeys(get_args(DecisionSource), 0)
 
     for event in events:
         role = _actor_role(event)
@@ -4441,6 +5213,8 @@ def _stream_stats(
             kind = event.data.get("kind")
             kind = kind if isinstance(kind, str) and kind else "-"
             deviation_kinds[kind] = deviation_kinds.get(kind, 0) + 1
+        if event.type == "gate-decision" and _go_gate(event.data) is not None:
+            go[event.data["source"]] += 1
         if event.type == "gate-decision":
             key = "{}/{}".format(
                 event.data.get("mode") or "-", event.data.get("raised_by") or "-"
@@ -4476,6 +5250,7 @@ def _stream_stats(
         "implied_phases": implied,
         "stream_render_bytes": len(rendered.encode()),
         "deviation_kinds": deviation_kinds,
+        "go": go,
         "trace": _trace(events),
     }
 
@@ -4521,6 +5296,10 @@ def build_stats(
     totals["by_role"] = _merge_counts(row["by_role"] for row in rows)
     totals["decisions"] = _merge_counts(row["decisions"] for row in rows)
     totals["deviation_kinds"] = _merge_counts(row["deviation_kinds"] for row in rows)
+    totals["go"] = {
+        **dict.fromkeys(get_args(DecisionSource), 0),
+        **_merge_counts(row["go"] for row in rows),
+    }
     totals["trace"] = _trace_totals(rows)
     totals["sessions"] = len(
         _counted_sessions(e for events in grouped.values() for e in events)
@@ -5206,6 +5985,29 @@ def build_parser() -> argparse.ArgumentParser:
                          help="stamp this run as the last check (one meta value, no "
                               "event); the Stop hook passes it, `doctor` prints it")
 
+    p_reply = subparsers.add_parser(
+        "reply",
+        help="the recorder's plan: the go rows and witnesses a user's reply gives "
+             "(reads JSON on stdin, writes nothing)",
+    )
+    _add_db_flag(p_reply)
+    p_reply.add_argument("--session", required=True, metavar="ID",
+                         help="the session the reply came in")
+    p_reply.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p_authorize = subparsers.add_parser(
+        "authorize",
+        help="the command gate's answer: may a model commit or publish on a branch?",
+    )
+    _add_db_flag(p_authorize)
+    p_authorize.add_argument("--gate", required=True, choices=list(get_args(GoGate)))
+    p_authorize.add_argument("--branch", required=True, metavar="NAME",
+                             help="the branch the command acts on")
+    p_authorize.add_argument("--subagent", action="store_true",
+                             help="the command comes from a subagent")
+    p_authorize.add_argument("--json", action="store_true",
+                             help="machine-readable output")
+
     p_log = subparsers.add_parser("log", help="raw events, newest last")
     _add_db_flag(p_log)
     p_log.add_argument("--stream", default=None, help="restrict to one stream")
@@ -5525,6 +6327,46 @@ def cmd_session(args, resolution: Resolution) -> int:
     return EXIT_OK
 
 
+def cmd_authorize(args, resolution: Resolution) -> int:
+    """``authorize --gate G --branch B [--subagent] --json``: the command gate's answer.
+
+    Exit 0 for a pass and for a hold; 1 for infrastructure (the hook then passes the
+    command, ADR 0023 §15).
+    """
+    conn = connect(resolution.db_path)
+    try:
+        answer = authorize(conn, args.gate, args.branch, resolution.db_path,
+                           subagent=args.subagent)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(answer, sort_keys=True))
+    else:
+        print(f"{answer['verdict']} ({answer['reason']})"
+              + (f": {answer['message']}" if answer["message"] else ""))
+    return EXIT_OK
+
+
+def cmd_reply(args, resolution: Resolution) -> int:
+    """``reply --session ID --json``: the rows a reply gives (ADR 0023 §11).
+
+    Reads the recorder's JSON on stdin and prints the plan. It writes nothing: the
+    recorder writes the plan with ``append --batch``. Exit 0, 1 for infrastructure, 2 for
+    usage.
+    """
+    reply = parse_reply_input(sys.stdin.read())
+    conn = connect(resolution.db_path)
+    try:
+        plan = plan_reply(conn, args.session, reply, resolution.db_path)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(plan, sort_keys=True))
+    elif plan["context"]:
+        print(plan["context"])
+    return EXIT_OK
+
+
 def cmd_status(args, resolution: Resolution) -> int:
     conn = connect(resolution.db_path)
     try:
@@ -5737,6 +6579,8 @@ COMMANDS = {
     "nudge": cmd_nudge,
     "stats": cmd_stats,
     "check": cmd_check,
+    "reply": cmd_reply,
+    "authorize": cmd_authorize,
     "log": cmd_log,
     "streams": cmd_streams,
     "doctor": cmd_doctor,

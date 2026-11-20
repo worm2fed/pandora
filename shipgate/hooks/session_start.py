@@ -21,7 +21,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from _common import (  # noqa: E402
+    MAX_BRANCH_LENGTH,
+    branch_name,
     append_event,
+    current_branch,
     emit,
     likely_journaled,
     read_hook_input,
@@ -33,7 +36,6 @@ from _common import (  # noqa: E402
 )
 
 META_STREAM = "shipgate"
-GIT_TIMEOUT_SECONDS = 2
 # Where an umbrella keeps its nested repos — the same three places `setup` looks.
 NESTED_REPO_PARENTS = ("", "source", "packages")
 # Where `workspace` puts a git worktree: `.worktrees/<slug>` beside the repos or inside one.
@@ -41,44 +43,10 @@ WORKTREES_DIR = ".worktrees"
 NESTED_REPO_LIMIT = 64
 NESTED_ENTRY_LIMIT = 512  # directory entries examined per parent
 HEAD_REF_PREFIX = "ref: refs/heads/"
-MAX_BRANCH_LENGTH = 255
 # A Claude Code session id is a UUID; anything else (absent, empty, odd characters) is not
 # passed to `status --session`. The id is the evidence the journal binds the session's own
 # stream on, so a strange payload loses that evidence, never the brief.
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
-
-
-def current_branch(cwd):
-    """The branch checked out in `cwd`, or None when there is no name worth passing.
-
-    A detached HEAD answers with the literal `HEAD`, which is not a branch and matches
-    no stream. No git, no repository and a hung git all land here as None as well: the
-    branch is evidence the journal matches a stream on, and failing to read it loses that
-    evidence, never the brief.
-    """
-    import subprocess
-
-    if not isinstance(cwd, str):
-        return None
-    # `GIT_DIR`/`GIT_WORK_TREE` inherited from the session point git at whatever
-    # repository set them, not at `cwd`; drop the whole family rather than guess.
-    env = {
-        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
-    }
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=cwd,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    return _branch_name((result.stdout or "").strip())
 
 
 def _read_first_line(path):
@@ -102,19 +70,6 @@ def _read_first_line(path):
         if fd is not None:
             os.close(fd)
     return raw.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
-
-
-def _branch_name(text):
-    """`text` as a branch name worth passing on, else None.
-
-    The name travels as one argv token: a NUL would make `subprocess` refuse the whole
-    call, a control character has no business in a branch. Over-long names are noise.
-    """
-    if not text or len(text) > MAX_BRANCH_LENGTH or text == "HEAD":
-        return None
-    if "\0" in text or not text.isprintable():
-        return None
-    return text
 
 
 def _within(path, root):
@@ -147,7 +102,7 @@ def head_branch(git_entry, root):
     line = _read_first_line(os.path.join(git_dir, "HEAD"))
     if not line or not line.startswith(HEAD_REF_PREFIX):
         return None
-    return _branch_name(line[len(HEAD_REF_PREFIX):])
+    return branch_name(line[len(HEAD_REF_PREFIX):])
 
 
 def _is_repo(directory):

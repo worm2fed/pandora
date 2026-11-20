@@ -120,8 +120,11 @@ already in a journal.
 children are separate branches and so separate streams; a stream carrying two issues has a
 phase, a gate history and a verdict that describe neither of them.
 
-Dial enforcement down by setting `enforce.stop_gate` or `enforce.auto_capture` to false
-in the sidecar (both default true). Run `journal.py doctor` when anything looks stale.
+Dial enforcement down by setting `enforce.stop_gate`, `enforce.auto_capture` or
+`enforce.command_gate` to false in the sidecar (all three default true). With
+`enforce.command_gate` false, a model commits, pushes and opens an MR/PR with no recorded
+go from the user; an unattended project, which has no user to answer, needs that. Run
+`journal.py doctor` when anything looks stale.
 
 ## Forge & tracker
 
