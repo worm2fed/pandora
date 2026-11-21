@@ -340,16 +340,16 @@ class TestSessionStartSources(HookTestCase):
         self.assertEqual({row["stream"] for row in rows}, {"shipgate"})
         self.assertEqual({row["data"]["session"] for row in rows}, {SESSION})
 
-    def test_a_clear_moves_attribution_to_the_new_session(self):
-        """`/clear` may hand the hook a new session id. The stored session follows it,
-        and so does an append from a shell that has no session id of its own."""
+    def test_a_clear_moves_the_stored_session_but_labels_no_append(self):
+        """`/clear` may hand the hook a new session id. The stored session follows it.
+        An append from a shell with no session id of its own still records none: the
+        stored session started last, and need not be the one appending (#46)."""
         self.start("startup")
         self.start("clear", session="sess-after-clear")
         result = journal(self.db, "session", "--get")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "sess-after-clear")
 
-        # `append` reads the stored session only when its shell names none (ADR 0005).
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
         appended = subprocess.run(
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
@@ -359,7 +359,7 @@ class TestSessionStartSources(HookTestCase):
         )
         self.assertEqual(appended.returncode, 0, appended.stderr)
         row = self.events(event_type="phase-entered")[0]
-        self.assertEqual(row["actor"], "orchestrator@sess-after-clear")
+        self.assertEqual(row["actor"], "orchestrator")
 
 
 class TestASecondSessionStartedRow(HookTestCase):

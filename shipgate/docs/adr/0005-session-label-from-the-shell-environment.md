@@ -2,10 +2,10 @@
 type: adr
 title: "0005. The session label comes from the appending shell; status --session"
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-11-20
 tags:
   - adr
-status: accepted (decisions 1 and 2 amended by 0010)
+status: accepted (decisions 1 and 2 amended by 0010; amended 2026-11-20, shipgate 0.27.1)
 date: 2026-10-08
 issue: "none / ad-hoc"
 related: ["0003-session-attribution-via-current-session.md", "../../../shipgate-hud/docs/adr/0001-sibling-plugin-fed-by-the-journal-cli.md"]
@@ -13,9 +13,13 @@ related: ["0003-session-attribution-via-current-session.md", "../../../shipgate-
 
 # 0005. The session label comes from the appending shell; status --session
 
-> `append` labels an unlabelled actor with `CLAUDE_CODE_SESSION_ID` from its own environment,
-> falling back to `meta.current_session`. `status --session ID` marks the live stream that
-> session last wrote to itself (`session_match`) and renders it first, ahead of the branch's.
+> `append` labels an unlabelled actor with `CLAUDE_CODE_SESSION_ID` from its own environment.
+> `status --session ID` marks the live stream that session last wrote to itself
+> (`session_match`) and renders it first, ahead of the branch's.
+>
+> **Amended 2026-11-20 (shipgate 0.27.1, #46):** the fallback to `meta.current_session` is retired. An append
+> from a shell with no `CLAUDE_CODE_SESSION_ID` records no session. See the Amendment
+> section.
 
 ## Context
 
@@ -34,7 +38,8 @@ that dispatched it.
 1. **Label source.** Explicit `role@label` first, then `data.session` (hook events keep the bare
    role), then `CLAUDE_CODE_SESSION_ID`, then `meta.current_session`. `SESSIONLESS_ROLES` are
    unchanged. *Amended by ADR 0010:* a `user` row stays unlabelled and records the same
-   session as `data.recorded_by` instead.
+   session as `data.recorded_by` instead. *Amended 2026-11-20 (#46):* the last source,
+   `meta.current_session`, is retired; with no variable the row records no session.
 2. **The session's position.** `status --session ID` finds the newest event whose
    `event_session()` is `ID` and whose role is not `hook`, across work streams; its stream is the
    session's unless that stream is finished, in which case nothing matches and the branch
@@ -61,4 +66,68 @@ crediting one session's events to another. A session that has written nothing ye
 start, or after `/clear`, which starts a new id) still sees the checkout's stream until its
 first append. A `journal.py` older than `--session` refuses the flag; the HUD then asks by
 branch alone. An append from a shell outside Claude Code (a manual run) has no variable and
-keeps ADR 0003's behaviour.
+keeps ADR 0003's behaviour. *Amended 2026-11-20 (#46):* such an append now records no
+session.
+
+## Amendment (2026-11-20, #46): an append with no session id records no session
+
+### Context
+
+`meta.current_session` is one row for the whole journal. Every SessionStart hook overwrites
+it, and since 0.25.1 the hook also runs on `/clear` and on a compaction. So the key names the
+session that started last. A shell with no `CLAUDE_CODE_SESSION_ID` labelled its row with
+that id, and decision 2 then bound that session to the row's stream. In a scratch journal,
+sessions A and B started in that order. A's append from such a shell got the actor
+`orchestrator@B`, and B's brief led with A's stream. A `user` row got `recorded_by` B, by
+the same fallback (ADR 0010). One real journal had two sessions on 40 of its 84 work streams.
+
+Which shells have no variable was probed on Claude Code 2.1.329:
+
+| Launch path | `CLAUDE_CODE_SESSION_ID` |
+|---|---|
+| The Bash tool, `bash -c`, `zsh -c`, `sh -lc`, a Python subprocess, a background shell | the session's own id |
+| A subagent's Bash | the parent session's id |
+| Every hook (SessionStart, PreToolUse, PostToolUse, SessionEnd) | the payload's `session_id` |
+| A `!` line, and a shell nested under it | the session's own id |
+| A mod's `$.process.run` child | the host process's own value: none, or the id of the session whose shell started this one (a teammate started from its lead's shell); `$.session.id()` returns the right id |
+| A client older than 2.1.132 | none in the Bash tool (2.1.132 added the variable) |
+| A shell outside Claude Code, or `env -i` | none |
+
+A nested `claude -p` gets its own new id since 2.1.317. shipgate-hud's "Approve publishing"
+append ran in a mod's `$.process.run` child. So a dialog approval took the stored id, or,
+in a session started from another session's shell, that parent session's id. In
+six other journals, three of six dialog approvals named a session that never wrote that
+stream.
+
+### Decision
+
+1. **The label source.** Explicit `role@label` first, then `data.session`, then
+   `CLAUDE_CODE_SESSION_ID`. A blank variable counts as none. `meta.current_session` is
+   never read as the appending session.
+2. **A row with no session.** A machine role stays bare (`orchestrator`, `worker`). A
+   `user` row gets no `recorded_by`. The implied `phase-entered` and the automatic
+   `deviation` of the same append follow. `event_session` returns None for such a row, so
+   `status --session`, `check` and `stats` count it for no session. The append is not
+   refused: a manual run, a mod's run and an older client still record.
+3. **`meta.current_session` stays as a diagnostic.** The SessionStart hook still writes it,
+   and `session --get` still prints it: the session that started last. A follow-up issue
+   retires the key and the hook call after #22 merges.
+4. **Rows already written stay as written.** No repair event. Nothing marks a label that
+   came from the fallback, so a repair would be a claim, not a computed fact. An event that
+   moves a row to a session would also be a way to forge one. The binding heals: it is the
+   session's newest own row, so the session's next own append moves it back, and a finished
+   stream releases it.
+5. **The HUD names its session.** shipgate-hud 0.11.1 runs the approval append with
+   `CLAUDE_CODE_SESSION_ID` set to `$.session.id()`, or blank when the engine gives no id
+   (HUD ADR 0010). So a dialog approval records the session that approved, as ADR 0010
+   says, and never an id the mod's child inherited.
+
+### Consequences
+
+Two sessions on one journal no longer label each other's rows, whatever starts last. A row
+from a shell with no variable binds no stream, and the session's brief falls back to the
+branch until it writes a row of its own. Rule C of the Stop gate does not see a forced
+`task-done` with no session; before, it blamed the session that started last. A go of the
+approval path (ADR 0023) appended with no session names no session, so it can never match a
+witness through a borrowed id. `stats` and `check` counts on rows written before this change
+stay as written.

@@ -179,6 +179,8 @@ interface, from the journal shipgate already keeps.
   publishing** (ADR 0010). **Let it through once** lets the line through and records
   nothing. **Approve publishing** records your approval: one `gate-decision` per held stream,
   with the marker `source: dialog` and the actor `user`, then lets the line through. The
+  record runs with this session's id in `CLAUDE_CODE_SESSION_ID` (blank when Claude Code
+  gives no id), so the journal names the session that approved and never another. The
   approval lasts until the stream's next `task-done`, so a later push of the same stream
   passes, and `mr-opened` is accepted. If the record fails, the line still goes through. A
   journal that cannot be read opens the dialog with the first two answers only, and the hold

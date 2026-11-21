@@ -61,6 +61,7 @@ import {
   type PublishTarget,
   type TargetBinding,
   approvalArgs,
+  approvalEnv,
   approvalsOf,
   denyReason,
   gateVerdict,
@@ -1531,10 +1532,21 @@ async function askToPass($: Engine, holds: Holds): Promise<HoldAnswer> {
 /**
  * Records one approval (HUD ADR 0010): `journal.py append` of a marked user publish decision
  * on its stream, in the project root. A `$.process.run`, never a tool call, so no PreToolUse
- * hook sees it. True when journal.py exited 0; any failure is false, never thrown.
+ * hook sees it. The run sets `CLAUDE_CODE_SESSION_ID` to this session's id, or blank when
+ * the engine cannot say (`approvalEnv`): a mod's child would otherwise inherit the host's
+ * value, which may name the session that started this one. journal.py records the approving
+ * session from it, and a blank one as no session (#46). True when journal.py exited 0; any
+ * failure is false, never thrown.
  */
 async function recordApproval($: Engine, path: string, approval: Approval): Promise<boolean> {
-  const ran = await settle(() => $.process.run(['python3', path, ...approvalArgs(approval)], { timeoutMs: 10_000, ...(projectRoot === null ? {} : { cwd: projectRoot }) }))
+  const env = approvalEnv(await sessionIdOf($))
+  const ran = await settle(() =>
+    $.process.run(['python3', path, ...approvalArgs(approval)], {
+      timeoutMs: 10_000,
+      env,
+      ...(projectRoot === null ? {} : { cwd: projectRoot }),
+    }),
+  )
   return ran.ok && ran.value.exitCode === 0
 }
 

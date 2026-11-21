@@ -1549,7 +1549,7 @@ describe('register', () => {
 
     test('ADR 0010: an unreviewed stream is offered three answers; Approve publishing records one marked decision by the user, then passes', async ($, on) => {
       engineWorld(on)
-      const { runs, cwds } = journaledWorld(on)
+      const { runs, cwds, envs } = journaledWorld(on)
       const { asked, offered } = gateWorld(on, { label: APPROVE })
       await $.session.start(START)
       const verdict = await check($, 'git push')
@@ -1566,9 +1566,29 @@ describe('register', () => {
       // in the project root, as every journal run
       const at = runs.indexOf(append)
       expect(cwds[at]).toBe(START.cwd)
+      // #46: the engine sets no session variable for a mod's child, so the append carries
+      // this session's id, and journal.py records the approving session from it
+      expect(envs[at]).toEqual({ CLAUDE_CODE_SESSION_ID: SESSION_ID })
+      // the reads set no variable: they name the session in `--session` where it matters
+      expect(envs.filter((_, index) => index !== at)).toEqual(runs.filter((_, index) => index !== at).map(() => undefined))
       // then a refresh, so the pane shows the stream authorized
       expect(runs.slice(at + 1).some(argv => argv[0] === 'python3' && argv.includes('status'))).toBe(true)
     })
+
+    // A mod's child inherits the host's environment, which may carry the id of the session
+    // whose shell started this one: the run blanks it rather than leave it to that.
+    for (const [name, id] of [['a blank', '  '], ['an empty', '']] as const) {
+      test(`#46: an approval in a session the engine names with ${name} id sets the session variable blank`, async ($, on) => {
+        engineWorld(on, { sessionId: id })
+        const { runs, envs } = journaledWorld(on)
+        gateWorld(on, { label: APPROVE })
+        await $.session.start(START)
+        expect(await check($, 'git push')).toMatchObject(BENEATH)
+        const at = runs.findIndex(argv => argv[0] === 'python3' && argv[2] === 'append')
+        expect(at).toBeGreaterThanOrEqual(0)
+        expect(envs[at]).toEqual({ CLAUDE_CODE_SESSION_ID: '' })
+      })
+    }
 
     test('ADR 0010: a line on two unreviewed streams: one approval per stream, in line order', async ($, on) => {
       engineWorld(on)
