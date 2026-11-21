@@ -293,13 +293,13 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
 - **The stop gates merge-and-build, not design.** Each issue is reviewed and merged
   independently. Report it done and **wait for the go-ahead** before *merging it or starting to
   implement* the next issue. Don't silently roll implementation from one issue into the next.
-  - **"Start the next item" is never publish authorization for this one.** An MR/PR goes up
-    only once one of two events is recorded: this issue's `review-verdict` {verdict: ready},
-    or the user's own publish approval. The user approves in the shipgate-hud publish
-    dialog ("Approve publishing"), or runs the `gate-decision` append with `!` and
-    `"source": "shell"` (form: `review`, **Record the outcome**). Never append a publish
-    decision as the user's yourself: a PreToolUse hook refuses it. Journaled projects
-    refuse `mr-opened` without one of the two events.
+  - **"Start the next item" is never a go for this one.** A commit needs the user's commit
+    go, and a push or an MR/PR needs the user's publish go: record a `go-requested`, then ask
+    with the gate as the header and the gate word as the first option (form: `review`,
+    **The user's go**). A reply that is no exact go leaves a witness; read it, and record
+    the read go when it approves. Never record an exact go as the user's yourself: a
+    PreToolUse hook refuses it. Journaled projects refuse `mr-opened` without an unforced
+    ready verdict or the publish go.
   - Design-ahead work on upcoming issues is explicitly allowed (and encouraged) during that
     wait. The gate exists so the user controls what gets built, not to park the orchestrator.
 - **Shared vs per-issue artifacts.** The epic-level PRD and design are shared context, written
@@ -350,12 +350,16 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   - **Say who decided.** A `gate-decision` carries `raised_by`. Use `user` when the user
     raised or corrected the point. Use `orchestrator` when you asked it or decided it
     yourself. Pass `--actor user` for a decision the user made, and `--actor orchestrator`
-    (or nothing) otherwise. The publish gate is the exception: the user records that
-    approval, not you. A worker that appends passes `--actor worker`. The form is
-    `role[@label]`. If you omit the label, `append` fills in the current session, except
-    for the sessionless roles `user` and `watcher`. Their label is never a session id. A
-    `user` event records the session that wrote it under `data.recorded_by` instead, so
-    the user's decisions still bind this session to the stream.
+    (or nothing) otherwise. The commit and publish gates are the exception: the recorder
+    or the user records the go, never you with `--actor user`; you record only a read go
+    (form: `review`, **The user's go**). A worker that appends passes `--actor worker`.
+    The form is `role[@label]`. If you omit the label, `append` fills in the current
+    session, except for the sessionless roles `user` and `watcher`. Their label is never
+    a session id. A `user` event records the session that wrote it under
+    `data.recorded_by` instead, so the user's decisions still bind this session to the
+    stream. The go rows of the commit and publish gates are the exception: a go request,
+    a witness and a go with the marker `question`, `prompt` or `read` bind no session
+    (ADR 0023 §13).
 
   Hooks capture what the harness can see: artifact writes, session start and end. The Stop
   hook blocks a session that did one of two things:

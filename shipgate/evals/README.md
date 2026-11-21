@@ -5,6 +5,9 @@ repository in `fixture.sh` (run by the harness **outside** the agent sandbox via
 `case.yaml` → `context.scaffold_script`), so nothing here depends on a real project and
 nothing private can leak in.
 
+`two-turn/` is no case: it drives one interactive session for SC-010 of the approval path,
+which the harness cannot run (one prompt, no `AskUserQuestion`). Its README says when and how.
+
 ## Run
 
 ```

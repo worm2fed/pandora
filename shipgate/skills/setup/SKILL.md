@@ -132,12 +132,15 @@ Order matters. Never leave a sidecar pointing at a database that was not created
      "ledger": "docs/ledger.md",
      "artifact_homes": { "prd": "docs/prd/*.md", "adr": "docs/adr/*.md",
                          "worklog": "docs/prd/*.worklog.md" },
-     "enforce": { "stop_gate": true, "auto_capture": true }
+     "enforce": { "stop_gate": true, "auto_capture": true, "command_gate": true }
    }
    ```
    Paths mirror the interview answers. `ledger` is optional: it is the path that the
    config's `## Knowledge base` `Ledger:` line names. Leave it out when that line is absent,
-   and `status` then counts `docs/ledger.md`. Both `enforce` flags default to true. Tell the
+   and `status` then counts `docs/ledger.md`. The three `enforce` flags default to true.
+   `command_gate` holds a model's `git commit`, `git push` and MR/PR creation until the
+   user's go is recorded (ADR 0023). Write it `false` only when the user says the project
+   runs unattended, with no user to answer. Tell the
    user this file is **generated and never hand-edited**. To change it, the user re-runs
    setup.
 4. **Gitignore.** Always ignore the db: `shipgate.db*` at the path you chose (the glob covers

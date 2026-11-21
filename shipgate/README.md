@@ -182,13 +182,15 @@ compacted or resumed session was driving, branch or no branch), then the checked
 
 | Command | Does |
 | --- | --- |
-| `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. Dormant streams take one line, and completed ones are hidden unless `--all`. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each stream also carries `publish`, `lifecycle` and `current`, and the top level carries `nested_matches` |
-| `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). Each entry also carries `label`: the newest name a `review-disposition`'s `labels` gave that key, or null. An unknown stream exits 1 |
+| `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. Dormant streams take one line, and completed ones are hidden unless `--all`. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each stream also carries `publish`, `go` (the user's go per gate, ADR 0023), `lifecycle` and `current`, and the top level carries `nested_matches` |
+| `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). Each entry also carries `label`: the newest name a `review-disposition`'s `labels` gave that key, or null. It also carries `go`, as `status --json` does. An unknown stream exits 1 |
 | `handoff --stream S` | the brief a fresh session continues one stream from (ADR 0021): its role, the request, the phase and the next one, where to report (the newest `report_to` an event names, else the user), the artifacts to open in reading order, the next Build Plan task, the open gates (an ADR still `proposed`, a `not-ready` verdict, findings still `fixing`, ticked tasks with no `task-done`, a failed verify, the publish gate), the last five gate decisions, and the config's **Autonomy** and **Security-sensitive areas** sections through the layers. Built from the journal, the files its events name and the config, never from the session; `design` prints it at `design-committed` and `/shipgate` reads it on a resume. Text for a model, no `--json`. An unknown stream exits 1 |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
+| `reply --session ID --json` | the recorder hook's plan for a user's reply on stdin (ADR 0023): the go rows and witnesses to write, and the context line. It writes nothing; the hook writes the rows with `append --batch` |
+| `authorize --gate commit\|publish --branch B [--subagent] --json` | the command gate's answer for a branch: `pass` or `hold`, the reason (`authorized`, `no-go`, `witness-waits`, `no-stream`, `not-live`) and the refusal text. A ready verdict is no go |
 | `check --session ID [--json] [--record]` | what the flow still owes (the Stop hook's source): `findings`, the worklogs it `skipped` and why, and the `waivers` that would clear the findings. `--record` stamps the run as the last check: one `meta` value, no event |
-| `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review" |
+| `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review". `go` counts the go records by marker (`dialog`, `shell`, `question`, `prompt`, `read`) |
 | `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, the session that started last (a diagnostic; no append reads it), schema, health, portability. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
 
 `append` is where the gates live. It validates the payload against its type's shape
@@ -198,10 +200,10 @@ must read each new version back from the output instead of assuming +1 — refus
 1 KB (prose belongs in the worklog — the event carries `refs`), records a `deviation` with
 `kind: signals-missing` beside a `route-and-map` entry that carries no `signals` (ADR 0011),
 and refuses `mr-opened` until the stream holds, after its last `task-done`, either a
-`review-verdict` with `verdict=ready` or the user's publish approval: a `gate-decision` with
-`gate=publish`, `raised_by=user`, `decision=publish`, the actor `user` and the marker
-`source=dialog` or `source=shell` (ADR 0015). A `gate-decision`'s `decision` must be a
-string, and its optional `source` is `dialog` or `shell`. A `review-verdict`'s optional
+`review-verdict` with `verdict=ready` that was not forced, or the user's publish go (see
+**The user's go** below; ADR 0015, ADR 0023). `--force` does not waive this. A
+`gate-decision`'s `decision` must be a string, and its optional `source` is `question`,
+`prompt`, `read`, `dialog` or `shell`. A `review-verdict`'s optional
 `criteria` map takes `met` or `unmet`, and its optional `dispositions` map takes `fixed`,
 `rejected` or `deferred`. A `review-disposition` records one finding's state when it is
 decided: its `dispositions` map also takes `fixing`, and its `round` must be a non-negative
@@ -260,18 +262,47 @@ The command holds a placeholder note. `append` refuses an empty note or a `<...>
 with `--force` too, until the reason replaces it.
 `doctor` prints the last recorded check and the last block.
 
-**The user's publish approval.** Only the user approves a publish. The approval is a
-`gate-decision` with `gate=publish`, `decision=publish`, `raised_by=user`, the actor `user`
-and a marker: `source=dialog` when shipgate-hud's publish dialog records it ("Approve
-publishing"), `source=shell` when you run the append yourself with a `!` command. Neither
-path is a model tool call. A **PreToolUse hook on Bash** refuses a model's command that
-appends a `gate-decision` with the marker, or a publish decision that names the user
-(`--actor user`, `user@…`, a JSONL `actor`, or `raised_by: user`). It reads `--data`,
-`--batch` with a heredoc, a here-string or a pipe from `echo`, `printf` or `cat`, abbreviated
-options, any path to `journal.py`, and `sh -c` or `eval` strings. It refuses a payload it
-cannot read in full, such as one from a variable, a file or another command. Decisions at
-other gates pass. The hook does nothing for a command without `journal.py` and `append`.
-This is a net against a flow that forges your approval through its tools. It is no defence
+**The user's go.** Only the user approves a commit or a publish (ADR 0023). A go is a
+`gate-decision` at the gate `commit` or `publish` with `decision` equal to the gate,
+`raised_by=user` and a `source` marker. A publish go also covers the commit, and one
+publish go covers the push and the MR/PR creation. A go lasts until the stream's next
+`task-done`. The flow records a `go-requested` event, then asks with `AskUserQuestion`
+under the header `Commit` or `Publish`, the gate word as the first option.
+
+- **The recorder hook** (UserPromptSubmit, and PostToolUse on `AskUserQuestion`) writes
+  the go as yours when you answer with the gate word, select a stream in a multi-select
+  question, or type `commit`, `publish`, `push`, `yes`, `y`, `ok`, `go`, `approve` or `all`
+  (`source=question` or `source=prompt`). To any other reply it writes a `reply-witnessed`
+  row, which holds no text; the model reads your reply and, when it approves, records a
+  read go (`source=read`) that names the witness and quotes your words. It asks no
+  confirming question. The journal accepts a read go only with an unused witness of the
+  same stream, gate and session, newer than the last `task-done`. A prompt that starts
+  with a tag, such as a subagent report, is no reply. `stats` counts the go records by
+  marker, so the read ones can be audited.
+- **shipgate-hud's publish dialog** ("Approve publishing") records `source=dialog`, and
+  your own `!` command records `source=shell`, as before.
+- **The command gate.** A **PreToolUse hook on Bash** holds a model's `git commit` until
+  the stream of the branch holds a commit go, and `git push`, `git subtree push`,
+  `gh pr create` and `glab mr create` until it holds a publish go. A ready verdict is no
+  go. The hook asks `journal.py authorize` for the branch of the command's directory. It
+  does nothing on a project with no sidecar, on a branch with no stream or a finished one,
+  or when the sidecar sets `enforce.command_gate` to `false` (an unattended project). A
+  dry run is held like any commit or push. A failure of git or the journal lets the
+  command run.
+- **The forgery net.** The same hook refuses a model's command that appends a go as yours:
+  a `gate-decision` with a marker other than `read`, a commit or publish decision that
+  names the user (`--actor user`, `user@…`, a JSONL `actor`, or `raised_by: user`), and
+  any `reply-witnessed` row. It reads `--data`, `--batch` with a heredoc, a here-string or
+  a pipe from `echo`, `printf` or `cat`, abbreviated options, any path to `journal.py`, and
+  `sh -c` or `eval` strings. It refuses a payload or a `--type` it cannot read in full.
+  It also refuses any `journal.py import` a model runs, because `import` writes rows with
+  no check: when you move a journal between machines, run the import yourself with `!`.
+  And it refuses a journal write whose line sets or clears `CLAUDE_CODE_SESSION_ID`, since
+  a go request and a read go count for the session that appends them, and a command that
+  runs the recorder script `hooks/reply.py`, which only Claude Code runs on your reply.
+  Decisions at other gates pass.
+
+This is a net against a flow that forges your go through its tools. It is no defence
 against deliberate circumvention: the model has a shell and can write the SQLite file, run
 a copy of the script or call its functions from Python. A user publish decision recorded
 before 0.23.0 carries no marker and no longer authorizes; the gate asks again.
