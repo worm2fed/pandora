@@ -2,11 +2,11 @@
 type: adr
 title: "0010. The publish dialog records the user's approval"
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-20
 tags:
   - adr
   - shipgate-hud
-status: accepted
+status: accepted (amended 2026-11-20, shipgate-hud 0.11.1)
 date: 2026-11-06
 issue: "#1"
 related:
@@ -19,6 +19,10 @@ related:
 > The publish dialog gets a third answer, "Approve publishing". It records one marked
 > publish `gate-decision` per held stream, then lets the line through. "Let it through
 > once" keeps its meaning and records nothing.
+>
+> **Amended 2026-11-20 (shipgate-hud 0.11.1, #46):** the approval run sets
+> `CLAUDE_CODE_SESSION_ID` to `$.session.id()`, or blank when the engine gives no id, so the
+> row records the session that approved and never one it inherited.
 
 ## Context
 
@@ -38,6 +42,12 @@ once" the flow's `mr-opened` was still refused, and the next push asked again.
    `gate: publish`, `decision: publish`, `raised_by: user`, `mode: ask`,
    `source: dialog` and a short `question` naming the held command. The HUD runs it with
    `$.process.run`, which is no tool call, so no PreToolUse hook sees it.
+   *Amended 2026-11-20 (shipgate-hud 0.11.1, #46):* the run sets `CLAUDE_CODE_SESSION_ID`
+   to `$.session.id()`. A mod's child gets the host process's own environment: no such
+   variable, or the id of the session whose shell started this one, as for a teammate
+   started from its lead's shell. journal.py records the approving session from that
+   variable alone (shipgate ADR 0005's 2026-11-20 amendment). With no id from the engine,
+   the run sets the variable blank, and the row records no session.
 3. **A failed record still passes.** The user answered "approve"; the line goes through,
    as for "Let it through once". The next publish asks again.
 

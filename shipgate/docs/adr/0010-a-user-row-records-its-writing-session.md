@@ -2,11 +2,11 @@
 type: adr
 title: "0010. A user row records the session that wrote it"
 created: 2026-10-30
-updated: 2026-10-30
+updated: 2026-11-20
 tags:
   - adr
   - shipgate
-status: accepted (Stop gate consequences amended by 0020)
+status: accepted (Stop gate consequences amended by 0020; decision 2 amended 2026-11-20, shipgate 0.27.1, by 0005's amendment)
 date: 2026-10-30
 issue: "#9"
 related: ["0003-session-attribution-via-current-session.md", "0005-session-label-from-the-shell-environment.md"]
@@ -43,6 +43,9 @@ that wrote a PRD and recorded only user gate decisions is blocked for "no gate-d
    appended with no session at all gets no key. The implied `phase-entered` row gets the
    same value. The key is not `raised_by`: a gate decision's `raised_by: user` says a person
    raised the point, and `recorded_by` names the session that wrote the row.
+   *Amended by ADR 0005's 2026-11-20 amendment (#46):* the source is
+   `CLAUDE_CODE_SESSION_ID` only. `meta.current_session` named the session that started
+   last, so a `user` row from a shell with no variable now gets no key.
 3. **`event_session` reads it.** The order is `data.session`, then `data.recorded_by` on a
    `user` row only, then the actor label of a machine role. The label of a `user` or
    `watcher` actor is never read: it names a person or a watcher. So `status --session`

@@ -2,6 +2,31 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.11.1 — an approval from the publish dialog records the session that approved.
+
+**The approval append named the wrong session (shipgate #46, HUD ADR 0010 amended).** The
+HUD records "Approve publishing" with `journal.py append --actor user` through
+`$.process.run`. A mod's child does not get this session's `CLAUDE_CODE_SESSION_ID`. It
+gets the host process's own environment: no such variable, or the id of the session whose
+shell started this one, as for a teammate started from its lead's shell. So the row named
+the session that started last on the journal (shipgate's fallback), or the parent session.
+That session was then bound to the approved stream.
+- The approval run always sets `CLAUDE_CODE_SESSION_ID`: to `$.session.id()`, or blank when
+  the engine gives no id. shipgate records a blank one as no session.
+- Proved live on Claude Code 2.1.329 with a probe mod and no model turn. With no variable
+  set, the row took the stored id (shipgate 0.27.0) or none (0.27.1). With the parent's id
+  in the host environment, the row took the parent's id. With the variable set, the row
+  recorded the id that `$.session.id()` and the session's hooks report.
+- No other run changes: the status, position and git reads set no variable.
+
+**The dependency.** `plugin.json` still declares shipgate `>=0.23.0`. Every shipgate in that
+range reads `CLAUDE_CODE_SESSION_ID` first, so the approval names the approving session with
+any of them. A blank variable records no session from shipgate 0.27.1 on; an older one falls
+back to the session that started last.
+
+**Tests.** The approval run carries this session's id, and only that run sets a variable. A
+blank or empty id from the engine sets the variable blank.
+
 v0.11.0 — the review board comes back after `/clear`, `/resume` and `/branch`.
 
 **The board is kept in the store (HUD ADR 0011).** Before, the Review tab's board lived in

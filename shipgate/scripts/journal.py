@@ -468,7 +468,7 @@ REVIVING_TYPES = frozenset(
 )
 
 # Roles whose label is never a session id. The watcher runs outside any Claude session,
-# so `meta.current_session` would attribute its events to whoever started a session last;
+# so a session id would attribute its events to a session that did not write them;
 # a `user` label names a person, which is why `stats` drops the label from its session
 # count — defaulting a session id in would put it back and inflate that count.
 SESSIONLESS_ROLES = frozenset({"watcher", "user"})
@@ -480,10 +480,11 @@ SESSIONLESS_ROLES = frozenset({"watcher", "user"})
 RECORDED_BY_KEY = "recorded_by"
 RECORDED_BY_ROLES = frozenset({"user"})
 
-# Claude Code sets this in every shell it starts, subagents' included (they get the
-# parent's id). It names the session that is appending, where `meta.current_session`
-# names only the one that started last — two sessions open on one project would
-# otherwise label each other's events.
+# Claude Code sets this in every shell and hook it starts, subagents' included (they get
+# the parent's id). It names the session that is appending. It is the only source:
+# `meta.current_session` names the one that started last, so two sessions open on one
+# project would label each other's events (#46). A mod's `$.process.run` child does not
+# get it; the HUD passes it in `env` when it records an approval.
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 
 # A `capture-done` with nothing after it is a flow that ended without saying so; give
@@ -807,7 +808,11 @@ def get_meta(conn: sqlite3.Connection, key: str) -> Optional[str]:
 
 
 def current_session(conn: sqlite3.Connection) -> Optional[str]:
-    """The session id the SessionStart hook stored, if any (ADR 0003)."""
+    """The session id the SessionStart hook stored last, if any (ADR 0003).
+
+    Diagnostic only, for `session --get`: the session that started last. Since #46 no
+    append reads it as its own session (ADR 0005, amendment 2026-11-20).
+    """
     if not _table_exists(conn, "meta"):
         return None
     return get_meta(conn, "current_session") or None
@@ -858,8 +863,14 @@ def parse_actor(
 
 def appending_session(conn: sqlite3.Connection) -> Optional[str]:
     """The session running this append (ADR 0005): the shell's ``CLAUDE_CODE_SESSION_ID``,
-    else ``meta.current_session``, else None."""
-    return os.environ.get(SESSION_ENV, "").strip() or current_session(conn)
+    else None.
+
+    Never ``meta.current_session``: that names the session that started last, which need
+    not be the one appending (#46). A shell with no variable — a mod's process run, a client
+    older than 2.1.132, a terminal outside Claude Code — records no session, so its row
+    binds and counts for none. ``conn`` stays in the signature for its callers.
+    """
+    return os.environ.get(SESSION_ENV, "").strip() or None
 
 
 def recorded_by_for(conn: sqlite3.Connection, actor: str) -> Optional[str]:
@@ -4316,7 +4327,7 @@ def _counted_sessions(events: Iterable[Event]) -> Set[str]:
 
     The label of an event actored `user@…` or `watcher@…` is not counted: it names a
     person or a watcher, not a session (ADR 0003 only defaults the label to
-    `meta.current_session` for machine roles), so counting it would inflate "sessions" by
+    the appending session for machine roles), so counting it would inflate "sessions" by
     one per human who ever appeared. `event_session` already skips those labels, and it
     counts the session that recorded a `user` row (`recorded_by`, ADR 0010).
     An artifact write counts only its author from the fold (ADR 0008): a session that
@@ -5110,13 +5121,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_vocab.set_defaults(func=cmd_vocab)
 
     p_session = subparsers.add_parser(
-        "session", help="read or set the session id append attributes events to"
+        "session",
+        help="read or set the session that started last (a diagnostic; append reads "
+             "its session from CLAUDE_CODE_SESSION_ID only)",
     )
     _add_db_flag(p_session)
     p_session.add_argument("--set", dest="set_id", default=None, metavar="ID",
-                           help="record ID as the current session")
+                           help="record ID as the session that started last")
     p_session.add_argument("--get", action="store_true",
-                           help="print the current session id")
+                           help="print the session that started last")
     p_session.add_argument("--json", action="store_true",
                            help="machine-readable output")
 
@@ -5517,11 +5530,11 @@ def cmd_session(args, resolution: Resolution) -> int:
     if args.json:
         print(json.dumps({"current_session": session_id}, sort_keys=True))
     elif args.set_id:
-        print(f"current session set to {session_id}")
+        print(f"session that started last set to {session_id}")
     elif session_id:
         print(session_id)
     else:
-        print("no current session recorded")
+        print("no session start recorded")
     return EXIT_OK
 
 

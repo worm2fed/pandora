@@ -186,10 +186,11 @@ export const EXAMPLE_JOURNAL: JournalWorld = {
   sidecar: () => SIDECAR,
 }
 
-/** What a journaled world recorded: each process run's argv and the directory it ran in (same index), each path read, each path asked for. */
+/** What a journaled world recorded: each process run's argv, the directory it ran in and the variables it set (same index), each path read, each path asked for. */
 export interface JournalRecord {
   readonly runs: string[][]
   readonly cwds: (string | undefined)[]
+  readonly envs: (Readonly<Record<string, string>> | undefined)[]
   readonly reads: string[]
   readonly asked: string[]
 }
@@ -202,8 +203,8 @@ export interface JournalRecord {
  */
 export function journaledWorld(on: On, given: Partial<JournalWorld> = {}): JournalRecord {
   const journal: JournalWorld = { ...EXAMPLE_JOURNAL, ...given }
-  const record: JournalRecord = { runs: [], cwds: [], reads: [], asked: [] }
-  const { runs, cwds, reads, asked } = record
+  const record: JournalRecord = { runs: [], cwds: [], envs: [], reads: [], asked: [] }
+  const { runs, cwds, envs, reads, asked } = record
   const isSidecar = (path: string): boolean =>
     journal.sidecarDir === null ? path.endsWith('/.claude/shipgate.json') : path === `${journal.sidecarDir}/.claude/shipgate.json`
   on('fs.exists', async (_$, e) => {
@@ -222,6 +223,7 @@ export function journaledWorld(on: On, given: Partial<JournalWorld> = {}): Journ
     const argv = [...e.argv]
     runs.push(argv)
     cwds.push(e.init?.cwd)
+    envs.push(e.init?.env === undefined ? undefined : { ...e.init.env })
     if (argv[0] === 'git') return ok(`${journal.branch(argv[1] === '-C' ? (argv[2] ?? null) : null)}\n`)
     if (argv.includes('status')) return ok(JSON.stringify(journal.status(argv)))
     if (argv.includes('position')) {

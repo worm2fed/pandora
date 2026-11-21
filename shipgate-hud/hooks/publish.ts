@@ -1278,6 +1278,16 @@ export function approvalData(approval: Approval): string {
   })
 }
 
+/**
+ * The environment an approval run sets, so journal.py records the session that approved
+ * (HUD ADR 0010 and shipgate ADR 0005, both amended for #46). A mod's `$.process.run` child
+ * gets the host process's own environment, not this session's id: none, or the id of the
+ * session whose shell started this one (a teammate started from its lead's shell). journal.py
+ * reads the session from that variable alone, so the run always sets it: this session's id,
+ * or blank when the engine cannot say, which journal.py records as no session.
+ */
+export const approvalEnv = (sessionId: string | null): Readonly<Record<string, string>> => ({ CLAUDE_CODE_SESSION_ID: sessionId ?? '' })
+
 /** The journal.py arguments that record one approval: a `gate-decision` on its stream, by the user. */
 export const approvalArgs = (approval: Approval): readonly string[] => [
   'append',

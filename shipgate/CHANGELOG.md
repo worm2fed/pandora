@@ -2,6 +2,39 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.27.1 — an append from a shell with no session id records no session, so it no longer binds another session to its stream.
+
+**An append borrowed the id of the session that started last (#46, ADR 0005 amended).**
+`append` took the session from `CLAUDE_CODE_SESSION_ID`, else from `meta.current_session`.
+That key is one row per journal, and every SessionStart hook overwrites it, on `/clear` and
+on a compaction too. So with two sessions on one journal, a shell with no variable labelled
+its row with the other session's id. That session's next status brief then led with a
+stream it never worked on, and its Stop gate could block on the row. In a scratch journal,
+sessions A and B started in that order: A's sessionless `gate-decision` got the actor
+`orchestrator@B`, a sessionless `user` row got `recorded_by` B, and `status --session B` put
+B on A's stream. The fallback came in with ADR 0003 (046c758); ADR 0005 (36dcec1) made it
+bind a stream.
+- `append` reads the session from `CLAUDE_CODE_SESSION_ID` only. A blank variable is none.
+  With none, a machine role stays bare (`orchestrator`, `worker`) and a `user` row gets no
+  `recorded_by`; the implied `phase-entered` and the automatic `deviation` follow. The row
+  binds no stream, and `status --session`, `check` and `stats` count it for no session. The
+  append is not refused.
+- Which shells have no variable, probed on Claude Code 2.1.329: a mod's `$.process.run`
+  child (shipgate-hud's "Approve publishing" append ran there), a client older than
+  2.1.132, and a shell outside Claude Code. A mod's child that inherits a parent session's
+  id, in a session started from that session's shell, carries the wrong id instead; the HUD
+  now sets its own. The Bash tool, nested and background shells, subagents, hooks and `!`
+  lines all carry the session's own id. ADR 0005's amendment holds the table.
+- `meta.current_session` stays: the SessionStart hook writes it and `session --get` prints
+  it, as a diagnostic of the session that started last. No append reads it. A later release
+  retires it.
+- Rows written before this release keep their labels. No event repairs them: nothing marks
+  a borrowed label, and a session's binding moves back at its next own append.
+- shipgate-hud 0.11.1 passes its session id to the approval append, so a dialog approval
+  still records the session that approved. An older HUD's approval now records no session,
+  or a parent session's id when the HUD's session was started from that session's shell.
+- No hook, schema or output shape changes.
+
 v0.27.0 — hand off to a fresh session at a phase gate: `journal.py handoff` prints the brief, `design` and `review` recommend `/clear`, and a hook says when the context is past a threshold.
 
 **Phases share one session (#23, ADRs 0021 and 0022).** A flow usually ran clarify, design,

@@ -751,15 +751,37 @@ class TestActorCanon(JournalTestCase):
         self.append_event("feature/x", "flow-suspended")
         self.assertEqual(self.actor_of(), "orchestrator")
 
-    def test_the_default_actor_carries_the_current_session(self):
+    # Issue #46: `meta.current_session` names the session that started last, which need
+    # not be the one appending. An append whose shell names no session records none.
+    def test_the_stored_session_never_labels_an_append(self):
         self.set_session("S1")
         self.append_event("feature/x", "flow-suspended")
-        self.assertEqual(self.actor_of(), "orchestrator@S1")
+        self.assertEqual(self.actor_of(), "orchestrator")
 
-    def test_a_bare_role_is_suffixed_with_the_current_session(self):
+    def test_a_bare_role_stays_bare_with_no_session_env(self):
         self.set_session("S1")
         self.append_event("feature/x", "flow-suspended", None, "--actor", "worker")
-        self.assertEqual(self.actor_of(), "worker@S1")
+        self.assertEqual(self.actor_of(), "worker")
+
+    def test_a_blank_session_env_is_no_session(self):
+        self.set_session("S1")
+        self.append_from_session("  ")
+        self.assertEqual(self.actor_of(), "orchestrator")
+
+    def test_the_implied_and_auto_rows_of_a_sessionless_append_are_bare(self):
+        """The implied `phase-entered` and the auto deviation take the append's actor."""
+        self.set_session("S1")
+        self.append_event("feature/x", "phase-entered",
+                          {"phase": "route-and-map", "skipped": ["workspace"]})
+        self.append_event("feature/x", "verify-run",
+                          {"outcome": "pass", "task_ids": ["T001"]}, "--actor", "user")
+        rows = self.events("feature/x")
+        self.assertEqual([r["type"] for r in rows], [
+            "phase-entered", "deviation", "phase-entered", "verify-run",
+        ])
+        self.assertEqual([r["actor"] for r in rows],
+                         ["orchestrator", "orchestrator", "user", "user"])
+        self.assertFalse([r for r in rows if "recorded_by" in r["data"]])
 
     def test_an_explicit_label_wins_over_the_current_session(self):
         self.set_session("S1")
@@ -843,11 +865,12 @@ class TestActorCanon(JournalTestCase):
         self.assertEqual(self.actor_of(), "user")
         self.assertEqual(self.data_of()["recorded_by"], "S1")
 
-    def test_a_user_row_falls_back_to_the_current_session(self):
+    def test_a_user_row_never_falls_back_to_the_stored_session(self):
+        """Issue #46: the stored session started last; it did not write this row."""
         self.set_session("S1")
         self.append_event("feature/x", "flow-suspended", None, "--actor", "user")
         self.assertEqual(self.actor_of(), "user")
-        self.assertEqual(self.data_of()["recorded_by"], "S1")
+        self.assertNotIn("recorded_by", self.data_of())
 
     def test_a_labelled_user_row_still_records_the_writing_session(self):
         """The label names a person; the writing session is a separate fact."""
@@ -2907,6 +2930,66 @@ class TestSessionMatch(JournalTestCase):
         text = self.journal("--db", self.db, "status", "--session", "A",
                             "--branch", "fix/1-b", rc=OK).stdout
         self.assertLess(text.index("epic-1"), text.index("fix/1-b"))
+
+
+class TestSessionlessAppend(JournalTestCase):
+    """Issue #46: two sessions share one journal, and one appends from a shell with no
+    CLAUDE_CODE_SESSION_ID (a mod's process run, an older client, a terminal outside
+    Claude Code). The SessionStart hook stored the other session's id last. The row must
+    record no session, so it binds and counts for neither."""
+
+    A = "aaaaaaaa-0000-4000-8000-00000000000a"
+    B = "bbbbbbbb-0000-4000-8000-00000000000b"
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+        # A starts, then B: the hook's stored session is B's.
+        self.journal("--db", self.db, "session", "--set", self.A, rc=OK)
+        self.journal("--db", self.db, "session", "--set", self.B, rc=OK)
+        self.append_as(self.A, "feat/x", "flow-started", {"request": "A's work"})
+        self.append_as(self.B, "fix/1290-date-off-by-one", "flow-started",
+                       {"request": "B's work"})
+        # A appends from a shell with no session id: a decision, and a user decision.
+        decision = {"gate": "design", "question": "q?", "decision": "d",
+                    "mode": "executive"}
+        self.append_event("feat/x", "gate-decision", decision)
+        self.append_event("feat/x", "gate-decision",
+                          {**decision, "mode": "ask", "raised_by": "user"},
+                          "--actor", "user")
+
+    def append_as(self, session, stream, etype, data, *args):
+        self.journal("--db", self.db, "append", "--stream", stream, "--type", etype,
+                     "--data", json.dumps(data), *args, rc=OK, session_env=session)
+
+    def test_the_sessionless_rows_name_no_session(self):
+        rows = self.events("feat/x")[1:]
+        self.assertEqual([r["actor"] for r in rows], ["orchestrator", "user"])
+        self.assertFalse([r for r in rows if "recorded_by" in r["data"]])
+
+    def test_the_other_sessions_brief_keeps_its_own_stream(self):
+        self.assertEqual(self.status_json("--session", self.B)["session_match"],
+                         "fix/1290-date-off-by-one")
+        self.assertEqual(self.status_json("--session", self.A)["session_match"], "feat/x")
+
+    def test_a_session_whose_only_writes_are_sessionless_binds_nothing(self):
+        self.append_event("epic-1", "flow-started", {"request": "planning"})
+        payload = self.status_json("--session", self.B, "--branch", "epic-1")
+        self.assertEqual(payload["session_match"], "fix/1290-date-off-by-one")
+        self.assertEqual(payload["branch_match"], "epic-1")
+
+    def test_the_stop_gate_does_not_blame_the_other_session(self):
+        """Rule C reads a session's own rows: a sessionless forced task-done is nobody's."""
+        self.append_event("feat/x", "task-done", {"task_id": "T001"},
+                          "--force", "--force-reason", "test")
+        proc = self.journal("--db", self.db, "check", "--session", self.B, "--json", rc=OK)
+        self.assertEqual(json.loads(proc.stdout)["findings"], [])
+
+    def test_stats_count_only_the_session_that_named_itself(self):
+        proc = self.journal("--db", self.db, "stats", "--json", rc=OK)
+        rows = {r["stream"]: r for r in json.loads(proc.stdout)["streams"]}
+        self.assertEqual(rows["feat/x"]["sessions"], 1)
+        self.assertEqual(rows["fix/1290-date-off-by-one"]["sessions"], 1)
 
 
 class TestBranchOrdering(JournalTestCase):
@@ -5383,20 +5466,30 @@ class TestStats(JournalTestCase):
         self.assertEqual(row["review_rounds"], 2)
         self.assertEqual(row["review_feedback"], 1)
 
+    def deviate_in(self, session, note, *args):
+        """A deviation appended from a shell whose CLAUDE_CODE_SESSION_ID is `session`."""
+        self.journal("--db", self.db, "append", "--stream", "feature/x",
+                     "--type", "deviation", "--data", json.dumps({"note": note}), *args,
+                     rc=OK, session_env=session)
+
     def test_sessions_touching_the_stream_are_counted(self):
         self.append_event("feature/x", "deviation", {"note": "a"})
         self.assertEqual(self.row()["sessions"], 0)
-        self.journal("--db", self.db, "session", "--set", "session-1", rc=OK)
-        self.append_event("feature/x", "deviation", {"note": "b"})
-        self.append_event("feature/x", "deviation", {"note": "c"})
-        self.journal("--db", self.db, "session", "--set", "session-2", rc=OK)
-        self.append_event("feature/x", "deviation", {"note": "d"})
+        self.deviate_in("session-1", "b")
+        self.deviate_in("session-1", "c")
+        self.deviate_in("session-2", "d")
         self.assertEqual(self.row()["sessions"], 2)
+
+    def test_the_stored_session_is_not_counted(self):
+        """Issue #46: a sessionless append does not borrow the stored session."""
+        self.journal("--db", self.db, "session", "--set", "session-1", rc=OK)
+        self.append_event("feature/x", "deviation", {"note": "a"})
+        self.append_event("feature/x", "deviation", {"note": "b"}, "--actor", "user")
+        self.assertEqual(self.row()["sessions"], 0)
 
     def test_a_user_label_is_a_name_not_a_session(self):
         """`user@alice` names a person; counting it would inflate the session count."""
-        self.journal("--db", self.db, "session", "--set", "session-1", rc=OK)
-        self.append_event("feature/x", "deviation", {"note": "a"})
+        self.deviate_in("session-1", "a")
         self.append_event("feature/x", "deviation", {"note": "b"},
                           "--actor", "user@alice")
         self.assertEqual(self.row()["sessions"], 1)
@@ -5404,8 +5497,7 @@ class TestStats(JournalTestCase):
 
     def test_a_bare_user_actor_is_not_a_session(self):
         """A `user` role takes no session label, so it cannot land in this count."""
-        self.journal("--db", self.db, "session", "--set", "session-1", rc=OK)
-        self.append_event("feature/x", "deviation", {"note": "a"})
+        self.deviate_in("session-1", "a")
         self.append_event("feature/x", "deviation", {"note": "b"},
                           "--actor", "user")
         self.append_event("feature/x", "deviation", {"note": "c"},
