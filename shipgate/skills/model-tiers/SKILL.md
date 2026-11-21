@@ -84,7 +84,7 @@ skip it when it doesn't. The sink-to-Sonnet rule still applies either way.
 - **Review before anything is staged.** Read the worker's diff against the design artifacts
   (ADR, worklog, PRD). Check the evidence in its report (real command output). Commit to the
   delegation: acceptance-check, and don't re-derive the worker's findings or redo its work.
-  Staging/committing stays under the user's explicit go-ahead as always.
+  Staging and committing need the user's go (form: `review`, **The user's go**).
 
 ## The worker brief — every dispatch includes
 
@@ -96,7 +96,8 @@ config's Worker guardrails section keeps the repo-specific rules only.
 > 1. Check the branch before you edit. You must be on the branch the brief names; stop and
 >    report if you are not.
 > 2. No commit and no staging. Leave every change in the working tree for the orchestrator's
->    review.
+>    review. Never ask the user for a go and never record a go request: when a hook holds a
+>    commit or a push, report the hold and hand the question back.
 > 3. The git index is the user's review record. Never run `git add`, `git reset`,
 >    `git stash`, `git restore --staged` or `git checkout -- <path>`. Leave the index exactly
 >    as you found it, even if the whole tree appears staged. If the index blocks you, stop

@@ -70,6 +70,13 @@ claude plugin eval <plugin-dir> --runs 3 --ablation with-without --scaffold --ju
    `env -u CLAUDECODE` (the scripts do).
 5. **zsh.** The Bash tool's shell is zsh: never start an unquoted word with `=`
    (`echo ===` fails with "== not found").
+6. **An installed plugin shadows the one under test.** When the paying account has a
+   plugin of the same name installed (`shipgate@pandora`), both the eval's "with" arm and
+   a `claude --plugin-dir` session load the installed copy, not the tree under test: the
+   trace's `init` record lists the plugin's `path` and `version`, so check it before you
+   trust a score. Eval sessions also have no `AskUserQuestion` tool, so a flow that asks
+   the user cannot be judged in the harness; `shipgate/evals/two-turn/` drives one
+   interactive session instead, after the merge, against the installed copy.
 
 ## Reading results
 

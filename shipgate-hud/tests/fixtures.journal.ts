@@ -22,6 +22,14 @@ export const STATUS_GOLDEN = {
         "feature": "epic-golden",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 46,
@@ -55,6 +63,14 @@ export const STATUS_GOLDEN = {
         "feature": "fix/7-golden-nested",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 44,
@@ -107,6 +123,20 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          },
+          "publish": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 42,
@@ -152,6 +182,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-named",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 25,
@@ -188,6 +226,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-started",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 22,
@@ -227,6 +273,14 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:29:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 16,
@@ -260,6 +314,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-signals",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 14,
@@ -293,6 +355,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dispositions",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 7,
@@ -312,10 +382,7 @@ export const STATUS_GOLDEN = {
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
-          "at": "2026-10-01T11:20:00+00:00",
-          "by": "review-verdict",
-          "kind": "authorized",
-          "seq": 7
+          "kind": "held"
         },
         "session_match": false,
         "stream": "feature/golden-dispositions",
@@ -336,6 +403,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dormant",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 18,
@@ -369,6 +444,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-done",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 21,
@@ -435,6 +518,20 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          },
+          "publish": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 42,
@@ -480,6 +577,14 @@ export const STATUS_GOLDEN = {
         "feature": "epic-golden",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 46,
@@ -513,6 +618,14 @@ export const STATUS_GOLDEN = {
         "feature": "fix/7-golden-nested",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 44,
@@ -546,6 +659,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-named",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 25,
@@ -582,6 +703,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-started",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 22,
@@ -621,6 +750,14 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:29:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 16,
@@ -654,6 +791,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-signals",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 14,
@@ -687,6 +832,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dispositions",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 7,
@@ -706,10 +859,7 @@ export const STATUS_GOLDEN = {
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
-          "at": "2026-10-01T11:20:00+00:00",
-          "by": "review-verdict",
-          "kind": "authorized",
-          "seq": 7
+          "kind": "held"
         },
         "session_match": false,
         "stream": "feature/golden-dispositions",
@@ -730,6 +880,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dormant",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 18,
@@ -777,6 +935,14 @@ export const STATUS_GOLDEN = {
         "feature": "fix/7-golden-nested",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 44,
@@ -810,6 +976,14 @@ export const STATUS_GOLDEN = {
         "feature": "epic-golden",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 46,
@@ -862,6 +1036,20 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          },
+          "publish": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 42,
@@ -907,6 +1095,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-named",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 25,
@@ -943,6 +1139,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-started",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 22,
@@ -982,6 +1186,14 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:29:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 16,
@@ -1015,6 +1227,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-signals",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 14,
@@ -1048,6 +1268,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dispositions",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 7,
@@ -1067,10 +1295,7 @@ export const STATUS_GOLDEN = {
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
-          "at": "2026-10-01T11:20:00+00:00",
-          "by": "review-verdict",
-          "kind": "authorized",
-          "seq": 7
+          "kind": "held"
         },
         "session_match": false,
         "stream": "feature/golden-dispositions",
@@ -1091,6 +1316,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dormant",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 18,
@@ -1140,6 +1373,14 @@ export const STATUS_GOLDEN = {
         "feature": "epic-golden",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 46,
@@ -1173,6 +1414,14 @@ export const STATUS_GOLDEN = {
         "feature": "fix/7-golden-nested",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 44,
@@ -1225,6 +1474,20 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          },
+          "publish": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 42,
@@ -1270,6 +1533,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-named",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 25,
@@ -1306,6 +1577,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-started",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 22,
@@ -1345,6 +1624,14 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:29:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 16,
@@ -1378,6 +1665,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-signals",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 14,
@@ -1411,6 +1706,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dispositions",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 7,
@@ -1430,10 +1733,7 @@ export const STATUS_GOLDEN = {
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
-          "at": "2026-10-01T11:20:00+00:00",
-          "by": "review-verdict",
-          "kind": "authorized",
-          "seq": 7
+          "kind": "held"
         },
         "session_match": false,
         "stream": "feature/golden-dispositions",
@@ -1454,6 +1754,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dormant",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 18,
@@ -1504,6 +1812,14 @@ export const STATUS_GOLDEN = {
         "feature": "epic-golden",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 46,
@@ -1537,6 +1853,14 @@ export const STATUS_GOLDEN = {
         "feature": "fix/7-golden-nested",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 44,
@@ -1589,6 +1913,20 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          },
+          "publish": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 42,
@@ -1634,6 +1972,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-named",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 25,
@@ -1670,6 +2016,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-started",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 22,
@@ -1709,6 +2063,14 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:29:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 16,
@@ -1742,6 +2104,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-signals",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 14,
@@ -1775,6 +2145,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dispositions",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 7,
@@ -1794,10 +2172,7 @@ export const STATUS_GOLDEN = {
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
-          "at": "2026-10-01T11:20:00+00:00",
-          "by": "review-verdict",
-          "kind": "authorized",
-          "seq": 7
+          "kind": "held"
         },
         "session_match": false,
         "stream": "feature/golden-dispositions",
@@ -1818,6 +2193,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dormant",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 18,
@@ -1871,6 +2254,14 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:29:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 16,
@@ -1904,6 +2295,14 @@ export const STATUS_GOLDEN = {
         "feature": "epic-golden",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 46,
@@ -1937,6 +2336,14 @@ export const STATUS_GOLDEN = {
         "feature": "fix/7-golden-nested",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 44,
@@ -1989,6 +2396,20 @@ export const STATUS_GOLDEN = {
             "ts": "2026-10-01T11:55:00+00:00"
           }
         ],
+        "go": {
+          "commit": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          },
+          "publish": {
+            "at": "2026-10-01T11:55:00+00:00",
+            "by": "gate-decision",
+            "kind": "authorized",
+            "seq": 42
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 42,
@@ -2034,6 +2455,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-named",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 25,
@@ -2070,6 +2499,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-started",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 22,
@@ -2103,6 +2540,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-signals",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 14,
@@ -2136,6 +2581,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dispositions",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": true,
         "last_event": {
           "seq": 7,
@@ -2155,10 +2608,7 @@ export const STATUS_GOLDEN = {
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
-          "at": "2026-10-01T11:20:00+00:00",
-          "by": "review-verdict",
-          "kind": "authorized",
-          "seq": 7
+          "kind": "held"
         },
         "session_match": false,
         "stream": "feature/golden-dispositions",
@@ -2179,6 +2629,14 @@ export const STATUS_GOLDEN = {
         "feature": "golden-dormant",
         "gate_decision_count": 0,
         "gate_decisions": [],
+        "go": {
+          "commit": {
+            "kind": "held"
+          },
+          "publish": {
+            "kind": "held"
+          }
+        },
         "implied_phase": false,
         "last_event": {
           "seq": 18,
@@ -2248,6 +2706,14 @@ export const POSITION_GOLDEN = {
         "state": "fixing"
       }
     },
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": {
       "at": "2026-10-01T11:18:00+00:00",
       "outcome": "pass",
@@ -2267,10 +2733,7 @@ export const POSITION_GOLDEN = {
       "workspace": "skipped"
     },
     "publish": {
-      "at": "2026-10-01T11:20:00+00:00",
-      "by": "review-verdict",
-      "kind": "authorized",
-      "seq": 7
+      "kind": "held"
     },
     "stream": "feature/golden-dispositions",
     "tasks": null,
@@ -2306,6 +2769,14 @@ export const POSITION_GOLDEN = {
     },
     "decisions": [],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": null,
     "lifecycle": "terminal",
     "phases": {
@@ -2345,6 +2816,14 @@ export const POSITION_GOLDEN = {
     },
     "decisions": [],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": null,
     "lifecycle": "dormant",
     "phases": {
@@ -2384,6 +2863,14 @@ export const POSITION_GOLDEN = {
     },
     "decisions": [],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": null,
     "lifecycle": "live",
     "phases": {
@@ -2456,6 +2943,20 @@ export const POSITION_GOLDEN = {
         "label": null,
         "seq": 39,
         "state": "deferred"
+      }
+    },
+    "go": {
+      "commit": {
+        "at": "2026-10-01T11:55:00+00:00",
+        "by": "gate-decision",
+        "kind": "authorized",
+        "seq": 42
+      },
+      "publish": {
+        "at": "2026-10-01T11:55:00+00:00",
+        "by": "gate-decision",
+        "kind": "authorized",
+        "seq": 42
       }
     },
     "last_verify": {
@@ -2559,6 +3060,14 @@ export const POSITION_GOLDEN = {
     },
     "decisions": [],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": {
       "at": "2026-10-01T11:38:00+00:00",
       "outcome": "pass",
@@ -2624,6 +3133,14 @@ export const POSITION_GOLDEN = {
     },
     "decisions": [],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": null,
     "lifecycle": "live",
     "phases": {
@@ -2663,6 +3180,14 @@ export const POSITION_GOLDEN = {
     },
     "decisions": [],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": null,
     "lifecycle": "live",
     "phases": {
@@ -2745,6 +3270,14 @@ export const POSITION_GOLDEN = {
     "current": null,
     "decisions": [],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": null,
     "lifecycle": "live",
     "phases": {
@@ -2790,6 +3323,14 @@ export const POSITION_GOLDEN = {
       }
     ],
     "dispositions": {},
+    "go": {
+      "commit": {
+        "kind": "held"
+      },
+      "publish": {
+        "kind": "held"
+      }
+    },
     "last_verify": null,
     "lifecycle": "live",
     "phases": {

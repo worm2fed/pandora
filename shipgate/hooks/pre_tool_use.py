@@ -1,19 +1,47 @@
 #!/usr/bin/env python3
-"""PreToolUse hook — refuse a Bash call that records the user's publish approval.
+"""PreToolUse hook — hold a commit or a publish with no go, and refuse a forged go.
 
-ADR 0015.
+ADR 0015, extended by ADR 0023 §14-§18. The hook has two rules: the command gate and the
+forgery net.
 
-Only the user approves a publish. The HUD's publish dialog and the user's own `!` command
-record that approval, and neither passes through PreToolUse. So a model's Bash call that
-appends either of these to the journal is refused:
+**The command gate** (ADR 0023 §14). On a journaled project, a model's `git commit` is
+held until the stream of its branch holds the user's go for the commit gate, and
+`git push`, `git subtree push`, `gh pr create` and `glab mr create` until it holds the go
+for the publish gate. `gated_commands` finds them in the lexed line; the branch is read in
+the command's directory (git's `-C`, or a literal `cd` before it, else the payload's
+`cwd`), and `journal.py authorize` answers for that branch. A `hold` is a `deny` with the
+journal's message. A project with no sidecar, `enforce.command_gate: false`, a directory
+with no branch, a branch with no stream or a finished one, and any failure of git or the
+journal pass the command (§15). A dry run is held like any commit or push: its flags
+cannot be read safely from the words (`--dry-run --no-dry-run`, `-m --dry-run`).
+
+**The forgery net** (ADR 0015, §18).
+
+Only the user approves a commit or a publish. The recorder hook writes the user's go from
+a gate question answer or a typed gate word, the HUD's publish dialog and the user's own
+`!` command write it too, and none of them passes through PreToolUse. So a model's Bash
+call that appends one of these to the journal is refused:
 
 * a `gate-decision` that carries `source`, the marker of the user's own approval, at any
-  gate;
-* a `gate-decision` at the publish gate (`gate`, or its alias `kind`; trimmed, any case)
-  that names the user: an actor of role `user` (`--actor user`, `user@...`, a JSONL
-  `actor`) or `raised_by: user`.
+  gate. The one exception is a read go: `source` that folds (trimmed, any case) to `read`,
+  with an actor that is not of role `user`. Such a row carries `raised_by: user`, and the
+  journal accepts it only with a witness the recorder wrote. A read go with an actor of
+  role `user` is refused, and one with an actor the hook cannot read is refused as opaque;
+* a `gate-decision` at the commit or the publish gate (`gate`, or its alias `kind`;
+  trimmed, any case) that names the user: an actor of role `user` (`--actor user`,
+  `user@...`, a JSONL `actor`) or `raised_by: user`;
+* a `reply-witnessed` event, whatever its actor or payload: a literal `--type` (trimmed,
+  any case) or a JSONL line whose `type` names it. Only the recorder hook writes a
+  witness.
+* `journal.py import`, whatever the file (ADR 0023 §20): it writes rows with no check.
+  The user runs an import with `!` when moving a journal between machines.
+* a command that runs the recorder hook script `reply.py` (ADR 0023 §21), as the program,
+  as a Python's script word, or through a script word the hook cannot read on a line that
+  names the script: it writes the user's go and witnesses, and only Claude Code runs it.
 
-A decision at another gate stays allowed with every actor, and so does every other event.
+The actor is the `--actor` option, or a JSONL line's own `actor`. With neither, journal.py
+records the role `orchestrator`, which is not the user. A decision at another gate stays
+allowed with every actor, and so does every other event.
 
 The hook lexes the command line itself (no shell runs): quotes, `\\` escapes, `$'...'`,
 the operators `;` `&&` `||` `|` `&` and newlines, `(`/`)` groups, comments, redirections,
@@ -32,17 +60,20 @@ alice`, `env -u X`, `stdbuf -o L`) are skipped to find the command they run, so 
 that reads its script on stdin behind one is lexed too. A literal stdin of any other
 command that is not text-only is lexed as well, and an event found there is refused.
 
-What the hook cannot read, it refuses when the append could be a `gate-decision`: a
-payload from a variable, a command substitution, a file, another command's output, a
-`--batch` with no visible stdin, a subcommand from a variable, an unquoted expansion
-among the arguments (it may split into a later `--type`), or a shell that reads a script
-on a stdin the hook cannot see. An append whose literal `--type` names another event type
-passes whatever its payload.
+What the hook cannot read, it refuses when the append could be a `gate-decision` or a
+witness: a payload from a variable, a command substitution, a file, another command's
+output, a `--batch` with no visible stdin, a subcommand from a variable, an unquoted
+expansion among the arguments (it may split into a later `--type`), or a shell that reads
+a script on a stdin the hook cannot see. A `--type` the hook cannot read is refused
+whatever its payload, because a witness is refused whatever its payload. An append whose
+literal `--type` names another event type passes whatever its payload.
 
 This is a net, not a boundary. The model has a shell and can still write the approval by
 other means, and these are out of scope:
 
-* a direct SQLite write, `python3 -c`, or a copied or renamed script;
+* a direct SQLite write, `python3 -c`, or a copied or renamed script (the recorder
+  script included), or a script of the model's own that drives the journal;
+* a nested `claude` session that resumes the parent session and fires its real hooks;
 * a shell function, an alias, or a sourced file (`. f`, `source f`) that runs the append;
 * a shell given a command line from a variable (`bash -c "$X"`, `eval "$X"`) or a script
   file;
@@ -52,9 +83,13 @@ other means, and these are out of scope:
 
 This hook fires on every Bash call in every project, so the fast path comes first: decode
 stdin, and exit 0 with no output and no file read unless the command contains both
-`journal.py` and `append`. `_common` is imported only to print a refusal. A crash exits 0
-silently, except on a command that names `journal.py`, `append` and `publish`: that one
-is refused.
+`journal.py` and `append` or `import`, or one of the command hints (`commit`, `push`,
+`create`, `new`). A command hint reads no file either unless the lexed line holds a gated
+command. `_common`
+is imported only to print a refusal or to answer for a gated command. A crash of the
+forgery net exits 0 silently, except on a command that names `journal.py`, `append` and
+`publish`, or `journal.py` and `import`: that one is refused (ADR 0015, ADR 0023 §20). A
+crash of the command gate passes the command.
 """
 
 from __future__ import annotations
@@ -63,8 +98,15 @@ import json
 import sys
 
 GATE_DECISION = "gate-decision"
+REPLY_WITNESSED = "reply-witnessed"
+COMMIT_GATE = "commit"
 PUBLISH_GATE = "publish"
+USER_GATES = (COMMIT_GATE, PUBLISH_GATE)
 USER_ROLE = "user"
+# `_common.SESSION_ENV`, kept here because the fast path does not import `_common`.
+SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
+# The one marker a model may write (ADR 0023 §8): a read go, which the journal checks.
+READ_SOURCE = "read"
 
 # How many times a string is lexed again as a command line (`sh -c`, `eval`, backticks, a
 # shell's stdin script), and how deep `$( ... )` may nest in one string.
@@ -126,30 +168,72 @@ TEXT_ONLY = {
 
 REASON_MARKER = "marker"
 REASON_USER = "user"
+REASON_WITNESS = "witness"
+REASON_IMPORT = "import"
+REASON_RECORDER = "recorder"
+REASON_SESSION = "session"
 REASON_OPAQUE = "opaque"
 REASON_SPLIT = "split"
 REASON_CRASH = "crash"
-REASON_PRIORITY = (REASON_MARKER, REASON_USER, REASON_OPAQUE, REASON_SPLIT)
+REASON_PRIORITY = (
+    REASON_MARKER, REASON_USER, REASON_WITNESS, REASON_IMPORT, REASON_RECORDER,
+    REASON_SESSION,
+    REASON_OPAQUE, REASON_SPLIT,
+)
+# The reasons that name an event the hook read, not a part it could not read.
+EVENT_REASONS = (
+    REASON_MARKER, REASON_USER, REASON_WITNESS, REASON_IMPORT, REASON_RECORDER,
+)
+# The recorder hook script (ADR 0023 §21): it writes the user's go and witnesses.
+RECORDER = "reply.py"
 
+# FR-024: the paths of this release (ADR 0023, ADR 0015).
 TAIL = (
-    "Only the user approves a publish. Ask them to choose \"Approve publishing\" in the "
-    "shipgate-hud publish dialog, or to run the append themselves with `!` and "
+    "Only the user approves a commit or a publish. Record a `go-requested` event, then "
+    "ask the gate question with the header `Commit` or `Publish`, or let the user type "
+    "the gate word: the recorder hook records the go. When the recorder names a witness "
+    "of the user's reply and that reply approves, append the read go with "
+    "`\"source\": \"read\"`, that `\"witness\"` and the user's `\"words\"`, never with "
+    "`--actor user`. The user can also choose \"Approve publishing\" in the "
+    "shipgate-hud publish dialog, or run the append themselves with `!` and "
     "`\"source\": \"shell\"`. Never record it on their behalf."
 )
 MESSAGES = {
     REASON_MARKER: (
         "shipgate refused this command: it appends a gate-decision that carries "
-        "`source`, the marker of the user's own approval."
+        "`source`, the marker of the user's own approval. Only a read go "
+        "(`\"source\": \"read\"`) passes here, and only with an actor that is not "
+        "`user`."
     ),
     REASON_USER: (
-        "shipgate refused this command: it records a publish gate-decision as the "
-        "user's (an actor of role `user`, or `raised_by: user`)."
+        "shipgate refused this command: it records a commit or publish gate-decision as "
+        "the user's (an actor of role `user`, or `raised_by: user`)."
+    ),
+    REASON_SESSION: (
+        "shipgate refused this command: it sets or clears `CLAUDE_CODE_SESSION_ID` for a "
+        "journal write. A go request and a read go count for the session that appends "
+        "them, so a write runs only in its own session's name."
+    ),
+    REASON_RECORDER: (
+        "shipgate refused this command: it runs the recorder hook script "
+        "(`hooks/reply.py`), which writes the user's go and witnesses. Only Claude Code "
+        "runs it, on the user's own prompt or question answer."
+    ),
+    REASON_IMPORT: (
+        "shipgate refused this command: it runs `journal.py import`, which writes the "
+        "rows of a file with no check, so it could write the user's go. Only the user "
+        "imports a journal: when you move one between machines, the user runs the "
+        "import with `!`."
+    ),
+    REASON_WITNESS: (
+        "shipgate refused this command: it appends a `reply-witnessed` event. Only the "
+        "recorder hook writes a witness, when the user replies to a go request."
     ),
     REASON_OPAQUE: (
-        "shipgate refused this command: it appends to the journal with a payload the "
-        "hook cannot read (a variable, a command substitution, a file, another "
-        "command's output, or no visible stdin for --batch). Write the payload "
-        "literally: `--data '{...}'` or a quoted heredoc (<<'EOF')."
+        "shipgate refused this command: it appends to the journal with an event type, a "
+        "payload or an actor the hook cannot read (a variable, a command substitution, "
+        "a file, another command's output, or no visible stdin for --batch). Write them "
+        "literally: `--type <event> --data '{...}'` or a quoted heredoc (<<'EOF')."
     ),
     REASON_SPLIT: (
         "shipgate refused this command: a journal append takes its subcommand or "
@@ -824,23 +908,37 @@ def _folded(value):
     return value.strip().casefold() if isinstance(value, str) else None
 
 
+def _is_user(actor):
+    """True for an actor label of role `user` (`user`, `user@alice`, ` User `)."""
+    if not isinstance(actor, str):
+        return False
+    return actor.partition("@")[0].strip().casefold() == USER_ROLE
+
+
 def judge_event(data, actor):
     """The reason to refuse a gate-decision with this data and actor, or None.
 
     `actor` is a string, None (no actor: journal.py's default), or a non-literal Word.
+    A read go (`source: read`) is the one marker that passes, and only with an actor
+    that is not the user's: it carries `raised_by: user`, and the journal checks its
+    witness (ADR 0023 §8).
     """
     if not isinstance(data, dict):
         return None
     if "source" in data:
-        return REASON_MARKER
+        if _folded(data.get("source")) != READ_SOURCE:
+            return REASON_MARKER
+        if isinstance(actor, Word):
+            return REASON_OPAQUE
+        return REASON_MARKER if _is_user(actor) else None
     gates = [_folded(data.get(key)) for key in ("gate", "kind") if key in data]
-    if PUBLISH_GATE not in gates:
+    if not any(gate in USER_GATES for gate in gates):
         return None
     if _folded(data.get("raised_by")) == USER_ROLE:
         return REASON_USER
     if isinstance(actor, Word):
         return REASON_OPAQUE
-    if isinstance(actor, str) and actor.partition("@")[0].strip().casefold() == USER_ROLE:
+    if _is_user(actor):
         return REASON_USER
     return None
 
@@ -858,7 +956,11 @@ def judge_jsonl(texts, args_actor):
                 continue
             if not isinstance(record, dict):
                 continue
-            if _folded(record.get("type")) != GATE_DECISION:
+            event_type = _folded(record.get("type"))
+            if event_type == REPLY_WITNESSED:
+                reasons.append(REASON_WITNESS)
+                continue
+            if event_type != GATE_DECISION:
                 continue
             actor = record.get("actor")
             if not (isinstance(actor, str) and actor):
@@ -957,12 +1059,15 @@ def judge_append(command, args, from_xargs, leading_opaque=False):
     An unread word in an option's place, or an unquoted expansion anywhere (it may split
     into `--type gate-decision`, and argparse keeps the last `--type`), is opaque at its
     position. Only a literal `--type` naming another event after the last of them lets the
-    append through unread.
+    append through unread. A literal `--type reply-witnessed` there is refused whatever
+    its payload, so a `--type` the hook cannot read is refused too: it may be a witness.
     """
     values = {}
     batch = False
     opaque_at = 0 if leading_opaque else -1
     other_type_at = -1
+    witness_at = -1
+    opaque_type_at = -1
     i = 0
     while i < len(args):
         word = args[i]
@@ -976,7 +1081,8 @@ def judge_append(command, args, from_xargs, leading_opaque=False):
             value = Word("", False, False)
             values[name] = value
             if name == "--type":
-                other_type_at = -1
+                other_type_at = witness_at = -1
+                opaque_type_at = i
             continue
         if not word.text.startswith("--"):
             continue
@@ -999,15 +1105,23 @@ def judge_append(command, args, from_xargs, leading_opaque=False):
             value = Word("", False, False)  # no value here: xargs may supply it
         values[name] = value
         if name == "--type":
-            literal_other = value.literal and _folded(value.text) != GATE_DECISION
-            other_type_at = i if literal_other else -1
+            folded = _folded(value.text) if value.literal else None
+            other_type_at = (
+                i if folded not in (None, GATE_DECISION, REPLY_WITNESSED) else -1
+            )
+            witness_at = i if folded == REPLY_WITNESSED else -1
+            opaque_type_at = i if folded is None else -1
 
     if other_type_at > opaque_at and not batch and not from_xargs:
         return []  # a literal --type names another event, after anything opaque
+    if witness_at > opaque_at and not batch and not from_xargs:
+        return [REASON_WITNESS]  # only the recorder hook writes a witness
     if from_xargs:
         return [REASON_OPAQUE]
     if opaque_at >= 0:
         return [REASON_SPLIT]
+    if opaque_type_at >= 0 and not batch:
+        return [REASON_OPAQUE]  # an unread --type: a gate-decision or a witness
 
     actor_word = values.get("--actor")
     if actor_word is None:
@@ -1035,7 +1149,9 @@ def judge_append(command, args, from_xargs, leading_opaque=False):
     return [judge_event(data, actor)]
 
 
-def judge_commands(commands, depth):
+def judge_commands(commands, depth, recorder_named=False):
+    """The reasons to refuse these commands. `recorder_named` says the line names the
+    recorder script, so a Python whose script word the hook cannot read may run it."""
     reasons = []
     for command in commands:
         at = command_name(command)
@@ -1047,9 +1163,21 @@ def judge_commands(commands, depth):
         appends = append_args(command)
         for args, leading_opaque in appends:
             reasons.extend(judge_append(command, args, from_xargs, leading_opaque))
-        reasons.extend(judge_commands(relexed(command, depth), depth + 1))
+        if runs_import(command):
+            reasons.append(REASON_IMPORT)
+        if runs_recorder(command, recorder_named):
+            reasons.append(REASON_RECORDER)
+        reasons.extend(
+            judge_commands(relexed(command, depth), depth + 1, recorder_named)
+        )
         if not appends and not text_only(command, at):
-            reasons.extend(judge_commands(wrapped(command, depth), depth + 1))
+            # A Python's arguments are Python, not a shell line (`python3 -c '...'` is out
+            # of scope, ADR 0015), so they are not lexed again as commands.
+            program = basename(command.words[at].text) if at is not None else ""
+            if not _is_python(program):
+                reasons.extend(
+                    judge_commands(wrapped(command, depth), depth + 1, recorder_named)
+                )
             reasons.extend(stdin_events(command, depth))
     return reasons
 
@@ -1063,14 +1191,107 @@ def stdin_events(command, depth):
     """
     reasons = []
     for text in stdin_texts(command) or []:
-        if "journal.py" not in text or "append" not in text:
+        if not names_a_net_target(text):
             continue
         try:
-            found = judge_commands(lex(text, depth + 1), depth + 1)
+            found = judge_commands(lex(text, depth + 1), depth + 1, RECORDER in text)
         except Opaque:
             continue
-        reasons.extend(r for r in found if r in (REASON_MARKER, REASON_USER))
+        reasons.extend(r for r in found if r in EVENT_REASONS)
     return reasons
+
+
+def names_a_write(text):
+    """True when the text names one of the journal's two writing subcommands."""
+    return "append" in text or "import" in text
+
+
+def names_a_net_target(text):
+    """True when the text may run a journal write or the recorder script: the forgery
+    net's fast path."""
+    return ("journal.py" in text and names_a_write(text)) or RECORDER in text
+
+
+def _is_python(program):
+    """`python`, `python3`, `python3.12`."""
+    rest = program[len("python"):] if program.startswith("python") else None
+    return rest is not None and all(c.isdigit() or c == "." for c in rest)
+
+
+# Python options that take the next word as their value.
+PYTHON_VALUE_OPTIONS = ("-W", "-X", "--check-hash-based-pycs")
+
+
+def runs_recorder(command, recorder_named):
+    """True when a simple command runs the recorder script (ADR 0023 §21).
+
+    The script runs as the program (`./hooks/reply.py`) or as a Python's script word
+    (`python3 -u hooks/reply.py`). A script word the hook cannot read (`"$R"`,
+    `"${CLAUDE_PLUGIN_ROOT}/hooks/reply.py"`) counts when the line names the script.
+    `python3 -m` and `python3 -c` run no script word, so `python3 -m py_compile
+    hooks/reply.py` passes.
+    """
+    at = command_name(command)
+    if at is None:
+        return False
+    word = command.words[at]
+    if not word.literal:
+        return False
+    program = basename(word.text)
+    if program == RECORDER:
+        return True
+    if not _is_python(program):
+        return False
+    words = command.words
+    i = at + 1
+    while i < len(words):
+        candidate = words[i]
+        if not candidate.literal:
+            return recorder_named or RECORDER in candidate.text
+        text = candidate.text
+        if text in ("-c", "-m"):
+            return False
+        if text in PYTHON_VALUE_OPTIONS:
+            i += 2
+            continue
+        if text.startswith("-") and text != "-":
+            i += 1
+            continue
+        return basename(text) == RECORDER
+    return False
+
+
+def runs_import(command):
+    """True when a simple command runs `journal.py import` (ADR 0023 §20).
+
+    The words are walked as `append_args` walks them. The script is a literal word whose
+    basename is `journal.py`, or a word the hook cannot read (`"$J"`,
+    `"${CLAUDE_PLUGIN_ROOT}/scripts/journal.py"`). Top-level options and their values
+    are skipped, `--db="$DB"` included, and the first other literal word is the
+    subcommand.
+    """
+    words = command.words
+    for at, word in enumerate(words):
+        if word.literal and basename(word.text) != "journal.py":
+            continue
+        i = at + 1
+        while i < len(words):
+            candidate = words[i]
+            if not candidate.literal:
+                if top_option_with_value(candidate):
+                    i += 1
+                    continue
+                break
+            text = candidate.text
+            if not text.startswith("-"):
+                if text == "import":
+                    return True
+                break
+            option = resolve_option(text, TOP_OPTIONS)
+            i += 1
+            if option and TOP_OPTIONS[option[0]] and option[1] is None:
+                i += 1
+    return False
 
 
 def text_only(command, at):
@@ -1089,7 +1310,7 @@ def wrapped(command, depth):
     """
     found = []
     for word in command.words:
-        if not (word.literal and "journal.py" in word.text and "append" in word.text):
+        if not (word.literal and names_a_net_target(word.text)):
             continue
         # A word with no break in it lexes back to itself: a path, a test id, no command.
         if any(c in word.text for c in _COMMAND_BREAKS):
@@ -1097,10 +1318,69 @@ def wrapped(command, depth):
     return found
 
 
+# `env` options that take the next word as their value.
+ENV_VALUE_OPTIONS = ("-u", "--unset", "-C", "--chdir", "-S", "--split-string")
+
+
+def overrides_session(commands, depth=0):
+    """True when a command of the line sets or clears the session id (ADR 0023 §8).
+
+    A word that is the variable's name or `NAME=value`: an assignment, `env NAME=value`,
+    `env -u NAME`, `export`, `unset`, `declare`, `read NAME`, `printf -v NAME`; and
+    `env -i`. Nested scripts (`sh -c`, `eval`, a shell's stdin, a quoted command line)
+    count too. A word that only mentions the name inside other text (a note, a commit
+    message) does not.
+    """
+    for command in commands:
+        at = command_name(command)
+        program = basename(command.words[at].text) if at is not None else ""
+        if text_only(command, at) and program != "printf":
+            words = []  # a search or a print sets nothing (`grep NAME f`)
+        elif program == "printf":
+            words = [w for i, w in enumerate(command.words)
+                     if i and command.words[i - 1].text == "-v"]
+        else:
+            words = command.words
+        in_env = False
+        value_next = False
+        for word in words:
+            text = word.text
+            if text in (SESSION_ENV, "-u" + SESSION_ENV, "--unset=" + SESSION_ENV) \
+                    or text.startswith(SESSION_ENV + "="):
+                return True
+            if value_next:
+                value_next = False  # the value of `env -u NAME`, `-C DIR`, `-S STR`
+                continue
+            if word.literal and basename(text) == "env":
+                in_env = True
+                continue
+            if not in_env:
+                continue
+            if word.literal and text.startswith("-"):
+                if text in ("-", "--ignore-environment") or (
+                    not text.startswith("--") and "i" in text[1:]
+                ):
+                    return True  # `env -i`, `env -iv`, `env -v -i`: a cleared environment
+                value_next = text in ENV_VALUE_OPTIONS
+                continue
+            if not (word.literal and "=" in text):
+                in_env = False  # the command env runs
+        try:
+            nested = relexed(command, depth) + wrapped(command, depth)
+        except Opaque:
+            continue
+        if overrides_session(nested, depth + 1):
+            return True
+    return False
+
+
 def inspect(command_line):
     """The reason to refuse this command line, or None to let it run."""
     try:
-        reasons = judge_commands(lex(command_line), 0)
+        commands = lex(command_line)
+        reasons = judge_commands(commands, 0, RECORDER in command_line)
+        if overrides_session(commands):
+            reasons.append(REASON_SESSION)
     except Opaque:
         return REASON_OPAQUE
     for reason in REASON_PRIORITY:
@@ -1109,10 +1389,348 @@ def inspect(command_line):
     return None
 
 
+# -- the command gate --------------------------------------------------------------------
+
+# git's global options that take the next word as their value (`--opt=value` is one word).
+GIT_VALUE_OPTIONS = {
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+    "--super-prefix", "--shallow-file", "--attr-source",
+}
+# git's global options that print or open help and exit: no subcommand runs after them.
+GIT_EXIT_OPTIONS = {
+    "-h", "--help", "-v", "--version", "--exec-path", "--html-path", "--man-path",
+    "--info-path",
+}
+# `git subtree` options that take the next word as their value.
+SUBTREE_VALUE_OPTIONS = {
+    "-P", "--prefix", "-m", "--message", "--onto", "-b", "--branch", "--annotate",
+}
+# `gh` and `glab` options before the noun or the verb that take a value.
+FORGE_VALUE_OPTIONS = {"-R", "--repo"}
+FORGE_NOUNS = {"gh": "pr", "glab": "mr"}
+FORGE_VERBS = ("create", "new")
+
+
+def _option_with_unread_value(word):
+    """True for an unsplit `--opt="$X"`: a literal option name with a value unread."""
+    if word.split or not word.text.startswith("-"):
+        return False
+    name, equals, _ = word.text.partition("=")
+    return bool(equals) and "$" not in name and "`" not in name
+
+
+def _skip_options(args, i, value_options):
+    """The index of the first word from `i` that is no option, or None when a word the
+    hook cannot read stands there (it may be the option or the operand)."""
+    while i < len(args):
+        word = args[i]
+        if not word.literal:
+            if _option_with_unread_value(word):
+                i += 1
+                continue
+            return None
+        if not word.text.startswith("-"):
+            return i
+        i += 2 if word.text in value_options else 1
+    return i
+
+
+def _path_of(word):
+    """The path a literal word names, with an unquoted leading `~` expanded as the shell
+    expands it."""
+    import os
+
+    if not word.quoted and word.text.startswith("~"):
+        return os.path.expanduser(word.text)
+    return word.text
+
+
+def _git_gate(args):
+    """(gate, directory) for `git <global options> commit|push|subtree push`, or None.
+
+    git's global options are walked as git reads them: a value option takes the next
+    word, `--opt=value` is one word, a help or version option ends git before any
+    subcommand. Each `-C` enters its path relative to the one before, and an absolute
+    path starts again. A `-C` the hook cannot read leaves the directory unknown (None)
+    until an absolute `-C` after it.
+    """
+    import os
+
+    directory = None
+    known = True
+    i = 0
+    while i < len(args):
+        word = args[i]
+        if not word.literal:
+            if _option_with_unread_value(word):
+                i += 1
+                continue
+            return None  # the subcommand, or options that may split, unread
+        text = word.text
+        if not text.startswith("-"):
+            break
+        i += 1
+        if text in GIT_EXIT_OPTIONS or text.startswith("--list-cmds"):
+            return None
+        if text.startswith(("--git-dir", "--work-tree")):
+            known = False  # git leaves the `-C` directory: read the cwd
+            directory = None
+        if text not in GIT_VALUE_OPTIONS:
+            continue
+        value = args[i] if i < len(args) else None
+        i += 1
+        if text != "-C" or value is None:
+            continue
+        if not value.literal:
+            directory, known = None, False
+        elif value.text:  # git ignores an empty `-C ""`
+            path = _path_of(value)
+            if os.path.isabs(path):
+                directory, known = path, True
+            elif known:
+                directory = os.path.join(directory, path) if directory else path
+    if i >= len(args) or not args[i].literal:
+        return None
+    subcommand = args[i].text
+    if subcommand == "subtree":
+        at = _skip_options(args, i + 1, SUBTREE_VALUE_OPTIONS)
+        if at is None or at >= len(args) or args[at].text != "push":
+            return None
+        subcommand = "push"
+    gate = {"commit": COMMIT_GATE, "push": PUBLISH_GATE}.get(subcommand)
+    if gate is None:
+        return None
+    return gate, (directory if known else UNKNOWN_DIR)
+
+
+def _forge_gate(program, args):
+    """("publish", None) for `gh pr create|new` and `glab mr create|new`, or None."""
+    noun = _skip_options(args, 0, FORGE_VALUE_OPTIONS)
+    if noun is None or noun >= len(args) or args[noun].text != FORGE_NOUNS[program]:
+        return None
+    verb = _skip_options(args, noun + 1, FORGE_VALUE_OPTIONS)
+    if verb is None or verb >= len(args) or args[verb].text not in FORGE_VERBS:
+        return None
+    return PUBLISH_GATE, None
+
+
+# Variables that move git away from the directory its `-C` or cwd names.
+GIT_DIR_VARIABLES = ("GIT_DIR=", "GIT_WORK_TREE=")
+
+
+def _assigns(text):
+    """True for `NAME=...`, the head of an assignment word."""
+    head, equals, _ = text.partition("=")
+    return bool(equals) and bool(head) and not head[0].isdigit() \
+        and all(c in _NAME_CHARS for c in head)
+
+
+def _gated_command(command):
+    """(gate, directory) for one simple command, wrappers skipped, or None.
+
+    An assignment before the command is skipped whether or not the hook can read its
+    value (`X="$Y" git commit`): bash does not split an assignment. `GIT_DIR=` or
+    `GIT_WORK_TREE=` there leaves the directory unknown, read as the cwd.
+    """
+    words = command.words
+    start = 0
+    while True:
+        rest = Command()
+        rest.words = words[start:]
+        at = command_name(rest)
+        if at is None:
+            return None
+        word = rest.words[at]
+        if not word.literal and _assigns(word.text):
+            start += at + 1
+            continue
+        break
+    if not word.literal:
+        return None
+    program = basename(word.text)
+    args = rest.words[at + 1:]
+    if program == "git":
+        gated = _git_gate(args)
+    elif program in FORGE_NOUNS:
+        gated = _forge_gate(program, args)
+    else:
+        return None
+    if gated is not None and any(
+        w.text.startswith(GIT_DIR_VARIABLES) for w in words[:start + at]
+    ):
+        gated = (gated[0], UNKNOWN_DIR)
+    return gated
+
+
+# A directory the hook cannot read: a `-C` or a `cd` from a variable. The caller reads it
+# as the command's cwd, as it reads no directory at all.
+UNKNOWN_DIR = object()
+CD_COMMANDS = ("cd", "pushd")
+
+
+def _cd_target(command):
+    """The directory a `cd` or `pushd` enters, UNKNOWN_DIR, or None for any other command.
+
+    `cd` with no operand, `cd -` and a path from a variable are unknown.
+    """
+    at = command_name(command)
+    if at is None or not command.words[at].literal:
+        return None
+    if basename(command.words[at].text) not in CD_COMMANDS:
+        return None
+    operands = command.words[at + 1:]
+    while operands and operands[0].literal and len(operands[0].text) > 1 \
+            and operands[0].text.startswith("-"):
+        operands = operands[1:]
+    if not operands or not operands[0].literal or operands[0].text == "-":
+        return UNKNOWN_DIR
+    return _path_of(operands[0])
+
+
+def _enter(base, path):
+    """`path` entered from `base`: None is the cwd, UNKNOWN_DIR stays unknown."""
+    import os
+
+    if path is UNKNOWN_DIR:
+        return UNKNOWN_DIR
+    if os.path.isabs(path):
+        return path
+    if base is UNKNOWN_DIR:
+        return UNKNOWN_DIR
+    return os.path.join(base, path) if base else path
+
+
+def _gated_in(commands, depth, found, cwd=None, follow_cd=True, cds=None):
+    """Walk the commands in the lexer's order. A literal `cd` moves the directory the
+    later commands act on (ADR 0023 §14: the branch of the command's directory); a
+    nested script starts from the directory its shell starts in, and its own `cd` does
+    not move the outer line."""
+    for command in commands:
+        target = _cd_target(command)
+        if target is not None:
+            if cds is not None:
+                cds.append(target)
+            if follow_cd:
+                cwd = _enter(cwd, target)
+            continue
+        gated = _gated_command(command)
+        if gated is not None:
+            gate, directory = gated
+            directory = cwd if directory is None else _enter(cwd, directory)
+            pair = (gate, None if directory is UNKNOWN_DIR else directory)
+            if pair not in found:
+                found.append(pair)
+        try:
+            hidden = relexed(command, depth)
+        except Opaque:
+            continue  # a script the hook cannot see: that script only, not the line
+        _gated_in(hidden, depth + 1, found, cwd, follow_cd, cds)
+
+
+def gated_commands(command_line):
+    """Every command of the line the command gate holds, as (gate, directory) pairs.
+
+    Each distinct pair comes once, in the order the lexer finds it: the gate asks the
+    journal once per pair. The gate is `commit` for `git commit`, and `publish` for
+    `git push`, `git subtree push`, `gh pr create|new` and `glab mr create|new`. The
+    directory is git's literal `-C` path, or None for the command's own cwd. Wrappers
+    and assignments are skipped (`timeout 5 git commit`), and a literal line given to
+    `sh -c`, `eval` or a shell's stdin is read too. Only a command is matched, never a
+    word: `echo git commit`, a commit message and `git log --grep commit` hold nothing.
+    A literal `cd` or `pushd` earlier in the line moves the directory, and git's `-C`
+    enters from there. The lexer cannot tell a `cd` inside `( )` or `$( )` from one that
+    moves the line, so a line with a `cd` also gives the pairs read from the cwd, and
+    the gate holds when either holds. A `cd` or `-C` the hook cannot read, `--git-dir`,
+    `--work-tree`, `GIT_DIR=` and a wrapper's own `-C` read as the command's cwd.
+
+    Pure: it reads no file and runs nothing. A line the lexer refuses, or any error,
+    gives [], and the caller's failure policy passes the command (ADR 0023 §15).
+    """
+    try:
+        commands = lex(command_line)
+        found = []
+        cds = []
+        _gated_in(commands, 0, found, cds=cds)
+        if cds:
+            # The lexer cannot tell a `cd` inside `( )` or `$( )` from one that moves
+            # the line (security review, T021), so the cwd's reading is asked too.
+            _gated_in(commands, 0, found, follow_cd=False)
+        return found
+    except Exception:  # noqa: BLE001 — the command gate passes what it cannot read
+        return []
+
+
 # -- the hook ----------------------------------------------------------------------------
 
 
 def deny(reason):
+    deny_with(MESSAGES[reason] + " " + TAIL)
+
+
+# The command gate's second fast path: without one of these words no command of the line
+# can be gated, and the hook reads no file.
+GATED_COMMAND_HINTS = ("commit", "push", "create", "new")
+# `git` gets 2 seconds per branch read (`_common.GIT_TIMEOUT_SECONDS`), `authorize` 5.
+AUTHORIZE_SECONDS = 5
+
+
+def command_gate(payload, command):
+    """The refusal for a gated command the journal holds, or None to let it run.
+
+    ADR 0023 §14-§15. The project comes from the payload's `cwd`; no sidecar, or
+    `enforce.command_gate` false, passes. Each directory the line acts on is asked once,
+    for its strongest gate: a publish go covers a commit, so a line that commits and
+    pushes in one directory asks for the publish gate. A directory with no branch, a
+    journal that fails or times out, and any answer but `hold` pass.
+    """
+    import os
+
+    gated = gated_commands(command)
+    if not gated:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _common import current_branch, resolve_project, run_journal
+
+    project = resolve_project(payload)
+    if project is None or not project.enforces("command_gate"):
+        return None
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        cwd = os.getcwd()
+    strongest = {}
+    for gate, directory in gated:
+        if directory and "\x00" in directory:
+            directory = None  # no path at all: bash drops it, so git acts on the cwd
+        path = os.path.normpath(os.path.join(cwd, directory) if directory else cwd)
+        if strongest.get(path) != PUBLISH_GATE:
+            strongest[path] = gate
+    subagent = ["--subagent"] if "agent_id" in payload else []
+    for path, gate in strongest.items():
+        branch = current_branch(path)
+        if not branch:
+            continue
+        result = run_journal(
+            project,
+            ["authorize", "--gate", gate, "--branch", branch, "--json", *subagent],
+            timeout=AUTHORIZE_SECONDS,
+        )
+        if result is None or result.returncode != 0:
+            continue
+        try:
+            answer = json.loads(result.stdout)
+        except ValueError:
+            continue
+        if isinstance(answer, dict) and answer.get("verdict") == "hold":
+            message = answer.get("message")
+            if isinstance(message, str) and message:
+                return message
+            return (f"shipgate held this {gate}: the stream of branch {branch} holds "
+                    "no go from the user. Record a go-requested and ask the gate "
+                    "question, or let the user type the gate word.")
+    return None
+
+
+def deny_with(message):
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1122,7 +1740,7 @@ def deny(reason):
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": MESSAGES[reason] + " " + TAIL,
+            "permissionDecisionReason": message,
         }
     })
 
@@ -1138,16 +1756,26 @@ def main():
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str):
         return
-    if "journal.py" not in command or "append" not in command:
+    if names_a_net_target(command):
+        try:
+            reason = inspect(command)
+        except Exception:  # noqa: BLE001 — the failure policy below decides
+            folded = command.casefold()
+            named = all(word in folded for word in ("journal.py", "append", "publish")) \
+                or all(word in folded for word in ("journal.py", "import")) \
+                or RECORDER in folded
+            reason = REASON_CRASH if named else None
+        if reason is not None:
+            deny(reason)
+            return
+    if not any(word in command for word in GATED_COMMAND_HINTS):
         return
     try:
-        reason = inspect(command)
-    except Exception:  # noqa: BLE001 — the failure policy below decides
-        folded = command.casefold()
-        named = all(word in folded for word in ("journal.py", "append", "publish"))
-        reason = REASON_CRASH if named else None
-    if reason is not None:
-        deny(reason)
+        message = command_gate(payload, command)
+    except Exception:  # noqa: BLE001 — a command gate that fails passes (ADR 0023 §15)
+        message = None
+    if message:
+        deny_with(message)
 
 
 if __name__ == "__main__":
