@@ -594,12 +594,13 @@ a publish go. A ready verdict is no go. Get the go in one form, every time:
 3. **The recorder records the answer.** An answer that is the gate word, a selected stream
    name, or a typed `commit`, `publish`, `push`, `yes`, `y`, `ok`, `go`, `approve` or `all` is an
    exact go. You record nothing.
-4. **Any other reply leaves a witness.** The recorder's context line names it: the witness
-   seq, the stream, the gate and the read go to append. Read the user's reply. When it
-   approves the gate ("it can go", "commit and start the next batch"), append that read go
-   with the witness and the user's approving words in `words`. Ask no confirming question
-   after a reply that clearly approves. When the reply does not approve, record nothing.
-   A new question needs a new go request.
+4. **Any other reply gets one confirming question.** The recorder writes a witness, and
+   its context line says that the reply was no exact go ("it can go", "commit and start
+   the next batch"). Unless the reply refuses, record a new go request (the line prints
+   the command), then ask one confirming question with the same header and the gate word
+   as the first option. The recorder records the click as the go. When the answer to the
+   confirming question is no go either, the user did not confirm: record nothing and ask
+   no more. Every new question needs a new go request.
 
 A session that asks the user about another session's stream records the go request itself,
 on that stream. The go then authorizes the session that works on the stream; it does not
@@ -618,11 +619,11 @@ with the stream name and the script's full path written out (`commit` in place o
            "mode":"ask","raised_by":"user","source":"shell"}'
 ```
 
-Never record an exact go as the user's yourself, and never append a `reply-witnessed`. The
-PreToolUse hook refuses both, so a flow cannot authorize itself by raising a gate and
-answering it. A read go passes the hook, and the journal accepts it only with an unused
-witness of the same stream, gate and session, newer than the last `task-done`. An
-instruction to start the next piece of work authorizes no commit and no publish.
+Never record a go as the user's yourself, in any form, and never append a
+`reply-witnessed`. The PreToolUse hook refuses both, and the journal refuses the retired
+`read` marker even with `--force`, so a flow cannot authorize itself by raising a gate and
+answering it. An instruction to start the next piece of work authorizes no commit and no
+publish.
 
 A missing or unreadable database is an infrastructure failure, not a reason to skip the
 append. Surface it loudly. Continue un-journaled only with the user's acknowledgement.

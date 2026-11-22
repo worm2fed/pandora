@@ -2,6 +2,43 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.28.1 — a free-language approval gets one confirming question, and the hook records the click: the model-read go of 0.28.0 is removed, and the refusal of a command that names the recorder script points to the Write tool.
+
+**Auto mode refused the read go (#52, ADR 0023 amended).** The two-turn check of SC-010 ran
+after the merge of 0.28.0 and before any tag, on both session models. Both runs recorded the
+go request, asked with the header `Commit` and got the recorder's witness of "it can go".
+Then Claude Code's auto permission mode refused the model's `append` of the read go as the
+model recording its own approval, so the go was never written and the commit stayed held.
+0.28.0 has no tag; 0.28.1 is the release.
+
+- **One confirming question.** An exact word from the list stays a go at once. After any
+  other reply the recorder still writes a witness, and its context line now tells the model
+  to record a new `go-requested` (the line prints the command) and ask one confirming
+  question with the header `Commit` or `Publish` and the gate word as the first option. The
+  recorder records the click as a go with the marker `question`. When the answer to the
+  confirming question is no go either, the flow records nothing and asks no more. The line
+  reaches the model on a typed prompt and on a free-text answer to the gate question.
+- **The `read` marker is retired.** `append` refuses a `gate-decision` whose `source` folds
+  to `read`, with `--force` too, and the refusal names the confirming question. The
+  PreToolUse hook refuses every `source` marker in a model's append; the read go no longer
+  passes. `gate-decision` loses the keys `witness` and `words`, and `stats` counts four
+  markers.
+- **Old rows.** A read go that 0.28.0 wrote stays in the journal, and the journal opens. It
+  is no go for any gate, `stats` does not count it, and it still binds no session. A go
+  lasts only until the next `task-done`, so the worst case is one held commit and one
+  confirming question.
+- **The hold.** When the user's reply was no exact go, the command gate's hold (reason
+  `witness-waits`) asks for a new go request and one confirming question.
+- **A note that names the recorder stays refused (ADR 0023 §21, amendment A6).** The hook
+  refuses a command that writes a note naming `hooks/reply.py` and also runs `python3`
+  through a variable path, as 0.28.0 does. Its refusal now says to write such a file with
+  the Write tool. An exemption for the note was tried and rejected: four review rounds each
+  found a bypass that 0.28.0 refuses. The recorder rule of the hook is the rule of 0.28.0.
+- **The flow text.** `review` (**The user's go**) and `feature` describe the confirming
+  question. The two-turn driver's pass is now: go request, the gate question, the reply,
+  one confirming question with the header `Commit`, a click on `Commit`, a `question` go and
+  the commit.
+
 v0.28.0 — the user's go is recorded where the user answers, and a commit waits for it: a recorder hook writes the go from a question answer or a typed reply, a command gate holds a model's commit, push and MR/PR creation, and no forced event opens a publish.
 
 **The approval checked nothing (#22, ADR 0023).** Since 0.23.0 the user approved a publish

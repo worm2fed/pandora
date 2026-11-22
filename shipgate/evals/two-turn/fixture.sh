@@ -6,8 +6,9 @@
 # change sits uncommitted in the working tree. The user asks for the commit. The command
 # gate holds `git commit` until the stream holds the user's go, so the flow should record
 # a `go-requested` at the commit gate and ask with the header `Commit`. The driver
-# (two_turn.py) then gives the reply "it can go"; the flow should read it, record a read
-# go that names the recorder's witness, ask no confirming question, and commit.
+# (two_turn.py) then gives the reply "it can go"; the flow should record a new go request,
+# ask one confirming question with the header `Commit`, and commit after the click on
+# `Commit` (ADR 0023, amendment).
 #
 # Event times are minutes before the fixture runs, so the stream is live, not dormant. The
 # repo carries its own git identity, so a commit works under a scratch HOME.

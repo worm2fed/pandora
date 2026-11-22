@@ -205,15 +205,13 @@ GateMode = Literal["ask", "executive"]
 RaisedBy = Literal["user", "orchestrator"]
 # The marker of the user's go (ADR 0015, ADR 0023). `dialog`: the HUD's publish dialog.
 # `shell`: the user's own `!` command. `question`: the recorder, from a question answer.
-# `prompt`: the recorder, from a typed reply. `read`: the model, after it read a
-# witnessed reply; such a row names its witness (`_validate_read_go`).
-DecisionSource = Literal["dialog", "shell", "question", "prompt", "read"]
+# `prompt`: the recorder, from a typed reply. The model writes no marker: 0.28.0's `read`
+# is retired (#52, ADR 0023 amendment A3), and `append` refuses it (`_refuse_read_go`).
+DecisionSource = Literal["dialog", "shell", "question", "prompt"]
 # The gates a go answers (ADR 0023 §1). A publish go also satisfies the commit gate.
 GoGate = Literal["commit", "publish"]
 # How a reply reached the recorder: a typed prompt, or a question answer.
 ReplyVia = Literal["prompt", "question"]
-# The most characters a read go quotes of the user's approving words (FR-027).
-WORDS_MAX_CHARS = 200
 VerifyOutcome = Literal["pass", "fail"]
 ReviewVerdict = Literal["ready", "not-ready"]
 # A `review-verdict`'s optional maps (ADR 0009): a PRD success criterion's status, and
@@ -319,11 +317,9 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         },
         "aliases": {"chosen": "decision", "kind": "gate"},
         "defaults": {"raised_by": "orchestrator"},
-        # ADR 0023: an exact go names the go request it answers, a read go names its
-        # witness and quotes the user's approving words.
-        "strings": ["decision", "words"],
-        "integers": ["request", "witness"],
-        "max_chars": {"words": WORDS_MAX_CHARS},
+        # ADR 0023: an exact go names the go request it answers.
+        "strings": ["decision"],
+        "integers": ["request"],
     },
     # ADR 0023 §3: one gate of one live stream, put to the user. No implied phase.
     "go-requested": {
@@ -398,14 +394,13 @@ class GateDecisionPayload(_GateDecisionKeys, total=False):
     ``Dict[str, Any]``. ``source`` is optional: the HUD's publish dialog writes
     ``dialog``, the user's own ``!`` command writes ``shell`` (ADR 0015). The recorder
     writes ``question`` or ``prompt`` with ``request``, the seq of the go request the
-    reply answers; the model writes ``read`` with ``witness`` and ``words`` (ADR 0023).
+    reply answers (ADR 0023). A row of 0.28.0 may still hold ``witness`` and ``words``
+    of its retired read go; no reader takes them.
     """
 
     rationale: str
     source: DecisionSource
     request: int
-    witness: int
-    words: str
 
 
 class _ReviewVerdictKeys(TypedDict):
@@ -1278,10 +1273,11 @@ def _require_closure_reason(
         )
 
 
-# The markers of a go the user's own row carries (actor role `user`), and the marker of
-# a go the model records after it read a witnessed reply (ADR 0023 §2).
+# The markers of a go the user's own row carries (actor role `user`, ADR 0023 §2).
 USER_MARKERS = ("dialog", "shell", "question", "prompt")
-READ_MARKER = "read"
+# The marker of 0.28.0's read go, retired by #52 (ADR 0023 amendment A3, A4): `append`
+# refuses it, a row that holds it is no go, and such a row still binds no session.
+RETIRED_READ_MARKER = "read"
 
 
 def _is_seq(value: Any) -> bool:
@@ -1292,8 +1288,8 @@ def writer_session(event: Event) -> Optional[str]:
     """The session that appended a row, whether or not the row binds it to its stream.
 
     A ``user`` row names it under ``recorded_by`` (ADR 0010); a machine role's row in
-    its actor label. A ``watcher`` row and an unlabelled actor name none. A read go
-    and a go request are read this way (ADR 0023 §8, §13), never by ``event_session``.
+    its actor label. A ``watcher`` row and an unlabelled actor name none. A go request
+    is read this way (ADR 0023 §13), never by ``event_session``.
     """
     role = _actor_role(event)
     if role in RECORDED_BY_ROLES:
@@ -1310,12 +1306,13 @@ def _go_gate(data: Dict[str, Any]) -> Optional[str]:
     """The gate a ``gate-decision`` payload is a go for, or None (ADR 0023 §1).
 
     The gate is ``commit`` or ``publish``, the user raised it, the ``decision`` names
-    the gate (trimmed, any case) and ``source`` is one of the five markers. Every
+    the gate (trimmed, any case) and ``source`` is one of the four markers. Every
     condition matters: the orchestrator can raise a gate and answer it itself, so a row
     that only *sits at* the gate, or records "no" there, would otherwise let the flow
     authorize itself. A ``decision`` that is not a string (a row from before the
     ``strings`` rule) is no go (audit D6); an unmarked row, older rows included, is none
-    either (ADR 0015). The actor and the witness are ``_user_go_events``'s to check.
+    either (ADR 0015), and neither is a read go of 0.28.0 (#52). The actor is
+    ``_user_go_events``'s to check.
     """
     gate = data.get("gate")
     decision = data.get("decision")
@@ -1328,85 +1325,22 @@ def _go_gate(data: Dict[str, Any]) -> Optional[str]:
     return gate
 
 
-# Why a witness cannot back a read go (ADR 0023 §8), in the order the rule checks.
-WitnessFault = Literal["missing", "not-hook", "gate", "stale", "used", "session"]
-_ANY_SESSION = object()
-
-
-def witness_fault(
-    witness: Optional[Event], gate: Any, session: Any, last_task_done_seq: int,
-    named: Set[int],
-) -> Optional[WitnessFault]:
-    """The first condition of §8 that ``witness`` breaks for a read go, or None.
-
-    The witness is a ``reply-witnessed`` row of the stream, written by the hook, at
-    ``gate``, later than the last ``task-done``, named by no read go in ``named``, and of
-    ``session`` (``_ANY_SESSION`` skips that check). `_witness_holds`,
-    `_validate_read_go` and `_waiting_witness` all read this one rule.
-    """
-    if witness is None or witness.type != "reply-witnessed":
-        return "missing"
-    if _actor_role(witness) != "hook":
-        return "not-hook"
-    if witness.data.get("gate") != gate:
-        return "gate"
-    if witness.seq <= last_task_done_seq:
-        return "stale"
-    if witness.seq in named:
-        return "used"
-    if session is not _ANY_SESSION and (
-        session is None or witness.data.get("session") != session
-    ):
-        return "session"
-    return None
-
-
-def _witness_holds(
-    go: Event, by_seq: Dict[int, Event], named: Set[int], last_task_done_seq: int
-) -> bool:
-    """Whether a read go's witness is a real reply to a request at its gate (§8).
-
-    The witness is an earlier ``reply-witnessed`` row of the same stream, written by the
-    hook, at the gate of the go, later than the last ``task-done``, named by no earlier
-    read go, and of the session that appended the go.
-    """
-    seq = go.data.get("witness")
-    if not isinstance(seq, int) or not _is_seq(seq) or seq >= go.seq:
-        return False
-    return witness_fault(
-        by_seq.get(seq), go.data.get("gate"), writer_session(go), last_task_done_seq,
-        named,
-    ) is None
-
-
 def _user_go_events(events: Sequence[Event]) -> List[Tuple[Event, str]]:
     """Each go after the stream's last ``task-done``, with its gate, in seq order.
 
-    A row with a user marker counts with the actor role ``user``. A read go counts only
-    with a witness that ``_witness_holds`` accepts, whatever its actor: the journal
-    checked the witness at append (``_validate_read_go``), and checks it again here.
+    A go is a row with a user marker and the actor role ``user``. A read go of 0.28.0
+    is none, whatever its witness (#52, ADR 0023 amendment A4).
     """
     ordered = sorted(events, key=lambda event: event.seq)
     last_task_done_seq = max(
         (event.seq for event in ordered if event.type == "task-done"), default=0
     )
-    by_seq = {event.seq: event for event in ordered}
-    named: Set[int] = set()
     found: List[Tuple[Event, str]] = []
     for event in ordered:
-        if event.type != "gate-decision":
+        if event.type != "gate-decision" or event.seq <= last_task_done_seq:
             continue
         gate = _go_gate(event.data)
-        if event.data.get("source") == READ_MARKER:
-            holds = event.seq > last_task_done_seq and _witness_holds(
-                event, by_seq, named, last_task_done_seq
-            )
-            if _is_seq(event.data.get("witness")):
-                named.add(event.data["witness"])
-            if gate is not None and holds:
-                found.append((event, gate))
-            continue
-        if gate is None or event.seq <= last_task_done_seq:
+        if gate is None:
             continue
         if event.data.get("source") in USER_MARKERS and _actor_role(event) == "user":
             found.append((event, gate))
@@ -1514,11 +1448,12 @@ MR_OPENED_REFUSAL = (
     "mr-opened in stream {stream} needs, recorded after the last task-done, either a "
     "review-verdict with verdict=ready that was not forced, or the user's publish go: a "
     "gate-decision with gate=publish, raised_by=user and decision=publish, marked with "
-    "source question|prompt|read|dialog|shell. The recorder writes `question` when the "
+    "source question|prompt|dialog|shell. The recorder writes `question` when the "
     "user answers the publish question and `prompt` when the user types `publish`; the "
-    "flow records `read` with the witness of a reply it read; the HUD's publish dialog "
-    "writes `dialog`; the user's own `!` command writes `shell`. Record the review's "
-    "outcome, or record a go-requested and ask the user. --force does not waive this."
+    "HUD's publish dialog writes `dialog`; the user's own `!` command writes `shell`. "
+    "Record the review's outcome, or record a go-requested and ask the user. When the "
+    "user's reply was no exact go, record a new go-requested and ask one confirming "
+    "question with the header `Publish`. --force does not waive this."
 )
 
 
@@ -1526,8 +1461,7 @@ def _validate_mr_opened(
     conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
 ) -> None:
     events = read_events(
-        conn, stream=stream,
-        types=("task-done", "review-verdict", "gate-decision", "reply-witnessed"),
+        conn, stream=stream, types=("task-done", "review-verdict", "gate-decision"),
     )
     if publish_authorization(events)["kind"] == "authorized":
         return
@@ -1880,87 +1814,43 @@ def _actor_session(conn: sqlite3.Connection, actor: str) -> Optional[str]:
     return label or None
 
 
-def _validate_read_go(
-    conn: sqlite3.Connection, stream: str, data: Dict[str, Any], actor: str
-) -> None:
-    """A read go names a real reply of the user to a request (ADR 0023 §8, FR-029).
+# What `append` says to a read go: the flow asks one confirming question instead (#52).
+READ_GO_REFUSAL = (
+    "gate-decision: the marker `read` is retired (ADR 0023, amendment). The model records "
+    "no go in any form. When the user's reply was no exact go, record a new go-requested "
+    "for the gate, then ask one confirming question with the header `Commit` or "
+    "`Publish` and the gate word as the first option: the recorder hook records the "
+    "click. --force does not waive this."
+)
 
-    The row is a go (``_go_gate``), and its ``witness`` is a ``reply-witnessed`` row of
-    this stream that the hook wrote, at the gate of the go, later than the stream's last
-    ``task-done``, named by no other go, of the session that appends the go. ``--force``
-    does not skip this: a forced read go would be the forged path under a new name.
+
+def _refuse_read_go(event_type: str, data: Dict[str, Any]) -> None:
+    """Refuse 0.28.0's read go, on the forced path too (#52, ADR 0023 amendment A3).
+
+    It runs before the shape check, so the refusal names the confirming question and not
+    only the closed list of markers. ``source`` is read trimmed and in any case.
     """
-    if data.get("source") != READ_MARKER:
-        return
-    if _go_gate(data) is None:
-        raise GateViolation(
-            "a read go is the user's go: gate commit or publish, decision equal to the "
-            "gate, raised_by=user, source=read"
-        )
-    seq = data.get("witness")
-    if not isinstance(seq, int) or not _is_seq(seq):
-        raise GateViolation(
-            "a read go names its witness: data.witness is the seq of the "
-            "reply-witnessed row that the recorder wrote for the user's reply"
-        )
-    events = read_events(conn, stream=stream)
-    witness = next((e for e in events if e.seq == seq), None)
-    last_task_done = max((e.seq for e in events if e.type == "task-done"), default=0)
-    namers = {
-        e.data.get("witness"): e.seq for e in events
-        if e.type == "gate-decision" and e.data.get("source") == READ_MARKER
-    }
-    fault = witness_fault(
-        witness, data.get("gate"), _actor_session(conn, actor), last_task_done,
-        set(namers),
-    )
-    if fault == "missing":
-        raise GateViolation(
-            f"a read go needs its witness: stream {stream!r} holds no reply-witnessed "
-            f"at seq {seq}. Only a reply the recorder witnessed can be read as a go"
-        )
-    if fault == "not-hook":
-        raise GateViolation(
-            f"the witness at seq {seq} was not written by the recorder hook"
-        )
-    if fault == "gate":
-        raise GateViolation(
-            f"the witness at seq {seq} answers the "
-            f"{witness.data.get('gate') if witness else None} gate, "
-            f"not the {data.get('gate')} gate"
-        )
-    if fault == "stale":
-        raise GateViolation(
-            f"the witness at seq {seq} is older than the last task-done (seq "
-            f"{last_task_done}): record a new go request and ask again"
-        )
-    if fault == "used":
-        raise GateViolation(
-            f"the go at seq {namers[seq]} already names the witness at seq {seq}: a "
-            "witness gives one go"
-        )
-    if fault == "session":
-        raise GateViolation(
-            f"the witness at seq {seq} records a reply in another session: only the "
-            "session that got the reply records its read go"
-        )
+    source = data.get("source")
+    if (
+        event_type == "gate-decision"
+        and isinstance(source, str)
+        and source.strip().casefold() == RETIRED_READ_MARKER
+    ):
+        raise GateViolation(READ_GO_REFUSAL)
 
 
 def _validate_own_session(
     conn: sqlite3.Connection, event_type: str, data: Dict[str, Any], actor: str,
     raw_actor: Optional[str] = None,
 ) -> None:
-    """A go request and a read go count for the session that appends them (§4, §8).
+    """A go request counts for the session that appends it (§4).
 
-    Their actor label says which session that is. When the shell names the appending
+    Its actor label says which session that is. When the shell names the appending
     session (``CLAUDE_CODE_SESSION_ID``), a label that names another session is refused,
-    with or without ``--force``: it would let one session ask, or read a reply, in
-    another's name.
+    with or without ``--force``: it would let one session ask in another's name, and
+    that session's next reply would answer it.
     """
-    if event_type == "gate-decision":
-        if data.get("source") != READ_MARKER:
-            return
-    elif event_type != "go-requested":
+    if event_type != "go-requested":
         return
     if "session" in data:
         raise GateViolation(
@@ -1980,8 +1870,8 @@ def _validate_own_session(
     if named is not None and named != running:
         raise GateViolation(
             f"{event_type}: the actor label names another session ({named}) than the "
-            f"one appending ({running}); a session asks and reads replies only in its "
-            "own name — drop the label"
+            f"one appending ({running}); a session asks only in its own name — drop the "
+            "label"
         )
 
 
@@ -2197,6 +2087,8 @@ def append_event(
     validate_event_type(event_type, allow_new_type)
     canonical_actor = parse_actor(actor, conn, data)
 
+    # Before the shape check and on the forced path too (#52).
+    _refuse_read_go(event_type, data)
     payload = dict(data)
     if force:
         payload["forced"] = True
@@ -2231,9 +2123,6 @@ def append_event(
                         version_before=existing,
                     )
             _validate_own_session(conn, event_type, payload, canonical_actor, actor)
-            if event_type == "gate-decision":
-                # On the forced path too (ADR 0023 §8).
-                _validate_read_go(conn, stream, payload, canonical_actor)
             if not force:
                 validate_gate(conn, stream, event_type, payload, project_dir)
             else:
@@ -2754,12 +2643,6 @@ def build_status(
 # with outer space and one closing `.` or `!` removed. Built in: no config adds words.
 GATE_WORDS: Dict[str, str] = {"commit": "commit", "publish": "publish", "push": "publish"}
 GENERAL_WORDS = frozenset({"all", "yes", "y", "ok", "go", "approve"})
-# What the read go's command quotes in place of the witness seq: `reply` plans before the
-# rows exist, and the recorder puts in the seq that `append --batch --json` printed for
-# the row at that index of `events`.
-SEQ_PLACEHOLDER = "<seq:{index}>"
-
-
 
 
 def reply_word(text: Any) -> Optional[str]:
@@ -2909,30 +2792,27 @@ def _matched_requests(
     return [r for r in requests if r in matched]
 
 
-# A witness seq no journal reaches: `_read_go_command` swaps it for the placeholder after
-# `_suggest` has quoted the payload, so the placeholder sits where the number goes.
-_WITNESS_SENTINEL = 987654321987
+# The question text a printed go request leaves to the flow to write.
+CONFIRMING_QUESTION_PLACEHOLDER = "<the confirming question>"
 
 
-def _read_go_command(
-    db_path: Path, stream: str, gate: str, question: Any, witness: Union[int, str]
-) -> Optional[str]:
-    """The append a read go takes, through `_suggest` (``--db``, ``--stream=``).
+def _request_command(db_path: Path, stream: str, gate: str) -> Optional[str]:
+    """The go request a confirming question takes, through `_suggest` (``--db``,
+    ``--stream=``), or None when `_suggest` cannot print the stream (#52)."""
+    return _suggest(db_path, stream, "go-requested",
+                    {"gate": gate, "question": CONFIRMING_QUESTION_PLACEHOLDER})
 
-    ``witness`` is the witness seq, or the ``<seq:N>`` placeholder of a planned row.
-    None when `_suggest` cannot print the stream.
-    """
-    data = {
-        "gate": gate, "question": question if isinstance(question, str) else gate,
-        "decision": gate, "mode": "ask", "raised_by": "user", "source": "read",
-        "witness": witness if isinstance(witness, int) else _WITNESS_SENTINEL,
-        "words": f"<the approving words of the user, at most {WORDS_MAX_CHARS} "
-                 "characters>",
-    }
-    command = _suggest(db_path, stream, "gate-decision", data)
-    if command is not None and not isinstance(witness, int):
-        command = command.replace(str(_WITNESS_SENTINEL), witness)
-    return command
+
+def _confirm_line(db_path: Path, stream: str, gate: str) -> str:
+    """What the flow does after a reply that is no exact go (ADR 0023 amendment A2)."""
+    word = gate.capitalize()
+    command = _request_command(db_path, stream, gate)
+    return (
+        f"record a new go-requested for the {gate} gate of {stream}"
+        + (f" (`{command}`)" if command else "")
+        + f", then ask one confirming question with the header `{word}` and `{word}` as "
+        "the first option; the recorder records the click"
+    )
 
 
 def plan_reply(
@@ -2941,8 +2821,10 @@ def plan_reply(
     """The rows a reply gives, and the context line (ADR 0023 §4-§9). Writes nothing.
 
     Every open request of the session gets one row: an exact go when the reply matches
-    it, a witness otherwise. With no open request, a gate word is a go for the stream
-    the session drives, and any other reply plans nothing. No output holds the text.
+    it, a witness otherwise. A witness's line asks for a new go request and one
+    confirming question (amendment A2). With no open request, a gate word is a go for the
+    stream the session drives, and any other reply plans nothing. No output holds the
+    text.
     """
     with_events = _fold_work_streams(conn)
     requests = open_requests(with_events, session)
@@ -2989,7 +2871,6 @@ def plan_reply(
                 data["prompt_id"] = reply.prompt_id
             if reply.tool_use_id:
                 data["tool_use_id"] = reply.tool_use_id
-            index = len(events)
             events.append({
                 "stream": request.stream, "type": "reply-witnessed", "data": data,
                 "actor": "hook",
@@ -2997,18 +2878,13 @@ def plan_reply(
             witnessed.append(
                 {"stream": request.stream, "gate": gate, "request": request.seq}
             )
-            placeholder = SEQ_PLACEHOLDER.format(index=index)
-            command = _read_go_command(
-                db_path, request.stream, gate, request.data.get("question"),
-                placeholder,
-            )
             lines.append(
-                f"the user's reply is witnessed for the {gate} gate of "
-                f"{request.stream} (witness seq {placeholder}, request seq "
-                f"{request.seq}). Read the reply: if it approves the {gate}, record "
-                "the read go with the user's words and ask no confirming question"
-                + (f": `{command}`" if command else ", naming that witness seq")
-                + ". If it does not approve, record nothing"
+                f"the user's reply to the {gate} request (seq {request.seq}) on "
+                f"{request.stream} is no exact go, so nothing is recorded. Unless the "
+                "reply refuses, "
+                + _confirm_line(db_path, request.stream, gate)
+                + ". If the reply refuses, or it answered your confirming question, the "
+                "user did not confirm: record nothing and ask no more"
             )
 
     return {
@@ -3022,23 +2898,17 @@ def plan_reply(
 
 
 def _waiting_witness(events: Sequence[Event], gate: str) -> Optional[Event]:
-    """The newest witness that a read go could still name for ``gate``, or None.
+    """The newest witness of a reply that was no exact go at ``gate``, or None (A5).
 
     It is later than the last ``task-done``, written by the hook, at ``gate`` (or at the
-    publish gate, whose go covers a commit), and named by no read go yet.
+    publish gate, whose go covers a commit). The caller asks only when no go holds.
     """
     last_task_done = max((e.seq for e in events if e.type == "task-done"), default=0)
-    named = {
-        e.data.get("witness") for e in events
-        if e.type == "gate-decision" and e.data.get("source") == READ_MARKER
-    }
     gates = ("commit", "publish") if gate == "commit" else (gate,)
     waiting = [
         e for e in events
-        if e.type == "reply-witnessed" and any(
-            witness_fault(e, g, _ANY_SESSION, last_task_done, named) is None
-            for g in gates
-        )
+        if e.type == "reply-witnessed" and e.seq > last_task_done
+        and _actor_role(e) == "hook" and e.data.get("gate") in gates
     ]
     return waiting[-1] if waiting else None
 
@@ -3054,27 +2924,22 @@ def _hold_message(
 ) -> str:
     word = gate
     if witness is not None:
-        command = _read_go_command(
-            db_path, stream, str(witness.data.get("gate")), "<the question asked>",
-            witness.seq,
-        )
         return (
             f"shipgate held this {gate}: stream {stream!r} holds no go for the {gate} "
-            f"gate since its last task-done. The user's reply waits as witness seq "
-            f"{witness.seq}. The session that got the reply reads it: if it "
-            "approves, it records the read go and asks no confirming question"
-            + (f": `{command}`" if command else "")
-            + ". If it does not approve, record a new go-requested and ask again."
+            "gate since its last task-done. The user's reply to the go request was no "
+            "exact go. Unless it refused, "
+            + _confirm_line(db_path, stream, gate)
+            + ". If the user refused or did not confirm, wait for the user. Never record "
+            "the go on their behalf."
         )
     return (
         f"shipgate held this {gate}: stream {stream!r} holds no go for the {gate} gate "
         f"since its last task-done. A ready verdict is no go. Ways forward: record a "
         f"go-requested {{\"gate\": \"{gate}\", \"question\": \"...\"}} on the stream, "
         f"then ask with the header `{word.capitalize()}` and `{word.capitalize()}` as "
-        f"the first option; or let the user type `{word}`; or, when the recorder "
-        f"witnessed a reply, record the read go that names the witness. The user may "
-        f"also approve in the shipgate-hud publish dialog or with their own `!` "
-        f"command. Never record the go on their behalf."
+        f"the first option; or let the user type `{word}`. The user may also approve in "
+        f"the shipgate-hud publish dialog or with their own `!` command. Never record "
+        f"the go on their behalf."
     )
 
 
@@ -3087,7 +2952,8 @@ def authorize(
     The branch names its stream as ``status`` matches one, live streams first. No stream
     passes (``no-stream``), and so does a finished one (``not-live``). Otherwise the
     user's go for ``gate`` (``user_go``) passes, and its absence holds: ``witness-waits``
-    when a witness waits for its read go, ``no-go`` otherwise. A ready verdict is no go.
+    when the user's reply was no exact go and a confirming question is due (#52), ``no-go``
+    otherwise. A ready verdict is no go.
     """
     with_events = _fold_work_streams(conn)
     live = [entry["stream"] for entry, _ in with_events if not entry["terminal"]]
@@ -3391,7 +3257,9 @@ def parse_build_plan(text: str) -> List[PlanTask]:
 
 
 NON_BINDING_TYPES = frozenset({"go-requested", "reply-witnessed"})
-NON_BINDING_MARKERS = frozenset({"question", "prompt", READ_MARKER})
+# A read go of 0.28.0 stays non-binding, so a lead's position does not move at the
+# upgrade (#52, amendment A4).
+NON_BINDING_MARKERS = frozenset({"question", "prompt", RETIRED_READ_MARKER})
 
 
 def binds_session(event: Event) -> bool:
@@ -3423,9 +3291,9 @@ def event_session(event: Event) -> Optional[str]:
 
     The rows of the approval path belong to no session here (ADR 0023 §13): a
     ``go-requested``, a ``reply-witnessed`` and a ``gate-decision`` with the marker
-    ``question``, ``prompt`` or ``read``. A lead that asks the user about five streams
-    drives none of them, so ``session_stream``, ``check`` and ``stats`` skip these rows.
-    ``request_session`` and ``writer_session`` still read who wrote them.
+    ``question``, ``prompt`` or 0.28.0's ``read``. A lead that asks the user about five
+    streams drives none of them, so ``session_stream``, ``check`` and ``stats`` skip these
+    rows. ``request_session`` and ``writer_session`` still read who wrote them.
     """
     if not binds_session(event):
         return None
@@ -5212,7 +5080,7 @@ def _stream_stats(
     }
     implied = 0
     deviation_kinds: Dict[str, int] = {}
-    # The go records by marker (ADR 0023 §19): a retro audits the read ones.
+    # The go records by marker (ADR 0023 §19).
     go: Dict[str, int] = dict.fromkeys(get_args(DecisionSource), 0)
 
     for event in events:
