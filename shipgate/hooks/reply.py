@@ -190,11 +190,18 @@ def context_of(plan, seqs, planned):
     if not isinstance(context, str) or not context:
         return None
     if len(seqs) < planned:
+        # #55: the journal prints the commands with its own path, --db and stream.
         if not seqs:
+            unwritten = plan.get("unwritten")
+            if isinstance(unwritten, str) and unwritten:
+                return unwritten
             return ("shipgate: the recorder could not write the user's reply to the "
                     "journal; nothing was recorded. Record a go-requested and ask again.")
+        status = plan.get("status_command")
+        if not isinstance(status, str) or not status:
+            status = "journal.py status"
         return (f"shipgate: the recorder wrote only {len(seqs)} of {planned} rows for "
-                "the user's reply; run `journal.py status` before you rely on a go.")
+                f"the user's reply; run `{status}` before you rely on a go.")
     return context
 
 

@@ -2,6 +2,30 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.28.2 — the command gate's refusal prints the full go-request command, so a session with no skill loaded can follow it.
+
+**A refusal named no journal command (#55, ADR 0023 amendment A7).** The release check of
+0.28.1 ran four times. In one run the model had loaded no skill. The command gate held its
+commit and said to record a `go-requested`, but named no script. The model searched the
+disk, found an older cached copy of the plugin, and that copy's `append` refused the event
+type. 0.28.0 and 0.28.1 have no tag; 0.28.2 is the release.
+
+- **The hold prints the command.** The command gate's `no-go` hold now prints one command
+  that runs as it stands: `python3`, the absolute quoted path of the `journal.py` that
+  answered, `--db`, `append --stream=<stream> --type go-requested` and a payload with the
+  gate and a placeholder question. `authorize --json` carries it as `request_command`.
+- **The other texts that ask for a go request print it too.** The `mr-opened` refusal
+  (publish gate), the refusal of 0.28.0's read go (its gate), and the recorder's line when
+  it could write none of the user's reply. The recorder's line for a partial write prints
+  the full `status` command. The `witness-waits` hold and the recorder's witness line
+  already printed the command and are unchanged. A refusal on a stream with no events or
+  a finished one prints no command, because `append` refuses a go request there.
+- **The forgery net's text.** The PreToolUse refusal of a forged go reads no branch and
+  runs no journal, so it prints no command. It now says that the command gate's hold and
+  the recorder's line print the `go-requested` command, and it names the hook's own
+  plugin journal script.
+- Nothing that the gate or the net refuses or allows has changed.
+
 v0.28.1 — a free-language approval gets one confirming question, and the hook records the click: the model-read go of 0.28.0 is removed, and the refusal of a command that names the recorder script points to the Write tool.
 
 **Auto mode refused the read go (#52, ADR 0023 amended).** The two-turn check of SC-010 ran

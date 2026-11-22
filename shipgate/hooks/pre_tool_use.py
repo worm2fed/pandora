@@ -187,15 +187,20 @@ EVENT_REASONS = (
 RECORDER = "reply.py"
 
 # FR-024: the paths of this release (ADR 0023 and its amendment, ADR 0015).
+# #55: the net reads no branch and runs no journal, so it prints no go request of its
+# own. It points at the two places that print one, and names this plugin's journal
+# script (`deny`), so a session never searches the disk for an older copy.
 TAIL = (
-    "Only the user approves a commit or a publish. Record a `go-requested` event, then "
-    "ask the gate question with the header `Commit` or `Publish`, or let the user type "
-    "the gate word: the recorder hook records the go. After any other reply, record a "
-    "new `go-requested` and ask one confirming question with that header and the gate "
-    "word as the first option: the recorder hook records the click. The user can also "
-    "choose \"Approve publishing\" in the shipgate-hud publish dialog, or run the "
-    "append themselves with `!` and `\"source\": \"shell\"`. Never record it on their "
-    "behalf."
+    "Only the user approves a commit or a publish. When the command gate holds a commit, "
+    "a push or a PR/MR creation, its refusal prints the full `go-requested` command: run "
+    "it as printed, "
+    "then ask the gate question with the header `Commit` or `Publish`, or let the user "
+    "type the gate word: the recorder hook records the go. After any other reply, the "
+    "recorder's context line prints a new `go-requested` command: run it and ask one "
+    "confirming question with that header and the gate word as the first option: the "
+    "recorder hook records the click. The user can also choose \"Approve publishing\" "
+    "in the shipgate-hud publish dialog, or run the append themselves with `!` and "
+    "`\"source\": \"shell\"`. Never record it on their behalf."
 )
 MESSAGES = {
     REASON_MARKER: (
@@ -1684,7 +1689,24 @@ def gated_commands(command_line):
 
 
 def deny(reason):
-    deny_with(MESSAGES[reason] + " " + TAIL)
+    deny_with(MESSAGES[reason] + " " + TAIL + script_line())
+
+
+def script_line():
+    """The sentence that names this plugin's journal script, absolute and quoted (#55).
+
+    A path computation only: no file is read and no process runs. Empty when the path
+    does not print on one line.
+    """
+    import os
+    from shlex import quote
+
+    script = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "scripts", "journal.py",
+    )
+    line = f" This plugin's journal script is `{quote(script)}`."
+    return line if line.isprintable() else ""
 
 
 # The command gate's second fast path: without one of these words no command of the line
@@ -1744,9 +1766,12 @@ def command_gate(payload, command):
             message = answer.get("message")
             if isinstance(message, str) and message:
                 return message
+            request = answer.get("request_command")
+            request = (f" with `{request}`" if isinstance(request, str) and request
+                       and request.isprintable() else "")
             return (f"shipgate held this {gate}: the stream of branch {branch} holds "
-                    "no go from the user. Record a go-requested and ask the gate "
-                    "question, or let the user type the gate word.")
+                    f"no go from the user. Record a go-requested{request} and ask the "
+                    "gate question, or let the user type the gate word.")
     return None
 
 
