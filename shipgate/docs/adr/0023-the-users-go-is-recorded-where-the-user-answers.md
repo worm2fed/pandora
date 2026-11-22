@@ -361,6 +361,16 @@ A6. **A note that names the recorder still counts, and the exemption is rejected
     `env` runs as a command line: the review forged a go through it. Both false refusals
     stay, and #54 holds them.
 
+A7. **A printed go request runs as printed (#55, 0.28.2).** Each refusal and context line
+    that tells the model to record a go request prints one full command: `python3`, the
+    absolute quoted path of the `journal.py` that wrote the text, `--db`, the append with
+    `--stream=` and `--type go-requested`, and a payload with the gate filled in. A
+    session with no skill loaded then never searches the disk, where a plugin cache can
+    hold an older copy of the script. The forgery net is the exception: it reads no branch
+    and runs no journal, so its text points at the command gate's printed request and
+    names its own plugin's journal script. A lookup in that refusal path was rejected,
+    because it adds a process to the hook path for a text.
+
 ### Alternatives considered
 
 - **Keep the read go, and ask the user to allow it in auto mode.** Every user of auto mode

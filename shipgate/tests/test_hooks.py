@@ -3689,6 +3689,15 @@ class TestCommandGateFailurePolicy(StubJournalMixin, CommandGateCase):
         self.assertEqual(output["permissionDecision"], "deny")
         self.assertIn("held by stub", output["permissionDecisionReason"])
 
+    def test_a_hold_with_no_message_prints_the_request_command(self):
+        """#55: the fallback line prints the journal's `request_command`."""
+        result = self.run_with_stub(
+            "import json\nprint(json.dumps({'verdict': 'hold', "
+            "'request_command': 'python3 /p/j.py --db /p/db append --stream=s'}))\n")
+        reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("Record a go-requested with "
+                      "`python3 /p/j.py --db /p/db append --stream=s`", reason)
+
 
 class TestCommandGateReadsNoFile(PreToolUseCase):
     """SC-007: a command that is no commit and no publish opens no file."""
@@ -4071,6 +4080,178 @@ class TestReplyHookRunsTheJournalOnlyWhenItMayAnswer(StubJournalMixin, ReplyHook
         _, context = self.context(self.run_prompt("commit"))
         self.assertIn("nothing was recorded", context)
         self.assertNotIn("go recorded", context)
+
+
+class TestPrintedGoRequestsRunAsPrinted(ReplyHookCase):
+    """#55: every go request a refusal or a context line prints runs as printed.
+
+    The plugin is a copy whose path holds spaces, so the quoting is under test. Each
+    printed command names that copy's journal script, passes the forgery net of that
+    copy's PreToolUse hook, and appends a `go-requested` to the fixture journal with
+    exit 0, run through `/bin/sh -c` exactly as printed.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        import shutil
+
+        self._plugin_tmp = tempfile.TemporaryDirectory(prefix="shipgate plugin ")
+        self.plugin = Path(self._plugin_tmp.name).resolve() / "cache dir" / "0.28.2"
+        for part in ("hooks", "scripts"):
+            shutil.copytree(SHIPGATE / part, self.plugin / part,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        self.script = self.plugin / "scripts" / "journal.py"
+
+    def tearDown(self) -> None:
+        self._plugin_tmp.cleanup()
+        super().tearDown()
+
+    def bash(self, command, cwd=None, **extra):
+        return run_hook(
+            "pre_tool_use",
+            {"session_id": SESSION, "cwd": str(cwd or self.root), "tool_name": "Bash",
+             "tool_input": {"command": command}, **extra},
+            self.root, hooks_dir=self.plugin / "hooks",
+        )
+
+    def printed(self, text):
+        """The one command `text` prints in backticks."""
+        commands = re.findall(r"`(python3 [^`]+)`", text)
+        self.assertEqual(len(commands), 1, text)
+        return commands[0]
+
+    def run_as_printed(self, command, gate, question):
+        import shlex
+
+        argv = shlex.split(command)
+        self.assertEqual(argv[:4], ["python3", str(self.script), "--db", str(self.db)])
+        self.assertIn(" ", argv[1])
+        self.assertEqual(argv[4], "append")
+        self.assertEqual(argv[argv.index("--type") + 1], "go-requested")
+        self.assertEqual(json.loads(argv[argv.index("--data") + 1]),
+                         {"gate": gate, "question": question})
+        net = self.bash(command)
+        self.assertEqual((net.returncode, net.stdout, net.stderr), (0, "", ""),
+                         "the forgery net refused the printed command")
+        before = self.events()[-1]["seq"]
+        result = subprocess.run(
+            ["/bin/sh", "-c", command], capture_output=True, text=True,
+            cwd=str(self.root), timeout=60,
+            env={**os.environ, "CLAUDE_CODE_SESSION_ID": SESSION},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = self.events()[-1]
+        self.assertGreater(row["seq"], before)
+        self.assertEqual((row["stream"], row["type"], row["data"]["gate"]),
+                         (self.BRANCH, "go-requested", gate))
+
+    def test_the_command_gate_hold_prints_a_request_that_runs(self):
+        for command, gate in (("git commit -m x", "commit"), ("git push", "publish")):
+            with self.subTest(command=command):
+                reason = self.assertHeld(command, gate)
+                self.run_as_printed(self.printed(reason), gate, "<the gate question>")
+                # A go request is no go: the gate still holds.
+                self.assertHeld(command, gate)
+
+    def test_the_witness_hold_and_the_context_line_print_requests_that_run(self):
+        self.request()
+        _, context = self.context(
+            self.prompt("it can go", hooks_dir=self.plugin / "hooks"))
+        self.run_as_printed(self.printed(context), "commit", "<the confirming question>")
+        self.context(self.prompt("it can go", hooks_dir=self.plugin / "hooks"))
+        reason = self.assertHeld("git commit -m x", "commit", "one confirming question")
+        self.run_as_printed(self.printed(reason), "commit", "<the confirming question>")
+
+    def test_the_append_refusals_print_requests_that_run(self):
+        """`mr-opened` with no go, and 0.28.0's read go."""
+        read_go = json.dumps({"gate": "Commit ", "question": "q", "decision": "commit",
+                              "mode": "ask", "source": "read"})
+        for event, data, gate, question in (
+            ("mr-opened", '{"url":"x"}', "publish", "<the gate question>"),
+            ("gate-decision", read_go, "commit", "<the confirming question>"),
+        ):
+            with self.subTest(event=event):
+                refused = subprocess.run(
+                    [sys.executable, str(self.script), "--db", str(self.db), "append",
+                     "--stream", self.BRANCH, "--type", event, "--data", data],
+                    capture_output=True, text=True, timeout=60,
+                )
+                self.assertNotEqual(refused.returncode, 0)
+                self.run_as_printed(self.printed(refused.stderr), gate, question)
+
+    def append(self, stream, event, data):
+        return subprocess.run(
+            [sys.executable, str(self.script), "--db", str(self.db), "append",
+             "--stream", stream, "--type", event, "--data", data],
+            capture_output=True, text=True, timeout=60,
+        )
+
+    def test_a_read_go_names_its_gate_through_kind_too(self):
+        """Review round 1: `"gate": null` with a valid `kind` alias still prints."""
+        data = json.dumps({"gate": None, "kind": "publish", "question": "q",
+                           "decision": "publish", "mode": "ask", "source": "read"})
+        refused = self.append(self.BRANCH, "gate-decision", data)
+        self.assertNotEqual(refused.returncode, 0)
+        self.run_as_printed(self.printed(refused.stderr), "publish",
+                            "<the confirming question>")
+
+    def test_a_refusal_on_a_stream_that_is_not_live_prints_no_request(self):
+        """Review round 1: `append` refuses a go request on a stream with no events or a
+        finished one, so the refusal prints none there."""
+        self.assertEqual(self.append("feat/2-done", "flow-started",
+                                     '{"request":"x"}').returncode, 0)
+        self.assertEqual(self.append("feat/2-done", "flow-abandoned",
+                                     '{"reason":"x"}').returncode, 0)
+        read_go = json.dumps({"gate": "commit", "question": "q", "decision": "commit",
+                              "mode": "ask", "source": "read"})
+        for stream in ("feat/2-done", "feat/3-empty"):
+            for event, data in (("mr-opened", '{"url":"x"}'),
+                                ("gate-decision", read_go)):
+                with self.subTest(stream=stream, event=event):
+                    refused = self.append(stream, event, data)
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn("go-requested", refused.stderr)
+                    self.assertNotIn("`python3 ", refused.stderr)
+
+    def test_the_recorder_failure_lines_print_commands_that_run(self):
+        import importlib.util
+        import shlex
+
+        import reply  # noqa: E402 — the hook module, for its pure helper
+
+        spec = importlib.util.spec_from_file_location("journal_copy", self.script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        plan = module._reply_failure_lines(self.db, [
+            {"stream": self.BRANCH, "type": "reply-witnessed", "data": {"gate": "commit"}},
+        ])
+        unwritten = reply.context_of({"context": "c", **plan}, [], 1)
+        self.assertIn("nothing was recorded", unwritten)
+        self.run_as_printed(self.printed(unwritten), "commit", "<the gate question>")
+        partial = reply.context_of({"context": "c", **plan}, [1], 2)
+        self.assertIn("wrote only 1 of 2 rows", partial)
+        status = self.printed(partial)
+        self.assertEqual(shlex.split(status),
+                         ["python3", str(self.script), "--db", str(self.db), "status"])
+        result = subprocess.run(["/bin/sh", "-c", status], capture_output=True,
+                                text=True, cwd=str(self.root), timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(self.BRANCH, result.stdout)
+
+    def test_the_forgery_net_names_the_journal_script_and_prints_no_command(self):
+        """Decision B of #55: the net reads no branch and runs no journal, so it points
+        at the command gate's printed request and names this plugin's script."""
+        import shlex
+
+        name = "jour" + "nal.py"
+        result = self.bash(f"python3 {name} {'app' + 'end'} --stream {self.BRANCH} "
+                           "--type reply-witnessed --data '{}'")
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["permissionDecision"], "deny")
+        reason = output["permissionDecisionReason"]
+        self.assertIn("its refusal prints the full `go-requested` command", reason)
+        self.assertIn(f"journal script is `{shlex.quote(str(self.script))}`", reason)
+        self.assertNotIn("`python3 ", reason)
 
 
 class TestPreToolUseFailurePolicy(unittest.TestCase):

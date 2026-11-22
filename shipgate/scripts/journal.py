@@ -1451,9 +1451,9 @@ MR_OPENED_REFUSAL = (
     "source question|prompt|dialog|shell. The recorder writes `question` when the "
     "user answers the publish question and `prompt` when the user types `publish`; the "
     "HUD's publish dialog writes `dialog`; the user's own `!` command writes `shell`. "
-    "Record the review's outcome, or record a go-requested and ask the user. When the "
-    "user's reply was no exact go, record a new go-requested and ask one confirming "
-    "question with the header `Publish`. --force does not waive this."
+    "Record the review's outcome, or record a go-requested{request} and ask the user. "
+    "When the user's reply was no exact go, record a new go-requested the same way and "
+    "ask one confirming question with the header `Publish`. --force does not waive this."
 )
 
 
@@ -1465,7 +1465,12 @@ def _validate_mr_opened(
     )
     if publish_authorization(events)["kind"] == "authorized":
         return
-    raise GateViolation(MR_OPENED_REFUSAL.format(stream=repr(stream)))
+    raise GateViolation(MR_OPENED_REFUSAL.format(
+        stream=repr(stream),
+        request=_in_backticks(_request_command_of(
+            conn, stream, "publish", GATE_QUESTION_PLACEHOLDER
+        )),
+    ))
 
 
 def suggest_event_types(event_type: str) -> List[str]:
@@ -1818,17 +1823,21 @@ def _actor_session(conn: sqlite3.Connection, actor: str) -> Optional[str]:
 READ_GO_REFUSAL = (
     "gate-decision: the marker `read` is retired (ADR 0023, amendment). The model records "
     "no go in any form. When the user's reply was no exact go, record a new go-requested "
-    "for the gate, then ask one confirming question with the header `Commit` or "
+    "for the gate{request}, then ask one confirming question with the header `Commit` or "
     "`Publish` and the gate word as the first option: the recorder hook records the "
     "click. --force does not waive this."
 )
 
 
-def _refuse_read_go(event_type: str, data: Dict[str, Any]) -> None:
+def _refuse_read_go(
+    conn: sqlite3.Connection, stream: str, event_type: str, data: Dict[str, Any]
+) -> None:
     """Refuse 0.28.0's read go, on the forced path too (#52, ADR 0023 amendment A3).
 
     It runs before the shape check, so the refusal names the confirming question and not
-    only the closed list of markers. ``source`` is read trimmed and in any case.
+    only the closed list of markers. ``source`` is read trimmed and in any case. When the
+    row names a commit or publish gate (``gate``, or its alias ``kind``), the refusal
+    prints the go request for it (#55).
     """
     source = data.get("source")
     if (
@@ -1836,7 +1845,13 @@ def _refuse_read_go(event_type: str, data: Dict[str, Any]) -> None:
         and isinstance(source, str)
         and source.strip().casefold() == RETIRED_READ_MARKER
     ):
-        raise GateViolation(READ_GO_REFUSAL)
+        gate = data.get("gate") or data.get("kind")
+        gate = gate.strip().casefold() if isinstance(gate, str) else ""
+        command = (
+            _request_command_of(conn, stream, gate)
+            if gate in get_args(GoGate) else None
+        )
+        raise GateViolation(READ_GO_REFUSAL.format(request=_in_backticks(command)))
 
 
 def _validate_own_session(
@@ -2088,7 +2103,7 @@ def append_event(
     canonical_actor = parse_actor(actor, conn, data)
 
     # Before the shape check and on the forced path too (#52).
-    _refuse_read_go(event_type, data)
+    _refuse_read_go(conn, stream, event_type, data)
     payload = dict(data)
     if force:
         payload["forced"] = True
@@ -2792,15 +2807,50 @@ def _matched_requests(
     return [r for r in requests if r in matched]
 
 
-# The question text a printed go request leaves to the flow to write.
+# The question text a printed go request leaves to the flow to write. `append` takes
+# either as it stands, so a printed request runs as printed (#55).
 CONFIRMING_QUESTION_PLACEHOLDER = "<the confirming question>"
+GATE_QUESTION_PLACEHOLDER = "<the gate question>"
 
 
-def _request_command(db_path: Path, stream: str, gate: str) -> Optional[str]:
-    """The go request a confirming question takes, through `_suggest` (``--db``,
-    ``--stream=``), or None when `_suggest` cannot print the stream (#52)."""
+def _request_command(
+    db_path: Path, stream: str, gate: str,
+    question: str = CONFIRMING_QUESTION_PLACEHOLDER,
+) -> Optional[str]:
+    """The go request for ``gate`` of ``stream``, through `_suggest` (the interpreter,
+    this script's absolute quoted path, ``--db``, ``--stream=``), or None when
+    `_suggest` cannot print it (#52, #55)."""
     return _suggest(db_path, stream, "go-requested",
-                    {"gate": gate, "question": CONFIRMING_QUESTION_PLACEHOLDER})
+                    {"gate": gate, "question": question})
+
+
+def _db_file(conn: sqlite3.Connection) -> Optional[Path]:
+    """The file of the database ``conn`` opened, or None for one with no file."""
+    for _, name, file in conn.execute("PRAGMA database_list"):
+        if name == "main":
+            return Path(file) if file else None
+    return None
+
+
+def _request_command_of(
+    conn: sqlite3.Connection, stream: str, gate: str,
+    question: str = CONFIRMING_QUESTION_PLACEHOLDER,
+) -> Optional[str]:
+    """`_request_command` for the journal ``conn`` opened: an `append` refusal has the
+    connection, not the db path (#55). None when the stream is not live, because
+    `append` refuses a go request there (`_validate_go_request`)."""
+    db_path = _db_file(conn)
+    if db_path is None:
+        return None
+    events = read_events(conn, stream=stream)
+    if not events or fold_stream(events)["terminal"]:
+        return None
+    return _request_command(db_path, stream, gate, question)
+
+
+def _in_backticks(command: Optional[str]) -> str:
+    """`` (`command`)`` to follow the words it runs, or nothing for no command."""
+    return f" (`{command}`)" if command else ""
 
 
 def _confirm_line(db_path: Path, stream: str, gate: str) -> str:
@@ -2809,7 +2859,7 @@ def _confirm_line(db_path: Path, stream: str, gate: str) -> str:
     command = _request_command(db_path, stream, gate)
     return (
         f"record a new go-requested for the {gate} gate of {stream}"
-        + (f" (`{command}`)" if command else "")
+        + _in_backticks(command)
         + f", then ask one confirming question with the header `{word}` and `{word}` as "
         "the first option; the recorder records the click"
     )
@@ -2894,7 +2944,39 @@ def plan_reply(
         # Every open request got a row, so none of the session's is left open.
         "open": 0,
         "context": ("shipgate: " + "; ".join(lines) + ".") if lines else None,
+        **_reply_failure_lines(db_path, events),
     }
+
+
+def _reply_failure_lines(
+    db_path: Path, events: Sequence[Dict[str, Any]]
+) -> Dict[str, Optional[str]]:
+    """The recorder's context lines for a plan it could not write, or wrote in part (#55).
+
+    ``unwritten`` asks for the go requests again, one printed command per gate of a
+    stream the plan touched; ``status_command`` is the status command the line for a
+    partial write prints. Both are None when the plan has no rows.
+    """
+    if not events:
+        return {"unwritten": None, "status_command": None}
+    pairs: List[Tuple[str, str]] = []
+    for event in events:
+        pair = (event["stream"], event["data"]["gate"])
+        if pair not in pairs:
+            pairs.append(pair)
+    commands = [
+        command for command in (
+            _request_command(db_path, stream, gate, GATE_QUESTION_PLACEHOLDER)
+            for stream, gate in pairs
+        ) if command
+    ]
+    unwritten = (
+        "shipgate: the recorder could not write the user's reply to the journal; "
+        "nothing was recorded. Record a go-requested and ask again"
+        + (": " + "; ".join(f"`{command}`" for command in commands) if commands else "")
+        + "."
+    )
+    return {"unwritten": unwritten, "status_command": _journal_command(db_path, "status")}
 
 
 def _waiting_witness(events: Sequence[Event], gate: str) -> Optional[Event]:
@@ -2932,10 +3014,15 @@ def _hold_message(
             + ". If the user refused or did not confirm, wait for the user. Never record "
             "the go on their behalf."
         )
+    command = _request_command(db_path, stream, gate, GATE_QUESTION_PLACEHOLDER)
+    request = (
+        f"record a go request with `{command}`" if command else
+        f"record a go-requested {{\"gate\": \"{gate}\", \"question\": \"...\"}} on the "
+        "stream"
+    )
     return (
         f"shipgate held this {gate}: stream {stream!r} holds no go for the {gate} gate "
-        f"since its last task-done. A ready verdict is no go. Ways forward: record a "
-        f"go-requested {{\"gate\": \"{gate}\", \"question\": \"...\"}} on the stream, "
+        f"since its last task-done. A ready verdict is no go. Ways forward: {request}, "
         f"then ask with the header `{word.capitalize()}` and `{word.capitalize()}` as "
         f"the first option; or let the user type `{word}`. The user may also approve in "
         f"the shipgate-hud publish dialog or with their own `!` command. Never record "
@@ -2982,6 +3069,12 @@ def authorize(
         "verdict": "hold",
         "reason": "witness-waits" if witness is not None else "no-go",
         "message": message,
+        # The go request the message prints, or None (#55).
+        "request_command": _request_command(
+            db_path, stream, gate,
+            CONFIRMING_QUESTION_PLACEHOLDER if witness is not None
+            else GATE_QUESTION_PLACEHOLDER,
+        ),
     })
     return answer
 
@@ -3469,15 +3562,30 @@ def _suggest(db_path: Path, stream: str, event_type: str,
     """
     from shlex import quote
 
-    script = str(Path(__file__).resolve())
     command = " ".join([
-        "python3", quote(script),
-        "--db", quote(str(db_path)),
+        *_journal_prefix(db_path),
         "append",
         "--stream=" + quote(stream),
         "--type", quote(event_type),
         "--data", quote(json.dumps(data, sort_keys=True)),
     ])
+    return command if command.isprintable() else None
+
+
+def _journal_prefix(db_path: Path) -> List[str]:
+    """The quoted words that run this script on ``db_path``: the interpreter, this
+    script's absolute path and ``--db`` (#55)."""
+    from shlex import quote
+
+    return ["python3", quote(str(Path(__file__).resolve())), "--db", quote(str(db_path))]
+
+
+def _journal_command(db_path: Path, *args: str) -> Optional[str]:
+    """A ready command of this script on ``db_path``, or None when it does not print on
+    one line (see `_suggest`)."""
+    from shlex import quote
+
+    command = " ".join([*_journal_prefix(db_path), *(quote(arg) for arg in args)])
     return command if command.isprintable() else None
 
 
