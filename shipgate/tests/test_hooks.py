@@ -327,7 +327,8 @@ class TestSessionStartSources(HookTestCase):
                 specific = self.start(source)
                 self.assertEqual(specific["hookEventName"], "SessionStart")
                 self.assertIn("shipgate flow journal", specific["additionalContext"])
-                self.assertIn(STREAM, specific["additionalContext"])
+                # No branch binds the stream here, so the brief counts it (ADR 0024).
+                self.assertIn("not shown: 1 live", specific["additionalContext"])
                 self.assertIn(str(self.worklog), specific["watchPaths"])
 
     def test_every_source_is_recorded_on_its_own_row(self):
@@ -1320,11 +1321,12 @@ class TestSessionStartBranchOrdering(HookTestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("aaa-other", context, f"no brief was rendered: {context}")
-        self.assertLess(
-            context.index(STREAM), context.index("aaa-other"),
-            "the stream named after the branch must render first",
-        )
+        # Since #31 the brief prints the branch stream and counts the other one; it
+        # never names it (ADR 0024).
+        self.assertIn(STREAM, context, f"no brief was rendered: {context}")
+        self.assertNotIn("aaa-other", context)
+        self.assertIn("not shown: 1 live", context)
+        self.assertLess(context.index(STREAM), context.index("not shown:"))
 
 
 class TestSessionStartSessionOrdering(HookTestCase):
@@ -4231,8 +4233,10 @@ class TestPrintedGoRequestsRunAsPrinted(ReplyHookCase):
         partial = reply.context_of({"context": "c", **plan}, [1], 2)
         self.assertIn("wrote only 1 of 2 rows", partial)
         status = self.printed(partial)
+        # `--all`: plain `status` is the brief since #31 and prints no unbound stream.
         self.assertEqual(shlex.split(status),
-                         ["python3", str(self.script), "--db", str(self.db), "status"])
+                         ["python3", str(self.script), "--db", str(self.db), "status",
+                          "--all"])
         result = subprocess.run(["/bin/sh", "-c", status], capture_output=True,
                                 text=True, cwd=str(self.root), timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)

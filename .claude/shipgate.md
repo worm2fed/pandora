@@ -33,6 +33,13 @@ pandora is a **plugin marketplace**: one git repo holding several independent pl
   `<plugin>/.claude-plugin/plugin.json` and the matching entry in
   `.claude-plugin/marketplace.json`, kept in lockstep.
 
+## Close-out
+
+- Tag the release: when the stream bumped a plugin's version, run `claude plugin tag
+  --push` in that plugin's directory once the version-bump commit is on `main` (root
+  `CLAUDE.md`).
+- Tick the child: tick this issue in its tracking issue's task list, when it has one.
+
 ## Branching
 
 - Pattern: `<type>/<slug>`, type ∈ feat | fix | chore. The issue id is optional here and

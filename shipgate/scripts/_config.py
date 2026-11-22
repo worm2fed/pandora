@@ -156,11 +156,12 @@ def _walk_section(text: str, section: str) -> Iterator[Tuple[str, bool]]:
             yield raw, False
 
 
-def section_bullets(text: str, section: str) -> List[Tuple[str, str]]:
+def section_bullets(text: str, section: str,
+                    keep_case: bool = False) -> List[Tuple[str, str]]:
     """The `- Key: value` bullets of one `## <section>` (lower-case name), in order.
 
-    Keys come back lower-cased; a wrapped continuation line joins its bullet. HTML
-    comments and fenced code are inert (`_walk_section`).
+    Keys come back lower-cased, or as written with `keep_case`; a wrapped continuation
+    line joins its bullet. HTML comments and fenced code are inert (`_walk_section`).
     """
     bullets: List[Tuple[str, str]] = []
     for raw, fenced in _walk_section(text, section):
@@ -168,7 +169,8 @@ def section_bullets(text: str, section: str) -> List[Tuple[str, str]]:
             continue
         bullet = _BULLET_RE.match(raw)
         if bullet:
-            bullets.append((bullet.group(1).strip().lower(), bullet.group(2)))
+            key = bullet.group(1).strip()
+            bullets.append((key if keep_case else key.lower(), bullet.group(2)))
         elif bullets and raw[:1].isspace() and raw.strip():
             key, value = bullets[-1]
             bullets[-1] = (key, value + " " + raw.strip())  # wrapped continuation

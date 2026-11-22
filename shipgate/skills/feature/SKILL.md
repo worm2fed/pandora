@@ -1,6 +1,6 @@
 ---
 name: feature
-description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the flow journal, or the PRD/ADR/worklog present), proposes the next phase, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. For a standalone question — which file has the bug, what does this change affect, rank the changed files by risk — go straight to structured-debug, route-and-map or review rather than through the orchestrator. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own flow and a stop between them.
+description: Orchestrator for lean, gate-driven feature and bug work — detects which phase a piece of work is in (from the flow journal, or the PRD/ADR/worklog present), proposes the next phase, and routes to the right phase skill. Use when starting a feature or bug, asking "what's next", resuming work, or invoking /shipgate. For a standalone question — which file has the bug, what does this change affect, rank the changed files by risk — go straight to structured-debug, route-and-map or review rather than through the orchestrator. Scales ceremony to the size of the change, and drives epics issue-by-issue — each child issue a separate deliverable with its own flow and a stop between them. Also use when the user says the PR or MR merged (it computes the close-out from forge and git evidence: the ordered local steps and one question for the project's own steps), or asks to close or sweep stale streams.
 ---
 
 # Feature orchestrator
@@ -170,9 +170,12 @@ last verify, any queued designs. Route from it, then open only the artifacts it 
 reconstruct the position by scanning worklog checkboxes. The journal exists precisely so that
 nobody has to.
 
-The status brief hides completed streams and collapses long-dormant ones to a line; `--all`
-shows everything. The SessionStart hook usually hands you this status brief before you ask. In
-that case use what you already have; don't re-run the command.
+The status brief prints in full only the **bound** streams: the one this session drives and
+the one the checkout names. It counts every other stream in one line; `--all` shows
+everything. The SessionStart hook usually hands you this status brief before you ask. In that
+case use what you already have; don't re-run the command. **With no bound stream**, run
+`journal.py streams --open` before you open a new stream or say that nothing is in flight.
+Then run `handoff` for the stream to resume.
 
 **A fresh session past design starts from the handoff brief.** This applies when the stream is
 in implement or later and this session holds none of its context: a new session, a `/clear`
@@ -218,14 +221,16 @@ way:
   "remember this": that goes to Claude's built-in session memory, not the knowledge base.
   **Capture is not gated on the MR/PR merging or on a further user go-ahead.** Then the work
   is done. On a journaled project the stream is closed with `flow-completed` once nothing is
-  owed on it. That event makes the stream leave every later session's status brief.
+  owed on it. That event makes the stream leave every later session's status brief. An open
+  MR/PR is owed: after the merge, the **Close-out** below closes the stream.
+- The user says the MR/PR merged → **Close-out** (below).
 - An **MR-watcher event** (if the config declares a watcher) that names an issue is a valid
   resume signal for that issue. Enter at the phase the event unlocks, not at the start:
   - reviewer comments → the review-feedback cycle (defined in `review`: re-enter implement
     for the fixes, re-verify the changed scope, reply and resolve threads);
-  - own MR/PR merged → *residual* capture only. Triage whatever the review-feedback cycle
-    added to the ledger since the main Capture. The main Capture already ran when review
-    passed. Then take the next child issue, if any;
+  - own MR/PR merged → the **Close-out** (below). Its first step is the *residual* capture:
+    whatever the review-feedback cycle added to the ledger since the main Capture. Then take
+    the next child issue, if any;
   - watched MR/PR merged → resume the held work per its watch-list note;
   - conflicts / failed CI → fix them before review continues.
 
@@ -233,6 +238,26 @@ way:
 
 Propose the next phase in one line, then proceed. For the heavier phases, proceed once the user
 confirms.
+
+## Close-out
+
+The user's "merged", or a watcher's `merged` event for the stream's MR/PR, starts it. No hook
+reads the word (ADR 0026), and the user's word is not evidence.
+
+1. Run `journal.py closeout --stream <s>`. Run its observe script in one Bash call, then the
+   printed rerun with `--observed <the directory it printed>`.
+2. `not-merged` (exit 4): stop, append nothing, and say what the forge and git showed.
+3. With `[ask]` steps, ask one `AskUserQuestion`: header `Close-out`, multi-select, one
+   option per `[ask]` step. Then run the printed record with the user's choice.
+4. Run the steps in order: each `[run]` step and the chosen `[ask]` steps; `[skip]` is done.
+   A last step marked `only when the user chose step N` runs only then. When the user chose
+   the steps a `when the user chose` line names, run that line in place of the last step.
+5. Report before the last step: from inside the worktree, it ends the working directory.
+6. Never add `--force`, `-f` or `-D`. A step git refuses stops: quote git and ask the user.
+
+`journal.py sweep` works the same way for dormant streams: observe, show the proposals, and
+after one confirmation run the printed `--apply`. An `unknown` stream is the user's to
+decide; `--apply` appends nothing for it.
 
 Sometimes you read more than one config file: a repo's file and its umbrella's, or a project
 file and the user file. Then, before the first phase, say which file each section in play came

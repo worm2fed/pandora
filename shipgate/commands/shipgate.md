@@ -30,10 +30,13 @@ Do this:
    ```
 
    That status brief is the authoritative position. Route from it, and open only the
-   artifacts it names. Fall back to **inferring** the phase from the artifacts present only
-   when no Journal is declared, or when the user has acknowledged an unreadable database.
-   Look in the configured PRD/ADR/worklog homes. The defaults are `docs/prd/<name>.md`,
-   `docs/adr/` and `docs/prd/<name>.worklog.md`. Then propose resuming at the right phase.
+   artifacts it names. It prints only the bound streams; with none bound, run
+   `journal.py streams --open` before you open a new stream. When the user says the PR/MR
+   merged, route to `feature`'s **Close-out**. Fall back to **inferring** the phase from
+   the artifacts present only when no Journal is declared, or when the user has
+   acknowledged an unreadable database. Look in the configured PRD/ADR/worklog homes. The
+   defaults are `docs/prd/<name>.md`, `docs/adr/` and `docs/prd/<name>.worklog.md`. Then
+   propose resuming at the right phase.
 4. Scale ceremony to the size of the change. A one-line fix should not get a full PRD.
    Say which phases you're skipping and why.
 
