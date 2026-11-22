@@ -48,7 +48,8 @@ you're about to write one, stop and run the command instead:
 3. **Read** — Read the complete output. Check the exit code. Count passes and failures.
    Don't infer them from the absence of red text.
 4. **Confirm** — Does the output prove the *exact* claim? "It compiled" does not prove "the
-   feature works." "0 failures" with "0 tests run" proves nothing.
+   feature works." "0 failures" with "0 tests run" proves nothing. Neither does "no
+   finding" from a review or a scan whose input was empty.
 5. **Report** — State the result. Cite the command, the exit code, and the key line of
    output. Let the user see the evidence, not just your conclusion.
 
@@ -59,6 +60,7 @@ you're about to write one, stop and run the command instead:
 | Tests pass | Test command run, exit 0, explicit pass count, 0 failures |
 | Build succeeds | Build command run, exit 0 |
 | Lint clean | Linter run, 0 errors |
+| Review or scan found nothing | Files read > 0, and every changed file read; a review of an empty diff proves nothing |
 | Bug is fixed | Reproduce first (must fail), apply fix, reproduce again (now passes) |
 | Phase complete | Each acceptance criterion verified individually, not as a bundle |
 | Feature works | An end-to-end run or a concrete manual walkthrough, not "the code looks right" |
