@@ -299,8 +299,8 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
     **The user's go**). After a reply that is no exact go, record a new `go-requested`
     and ask one confirming question with the same header; the recorder records the
     click. Never record a go as the user's yourself, in any form: a PreToolUse hook and
-    the journal refuse it. Journaled projects refuse `mr-opened` without an unforced
-    ready verdict or the publish go.
+    the journal refuse it. Journaled projects refuse `mr-opened` unless the newest
+    verdict is an unforced ready one, or the publish go is recorded.
   - Design-ahead work on upcoming issues is explicitly allowed (and encouraged) during that
     wait. The gate exists so the user controls what gets built, not to park the orchestrator.
 - **Shared vs per-issue artifacts.** The epic-level PRD and design are shared context, written
@@ -384,8 +384,10 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
   clean feature.
 - **For a deep security audit or a release check, fire the built-in `/security-review`.** A
   deep audit fits changes that touch auth, secrets, or any configured security-sensitive area.
-  The in-flow reviewer security lens is a routine sweep, not a full audit. Built-in `/simplify`
-  is there for standalone cleanup.
+  The in-flow reviewer security lens is a routine sweep, not a full audit. The command reads
+  only commits, so before the commit its diff is empty. `review` (**The security review**)
+  says how the pass runs then. The command runs again on the commit, before the push.
+  Built-in `/simplify` is there for standalone cleanup.
 - **Structured thinking where it pays.** Each phase describes its thinking lens inline and
   applies the idea by default. The config's **Thinking lenses** section may map phases to
   actual lens skills to invoke (typically the early, judgment-dense phases: clarify, design).

@@ -559,6 +559,73 @@ class TestShapeValidation(JournalTestCase):
         self.verdict(dispositions="fixed", rc=GATE)
         self.assertEqual(self.events(), [])
 
+    # `security_review` says which security review ran and what it read (#40).
+    def test_a_verdict_records_the_security_review_that_ran(self):
+        for review in (
+            {"kind": "briefed", "files": 8},
+            {"kind": "builtin", "files": 8, "ref": "0123abc"},
+            {"kind": "none"},
+            {"kind": "none", "files": 0},
+        ):
+            with self.subTest(review=review):
+                self.verdict(security_review=review)
+                self.assertEqual(self.data_of()["security_review"], review)
+
+    def test_a_security_review_kind_outside_the_vocabulary_is_refused(self):
+        for review in ({"kind": "full", "files": 3}, {"files": 3}, {"kind": ""}):
+            with self.subTest(review=review):
+                proc = self.verdict(security_review=review, rc=GATE)
+                self.assertIn("data.security_review", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_security_review_must_be_an_object_with_an_integer_count(self):
+        self.verdict(security_review="builtin", rc=GATE)
+        for files in (-1, "8", True, 2.5):
+            with self.subTest(files=files):
+                proc = self.verdict(
+                    security_review={"kind": "briefed", "files": files}, rc=GATE)
+                self.assertIn("data.security_review.files", proc.stderr)
+        self.verdict(security_review={"kind": "builtin", "files": 1, "ref": 7}, rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_a_security_review_that_read_no_file_is_refused(self):
+        """An empty diff reviews nothing; its "no finding" is no review (#40)."""
+        for review in (
+            {"kind": "builtin", "files": 0},
+            {"kind": "briefed", "files": 0},
+            {"kind": "briefed"},
+        ):
+            with self.subTest(review=review):
+                proc = self.verdict(security_review=review, rc=GATE)
+                self.assertIn("read no file", proc.stderr)
+                self.assertIn('"kind": "none"', proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_a_builtin_security_review_names_its_commit(self):
+        for review in (
+            {"kind": "builtin", "files": 8},
+            {"kind": "builtin", "files": 8, "ref": "  "},
+        ):
+            with self.subTest(review=review):
+                proc = self.verdict(security_review=review, rc=GATE)
+                self.assertIn("data.security_review.ref", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_force_does_not_waive_the_security_review_count(self):
+        self.append_event("feature/x", "review-verdict", {
+            "verdict": "ready", "security_review": {"kind": "builtin", "files": 0},
+        }, "--force", "--force-reason", "test", rc=GATE)
+        self.assertEqual(self.events(), [])
+
+    def test_vocab_prints_the_security_review_shape(self):
+        shape = json.loads(self.journal(
+            "--db", self.db, "vocab", "--shape", "review-verdict", rc=OK).stdout)
+        sub = shape["objects"]["security_review"]
+        self.assertEqual(sub["required"], ["kind"])
+        self.assertEqual(sub["enums"]["kind"], ["builtin", "briefed", "none"])
+        self.assertEqual(sub["integers"], ["files"])
+        self.assertEqual(sub["strings"], ["ref"])
+
     # `review-disposition` records a finding's state when it is decided (ADR 0014).
     def disposition(self, rc=OK, **data):
         data.setdefault("dispositions", {"src/a.py:12": "fixing"})
@@ -1579,6 +1646,17 @@ class TestGateMrOpened(JournalTestCase):
         self.append_event("feature/x", "review-verdict", {"verdict": "not-ready"})
         self.mr_opened(rc=GATE)
 
+    def test_a_later_not_ready_verdict_takes_back_the_ready_one(self):
+        """#40: the built-in run on the commit found something after a ready verdict."""
+        self.append_event("feature/x", "verify-run", self.PASSING_VERIFY)
+        self.append_event("feature/x", "review-verdict", {"verdict": "ready"})
+        self.append_event("feature/x", "review-verdict", {
+            "verdict": "not-ready",
+            "security_review": {"kind": "builtin", "files": 3, "ref": "0123abc"},
+        })
+        self.mr_opened(rc=GATE)
+        self.assertEqual(self.last_type(), "review-verdict")
+
     def test_a_user_raised_publish_decision_unblocks(self):
         self.publish_decision()
         self.mr_opened()
@@ -1864,6 +1942,32 @@ class TestPublishAuthorization(unittest.TestCase):
                 self.assertEqual(self.authorize(self.decision(1, actor=actor)),
                                  self.authorized("gate-decision", 1))
 
+    # #40: the newest verdict after the last task-done decides. The built-in
+    # /security-review runs on the commit, after the briefed pass's ready verdict.
+    def test_a_later_not_ready_verdict_holds_an_earlier_ready_one(self):
+        self.assertEqual(
+            self.authorize(self.task_done(1), self.verdict(2), self.verdict(3, "not-ready")),
+            {"kind": "held"},
+        )
+
+    def test_a_ready_verdict_after_a_not_ready_one_authorizes(self):
+        self.assertEqual(
+            self.authorize(self.task_done(1), self.verdict(2, "not-ready"), self.verdict(3)),
+            self.authorized("review-verdict", 3),
+        )
+
+    def test_the_newest_of_two_ready_verdicts_names_the_authorization(self):
+        self.assertEqual(
+            self.authorize(self.task_done(1), self.verdict(2), self.verdict(3)),
+            self.authorized("review-verdict", 3),
+        )
+
+    def test_a_later_not_ready_verdict_is_read_in_seq_order(self):
+        self.assertEqual(
+            self.authorize(self.verdict(3, "not-ready"), self.verdict(2), self.task_done(1)),
+            {"kind": "held"},
+        )
+
     def test_the_events_are_read_in_seq_order_not_list_order(self):
         """A task-done with a higher seq makes an earlier verdict stale, wherever the
         list puts it."""
@@ -1879,6 +1983,19 @@ class TestPublishAuthorization(unittest.TestCase):
         self.assertEqual(self.authorize(self.task_done(1), forced), {"kind": "held"})
         self.assertEqual(self.authorize(self.task_done(1), forced, self.verdict(3)),
                          self.authorized("review-verdict", 3))
+
+    def test_the_newest_verdict_rule_skips_a_forced_ready_verdict(self):
+        """ADR 0023 §17 skips a forced ready; #40's newest-verdict rule keeps that."""
+        forced = self.event(3, "review-verdict",
+                            {"verdict": "ready", "forced": True, "force_reason": "x"})
+        self.assertEqual(self.authorize(self.task_done(1), self.verdict(2), forced),
+                         self.authorized("review-verdict", 2))
+        self.assertEqual(
+            self.authorize(self.task_done(1), self.verdict(2), self.verdict(3, "not-ready"),
+                           self.event(4, "review-verdict",
+                                      {"verdict": "ready", "forced": True})),
+            {"kind": "held"},
+        )
 
     def test_the_first_authorizing_event_in_seq_order_is_named(self):
         self.assertEqual(

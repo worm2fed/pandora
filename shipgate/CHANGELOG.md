@@ -2,6 +2,41 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.29.0 — the security review sees the change: a briefed reviewer reads the working tree before the commit, the built-in `/security-review` runs on the commit before the push, and the verdict names the review and the files it read.
+
+**The built-in `/security-review` reviewed an empty diff (#40).** `feature` and `review`
+fire the built-in command for a change in a security-sensitive area. Review runs before the
+commit, and the command takes its diff from the branch's commits against `origin/HEAD`. So
+its diff was empty, and it reported no finding on no code. In four flows the capture was
+empty each time. Each flow then briefed one reviewer on the working tree, and reran the
+command on the commit; twice that rerun found something the briefed reviewer had not.
+- `review` has a new **The security review** section. Before the commit, one reviewer gets
+  the command's criteria and reads `git diff <base>` plus each untracked file in full. The
+  pass leaves the index and the other worktrees as they are: no `git add -N`, no detached
+  worktree, no commit for the review. The orchestrator checks that the reviewer read every
+  changed file that still exists. After the commit and before the push, the built-in
+  command runs on the commit. A finding there is a `not-ready` verdict and a fix round; the
+  fix lands as a new commit, and the command runs again on it before the push.
+- `review-verdict` takes an optional `security_review` object: `kind` (`builtin`, `briefed`
+  or `none`), `files` (the number of files it read) and `ref` (the commit the command
+  read). `append` refuses `builtin` or `briefed` with no file read, and `builtin` with no
+  `ref`, even with `--force`. The built-in run on the commit is a second verdict that
+  copies the first one's `criteria`, `dispositions` and `ranking`; it counts as a review
+  round. Rows written before this release stay valid.
+- **The publish gate reads the newest verdict.** `mr-opened`, `status --json` and
+  `position` took the first ready `review-verdict` after the last `task-done`. So a
+  `not-ready` verdict from the built-in run on the commit left the earlier ready verdict
+  authorizing the publish, and the HUD showed publishing as allowed. Now the newest verdict
+  after the last `task-done` decides: a later `not-ready` holds publishing until a newer
+  ready verdict. A forced ready verdict is still skipped (ADR 0023 §17), so it neither
+  authorizes nor takes back an earlier ready one. The user's publish go is unchanged: a go
+  on record after the last `task-done` still authorizes, so `review` now asks the publish
+  go only after the built-in run on the commit.
+- `verify` lists a review or scan whose input was empty as one more way a report lies.
+  `feature` points at the two passes.
+- No hook or hook contract changes: nothing holds a push until the built-in run is on
+  record. The publish gate change is in `journal.py` only.
+
 v0.28.2 — the command gate's refusal prints the full go-request command, so a session with no skill loaded can follow it.
 
 **A refusal named no journal command (#55, ADR 0023 amendment A7).** The release check of

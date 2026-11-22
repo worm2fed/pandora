@@ -223,6 +223,9 @@ Disposition = Literal["fixed", "rejected", "deferred"]
 # the verdict's three closed states, and `fixing` while a fix is in progress. `fixing`
 # exists only on that event; a verdict's `dispositions` stay closed.
 FindingState = Literal["fixing", "fixed", "rejected", "deferred"]
+# Which security review a verdict rests on (#40): the built-in `/security-review` on a
+# commit, a reviewer briefed with its criteria on the working tree, or none.
+SecurityReviewKind = Literal["builtin", "briefed", "none"]
 # Where the structure half of the code signals came from (#10, ADR 0013): the code
 # graph, the regex scanner, or nothing at all (`signals.py` unavailable).
 SignalSource = Literal["graph", "regex", "none"]
@@ -249,6 +252,17 @@ RANKING_SHAPE: Dict[str, Any] = {
             },
         },
     },
+}
+
+
+# The security review a verdict rests on (#40). `files` is how many files it read; a
+# `builtin` or `briefed` review needs at least one (`check_security_review`). `ref` is the
+# commit the built-in command read.
+SECURITY_REVIEW_SHAPE: Dict[str, Any] = {
+    "required": ["kind"],
+    "enums": {"kind": list(get_args(SecurityReviewKind))},
+    "integers": ["files"],
+    "strings": ["ref"],
 }
 
 
@@ -356,7 +370,7 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         },
         # A verdict that enters review by implication still says what it named (#11).
         "string_lists": ["style"],
-        "objects": {"ranking": RANKING_SHAPE},
+        "objects": {"ranking": RANKING_SHAPE, "security_review": SECURITY_REVIEW_SHAPE},
     },
     # A finding's state the moment it is decided (ADR 0014). No implied phase: `fixing`
     # is appended in the fix round, while the flow is back in implement.
@@ -415,6 +429,8 @@ class ReviewVerdictPayload(_ReviewVerdictKeys, total=False):
     it. Both are optional — a verdict may judge neither — and a value outside its
     vocabulary is refused at append (the ``map_enums`` rule kind). ``style`` and
     ``ranking`` (#11, #10) are optional too; ``objects`` and ``string_lists`` check them.
+    ``security_review`` (#40) is optional: which security review ran and how many files
+    it read; ``check_security_review`` refuses one that read no file.
     A ``dispositions`` key that is not a location is refused (``check_location_keys``),
     and a ``ready`` verdict that leaves a folded key at ``fixing`` is refused unless
     forced with a reason (``_validate_review_verdict``, ADR 0014 amended 0.23.0).
@@ -424,6 +440,18 @@ class ReviewVerdictPayload(_ReviewVerdictKeys, total=False):
     dispositions: Dict[str, Disposition]
     style: List[str]
     ranking: "RankingPayload"
+    security_review: "SecurityReviewPayload"
+
+
+class _SecurityReviewKeys(TypedDict):
+    kind: SecurityReviewKind
+
+
+class SecurityReviewPayload(_SecurityReviewKeys, total=False):
+    """`security_review` on `review-verdict` (#40): the kind, the files read, the commit."""
+
+    files: int
+    ref: str
 
 
 class _ReviewDispositionKeys(TypedDict):
@@ -1409,11 +1437,16 @@ def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
     """Whether one stream's events authorize publishing, and which event did.
 
     ``events`` are one stream's, in any order; the rule reads them in seq order. After
-    the last ``task-done`` (seq 0 when there is none), the first event that is either a
-    ``review-verdict`` with ``verdict: ready`` that was not forced (ADR 0023 §17) or
-    the user's publish go (``user_go``)
-    gives ``{kind: authorized, by: <its type>, seq, at: <its ts>}``. No such event gives
+    the last ``task-done`` (seq 0 when there is none), the first event that is either
+    the newest ``review-verdict`` that is not a forced ready (ADR 0023 §17 skips one),
+    when it says ``verdict: ready``, or the user's publish go (``user_go``) gives
+    ``{kind: authorized, by: <its type>, seq, at: <its ts>}``. No such event gives
     ``{kind: held}``.
+
+    The newest verdict decides (#40): a ``not-ready`` verdict after a ready one takes
+    the ready one back, as when the built-in ``/security-review`` finds something on
+    the commit after the briefed pass said ready. It does not take back the user's
+    publish go, which the command gate reads the same way.
 
     ``_validate_mr_opened`` raises when this is held, ``fold_stream`` prints it as
     ``publish`` and ``build_position`` copies it, so the gate and the HUD cannot
@@ -1423,15 +1456,19 @@ def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
     last_task_done_seq = max(
         (event.seq for event in ordered if event.type == "task-done"), default=0
     )
-    verdict = next(
+    # A forced ready is skipped (ADR 0023 §17); a not-ready holds, forced or not.
+    newest = next(
         (
-            event for event in ordered
+            event for event in reversed(ordered)
             if event.seq > last_task_done_seq
             and event.type == "review-verdict"
-            and event.data.get("verdict") == "ready"
-            and not event.data.get("forced")
+            and event.data.get("verdict") in get_args(ReviewVerdict)
+            and not (event.data.get("verdict") == "ready" and event.data.get("forced"))
         ),
         None,
+    )
+    verdict = (
+        newest if newest is not None and newest.data.get("verdict") == "ready" else None
     )
     go = user_go(ordered, "publish")
     if go["kind"] == "authorized" and (verdict is None or go["seq"] < verdict.seq):
@@ -1445,10 +1482,10 @@ def publish_authorization(events: Sequence[Event]) -> PublishAuthorization:
 
 
 MR_OPENED_REFUSAL = (
-    "mr-opened in stream {stream} needs, recorded after the last task-done, either a "
-    "review-verdict with verdict=ready that was not forced, or the user's publish go: a "
-    "gate-decision with gate=publish, raised_by=user and decision=publish, marked with "
-    "source question|prompt|dialog|shell. The recorder writes `question` when the "
+    "mr-opened in stream {stream} needs, recorded after the last task-done, either the "
+    "newest review-verdict, with verdict=ready and not forced, or the user's publish "
+    "go: a gate-decision with gate=publish, raised_by=user and decision=publish, marked "
+    "with source question|prompt|dialog|shell. The recorder writes `question` when the "
     "user answers the publish question and `prompt` when the user types `publish`; the "
     "HUD's publish dialog writes `dialog`; the user's own `!` command writes `shell`. "
     "Record the review's outcome, or record a go-requested{request} and ask the user. "
@@ -1508,7 +1545,8 @@ def normalize_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
     is no way to tell which of the two they meant.
 
     After the shape, the finding maps of ``LOCATION_KEYED_MAPS`` must hold location
-    keys only (``check_location_keys``, ADR 0014 amended 0.23.0).
+    keys only (``check_location_keys``, ADR 0014 amended 0.23.0), and a verdict's
+    ``security_review`` must have read a file (``check_security_review``, #40).
     """
     shape = EVENT_SHAPES.get(event_type)
     if not shape:
@@ -1536,7 +1574,37 @@ def normalize_payload(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
 
     _validate_shape(event_type, payload, shape, "data")
     check_location_keys(event_type, payload)
+    check_security_review(event_type, payload)
     return payload
+
+
+def check_security_review(event_type: str, payload: Dict[str, Any]) -> None:
+    """Refuse a ``builtin`` or ``briefed`` security review that read no file (#40).
+
+    The built-in command reads commits only, so before the commit its diff is empty and
+    it reports no finding on no code. A count of 0, or none, records that as a review.
+    A ``builtin`` review also names the commit it read in ``ref``. A payload check, like
+    the shape: ``--force`` does not waive it. An imported row is not checked again. Runs
+    after ``_validate_shape``, so ``files`` is absent or a non-negative integer and
+    ``ref`` absent or a string.
+    """
+    review = payload.get("security_review")
+    if event_type != "review-verdict" or not isinstance(review, dict):
+        return
+    kind = review.get("kind")
+    if kind in ("builtin", "briefed") and not review.get("files"):
+        raise GateViolation(
+            f"{event_type}: data.security_review of kind {kind!r} read no file — a "
+            "review of an empty diff is no review. Give data.security_review.files the "
+            'number of files it read, or record {"kind": "none"} when no security '
+            "review ran"
+        )
+    if kind == "builtin" and not str(review.get("ref", "")).strip():
+        raise GateViolation(
+            f"{event_type}: data.security_review of kind 'builtin' names no commit — "
+            "the built-in command reads a commit; give its sha in "
+            "data.security_review.ref"
+        )
 
 
 # The maps keyed by a review finding (ADR 0014, amended 0.23.0). Each key must be a

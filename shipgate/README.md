@@ -200,14 +200,17 @@ must read each new version back from the output instead of assuming +1 — refus
 1 KB (prose belongs in the worklog — the event carries `refs`), records a `deviation` with
 `kind: signals-missing` beside a `route-and-map` entry that carries no `signals` (ADR 0011),
 and refuses `mr-opened` until the stream holds, after its last `task-done`, either a
-`review-verdict` with `verdict=ready` that was not forced, or the user's publish go (see
-**The user's go** below; ADR 0015, ADR 0023). `--force` does not waive this. A
+`review-verdict` with `verdict=ready` that was not forced and is the newest verdict, or the
+user's publish go (see **The user's go** below; ADR 0015, ADR 0023). `--force` does not waive this. A
 `gate-decision`'s `decision` must be a string, and its optional `source` is `question`,
 `prompt`, `dialog` or `shell`; `read` is refused, with `--force` too. A `review-verdict`'s optional
 `criteria` map takes `met` or `unmet`, and its optional `dispositions` map takes `fixed`,
-`rejected` or `deferred`. A `review-disposition` records one finding's state when it is
-decided: its `dispositions` map also takes `fixing`, and its `round` must be a non-negative
-integer. Its optional `labels` map gives a finding key a short human name. Each name must be
+`rejected` or `deferred`. Its optional `security_review` object names the security review
+it rests on: `kind` is `builtin`, `briefed` or `none`, `files` counts the files it read, and
+`ref` names the commit the built-in command read. `append` refuses `builtin` or `briefed`
+with no file read, and `builtin` with no `ref`, even with `--force`. A `review-disposition`
+records one finding's state when it is decided: its `dispositions` map also takes `fixing`,
+and its `round` must be a non-negative integer. Its optional `labels` map gives a finding key a short human name. Each name must be
 a non-empty string. Every key of these maps must be the finding's location
 `<path>:<line|?>`; `append` refuses another key, even with `--force`. `append` also refuses
 a `ready` verdict while a finding is still `fixing` and the verdict's own map does not close

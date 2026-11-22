@@ -155,10 +155,42 @@ subagent. Say that you're doing it, and record the ruling (journaled projects: a
 `gate-decision` event). The independent-review requirement is for changes with judgment
 surface, not for every diff.
 
-This security lens is a routine sweep, not a full audit. Escalate to the built-in
+### The security review
+
+The security lens above is a routine sweep, not a full audit. Escalate to the built-in
 `/security-review` for a dedicated OWASP-depth pass in two cases. The first is changes that
 touch auth, secrets, or any area the project config lists as security-sensitive (default:
 auth, secrets, payments). The second is before a release.
+
+The built-in command reads only commits. It takes its diff from the branch's commits against
+`origin/HEAD`. Review runs before the commit, so on the working tree that diff is empty. The
+command then reviews no code and reports no finding. So the pass runs twice:
+
+1. **Before the commit, brief one reviewer.** Load the `security-review` skill for its
+   criteria and its false-positive rules only. Do not act on its empty diff. Brief one
+   subagent with that text, the working-tree path and a short threat model. Its input is
+   `git diff <base>` for the tracked files, and each file that
+   `git ls-files --others --exclude-standard` lists, read in full. This leaves the index and
+   the other worktrees as they are: no `git add -N`, no detached worktree, no commit made for
+   the review.
+2. **Check that the reviewer read the change.** It reports the files it read. Count the
+   changed files that still exist: `git diff --name-only --diff-filter=d <base>` plus the
+   untracked list. A reviewer that read 0 files, or fewer than that count, did not review the
+   change. Run it again. Never report its "no finding".
+3. **After the commit and before the push, run the built-in command on the commit.** It now
+   has a diff, and in past flows it found what the briefed reviewer had missed. This run is
+   the audit of what lands, not a second self-check. Check that its FILES MODIFIED section is
+   not empty. With no finding, record the run as a second verdict. A finding is a `not-ready`
+   verdict and a fix round. Push nothing until the fix round ends. The fix lands as a new
+   commit after its re-review, on a new commit go, and the built-in command runs again on
+   that commit before the push.
+4. **Ask the gates in that order.** Before the commit, ask the commit go only. Ask the
+   publish go after the built-in run on the commit has recorded a ready verdict. A publish
+   go covers the push until the next `task-done`, so a go asked earlier would let the push
+   pass a later finding.
+
+Each verdict names the security review it rests on, in `security_review` (form: **Record the
+outcome**).
 
 ### When the config says `review: workflow`
 
@@ -397,6 +429,9 @@ The config's **Writing style** section (`Docs: ste-80`) applies the Writing for 
 the worklog's round entries and Rejected findings, ledger lines, the MR/PR body and every
 reply in the review-feedback cycle; absent, a placeholder, or `plain`, write them as before.
 
+When the change owed a security review, the built-in `/security-review` runs on the commit
+before the push (**The security review**, step 3).
+
 With no tracker/remote, stop at "Ready, evidence attached" and let the user handle pushing.
 On a journaled project the verdict is recorded, and the user's publish go is recorded, *before*
 the push and the MR/PR. See **The user's go** under **Record the outcome** below.
@@ -520,6 +555,22 @@ those findings just before the verdict, and let the verdict's map carry the rest
 folds both, and the latest event wins for each key.
 `journal.py vocab --shape review-verdict` lists both keys and the values each one accepts.
 
+When the change owed a security review (**The security review** in Step 1), the verdict
+also carries `security_review`: `{"kind":"briefed","files":8}`. A change that owed none
+leaves the key out.
+- `kind` is `briefed` for a reviewer with the built-in criteria on the working tree, and
+  `builtin` for the command on a commit. `none` records that a review was owed and did not
+  run; say why in `note`.
+- `files` is the number of files the review read. `append` refuses `briefed` or `builtin`
+  with no `files` or with `files: 0`, because a review of an empty diff is no review.
+- `ref` is the commit the built-in command read. `append` refuses `builtin` without it.
+
+The built-in run on the commit is a second `review-verdict`. It carries
+`{"kind":"builtin","files":8,"ref":"<sha>"}` and copies `criteria`, `dispositions` and
+`ranking` from the verdict before it, because the HUD draws the newest verdict only. With no
+`task-done` since the last `verify-run`, it needs no new verify. It counts as a round for
+the `round` numbering, not for the two-round cap in Step 6.
+
 The verdict comes at the end of a round. Between verdicts, record each decision as it is
 made with `review-disposition`. Send one key or a few keys at a time, with the same keys as
 the verdict. `round` is the review round the decision belongs to: 1 for the first round.
@@ -569,8 +620,10 @@ It holds counts and references only; the finding text and thread bodies stay in 
 
 **Publishing follows the record, not the momentum.** The journal accepts `mr-opened` only when
 the stream holds one of two events, appended after its last `task-done`: a `review-verdict`
-with `verdict: ready` that was not forced, or the user's publish go. `--force` does not waive
-this, and a forced verdict opens nothing.
+with `verdict: ready` that was not forced, or the user's publish go. The newest verdict
+decides, so a `not-ready` verdict after a ready one holds publishing again, unless the user's
+publish go is on record after the last `task-done`. `--force` does not waive this, and a
+forced verdict opens nothing.
 
 ### The user's go (commit and publish)
 
