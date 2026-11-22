@@ -2,16 +2,17 @@
 type: prd
 title: "PRD: the approval path for commit and publish"
 created: 2026-11-20
-updated: 2026-11-20
+updated: 2026-11-21
 tags:
   - prd
   - shipgate
   - hooks
   - journal
 status: clarified
-issue: "#22 (child of #37)"
+issue: "#22 and its fix #52 (children of #37)"
 worklog: "./approval-path.worklog.md"
 related:
+  - ./confirming-question.worklog.md
   - ../adr/0015-the-user-approves-a-publish-outside-the-model-tools.md
   - ../adr/0010-a-user-row-records-its-writing-session.md
   - ../adr/0023-the-users-go-is-recorded-where-the-user-answers.md
@@ -60,7 +61,8 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
   answer, a stream name as a selected label, or a typed reply from the word list.
 - **Witness**: the record that the user replied to an open go request with a reply that is
   no exact go. Only the recorder writes it.
-- **Read go**: a go that the model records after it read a witnessed reply.
+- **Confirming question**: the one gate question the flow asks after a witnessed reply. Its
+  answer is a reply like any other, so the recorder records the click (#52).
 - **Recorder**: the part of the harness that writes an exact go or a witness from a reply.
   It is not a model tool call.
 - **Command gate**: the check that holds a commit command or a publish command.
@@ -69,7 +71,8 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
 
 **Goals**
 
-- A go is recorded from each way the user approves, with no extra step for the user.
+- A go is recorded from each way the user approves. An exact go takes no extra step. A
+  free-language reply takes one confirming question (#52).
 - A model's commit or publish on a journaled stream is held until the stream holds the go.
   A ready verdict alone opens no commit, no push and no MR/PR creation.
 - A go given in one session authorizes the session that works on the stream.
@@ -84,8 +87,6 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
 
 - No defence against a direct database write, a copied script, or text injected into the
   terminal on purpose.
-- No check that the model read a witnessed reply correctly. The witness and the quoted
-  words stay in the journal for an audit.
 - No gate for a tag, a merge, an issue comment or an issue close. A project rule can still
   ask for the user's go there.
 - No handling of "merged". That reply reports a fact after the publish. #31 owns the
@@ -98,12 +99,11 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
 
 - As the user, I answer "Commit" in a question, and the commit runs. I do nothing else.
 - As the user, I type `commit` after the flow asked, and the commit runs.
-- As the user, I type "it can go" or "commit and start the next batch", and the commit
-  runs. I am not asked to confirm.
+- As the user, I type "it can go" or "commit and start the next batch". The flow asks me
+  one confirming question with the gate header. I click the gate word, and the commit runs.
 - As the user, I see a list of five steps from the lead, and I type `all`. Each stream gets
   its go.
 - As the user, I find no commit and no push that I did not approve.
-- As the user, I can count how many go records came from the model's reading.
 - As a teammate session, I read the go from the journal. I do not need the user's words
   relayed to me.
 - As a maintainer of an unattended project, I turn the command gate off in one place.
@@ -137,16 +137,15 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
   subagent report, a message from another session, a scheduled task and a relayed text
   inside a wrapper tag. It records nothing, and it closes nothing.
 
-**The read go**
+**The confirming question** (#52; it replaces the read go of 0.28.0)
 
-- **FR-028** — The model reads a witnessed reply. When the reply approves the gate, the
-  flow records the go with a pointer to the witness and with the user's approving words. It
-  asks no confirming question.
-- **FR-029** — The journal refuses a read go unless all of these hold: the witness exists
-  on the same stream; the recorder wrote it; it answers a request at the same gate; it is
-  later than the stream's last `task-done`; no other go names it; the session that records
-  the go is the session that got the reply. `--force` does not waive this.
-- **FR-030** — A read go carries its own marker. `stats` counts the go records by marker.
+- **FR-028** — After a witnessed reply, the flow records a new go request and asks one
+  confirming question with the gate header and the gate word as the first option. The
+  recorder records the click as an exact go. When that answer is no go either, the user did
+  not confirm: the flow records nothing and asks no more.
+- **FR-029** — The journal refuses a `gate-decision` with the marker `read`, in any case.
+  `--force` does not waive this. The model writes no go row in any form.
+- **FR-030** — `stats` counts the go records by marker.
 - **FR-031** — Only the recorder writes a witness. A model's Bash call that appends a
   witness is refused.
 
@@ -162,8 +161,7 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
   recording session to that stream. Its status brief and its Stop gate do not change.
 - **FR-014** — `status --json` and `position --json` print the user's go for each gate of a
   stream, beside its publish authorization.
-- **FR-027** — The recorder never stores the text of a prompt. A read go holds the user's
-  approving words as the model quotes them, in at most 200 characters.
+- **FR-027** — The recorder never stores the text of a prompt.
 
 **The command gate**
 
@@ -172,8 +170,8 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
   `glab mr create` are held when the stream holds no go for the publish gate. A ready
   verdict is no go.
 - **FR-016** — The refusal names the stream, the gate and the ways forward: record a go
-  request and ask, let the user type the gate word, or record the read go of a witness that
-  waits.
+  request and ask, or let the user type the gate word. When a witness waits, the refusal
+  asks for one confirming question.
 - **FR-017** — A call from a subagent meets the same rule. Its refusal tells the subagent to
   hand the question back to the session that started it.
 - **FR-018** — The command gate does nothing on a project with no journal, on a branch with
@@ -190,14 +188,14 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
 - **FR-033** — A forced ready verdict authorizes no publish: not for `mr-opened`, and not
   in `status --json` or `position --json`.
 - **FR-022** — A model's Bash call that records a go as the user's is refused at the commit
-  gate as it is at the publish gate. A call that writes any marker other than the read
-  marker is refused, as today.
+  gate as it is at the publish gate. A call that writes any `source` marker is refused.
 
 **The flow text**
 
 - **FR-023** — The `review`, `feature`, `implement` and `model-tiers` skills name one
-  question form for each gate, the go request that precedes it, and the read go. They no
-  longer send the user to the dialog or to `!` as the only paths.
+  question form for each gate, the go request that precedes it, and the confirming
+  question after a witnessed reply. They no longer send the user to the dialog or to `!`
+  as the only paths.
 - **FR-024** — Every refusal text names the paths that exist in this release.
 
 **Safety and cost of the hooks**
@@ -235,20 +233,29 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
   append with `gate: scope` passes.
 - **SC-010** — The changed skill text is judged on both session models in use. In each run
   the flow records a go request and asks with the gate header. After the reply "it can go"
-  it records a read go and asks no confirming question.
+  it asks one confirming question with the gate header. A click on the gate word records a
+  go with the question marker, and the commit lands.
 - **SC-011** — One month after the release, the journals hold 0 forced `mr-opened` events
   (the retro of #37).
-- **SC-012** — After the witness of `it can go`, a read go that names it is accepted, and
-  the command gate passes `git commit`.
-- **SC-013** — Each of these read-go appends exits 4, with `--force` too: no witness; a
-  witness that another go already names; a witness on another stream; a witness that is
-  older than the last `task-done`; a session other than the one that got the reply.
+- **SC-012** — After the witness of `it can go`, a new go request and the answer `Commit`
+  under the header `Commit` give one go with the question marker, and the command gate
+  passes `git commit`.
+- **SC-013** — A `gate-decision` with `source: read` exits 4, with `--force` too, and the
+  PreToolUse hook refuses it. A journal that holds a read go row from 0.28.0 opens, and
+  that row authorizes no commit and no publish.
 - **SC-014** — The PreToolUse hook refuses a model's append of a witness.
 - **SC-015** — With no open request of the session, a prompt of 33 characters runs no
   journal process. The test counts the calls of a stub journal.
 - **SC-016** — After a forced ready verdict, a plain `mr-opened` exits 4, and `publish` in
   `status --json` is `held`.
 - **SC-017** — `stats --json` reports the count of go records for each marker.
+- **SC-018** — The recorder's context line after a witnessed reply asks for one confirming
+  question with the gate header, for a typed prompt and for a free-text question answer.
+- **SC-019** — The PreToolUse hook refuses a command that writes a text file through a
+  heredoc that names the recorder's path and then runs `python3` on another script through
+  a quoted variable path, as 0.28.0 does, and the refusal names the Write tool for such a
+  file. A command that runs the recorder stays refused. (The exemption first planned here
+  was rejected; ADR 0023, A6.)
 
 ## Constraints & assumptions
 
@@ -273,7 +280,8 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
 - A text that another program pastes into the terminal reaches the hook as a prompt. A
   wrapper tag is the only sign. A raw paste of the bare word `commit` is deliberate
   circumvention, and it is out of scope.
-- The release is 0.28.0. The ADR has the number 0023.
+- The release is 0.28.0. The ADR has the number 0023. The fix #52 releases as 0.28.1, and
+  0.28.0 gets no tag.
 - The PRD, the ADR and the worklog are committed with the implementation, in one PR.
 
 ## Assumptions (executive)
@@ -299,6 +307,13 @@ Real use adds three facts that the paths of 0.23.0 do not cover:
   opened by hand on a reviewed stream needs no second approval.
 - What bounds a read go in time? → the last `task-done`, the single use of a witness and
   the session — a check against the prompt id of the turn would put policy into the hook.
+  (#52 removed the read go.)
+- #52: what happens to a read go row that 0.28.0 wrote? → it stays and is inert: it is no
+  go, it binds no session, and the journal opens — 0.28.0 has no tag, and a go lasts only
+  until the next `task-done`.
+- #52: how does the click reach the right stream? → the flow records a new go request
+  before the confirming question — the witness closed the first request, and with no open
+  request a click reaches only the stream the session drives.
 
 ## Rulings
 
@@ -309,9 +324,8 @@ own choices. The lead presented the others as defaults, and the user did not obj
    MR/PR creation each need a recorded go. A ready verdict alone opens none of them.
 2. **A typed reply** — the user: "Word list, else model reads". A whole reply from the
    fixed list is a go at once. The model reads any other reply and records the go with a
-   pointer to the witness. No confirming question follows. A go without a real witnessed
-   reply after the request stays impossible. A read go carries its own marker, and `stats`
-   counts it.
+   pointer to the witness. No confirming question follows. Ruling 14 replaces the model's
+   reading.
 3. **The command gate at upgrade** — the user: "On by default", with the sidecar setting.
 4. **The UserPromptSubmit hook** — in. It follows from ruling 2.
 5. **With no go the command gate refuses.** It does not show the native permission dialog.
@@ -329,6 +343,14 @@ Two more rulings came during the build, relayed by the lead:
     refuses any `journal.py import` a model runs (ADR 0023 §20).
 13. **A model's run of the recorder** — the user: "Hook refuses running the script". The
     PreToolUse hook refuses a command that runs `hooks/reply.py` (ADR 0023 §21).
+
+One ruling came after the merge of 0.28.0, from its release check (#52):
+
+14. **A confirming question replaces the read go** — the user's ruling, relayed by the lead.
+    An exact word from the list stays a go at once. After any other reply the flow asks one
+    confirming question with the gate header, and the hook records the click. The
+    model-read path is removed. Auto mode refused the model's read-go append as the model
+    recording its own approval, on both session models (ADR 0023, amendment).
 
 Two points came from the lead:
 

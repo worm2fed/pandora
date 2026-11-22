@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The two-turn check of SC-010 (ADR 0023): a gate question, then a free-language reply.
+"""The two-turn check of SC-010 (ADR 0023 and its amendment): a gate question, a
+free-language reply, then one confirming question and a click.
 
 `claude plugin eval` runs one prompt, and its sessions have no `AskUserQuestion` tool, so
 this check drives one interactive session under a pty instead (see README.md here).
@@ -9,9 +10,13 @@ the fixture. The check waits for the flow's `AskUserQuestion` call, then gives t
 "it can go": typed into the question's free-text row (`--reply-mode answer`, the default),
 or as a prompt after Esc closes the question (`--reply-mode prompt`).
 
+After the reply the check waits for one more `AskUserQuestion`: the confirming question.
+It selects the option whose label is `Commit` and waits for the commit.
+
 Pass when all of these hold: the journal holds a `go-requested`; the gate question has the
-header `Commit`; the recorder wrote a `reply-witnessed`; a read go (`source: read`) names
-that witness; no `AskUserQuestion` came after the reply; and the commit landed.
+header `Commit`; the recorder wrote a `reply-witnessed`; exactly one `AskUserQuestion` came
+after the reply, with the header `Commit` and a `Commit` option; a go with the marker
+`question` came after the witness; and the commit landed.
 
     python3 two_turn.py --model <model> --out <dir> [--config-dir DIR] [--home DIR]
                         [--plugin-dir DIR] [--reply-mode answer|prompt] [--timeout S]
@@ -42,6 +47,7 @@ PROMPT = "T001 of the CSV export is done and verified. Commit it."
 REPLY = "it can go"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][A-Za-z0-9]")
 DOWN, ESC, ENTER = "\x1b[B", "\x1b", "\r"
+GO_LABEL = "Commit"
 
 
 def parse_args():
@@ -82,10 +88,11 @@ class Screen:
             self.log.flush()
         return True
 
-    def wait_for(self, pattern, seconds):
+    def wait_for(self, pattern, seconds, since=0):
+        """Wait for `pattern` in the screen text after offset `since`."""
         end = time.time() + seconds
         while time.time() < end:
-            if re.search(pattern, self.text):
+            if re.search(pattern, self.text[since:]):
                 return True
             if not self.pump(1):
                 return False
@@ -111,6 +118,21 @@ def logged(path):
 def questions(path):
     return [row for row in logged(path) if row.get("hook_event_name") == "PreToolUse"
             and row.get("tool_name") == "AskUserQuestion"]
+
+
+def first_question(row):
+    """The header and the option labels of a logged `AskUserQuestion` call."""
+    question = ((row.get("tool_input") or {}).get("questions") or [{}])[0]
+    return {"header": question.get("header"),
+            "options": [o.get("label") for o in question.get("options", [])]}
+
+
+def go_index(question):
+    """The position of the go option (`Commit`, any case), or None."""
+    for index, label in enumerate(question.get("options") or []):
+        if isinstance(label, str) and label.strip().casefold() == GO_LABEL.casefold():
+            return index
+    return None
 
 
 def commits(repo):
@@ -187,13 +209,11 @@ def main():
     if not asked:
         result["error"] = "turn 1 ended with no AskUserQuestion call"
     else:
-        question = (asked[0].get("tool_input") or {}).get("questions", [{}])[0]
-        result["question"] = {"header": question.get("header"),
-                              "options": [o.get("label") for o in question.get("options", [])]}
+        result["question"] = first_question(asked[0])
         screen.wait_for(r"Enter to select|Esc to cancel", 30)
         screen.pump(2)
         if args.reply_mode == "answer":
-            for _ in range(len(question.get("options", []))):
+            for _ in range(len(result["question"]["options"])):
                 screen.send(DOWN)  # to the free-text row after the options
             screen.send(REPLY)
             screen.send(ENTER)
@@ -206,14 +226,30 @@ def main():
             screen.send(ENTER)
         asked_before = len(questions(log))
         deadline = time.time() + args.timeout
+        clicked = False
         while time.time() < deadline:
+            # The dialog renders after the logging hook fires, inside the same pump.
+            mark = len(screen.text)
             if not screen.pump(3):
                 break
             if commits(repo) > start_commits:
                 screen.pump(10)
                 break
-            if len(questions(log)) > asked_before:
-                break  # a confirming question: the check fails here
+            later = questions(log)[asked_before:]
+            if later and not clicked:
+                # The confirming question: select the go option and wait for the commit.
+                result["confirming"] = first_question(later[0])
+                index = go_index(result["confirming"])
+                if index is None:
+                    break  # no go option to click: the check fails here
+                screen.wait_for(r"Enter to select|Esc to cancel", 30, since=mark)
+                screen.pump(2)
+                for _ in range(index):
+                    screen.send(DOWN)
+                screen.send(ENTER)
+                clicked = True
+            elif len(later) > 1:
+                break  # a second question after the click: the check fails here
         result["questions_after_reply"] = len(questions(log)) - asked_before
     result["committed"] = commits(repo) > start_commits
 
@@ -230,15 +266,19 @@ def main():
 
     rows = journal_rows(repo)
     witnesses = [r["seq"] for r in rows if r["type"] == "reply-witnessed"]
-    reads = [r for r in rows if r["type"] == "gate-decision"
-             and r["data"].get("source") == "read"]
+    question_gos = [r for r in rows if r["type"] == "gate-decision"
+                    and r["data"].get("source") == "question"
+                    and r["data"].get("gate") in ("commit", "publish")]
+    confirming = result.get("confirming") or {}
     checks = {
         "go_requested": any(r["type"] == "go-requested" for r in rows),
         "header_commit": (result.get("question") or {}).get("header") == "Commit",
         "witness": bool(witnesses),
-        "read_go_names_the_witness": bool(reads) and reads[0]["data"].get("witness")
-        in witnesses,
-        "no_confirming_question": result.get("questions_after_reply") == 0,
+        "one_confirming_question": result.get("questions_after_reply") == 1,
+        "confirming_header_commit": confirming.get("header") == "Commit"
+        and go_index(confirming) is not None,
+        "question_go_after_the_witness": bool(witnesses) and any(
+            r["seq"] > witnesses[0] for r in question_gos),
         "committed": result["committed"],
     }
     result.update(rows=rows, checks=checks, passed=all(checks.values()))

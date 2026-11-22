@@ -64,6 +64,32 @@ def run_journal(args, cwd=None, env=None):
 
 
 
+def insert_legacy_row(db, stream, etype, data, actor):
+    """Write one row as an older release wrote it, past every append check: a read go
+    that untagged 0.28.0 accepted (ADR 0023, amendment A4). Returns its seq."""
+    conn = sqlite3.connect(str(db))
+    try:
+        version = conn.execute(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM events WHERE stream = ?", (stream,)
+        ).fetchone()[0]
+        cursor = conn.execute(
+            "INSERT INTO events (stream, version, type, data, ts, actor) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (stream, version, etype, json.dumps(data, sort_keys=True), _recent_ts(), actor),
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def legacy_read_go(gate, witness):
+    """The payload of a read go as 0.28.0 wrote it."""
+    return {"gate": gate, "question": "q", "decision": gate, "mode": "ask",
+            "raised_by": "user", "source": "read", "witness": witness,
+            "words": "it can go"}
+
+
 def _recent_ts() -> str:
     """An ISO timestamp one hour ago — for fixtures that must render as live, not dormant."""
     return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -625,19 +651,20 @@ class TestShapeValidation(JournalTestCase):
                 self.assertEqual(self.data_of()["source"], source)
 
     def test_a_source_outside_the_enum_is_refused(self):
-        for source in ("hud", "Dialog", "", None, ["dialog"], True, "Read"):
+        # `read` in any case has its own refusal (#52, TestReadGoIsRetired).
+        for source in ("hud", "Dialog", "", None, ["dialog"], True):
             with self.subTest(source=source):
                 proc = self.append_event("feature/x", "gate-decision", {
                     "gate": "publish", "question": "q", "decision": "publish",
                     "mode": "ask", "raised_by": "user", "source": source,
                 }, "--actor", "user", rc=GATE)
                 self.assertIn(
-                    "data.source must be one of dialog, shell, question, prompt, read",
+                    "data.source must be one of dialog, shell, question, prompt,",
                     proc.stderr,
                 )
         self.assertEqual(self.events(), [])
 
-    # ADR 0023: the recorder's two markers, the read go's marker and their keys.
+    # ADR 0023: the recorder's two markers and their key.
     def test_the_recorders_markers_and_the_request_key_are_accepted(self):
         for source in ("question", "prompt"):
             with self.subTest(source=source):
@@ -649,42 +676,24 @@ class TestShapeValidation(JournalTestCase):
                 self.assertEqual(self.data_of()["source"], source)
                 self.assertEqual(self.data_of()["request"], 7)
 
-    def test_the_read_marker_passes_the_shape(self):
+    def test_the_read_marker_is_not_in_the_shape(self):
+        """#52, ADR 0023 amendment A3: `read` is no marker any more."""
         module = load_journal_module()
-        payload = module.normalize_payload("gate-decision", {
-            "gate": "commit", "question": "q", "decision": "commit", "mode": "ask",
-            "raised_by": "user", "source": "read", "witness": 3,
-            "words": "it can go",
-        })
-        self.assertEqual(payload["witness"], 3)
-        self.assertEqual(payload["words"], "it can go")
+        self.assertEqual(module.get_args(module.DecisionSource),
+                         ("dialog", "shell", "question", "prompt"))
+        self.assertNotIn("witness", module.EVENT_SHAPES["gate-decision"]["integers"])
+        self.assertNotIn("words", module.EVENT_SHAPES["gate-decision"]["strings"])
 
-    def test_request_and_witness_must_be_non_negative_integers(self):
-        for key in ("request", "witness"):
-            for value in ("3", -1, True, 1.5, None):
-                with self.subTest(key=key, value=value):
-                    proc = self.append_event("feature/x", "gate-decision", {
-                        "gate": "scope", "question": "q", "decision": "d",
-                        "mode": "ask", key: value,
-                    }, rc=GATE)
-                    self.assertIn(f"data.{key} must be a non-negative integer",
-                                  proc.stderr)
+    def test_request_must_be_a_non_negative_integer(self):
+        for value in ("3", -1, True, 1.5, None):
+            with self.subTest(value=value):
+                proc = self.append_event("feature/x", "gate-decision", {
+                    "gate": "scope", "question": "q", "decision": "d",
+                    "mode": "ask", "request": value,
+                }, rc=GATE)
+                self.assertIn("data.request must be a non-negative integer",
+                              proc.stderr)
         self.assertEqual(self.events(), [])
-
-    def test_words_is_a_string_of_at_most_200_characters(self):
-        base = {"gate": "scope", "question": "q", "decision": "d", "mode": "ask"}
-        self.append_event("feature/x", "gate-decision", {**base, "words": "w" * 200})
-        self.assertEqual(len(self.data_of()["words"]), 200)
-        proc = self.append_event("feature/x", "gate-decision",
-                                 {**base, "words": "w" * 201}, rc=GATE)
-        self.assertIn("data.words must be at most 200 characters", proc.stderr)
-        proc = self.append_event("feature/x", "gate-decision",
-                                 {**base, "words": 5}, rc=GATE)
-        self.assertIn("data.words must be a string", proc.stderr)
-        proc = self.append_event("feature/x", "gate-decision",
-                                 {**base, "words": "w" * 201}, "--force",
-                                 "--force-reason", "x", rc=GATE)
-        self.assertIn("at most 200 characters", proc.stderr)
 
     # Every key of a finding map is a location (ADR 0014, amended 0.23.0).
     FREE_LABELS = ("F21", "flush-older-sync")
@@ -1622,12 +1631,15 @@ class TestGateMrOpened(JournalTestCase):
         self.assertEqual(self.last_type(), "gate-decision")
 
     def test_the_refusal_sends_the_model_to_the_user(self):
-        """ADR 0023 §17: the refusal names the five markers and offers no force."""
+        """ADR 0023 §17: the refusal names the four markers and offers no force (#52: the
+        read go is gone)."""
         proc = self.mr_opened(rc=GATE)
         combined = proc.stdout + proc.stderr
         self.assertIn("publish dialog", combined)
         self.assertIn("`!`", combined)
-        self.assertIn("source question|prompt|read|dialog|shell", combined)
+        self.assertIn("source question|prompt|dialog|shell", combined)
+        self.assertIn("confirming question", combined)
+        self.assertNotRegex(combined, r"\bread\b")
         self.assertIn("go-requested", combined)
         self.assertIn("--force does not waive", combined)
         self.assertNotIn("--force and a reason", combined)
@@ -1876,7 +1888,8 @@ class TestPublishAuthorization(unittest.TestCase):
 
 
 class TestUserGo(unittest.TestCase):
-    """ADR 0023 §1, §2, §8: the user's go for a gate, as the command gate reads it."""
+    """ADR 0023 §1, §2 and amendment A4: the user's go for a gate, as the command gate
+    reads it."""
 
     def setUp(self):
         self.journal = load_journal_module()
@@ -1904,8 +1917,8 @@ class TestUserGo(unittest.TestCase):
         }, actor=actor)
 
     def read_go(self, seq, witness, gate="commit", actor="orchestrator@A"):
-        return self.go(seq, gate=gate, source="read", actor=actor, witness=witness,
-                       words="it can go")
+        """A read go as untagged 0.28.0 wrote it."""
+        return self.event(seq, "gate-decision", legacy_read_go(gate, witness), actor=actor)
 
     def answer(self, gate, *events):
         return self.journal.user_go(list(events), gate)
@@ -1965,36 +1978,23 @@ class TestUserGo(unittest.TestCase):
         self.assertEqual(self.answer("commit", verdict), self.HELD)
         self.assertEqual(self.answer("publish", verdict), self.HELD)
 
-    def test_a_read_go_counts_with_its_witness(self):
-        self.assertEqual(self.answer("commit", self.witness(2), self.read_go(3, 2)),
-                         self.authorized(3))
-        self.assertEqual(
-            self.answer("publish", self.witness(2, gate="publish"),
-                        self.read_go(3, 2, gate="publish")),
-            self.authorized(3),
-        )
+    def test_a_read_go_of_0_28_0_is_no_go(self):
+        """#52, amendment A4: an old read row with a valid witness authorizes nothing,
+        under any actor."""
+        for actor in ("orchestrator@A", "user"):
+            with self.subTest(actor=actor):
+                for gate in ("commit", "publish"):
+                    events = [self.witness(2, gate=gate),
+                              self.read_go(3, 2, gate=gate, actor=actor)]
+                    self.assertEqual(self.answer(gate, *events), self.HELD)
+                    self.assertEqual(self.answer("commit", *events), self.HELD)
 
-    def test_a_read_go_without_a_valid_witness_holds(self):
-        cases = {
-            "no witness row": [self.read_go(3, 2)],
-            "a witness of another type": [
-                self.event(2, "deviation", {"note": "n", "request": 1, "gate": "commit",
-                                            "session": "A"}, actor="hook"),
-                self.read_go(3, 2)],
-            "a witness not written by the hook": [self.witness(2, actor="orchestrator@A"),
-                                                  self.read_go(3, 2)],
-            "a witness at another gate": [self.witness(2, gate="commit"),
-                                          self.read_go(3, 2, gate="publish")],
-            "a witness older than the last task-done": [
-                self.witness(1), self.task_done(2), self.read_go(3, 1)],
-            "a witness of another session": [self.witness(2, session="B"),
-                                             self.read_go(3, 2)],
-            "a witness that an earlier go names": [
-                self.witness(2), self.read_go(3, 2, gate="publish"), self.read_go(4, 2)],
-        }
-        for name, events in cases.items():
-            with self.subTest(case=name):
-                self.assertEqual(self.answer("commit", *events), self.HELD)
+    def test_a_question_go_after_a_witness_is_a_go(self):
+        """The confirming question's click: a question go after the witness."""
+        self.assertEqual(
+            self.answer("commit", self.witness(2), self.go(4, request=3)),
+            self.authorized(4),
+        )
 
     def test_commit_authorization_is_the_go_at_the_commit_gate(self):
         events = [self.task_done(1), self.go(2, gate="publish")]
@@ -2008,11 +2008,7 @@ class TestUserGo(unittest.TestCase):
                 self.assertEqual(self.journal.publish_authorization([go]),
                                  self.authorized(1))
         read = [self.witness(1, gate="publish"), self.read_go(2, 1, gate="publish")]
-        self.assertEqual(self.journal.publish_authorization(read), self.authorized(2))
-        self.assertEqual(
-            self.journal.publish_authorization([self.read_go(2, 1, gate="publish")]),
-            self.HELD,
-        )
+        self.assertEqual(self.journal.publish_authorization(read), self.HELD)
 
 
 class TestGoInStatusAndPosition(JournalTestCase):
@@ -3437,11 +3433,9 @@ class TestGoDoesNotBind(JournalTestCase):
                             "request": second, "gate": "publish", "via": "prompt",
                             "session": "A"}))
         witness = self.events("feat/1-a")[-1]["seq"]
-        self.as_session("--stream", "feat/1-a", "--type", "gate-decision",
-                        "--data", json.dumps({
-                            "gate": "publish", "question": "q", "decision": "publish",
-                            "mode": "ask", "raised_by": "user", "source": "read",
-                            "witness": witness, "words": "it can go"}))
+        # A read go that 0.28.0 wrote stays non-binding after #52 (amendment A4).
+        insert_legacy_row(self.db, "feat/1-a", "gate-decision",
+                          legacy_read_go("publish", witness), "orchestrator@A")
         types = [e["type"] for e in self.events("feat/1-a")][-5:]
         self.assertEqual(types, ["go-requested", "gate-decision", "go-requested",
                                  "reply-witnessed", "gate-decision"])
@@ -3491,9 +3485,9 @@ class TestGoDoesNotBind(JournalTestCase):
         )
 
 
-class TestReadGo(JournalTestCase):
-    """ADR 0023 §8, SC-012, SC-013: a read go is accepted only with its witness, and
-    `--force` never waives the check."""
+class TestReadGoIsRetired(JournalTestCase):
+    """#52, ADR 0023 amendment A3, A4, SC-013: the journal refuses a read go, with
+    `--force` too, and a journal that holds one from 0.28.0 opens and authorizes nothing."""
 
     STREAM = "feat/1-x"
     FORCE = ("--force", "--force-reason", "x")
@@ -3501,116 +3495,67 @@ class TestReadGo(JournalTestCase):
     def setUp(self):
         super().setUp()
         self.init_db()
+        # No session label: session A writes only rows that bind no session.
         self.append_event(self.STREAM, "flow-started", {"request": "x"})
-        self.append_event("feat/2-y", "flow-started", {"request": "y"})
 
-    def seq_of_last(self, stream=None):
-        return self.events(stream or self.STREAM)[-1]["seq"]
-
-    def witness(self, stream=None, gate="commit", session="A"):
-        stream = stream or self.STREAM
-        self.append_event(stream, "go-requested", {"gate": gate, "question": "q"})
-        request = self.seq_of_last(stream)
-        self.append_event(stream, "reply-witnessed", {
+    def witness(self, gate="commit", session="A"):
+        self.journal("--db", self.db, "append", "--stream", self.STREAM, "--type",
+                     "go-requested", "--data", json.dumps({"gate": gate, "question": "q"}),
+                     session_env=session, rc=OK)
+        request = self.events(self.STREAM)[-1]["seq"]
+        self.append_event(self.STREAM, "reply-witnessed", {
             "request": request, "gate": gate, "via": "prompt", "session": session,
         }, "--actor", "hook")
-        return self.seq_of_last(stream)
+        return self.events(self.STREAM)[-1]["seq"]
 
-    def read_go(self, witness, *args, gate="commit", session="A", rc=OK, **extra):
-        data = {"gate": gate, "question": "q", "decision": gate, "mode": "ask",
-                "raised_by": "user", "source": "read", "words": "it can go",
-                **extra}
-        if witness is not None:
-            data["witness"] = witness
-        return self.journal("--db", self.db, "append", "--stream", self.STREAM,
+    def test_a_read_go_is_refused_with_force_too_and_names_the_confirming_question(self):
+        witness = self.witness()
+        before = len(self.events(self.STREAM))
+        for source in ("read", "Read", " READ "):
+            for actor in ((), ("--actor", "user"), ("--actor", "orchestrator")):
+                for force in ((), self.FORCE):
+                    with self.subTest(source=source, actor=actor, force=bool(force)):
+                        data = {**legacy_read_go("commit", witness), "source": source}
+                        proc = self.journal(
+                            "--db", self.db, "append", "--stream", self.STREAM,
                             "--type", "gate-decision", "--data", json.dumps(data),
-                            *args, session_env=session, rc=rc)
+                            *actor, *force, session_env="A", rc=GATE)
+                        self.assertIn("confirming question", proc.stderr)
+                        self.assertIn("Commit", proc.stderr)
+        self.assertEqual(len(self.events(self.STREAM)), before)
 
-    def commit_go(self):
-        features = self.status_json()["features"]
-        return next(f for f in features if f["stream"] == self.STREAM)["go"]["commit"]
-
-    def test_a_read_go_with_its_witness_is_accepted_and_authorizes(self):
-        """SC-012."""
+    def test_a_read_marker_in_a_batch_is_refused(self):
         witness = self.witness()
-        self.read_go(witness)
-        row = self.events(self.STREAM)[-1]
-        self.assertEqual(row["data"]["witness"], witness)
-        self.assertEqual(row["actor"], "orchestrator@A")
-        self.assertEqual(self.commit_go()["seq"], row["seq"])
+        line = json.dumps({"type": "gate-decision",
+                           "data": legacy_read_go("publish", witness)})
+        proc = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "app" "end", "--stream",
+             self.STREAM, "--batch"],
+            input=line + "\n", capture_output=True, text=True, cwd=str(self.root),
+        )
+        self.assertEqual(proc.returncode, GATE, proc.stderr)
+        self.assertIn("confirming question", proc.stderr)
 
-    def assertRefused(self, fragment, *args, **kwargs):
-        for force in ((), self.FORCE):
-            with self.subTest(force=bool(force)):
-                proc = self.read_go(*args, *force, rc=GATE, **kwargs)
-                self.assertIn(fragment, proc.stderr)
-        self.assertNotEqual(self.events(self.STREAM)[-1]["data"].get("source"), "read")
-
-    def test_a_read_go_from_a_sessionless_shell_is_refused(self):
-        """#46 interplay: the stored session is A and the witness is A's, but the read go
-        comes from a shell with no CLAUDE_CODE_SESSION_ID. It names no session, so it is
-        no read of A's reply (0.27.1 reads the variable only), with either actor."""
-        self.journal("--db", self.db, "session", "--set", "A", rc=OK)
-        witness = self.witness(session="A")
-        data = {"gate": "commit", "question": "q", "decision": "commit", "mode": "ask",
-                "raised_by": "user", "source": "read", "witness": witness,
-                "words": "it can go"}
-        for actor in ((), ("--actor", "user")):
-            with self.subTest(actor=actor or "default"):
-                proc = self.journal("--db", self.db, "app" "end", "--stream", self.STREAM,
-                                    "--type", "gate-decision", "--data", json.dumps(data),
-                                    *actor, rc=GATE)
-                self.assertIn("session", proc.stderr)
-        self.assertNotEqual(self.events(self.STREAM)[-1]["data"].get("source"), "read")
-
-    def test_no_witness_is_refused(self):
-        self.assertRefused("names its witness", None)
-        self.assertRefused("no reply-witnessed", 9999)
-
-    def test_a_witness_another_go_names_is_refused(self):
+    def test_a_journal_with_a_read_go_of_0_28_0_opens_and_authorizes_nothing(self):
         witness = self.witness()
-        self.read_go(witness)
-        for force in ((), self.FORCE):
-            with self.subTest(force=bool(force)):
-                proc = self.read_go(witness, *force, rc=GATE)
-                self.assertIn("already names", proc.stderr)
-
-    def test_a_witness_on_another_stream_is_refused(self):
-        witness = self.witness(stream="feat/2-y")
-        self.assertRefused("no reply-witnessed", witness)
-
-    def test_a_witness_older_than_the_last_task_done_is_refused(self):
-        witness = self.witness()
-        self.append_event(self.STREAM, "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
-        self.append_event(self.STREAM, "task-done", {"task_id": "T001"})
-        self.assertRefused("older than the last task-done", witness)
-
-    def test_a_session_other_than_the_witnesss_is_refused(self):
-        witness = self.witness(session="A")
-        self.assertRefused("session", witness, session="B")
-
-    def test_a_witness_at_another_gate_is_refused(self):
-        witness = self.witness(gate="commit")
-        self.assertRefused("gate", witness, gate="publish")
-
-    def test_a_row_that_is_no_witness_is_refused(self):
-        self.append_event(self.STREAM, "deviation", {"note": "n"}, "--actor", "hook")
-        self.assertRefused("no reply-witnessed", self.seq_of_last())
-
-    def test_a_witness_not_written_by_the_hook_is_refused(self):
-        self.append_event(self.STREAM, "go-requested", {"gate": "commit", "question": "q"})
-        request = self.seq_of_last()
-        self.append_event(self.STREAM, "reply-witnessed", {
-            "request": request, "gate": "commit", "via": "prompt", "session": "A",
-        }, "--actor", "orchestrator@A")
-        self.assertRefused("hook", self.seq_of_last())
-
-    def test_a_read_row_that_is_no_go_is_refused(self):
-        witness = self.witness()
-        self.assertRefused("a read go is the user's go", witness, decision="hold")
-        self.assertRefused("a read go is the user's go", witness,
-                           raised_by="orchestrator")
+        legacy = insert_legacy_row(self.db, self.STREAM, "gate-decision",
+                                   legacy_read_go("commit", witness), "orchestrator@A")
+        self.assertEqual(self.events(self.STREAM)[-1]["seq"], legacy)
+        feature = next(f for f in self.status_json()["features"]
+                       if f["stream"] == self.STREAM)
+        self.assertEqual(feature["go"]["commit"], {"kind": "held"})
+        self.assertEqual(feature["publish"], {"kind": "held"})
+        self.journal("--db", self.db, "status", rc=OK)
+        stats = json.loads(self.journal("--db", self.db, "stats", "--json",
+                                        rc=OK).stdout)
+        self.assertEqual(sum(stats["totals"]["go"].values()), 0)
+        self.assertNotIn("read", stats["totals"]["go"])
+        answer = json.loads(self.journal("--db", self.db, "authorize", "--gate", "commit",
+                                         "--branch", self.STREAM, "--json",
+                                         rc=OK).stdout)
+        self.assertEqual(answer["verdict"], "hold")
+        # The old row still binds no session (ADR 0023 §13).
+        self.assertIsNone(self.status_json("--session", "A")["session_match"])
 
 
 class TestReplyPlan(JournalTestCase):
@@ -3695,8 +3640,33 @@ class TestReplyPlan(JournalTestCase):
                 self.assertEqual(data, {"request": request, "gate": "commit",
                                         "via": "prompt", "session": "A",
                                         "prompt_id": "p-1"})
-                self.assertIn("<seq:0>", plan["context"])
-                self.assertIn('"source": "read"', plan["context"])
+                self.assertConfirmingQuestion(plan["context"], "commit", "feat/1-a")
+                self.write(plan)
+
+    def assertConfirmingQuestion(self, context, gate, stream):
+        """SC-018: the line asks for a new go request and one confirming question with
+        the gate header, and names no witness seq and no read go."""
+        self.assertIn("one confirming question", context)
+        self.assertIn(f"header `{gate.capitalize()}`", context)
+        self.assertIn(f"`{gate.capitalize()}` as the first option", context)
+        self.assertIn("go-requested", context)
+        self.assertIn(stream, context)
+        self.assertIn("did not confirm", context)
+        self.assertNotIn("<seq:", context)
+        self.assertNotRegex(context, r"\bread\b")
+
+    def test_a_free_text_question_answer_asks_for_a_confirming_question(self):
+        """SC-018, the question path: "it can go" typed into the gate question's free-text
+        row arrives as the answer under the gate header."""
+        for gate in ("commit", "publish"):
+            with self.subTest(gate=gate):
+                self.request("feat/1-a", gate=gate)
+                plan = self.question([{"header": gate.capitalize(),
+                                       "answer": "it can go"}])
+                self.assertEqual(self.gos(plan), [])
+                self.assertEqual(self.witnesses(plan),
+                                 [("feat/1-a", gate, "question", "hook")])
+                self.assertConfirmingQuestion(plan["context"], gate, "feat/1-a")
                 self.write(plan)
 
     def test_all_answers_five_requests_in_one_run(self):
@@ -3833,26 +3803,37 @@ class TestReplyPlan(JournalTestCase):
         plan = self.question([{"header": "Commit", "answer": "yes"}])
         self.assertEqual(self.gos(plan), [])
 
-    def test_the_read_go_command_in_the_context_is_accepted(self):
-        """The command the context prints, with the seq filled in, is a valid read go."""
+    def test_the_confirming_question_records_the_click(self):
+        """SC-012 at the journal: the witness of "it can go", the go request the context
+        prints, then the click `Commit` under the header `Commit`: one question go that
+        names the new request, and the commit gate opens."""
         import shlex
         self.request("feat/1-a", question="Commit T003? it's done")
-        plan = self.prompt("it can go")
-        results = self.write(plan)
-        context = plan["context"].replace("<seq:0>", str(results[0]["seq"]))
+        witnessed = self.prompt("it can go")
+        self.write(witnessed)
+        context = witnessed["context"]
+        # The witness closed the first request: a later reply answers nothing.
+        self.assertEqual(self.prompt("it can go")["events"], [])
         command = re.search(r"`(python3 [^`]+ append [^`]+)`", context).group(1)
         argv = shlex.split(command)
         self.assertEqual(Path(argv[1]).resolve(), JOURNAL.resolve())
         self.assertEqual(Path(argv[argv.index("--db") + 1]).resolve(), self.db.resolve())
+        self.assertEqual(argv[argv.index("--type") + 1], "go-requested")
         data = json.loads(argv[argv.index("--data") + 1])
-        data["words"] = "it can go"
+        self.assertEqual(data["gate"], "commit")
+        data["question"] = "Commit T003 now?"
         argv[argv.index("--data") + 1] = json.dumps(data)
         self.journal(*argv[2:], session_env="A", rc=OK)
+        confirming = self.events("feat/1-a")[-1]["seq"]
+        click = self.question([{"header": "Commit", "answer": "Commit"}])
+        self.assertEqual(self.gos(click), [("feat/1-a", "commit", "question", "user")])
+        self.assertEqual(click["events"][0]["data"]["request"], confirming)
+        self.write(click)
         commit = next(f for f in self.status_json()["features"]
                       if f["stream"] == "feat/1-a")["go"]["commit"]
         self.assertEqual(commit["seq"], self.events("feat/1-a")[-1]["seq"])
 
-    def test_the_read_go_command_names_the_db_and_a_dash_leading_stream_safely(self):
+    def test_the_go_request_command_names_the_db_and_a_dash_leading_stream_safely(self):
         """Review round 1, F3: the command goes through `_suggest`."""
         self.journal("--db", self.db, "append", "--stream=-odd", "--type", "flow-started",
                      "--data", json.dumps({"request": "x"}), rc=OK)
@@ -3863,7 +3844,7 @@ class TestReplyPlan(JournalTestCase):
         self.assertIn("--db", plan["context"])
         self.assertIn(str(self.db), plan["context"])
         self.assertIn("--stream=-odd", plan["context"])
-        self.assertIn("<seq:0>", plan["context"])
+        self.assertIn("--type go-requested", plan["context"])
 
     def test_a_push_answer_under_the_publish_header_is_a_go(self):
         """Review round 1, F15: a question answer reads the gate words as a prompt does."""
@@ -3947,7 +3928,7 @@ class TestAuthorize(JournalTestCase):
                 self.assertIn(gate, message)
                 self.assertIn("go-requested", message)
                 self.assertIn("type", message)
-                self.assertIn("read go", message)
+                self.assertNotIn("read go", message)
 
     def test_a_ready_verdict_alone_holds(self):
         self.append_event(self.STREAM, "verify-run",
@@ -3966,25 +3947,36 @@ class TestAuthorize(JournalTestCase):
         self.assertAnswer(self.authorize("commit"), "pass", "authorized")
         self.assertAnswer(self.authorize("publish"), "pass", "authorized", "publish")
 
-    def test_a_waiting_witness_holds_and_names_the_read_go(self):
-        witness = self.witness()
+    def test_a_waiting_witness_holds_and_asks_for_one_confirming_question(self):
+        """#52, amendment A5."""
+        self.witness()
         answer = self.authorize()
         self.assertAnswer(answer, "hold", "witness-waits")
-        self.assertIn(f"witness seq {witness}", answer["message"])
-        self.assertIn('"source": "read"', answer["message"])
-        self.assertIn("--db", answer["message"])
+        message = answer["message"]
+        self.assertIn("no exact go", message)
+        self.assertIn("one confirming question", message)
+        self.assertIn("header `Commit`", message)
+        self.assertIn("--type go-requested", message)
+        self.assertIn("--db", message)
+        self.assertNotIn('"source"', message)
+        self.assertNotIn("read go", message)
+        self.assertNotIn("witness seq", message)
         # Security recheck, finding 3: the message names no session id.
         self.assertNotIn("session A", answer["message"])
         self.assertNotIn("(session", answer["message"])
 
-    def test_a_read_go_authorizes(self):
+    def test_an_old_read_go_holds_and_the_confirming_click_authorizes(self):
+        """#52: a read go of 0.28.0 opens nothing; the click on the confirming question
+        does."""
         witness = self.witness()
+        insert_legacy_row(self.db, self.STREAM, "gate-decision",
+                          legacy_read_go("commit", witness), "orchestrator@A")
+        self.assertAnswer(self.authorize(), "hold", "witness-waits")
         self.journal("--db", self.db, "append", "--stream", self.STREAM, "--type",
-                     "gate-decision", "--data", json.dumps({
-                         "gate": "commit", "question": "q", "decision": "commit",
-                         "mode": "ask", "raised_by": "user", "source": "read",
-                         "witness": witness, "words": "it can go"}),
+                     "go-requested", "--data",
+                     json.dumps({"gate": "commit", "question": "Commit now?"}),
                      session_env="A", rc=OK)
+        self.go("commit")
         self.assertAnswer(self.authorize(), "pass", "authorized")
 
     def test_the_branch_finds_its_stream_by_the_usual_candidates(self):
@@ -4009,7 +4001,7 @@ class TestAuthorize(JournalTestCase):
 class TestStatsGoMarkers(JournalTestCase):
     """ADR 0023 §19, SC-017: `stats --json` counts the go records by marker."""
 
-    MARKERS = ("dialog", "shell", "question", "prompt", "read")
+    MARKERS = ("dialog", "shell", "question", "prompt")
 
     def setUp(self):
         super().setUp()
@@ -4042,12 +4034,14 @@ class TestStatsGoMarkers(JournalTestCase):
         self.append_event("feat/1-x", "reply-witnessed", {
             "request": request, "gate": "commit", "via": "prompt", "session": "A",
         }, "--actor", "hook")
-        self.go("read", actor="orchestrator", witness=self.events("feat/1-x")[-1]["seq"],
-                words="it can go")
+        # A read go of 0.28.0 is no go any more (#52), so it is not counted.
+        insert_legacy_row(self.db, "feat/1-x", "gate-decision",
+                          legacy_read_go("commit", self.events("feat/1-x")[-1]["seq"]),
+                          "orchestrator@A")
         # A row at the gate that is no go is not counted.
         self.go("shell", decision="hold")
         stats = self.stats()
-        expected = {"dialog": 1, "shell": 0, "question": 2, "prompt": 1, "read": 1}
+        expected = {"dialog": 1, "shell": 0, "question": 2, "prompt": 1}
         self.assertEqual(stats["totals"]["go"], expected)
         row = next(r for r in stats["streams"] if r["stream"] == "feat/1-x")
         self.assertEqual(row["go"], expected)
@@ -4110,8 +4104,8 @@ class TestRequestMarker(JournalTestCase):
 
 
 class TestApprovalRowsNameTheirOwnSession(JournalTestCase):
-    """Security review T021, finding 3: a go request and a read go count for the session
-    that appends them, so an actor label that names another session is refused."""
+    """Security review T021, finding 3: a go request counts for the session that appends
+    it, so an actor label that names another session is refused."""
 
     def setUp(self):
         super().setUp()
@@ -4124,7 +4118,7 @@ class TestApprovalRowsNameTheirOwnSession(JournalTestCase):
 
     def test_a_label_with_no_session_in_the_shell_is_refused(self):
         """Review round 2, N2: with CLAUDE_CODE_SESSION_ID empty, a label names a session
-        no one can check, so a go request or a read go may not carry one."""
+        no one can check, so a go request may not carry one."""
         for force in ((), ("--force", "--force-reason", "x")):
             with self.subTest(force=bool(force)):
                 proc = self.journal(
@@ -4145,22 +4139,6 @@ class TestApprovalRowsNameTheirOwnSession(JournalTestCase):
                 self.assertIn("another session", proc.stderr)
         self.append_as("A", "--type", "go-requested", "--actor", "orchestrator@A",
                        "--data", json.dumps({"gate": "commit", "question": "q"}))
-
-    def test_a_read_go_labelled_with_the_witnesss_session_from_another_is_refused(self):
-        self.append_as("A", "--type", "go-requested", "--data",
-                       json.dumps({"gate": "commit", "question": "q"}))
-        request = self.events("feat/1-x")[-1]["seq"]
-        self.append_event("feat/1-x", "reply-witnessed", {
-            "request": request, "gate": "commit", "via": "prompt", "session": "A"},
-            "--actor", "hook")
-        witness = self.events("feat/1-x")[-1]["seq"]
-        data = json.dumps({"gate": "commit", "question": "q", "decision": "commit",
-                           "mode": "ask", "raised_by": "user", "source": "read",
-                           "witness": witness, "words": "ok"})
-        proc = self.append_as("B", "--type", "gate-decision", "--actor", "orchestrator@A",
-                              "--data", data, rc=GATE)
-        self.assertIn("another session", proc.stderr)
-        self.append_as("A", "--type", "gate-decision", "--data", data)
 
 
 class TestBranchOrdering(JournalTestCase):
@@ -6467,17 +6445,19 @@ class TestVocabCommand(JournalTestCase):
         )
         self.assertEqual(shape["defaults"]["raised_by"], "orchestrator")
         self.assertEqual(shape["aliases"]["chosen"], "decision")
-        self.assertEqual(shape["strings"], ["decision", "words"])
-        self.assertEqual(shape["integers"], ["request", "witness"])
-        self.assertEqual(shape["max_chars"], {"words": 200})
+        # #52 retired the read go and its keys `witness` and `words`.
+        self.assertEqual(shape["strings"], ["decision"])
+        self.assertEqual(shape["integers"], ["request"])
+        self.assertNotIn("max_chars", shape)
 
     def test_the_gate_decision_shape_names_its_source_marker(self):
-        """ADR 0015: the HUD's dialog writes `dialog`, the user's `!` command `shell`."""
+        """ADR 0015: the HUD's dialog writes `dialog`, the user's `!` command `shell`;
+        ADR 0023: the recorder writes `question` and `prompt` (#52: no `read`)."""
         out = self.journal(
             "--db", self.db, "vocab", "--shape", "gate-decision", rc=OK
         ).stdout
         self.assertEqual(json.loads(out)["enums"]["source"],
-                         ["dialog", "shell", "question", "prompt", "read"])
+                         ["dialog", "shell", "question", "prompt"])
 
     def test_the_review_verdict_shape_names_its_map_vocabularies(self):
         out = self.journal(

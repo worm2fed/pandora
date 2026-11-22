@@ -13,7 +13,7 @@ writes those rows with the existing `append --batch`, removes the session's requ
 marker when no request is left open, and gives the model the context line. So the model
 gets no new command that writes a go or a witness.
 
-The transport facts this hook holds are five:
+The transport facts this hook holds are four:
 
 * a prompt that starts with `<` is no reply: a subagent report, a message from another
   session, or a relayed text in a wrapper tag. It records nothing and closes nothing;
@@ -23,9 +23,11 @@ The transport facts this hook holds are five:
   (FR-032), and a question with no gate header runs none either;
 * a header is a gate header when it reads `commit` or `publish` as the journal reads a
   reply (case, outer space and one closing `.` or `!` ignored); an answer under any other
-  header goes as `null`, since it can only witness;
-* the journal's context names a witness seq as `<seq:N>`, the index of the row in the
-  plan, and the hook puts in the seq the batch printed for that row.
+  header goes as `null`, since it can only witness.
+
+After a witness, the journal's context line asks the model for a new go request and one
+confirming question with the gate header (ADR 0023, amendment A2); the hook passes it on
+as the event's `additionalContext`.
 
 This hook fires on every prompt in every project, so the order is deliberate: a `stat`
 gate on the sidecar before stdin is read, and no heavy import before the project is
@@ -193,8 +195,6 @@ def context_of(plan, seqs, planned):
                     "journal; nothing was recorded. Record a go-requested and ask again.")
         return (f"shipgate: the recorder wrote only {len(seqs)} of {planned} rows for "
                 "the user's reply; run `journal.py status` before you rely on a go.")
-    for index, seq in enumerate(seqs):
-        context = context.replace(f"<seq:{index}>", str(seq))
     return context
 
 

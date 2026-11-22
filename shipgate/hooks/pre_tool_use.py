@@ -23,10 +23,8 @@ a gate question answer or a typed gate word, the HUD's publish dialog and the us
 call that appends one of these to the journal is refused:
 
 * a `gate-decision` that carries `source`, the marker of the user's own approval, at any
-  gate. The one exception is a read go: `source` that folds (trimmed, any case) to `read`,
-  with an actor that is not of role `user`. Such a row carries `raised_by: user`, and the
-  journal accepts it only with a witness the recorder wrote. A read go with an actor of
-  role `user` is refused, and one with an actor the hook cannot read is refused as opaque;
+  gate, whatever the marker and the actor. 0.28.0 let a read go (`source: read`) through
+  here; #52 retired it (ADR 0023, amendment A3), and the journal refuses it too;
 * a `gate-decision` at the commit or the publish gate (`gate`, or its alias `kind`;
   trimmed, any case) that names the user: an actor of role `user` (`--actor user`,
   `user@...`, a JSONL `actor`) or `raised_by: user`;
@@ -105,8 +103,6 @@ USER_GATES = (COMMIT_GATE, PUBLISH_GATE)
 USER_ROLE = "user"
 # `_common.SESSION_ENV`, kept here because the fast path does not import `_common`.
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
-# The one marker a model may write (ADR 0023 §8): a read go, which the journal checks.
-READ_SOURCE = "read"
 
 # How many times a string is lexed again as a command line (`sh -c`, `eval`, backticks, a
 # shell's stdin script), and how deep `$( ... )` may nest in one string.
@@ -190,23 +186,22 @@ EVENT_REASONS = (
 # The recorder hook script (ADR 0023 §21): it writes the user's go and witnesses.
 RECORDER = "reply.py"
 
-# FR-024: the paths of this release (ADR 0023, ADR 0015).
+# FR-024: the paths of this release (ADR 0023 and its amendment, ADR 0015).
 TAIL = (
     "Only the user approves a commit or a publish. Record a `go-requested` event, then "
     "ask the gate question with the header `Commit` or `Publish`, or let the user type "
-    "the gate word: the recorder hook records the go. When the recorder names a witness "
-    "of the user's reply and that reply approves, append the read go with "
-    "`\"source\": \"read\"`, that `\"witness\"` and the user's `\"words\"`, never with "
-    "`--actor user`. The user can also choose \"Approve publishing\" in the "
-    "shipgate-hud publish dialog, or run the append themselves with `!` and "
-    "`\"source\": \"shell\"`. Never record it on their behalf."
+    "the gate word: the recorder hook records the go. After any other reply, record a "
+    "new `go-requested` and ask one confirming question with that header and the gate "
+    "word as the first option: the recorder hook records the click. The user can also "
+    "choose \"Approve publishing\" in the shipgate-hud publish dialog, or run the "
+    "append themselves with `!` and `\"source\": \"shell\"`. Never record it on their "
+    "behalf."
 )
 MESSAGES = {
     REASON_MARKER: (
         "shipgate refused this command: it appends a gate-decision that carries "
-        "`source`, the marker of the user's own approval. Only a read go "
-        "(`\"source\": \"read\"`) passes here, and only with an actor that is not "
-        "`user`."
+        "`source`, the marker of the user's own approval. The model writes no marker, "
+        "`read` included."
     ),
     REASON_USER: (
         "shipgate refused this command: it records a commit or publish gate-decision as "
@@ -214,13 +209,14 @@ MESSAGES = {
     ),
     REASON_SESSION: (
         "shipgate refused this command: it sets or clears `CLAUDE_CODE_SESSION_ID` for a "
-        "journal write. A go request and a read go count for the session that appends "
-        "them, so a write runs only in its own session's name."
+        "journal write. A go request counts for the session that appends it, so a write "
+        "runs only in its own session's name."
     ),
     REASON_RECORDER: (
         "shipgate refused this command: it runs the recorder hook script "
         "(`hooks/reply.py`), which writes the user's go and witnesses. Only Claude Code "
-        "runs it, on the user's own prompt or question answer."
+        "runs it, on the user's own prompt or question answer. A command that only "
+        "writes text naming the script should write the file with the Write tool."
     ),
     REASON_IMPORT: (
         "shipgate refused this command: it runs `journal.py import`, which writes the "
@@ -922,18 +918,13 @@ def judge_event(data, actor):
     """The reason to refuse a gate-decision with this data and actor, or None.
 
     `actor` is a string, None (no actor: journal.py's default), or a non-literal Word.
-    A read go (`source: read`) is the one marker that passes, and only with an actor
-    that is not the user's: it carries `raised_by: user`, and the journal checks its
-    witness (ADR 0023 §8).
+    Any `source` is refused, whatever its value and the actor: the model writes no
+    marker (ADR 0023 amendment A3).
     """
     if not isinstance(data, dict):
         return None
     if "source" in data:
-        if _folded(data.get("source")) != READ_SOURCE:
-            return REASON_MARKER
-        if isinstance(actor, Word):
-            return REASON_OPAQUE
-        return REASON_MARKER if _is_user(actor) else None
+        return REASON_MARKER
     gates = [_folded(data.get(key)) for key in ("gate", "kind") if key in data]
     if not any(gate in USER_GATES for gate in gates):
         return None

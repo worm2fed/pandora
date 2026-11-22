@@ -2,14 +2,14 @@
 type: adr
 title: "0023. The user's go is recorded where the user answers, and a commit waits for it"
 created: 2026-11-20
-updated: 2026-11-20
+updated: 2026-11-21
 tags:
   - adr
   - shipgate
   - hooks
 status: accepted
 date: 2026-11-20
-issue: "#22 (child of #37)"
+issue: "#22, amended by #52 (children of #37)"
 related:
   - "0015-the-user-approves-a-publish-outside-the-model-tools.md"
   - "0010-a-user-row-records-its-writing-session.md"
@@ -22,10 +22,11 @@ related:
 # 0023. The user's go is recorded where the user answers, and a commit waits for it
 
 > A recorder hook writes the user's go from a question answer and from a typed reply. When
-> the reply is free language, the hook writes a witness, and the model records the go with
-> a pointer to it. A command gate holds a model's commit, push and MR/PR creation until the
-> stream holds a go. No forced event opens a publish. This ADR extends ADR 0015. It replaces
-> items 1, 4 and 8 of that ADR where they name two markers and the publish gate only.
+> the reply is free language, the hook writes a witness, and the flow asks one confirming
+> question with the gate header. The hook records the click (the amendment of #52 at the
+> end). A command gate holds a model's commit, push and MR/PR creation until the stream
+> holds a go. No forced event opens a publish. This ADR extends ADR 0015. It replaces items
+> 1, 4 and 8 of that ADR where they name two markers and the publish gate only.
 
 Status note: the user ruled on the open points on 2026-11-20, and the lead relayed the
 rulings. The user chose three of them: "No, always my go", "Word list, else model reads"
@@ -87,11 +88,12 @@ through its tools. It is no defence against deliberate circumvention.
    `commit` and `publish`. A go is a `gate-decision` with `gate: <gate>`, `decision:
    <gate>`, `raised_by: user` and a `source` marker. A publish go also satisfies the commit
    gate. A go lasts until the stream's next `task-done`.
-2. **Five markers.** `source` is one of `dialog`, `shell`, `question`, `prompt` and
-   `read`. `question` marks an exact go from a question answer. `prompt` marks an exact go
-   from a typed reply. `read` marks a go that the model recorded after it read a witnessed
-   reply. The first four rows have the actor `user`. A `read` row has the actor of the
-   session that read the reply. The meaning of `dialog` and `shell` does not change.
+2. **Five markers** (four since the amendment, which retires `read`). `source` is one of
+   `dialog`, `shell`, `question`, `prompt` and `read`. `question` marks an exact go from a
+   question answer. `prompt` marks an exact go from a typed reply. `read` marks a go that
+   the model recorded after it read a witnessed reply. The first four rows have the actor
+   `user`. A `read` row has the actor of the session that read the reply. The meaning of
+   `dialog` and `shell` does not change.
 3. **The go request.** A new event, `go-requested`, records that a session put one gate of
    one stream to the user. It keeps the question text. The model writes it with a normal
    `append`, because a request authorizes nothing. Any session can write it for any live
@@ -115,15 +117,15 @@ through its tools. It is no defence against deliberate circumvention.
    open request with a reply that is no exact go. It names the request, the gate, the
    session and the way the reply came. It holds no text. Only the recorder writes it. The
    recorder tells the model which witnesses the reply left.
-8. **The read go.** The model reads the witnessed reply. When the reply approves the gate,
-   the model appends a go with `source: read`, `witness: <seq>` and `words`, the user's
-   approving words in at most 200 characters. It asks no confirming question. The journal
-   refuses the append unless all of these hold: the witness is on the same stream; its
-   actor is the hook; its gate is the gate of the go; it is later than the stream's last
-   `task-done`; no other go names it; the appending session is the witness's session.
-   `--force` never waives this check. The go rule checks the witness again when it reads
-   the stream. So a go without a real reply of the user after the request stays impossible
-   through a normal tool path.
+8. **The read go** (the amendment replaces it with the confirming question). The model
+   reads the witnessed reply. When the reply approves the gate, the model appends a go with
+   `source: read`, `witness: <seq>` and `words`, the user's approving words in at most 200
+   characters. It asks no confirming question. The journal refuses the append unless all of
+   these hold: the witness is on the same stream; its actor is the hook; its gate is the
+   gate of the go; it is later than the stream's last `task-done`; no other go names it;
+   the appending session is the witness's session. `--force` never waives this check. The
+   go rule checks the witness again when it reads the stream. So a go without a real reply
+   of the user after the request stays impossible through a normal tool path.
 9. **A gate word with no open request** is a go for the stream the session drives: the
    live stream that the session last wrote to. Any other reply with no open request records
    nothing, and nothing witnesses it.
@@ -167,13 +169,15 @@ through its tools. It is no defence against deliberate circumvention.
     and the refusal no longer offers it. A forced ready verdict does not authorize a
     publish: the publish rule skips a `review-verdict` that carries `forced`. An MR/PR that
     the user opened by hand on an unreviewed stream takes a go, as any publish does.
-18. **The forgery net grows with the gates.** The PreToolUse hook refuses a model's append
-    of a user decision at the commit gate, as it does at the publish gate. It refuses a
-    model's append of a `reply-witnessed` event. It still refuses a `source` marker at any
-    gate, with one exception: a `gate-decision` with `source: read` and an actor that is
-    not `user` passes the hook, and the journal checks its witness.
+18. **The forgery net grows with the gates** (the amendment removes the exception). The
+    PreToolUse hook refuses a model's append of a user decision at the commit gate, as it
+    does at the publish gate. It refuses a model's append of a `reply-witnessed` event. It
+    still refuses a `source` marker at any gate, with one exception: a `gate-decision` with
+    `source: read` and an actor that is not `user` passes the hook, and the journal checks
+    its witness.
 19. **`stats` counts the go records by marker.** So the share of read go records is
-    visible, and a retro can audit them against their witnesses.
+    visible, and a retro can audit them against their witnesses. (Since the amendment a
+    read row is no go, so `stats` does not count it.)
 20. **A model's `journal.py import` is refused.** `import` writes the rows of a file with
     no shape, gate, read-go or actor check, so a model could write the user's go with its
     Write tool and one import (the security review of the build, finding 1). The
@@ -182,7 +186,8 @@ through its tools. It is no defence against deliberate circumvention.
     machines. The user ruled for this on 2026-11-20: "Hook refuses a model's import".
     A crash of the forgery net on a line that names `journal.py` and `import` refuses it,
     as a crash on a publish append does (ADR 0015).
-21. **A model's command that runs the recorder script is refused.** The recorder,
+21. **A model's command that runs the recorder script is refused** (the amendment keeps
+    "a line that names the script" as it is; A6). The recorder,
     `hooks/reply.py`, is a script. A model could run it from its own Bash call with a
     forged payload (`{"prompt": "publish"}`), and its child journal runs would write the
     user's go, since PreToolUse never sees them (the built-in security review of the
@@ -204,7 +209,7 @@ through its tools. It is no defence against deliberate circumvention.
 - **A fixed word list only, and a confirming question for any other reply.** This was the
   first design. It keeps the model out of the decision. But the user approves in free
   language, and a second question for "it can go" is the friction this issue removes. The
-  user ruled for the read go.
+  user ruled for the read go. (The amendment returns to this design.)
 - **The model reads every reply, and no word list exists.** The common short replies would
   then also rest on the model's reading. The word list keeps them deterministic, and a test
   pins it.
@@ -254,7 +259,7 @@ through its tools. It is no defence against deliberate circumvention.
   off in its sidecar.
 - The model decides what a free-language reply means. The journal holds the witness, the
   quoted words and the marker, so a wrong reading is visible after the fact. It is not
-  prevented.
+  prevented. (The amendment removes this: the user's click decides.)
 - A caller that forced `mr-opened` or forced a ready verdict to publish now meets a
   refusal. The CHANGELOG says so.
 - The flow text changes: the skills record a go request, ask with the gate header, and
@@ -280,3 +285,121 @@ through its tools. It is no defence against deliberate circumvention.
     gate word records a go.
   - A ready verdict still authorizes `mr-opened` and the HUD's gate. The verdict rests on
     `verify-run`, which is a claim until #27.
+
+## Amendment (2026-11-21, #52): a confirming question replaces the read go
+
+Status: accepted. The user ruled on #52, and the lead relayed the ruling. The release is
+0.28.1. 0.28.0 is on `main` and gets no tag.
+
+### Context
+
+The two-turn check of SC-010 ran after the merge of 0.28.0 and before any tag, on both
+session models. Both runs recorded the go request, asked with the header `Commit` and got
+the recorder's witness of "it can go". Both runs then failed the read go and the commit.
+Claude Code's auto permission mode refused the model's `append` of the read go: its
+classifier read the call as the model recording its own approval. The hook payloads show
+`permission_mode: auto`. The plugin's own hooks did not refuse the append, and neither
+model tried to get around the block.
+
+So the read go cannot work where the user runs the flow. A go that the model writes is the
+pattern that auto mode stops, under any marker.
+
+The same release check found a false refusal of decision 21. A Bash call wrote a text file
+through a heredoc whose text named the recorder's path. The same call ran `python3` on
+another script through a quoted variable path. The hook refused the call as a run of the
+recorder, because "the line names the script" read the raw line, heredoc text included.
+Only a session that writes text naming the recorder script meets this refusal, which in
+practice means shipgate's own development.
+
+### Decision
+
+A1. **An exact go stays a go at once.** Decisions 5 and 6 do not change.
+
+A2. **After any other reply the flow asks one confirming question.** The recorder still
+    writes a witness for each open request that the reply does not match. The witness
+    still closes that request (decision 4). The recorder's context line tells the model to
+    record a new go request, then ask one confirming question with the gate header and the
+    gate word as the first option. The line carries the command of the go request. The
+    click on the gate word is a question answer, so the recorder records it as an exact go
+    with the marker `question` (decision 5). When the answer to the confirming question is
+    no go either, the user did not confirm. The flow then records nothing and asks no more.
+
+A3. **The `read` marker is retired.** The journal refuses a `gate-decision` whose `source`
+    folds to `read`, with or without `--force`. The PreToolUse hook refuses every `source`
+    marker in a model's append, so decision 18 loses its exception. The model writes no go
+    row in any form. This replaces decision 8 and the `read` part of decision 2.
+
+A4. **A read row from 0.28.0 is inert.** It stays in the journal, and the journal opens. It
+    is no go for any gate, so it authorizes no commit and no publish. `stats` does not
+    count it as a go. It still binds no session (decision 13), so a lead's position does
+    not change at the upgrade. No migration runs. A go lasts only until the next
+    `task-done`, so the worst case is one held commit and one confirming question.
+
+A5. **The hold of the command gate names the confirming question.** A witness of the
+    stream at the gate, newer than the last `task-done`, means that the user's reply was no
+    exact go. The hold then asks for a new go request and one confirming question. The
+    `authorize` reason stays `witness-waits`.
+
+A6. **A note that names the recorder still counts, and the exemption is rejected.**
+    The false refusal of decision 21 stays: the line names the script wherever its raw text
+    holds the name, as in 0.28.0. The refusal text adds one sentence: a command that only
+    writes text naming the script should write the file with the Write tool. An exemption
+    for such a note was built and reviewed in four rounds, and each round found a bypass
+    that 0.28.0 refuses. Round 1 forged a `prompt` go end to end through
+    `echo "${R:=…/hooks/reply.py}"; python3 "$R"`, and found `read R < <(echo …)` too.
+    Round 2 let a note reach a variable through a coprocess, a captured function body, a
+    builtin's unquoted heredoc and a misread `$[1<<2]`. Round 3, the built-in security
+    review of the commit, found a pipe that ends the line, a `case` pattern inside `$(`
+    and a zsh `foreach … end | read`. Round 4 found that the fix for the line-ending pipe
+    let a forged `--batch` append through `| 2>/dev/null`. The benefit is small: only a
+    session that writes text naming the recorder script meets the refusal. So the hook's
+    run detection for the recorder is the rule of 0.28.0, with none of the lexer additions
+    the exemption needed. A skip of a command's own program word in the wrapped-line
+    scan, meant to stop a second false refusal (an escaped `\|` in a search pattern behind
+    an unknown runner), was dropped too. It trusted the wrapper scan to find the program,
+    and that scan misreads an option cluster such as `env -vS '<line>'`, whose value
+    `env` runs as a command line: the review forged a go through it. Both false refusals
+    stay, and #54 holds them.
+
+### Alternatives considered
+
+- **Keep the read go, and ask the user to allow it in auto mode.** Every user of auto mode
+  would meet the refusal first. An allow rule for the model's own approval is the bypass
+  that the classifier stops.
+- **The witness keeps its request open, so the click answers the first request.** Then
+  every later reply of the session writes another witness until a go lands, and a later
+  `yes` to another question is a go. Decision 4 closes requests for this reason.
+- **The recorder records the new go request itself.** The model then needs no extra
+  append. But the hook would write a row whose question only the flow knows.
+- **A go request key that names the witness it confirms.** The journal could then tell a
+  confirming question from a first one and print "the user did not confirm". It adds a key
+  to the contract for a case that the flow knows from its own turn.
+- **Honour an old read row.** It keeps the removed code path alive for rows that only an
+  untagged release wrote.
+- **Drop the unread-word rule of decision 21.** It closes the false refusal, and it opens
+  `R=hooks/reply.py; python3 "$R"` again.
+- **Exempt a note from "the line names the script".** Tried in four review rounds of #52
+  and rejected (A6): each round found a bypass that 0.28.0 refuses.
+
+### Consequences
+
+- A free-language approval costs the user one click. An exact word costs nothing more.
+- The model records no go in any form. Only the recorder, the HUD dialog and the user's
+  `!` command write a go.
+- The context line names no witness seq. The `<seq:N>` placeholder of the recorder is gone.
+- `gate-decision` loses the keys `witness` and `words`. A row that holds them still reads.
+- Known limits, accepted:
+  - A command that names the recorder's path in data (a heredoc note, an `echo`, a search
+    pattern) and also runs Python through an unread script path is refused (A6). Such a
+    command writes its file with the Write tool instead.
+  - A text-only command that can also run a program (a git alias with `!`, `rg --pre`) is
+    read as text, as before. So are `source <(…)`, `bash <(…)` and a name split by quotes
+    (`rep''ly.py`). The lexer also does not read a `$( )` inside an unquoted heredoc body,
+    a heredoc opened inside `$(` on its operator line, or `$[1<<2]`; a run of the
+    recorder hidden there passes. Each passes on 0.28.0 too; a follow-up can close them.
+  - A runner that the wrapper table does not know, whose literal argument lexes to a path
+    that ends in the script's name, is still read as the recorder. The hook cannot tell it
+    from `ssh host 'hooks/reply.py'`.
+  - A Python program on stdin (`python3 - <<'EOF'`) is still lexed as a shell script for
+    events. A shell example in its text that runs the recorder through a variable is still
+    refused.
