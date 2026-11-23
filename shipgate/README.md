@@ -138,7 +138,7 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 
 **Scripts** (Python 3 stdlib)
 
-- `scripts/journal.py` — the flow journal CLI; `scripts/signals.py` — per-file risk signals, read by `route-and-map`, `review` and `structured-debug` (see [Code signals](#code-signals)).
+- `scripts/journal.py` — the flow journal CLI, an entry point over the modules of `scripts/_journal/` (ADR 0027); `scripts/signals.py` — per-file risk signals, read by `route-and-map`, `review` and `structured-debug` (see [Code signals](#code-signals)).
 - `scripts/lean_config.py` — strips the boilerplate that explains the plugin from a config; prints a diff, and writes only with `--apply` (run by `setup` in update mode; ADR 0019).
 
 **Glossary** — [`docs/glossary.md`](docs/glossary.md): one term per shipgate concept, what it means and what it is not to be confused with. Prose in this plugin uses those terms and no synonyms. Every report a person reads follows the **Writing for people** rule (short sentences, one idea each, every fact kept; ADR 0006); the `Writing style` config section extends it to the documents shipgate writes into your repo.

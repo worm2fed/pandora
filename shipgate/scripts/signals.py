@@ -57,7 +57,7 @@ def _load_hooks_common():
 
     The plugin always ships `hooks/` beside `scripts/`; without it this script cannot
     know which project a directory belongs to, so it stops with an infrastructure error
-    (exit 1). The same loader sits in `journal.py`: keep the two in step.
+    (exit 1). The same loader sits in `_journal/plugin.py`: keep the two in step.
     """
     import importlib.util
 
@@ -443,7 +443,7 @@ def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
-    # Copied from journal.py — scripts stay standalone.
+    # Copied from _journal/artifacts.py — scripts stay standalone.
     from fnmatch import fnmatch
 
     normalized = path.replace(os.sep, "/")
