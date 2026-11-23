@@ -4873,7 +4873,11 @@ class TestTheUserSettingsFileMarksNoProject(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_every_hook_stays_inert(self):
-        before = tree_of(self.home)
+        # The project and the Claude config directory: where a journal, a marker or a
+        # settings file could appear. The rest of HOME is left out, because a Python may
+        # keep its own cache there (Library/Caches on macOS).
+        watched = (self.home / ".claude", self.home / "work")
+        before = [tree_of(path) for path in watched]
         for env in ({"HOME": str(self.home), "CLAUDE_CONFIG_DIR": ""},
                     {"HOME": str(self.home),
                      "CLAUDE_CONFIG_DIR": str(self.home / ".claude")}):
@@ -4883,7 +4887,8 @@ class TestTheUserSettingsFileMarksNoProject(unittest.TestCase):
                     result = run_hook(hook, payload, self.root, env_extra=env)
                     self.assertEqual((result.returncode, result.stdout, result.stderr),
                                      (0, "", ""))
-        self.assertEqual(tree_of(self.home), before)
+        self.assertEqual([tree_of(path) for path in watched], before)
+        self.assertEqual(list(self.home.rglob("*.db*")), [])
         self.assertIsNone(find_project(str(self.root)))
 
 
@@ -5031,7 +5036,11 @@ class TestHostileSettingsFiles(CommandGateCase):
                 self.assertEqual((result.returncode, result.stderr), (0, ""))
                 if result.stdout:
                     json.loads(result.stdout)
-        if find_project(str(self.root)) is not None:
+        try:
+            project = find_project(str(self.root))
+        except RecursionError:
+            project = None  # this Python's json gives up: the hooks failed open above
+        if project is not None:
             self.assertEqual(json.loads(self.stop().stdout)["decision"], "block")
             self.assertHeld("git commit -m x", "commit")
 

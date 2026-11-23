@@ -822,3 +822,21 @@ three lines alone, because they change no code.
   keys no shipgate reader uses. Fixed: the keys that `settings.schema.json` does not name.
 - F11 LOW `shipgate/README.md:244` — the README did not say that a file holding `NaN` or
   `Infinity` keeps its journal. Fixed: one sentence.
+
+### Review round 3 (PR 2)
+
+After the push of `9d6557d`, a run of the new tests on Python 3.9.6 found two test defects.
+The hooks passed on 3.9. The orchestrator fixed both tests alone, because the fix changes
+no product code, and ran them on 3.9.6 and 3.15.2.
+
+- F12 LOW `shipgate/tests/test_hooks.py:5034` — the deep-nesting test called
+  `find_project` in its own process, and 3.9's json raised `RecursionError` there. Fixed:
+  the test reads that as "no project", as the hooks do.
+- F13 LOW `shipgate/tests/test_hooks.py:4886` — with `HOME` set to the temp directory, the
+  macOS system Python writes its own cache under `HOME/Library`, so the "nothing written"
+  check failed. Fixed: the test watches the project and the Claude config directory, and
+  finds no journal file anywhere under `HOME`.
+
+On 3.9.6, `test_hooks.py` still fails 6 subtests of `test_the_fast_path_reads_no_file`
+(`TestPreToolUseNoOpPath`, `TestCommandGateReadsNoFile`). They fail the same way on
+`origin/main`: a note for a new issue.
