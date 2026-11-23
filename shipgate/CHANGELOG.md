@@ -2,6 +2,37 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.30.1 — `journal.py` is an entry point over the package `scripts/_journal/`: the code moved, unedited, into 22 modules, and a journal run starts about 34 ms faster where Python caches bytecode.
+
+**One file of 7,826 lines held the whole journal (#61, ADR 0027).** A session that read it
+spent tens of thousands of tokens. Every branch rebased over it, and a reviewer could not
+scope a change to one concern. Python also compiled all of it at every start, because it
+never caches the bytecode of a script it runs as `__main__`. Refs #48.
+
+- **22 modules in a fixed layer order.** Each module owns one concern, for example `store`,
+  `fold`, `reply`, `position` or `cli`, and imports only the modules above it, so there is
+  no import cycle. ADR 0027 lists the modules and what each owns. Every top-level statement
+  moved with its text unchanged. The only edited lines are the four that read `__file__`.
+  Three gained one `.parent`. The fourth now names `journal.py` beside the package, so the
+  printed path of `journal.py` is the same.
+- **`journal.py` keeps its path, its commands, its options, its exit codes and every output
+  byte.** It loads the package by path under a name of its own, so it runs under `-I`,
+  `-P` and `PYTHONSAFEPATH`, and two copies of the plugin in one process each print their
+  own path. A copy that lacks `_journal/` exits 1 with `error: cannot load <dir> (shipgate
+  install incomplete): …`. No file under `hooks/` changed, and the hook contract is the
+  same.
+- **The start, median of 20 runs** (Python 3.15.2, a warm bytecode cache): `journal.py
+  vocab` 107.1 → 72.7 ms; the recorder with an open request, which runs the journal twice,
+  268.1 → 195.4 ms against its 200 ms budget; the command gate holding a `git commit` 173.5
+  → 137.9 ms. The recorder and the gate with no journal run change by less than 1 ms.
+- **The cost without a bytecode cache.** Where Python cannot write bytecode (a read-only
+  install, or `PYTHONDONTWRITEBYTECODE=1`), it compiles 23 files instead of one, and a
+  journal run takes about 5 ms more than before (`vocab` 108.1 → 113.1 ms). Set
+  `PYTHONPYCACHEPREFIX` to a writable directory to get the cache back. The plugin cache
+  that Claude Code writes is writable, so a default install gets the cache.
+- `test_journal.py` is split along the same lines into nine files, and
+  `test_journal_layout.py` checks the layer order of the package.
+
 v0.30.0 — a smaller status brief and the close-out of a merged stream: the brief prints the bound streams and one count line, `journal.py closeout` plans the close-out from forge and git evidence, and `journal.py sweep` proposes an end for each dormant stream.
 
 **The brief cost about 7,400 characters at every session start (#31, ADR 0024).** It
