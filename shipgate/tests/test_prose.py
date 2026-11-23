@@ -311,6 +311,17 @@ class TestHandoffText(unittest.TestCase):
                               "brief.**"))
         self.assertIn(self.COMMAND, body)
 
+    def test_45_feature_records_the_lead_that_a_brief_names(self):
+        """#45: a teammate records its lead in the journal, so `handoff` keeps the target
+        after a `/clear`."""
+        body = flat(section((SHIPGATE / "skills/feature/SKILL.md").read_text(),
+                            "## Always-on disciplines"))
+        for phrase in ("a lead's brief started", "`flow-started`'s `report_to`",
+                       "the command the brief gives to reach it",
+                       "a `deviation` with `report_to`", "`report to`"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, body)
+
 
 if __name__ == "__main__":
     unittest.main()

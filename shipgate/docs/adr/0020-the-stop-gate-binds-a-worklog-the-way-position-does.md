@@ -2,7 +2,7 @@
 type: adr
 title: "0020. The Stop gate binds a worklog the way position does"
 created: 2026-11-19
-updated: 2026-11-19
+updated: 2026-11-23
 tags:
   - adr
   - shipgate
@@ -126,3 +126,23 @@ Two more defects sat behind the first one:
   result does not depend on it.
 - The hook tests now run each rule on branch-named streams. The stream name
   `feature/<worklog name>` is one case among them, no longer the only one.
+
+## Amendment (2026-11-23, #43): the slug without its issue id
+
+A stream named for its branch often keeps the issue id in its slug: `fix/1290-date-off-by-one`
+has the slug `1290-date-off-by-one`, which does not name `date-off-by-one.worklog.md`. Such a
+stream had no worklog in `position`, and the Stop gate skipped its ticks as `no-stream`, until
+an event named the worklog. A scaled-down flow with a worklog and no `design-committed` stayed
+ungated.
+
+So the name binding has a second, weaker slug: the slug without one leading issue id of ASCII
+digits and a dash. `_stream_slugs` in `_journal/artifacts.py` gives both, most exact first,
+and `position` and `check` both read it. `position` tries the slug without the id only when
+the full slug leaves no free worklog. Among names, the rank is now: `<slug>.worklog.md` beats
+a prefix match, the longer slug beats the shorter, and the full slug beats the slug without
+its issue id. So `feat/demo` keeps `demo.worklog.md` when `fix/1290-demo` is live too.
+
+This widens what the Stop gate can block. No hook file changed: the hook runs `check`. The
+rejected alternative was skill text alone: the `workspace` and `design` skills would tell
+a session to name the worklog for the full slug. It leaves every existing stream of that
+form ungated.

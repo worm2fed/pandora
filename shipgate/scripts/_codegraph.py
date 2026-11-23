@@ -48,6 +48,12 @@ REQUIRED_COLUMNS = {
 }
 
 INIT_TIMEOUT = 120.0
+# A sync catches the index up with the working tree. After many changes it takes far
+# longer than a query (#19: 20-36 s measured, a root sync 55-66 s), so it gets its own
+# limit. A killed sync loses its work, and the next one starts the same catch-up. The
+# limit stays 30 s under the Bash tool's default of 120 s, which caps the whole
+# `signals.py` call: past that, the call dies before the regex fallback runs.
+SYNC_TIMEOUT = 90.0
 CALL_TIMEOUT = 30.0
 MAX_FILES = 10_000
 
@@ -115,6 +121,11 @@ GRAPH_NOTES = {
         "(graph-index-untrusted). Remove the symlink or untrack the files (shipgate "
         "README, Code graph); the next signals call builds the index. Until then "
         + NOTE_REGEX),
+    "graph-sync-timeout": (
+        "code graph: the index sync did not finish in time, so its catch-up was lost. "
+        "Run `codegraph sync` once yourself where the index lives (the repository "
+        "root, or the umbrella root in root mode); the next signals call then syncs "
+        "quickly. Until then " + NOTE_REGEX),
 }
 
 
@@ -291,7 +302,7 @@ def run(args: Sequence[str], cwd: Path, reason: str,
     """Run codegraph ARGS in CWD; stdout, or GraphUnavailable(reason).
 
     STDIN, when given, is the process's input. A timeout is `graph-timeout`
-    whatever the step.
+    whatever the step; `freshen` renames a sync's.
     """
     exe = _CHOSEN.get(str(Path(cwd).resolve())) or binary(Path(cwd))
     if exe is None:
@@ -595,7 +606,8 @@ def daemon_alive(index_root: Path) -> bool:
 
 def freshen(index_root: Path) -> str:
     """FR-005: query now when a daemon keeps the index fresh, else `sync PATH` first.
-    Returns `daemon` or `sync`.
+    Returns `daemon` or `sync`. The sync runs under `SYNC_TIMEOUT`, and its timeout is
+    `graph-sync-timeout`.
 
     INDEX_ROOT must hold its own database: `sync` on a path without one walks up
     and syncs the indexed ancestor (an umbrella root), so that is `graph-init`.
@@ -604,7 +616,12 @@ def freshen(index_root: Path) -> str:
         raise GraphUnavailable("graph-init")
     if daemon_alive(index_root):
         return "daemon"
-    run(["sync", str(index_root)], index_root, "graph-sync")
+    try:
+        run(["sync", str(index_root)], index_root, "graph-sync", timeout=SYNC_TIMEOUT)
+    except GraphUnavailable as exc:
+        if exc.reason == "graph-timeout":  # a slow catch-up, not a hung query (#19)
+            raise GraphUnavailable("graph-sync-timeout") from exc
+        raise
     return "sync"
 
 

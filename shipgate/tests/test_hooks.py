@@ -1623,6 +1623,26 @@ class TestStopGateProbes(HookTestCase):
         self.assertIn("T002", payload["reason"])
         self.assertIn(f"--stream={self.ISSUE_BRANCH} ", payload["reason"])
 
+    def test_43_rule_a_blocks_on_a_stream_whose_slug_without_its_issue_id_names_it(self):
+        stream = f"fix/1290-{SLUG}"
+        self.flow(stream)
+        self.tick()
+        payload = self.blocked()
+        self.assertIsNotNone(payload, "the Stop hook let an unrecorded tick through")
+        self.assertEqual(payload["decision"], "block")
+        self.assertIn("T001", payload["reason"])
+        self.assertIn(f"--stream={stream} ", payload["reason"])
+
+    def test_43_the_full_slug_beats_the_slug_without_its_issue_id(self):
+        self.flow(f"fix/1290-{SLUG}")
+        self.flow(self.BRANCH)
+        self.tick()
+        code, report = self.check()
+        self.assertEqual(code, 5)
+        self.assertEqual(
+            [finding["stream"] for finding in report["findings"]], [self.BRANCH]
+        )
+
     def test_the_suggested_events_unblock_a_branch_named_stream(self):
         self.flow(self.ISSUE_BRANCH, self.names_the_worklog())
         self.tick()

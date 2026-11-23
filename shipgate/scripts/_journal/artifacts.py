@@ -280,6 +280,22 @@ def _names_artifact(path: str, ref: str) -> bool:
     return bool(ref) and (path == ref or path.endswith("/" + ref))
 
 
+# A leading issue id in a slug: ASCII digits and a dash, with a name after them.
+_ISSUE_ID_RE = re.compile(r"[0-9]+-(.+)")
+
+
+def _stream_slugs(stream: str) -> List[str]:
+    """The slugs that name a stream's worklog, most exact first: the stream's last path
+    segment, then that segment without one leading issue id (#43). The stream
+    ``fix/1290-date-off-by-one`` gives ``1290-date-off-by-one``, then ``date-off-by-one``.
+    """
+    slug = stream.rsplit("/", 1)[-1]
+    if not slug:
+        return []
+    match = _ISSUE_ID_RE.fullmatch(slug)
+    return [slug, match.group(1)] if match else [slug]
+
+
 def _slug_names_file(slug: str, name: str) -> bool:
     """``<slug>.worklog.md``, or a name that starts with ``<slug>-`` or ``<slug>.``: a
     substring match would let a short slug take another feature's worklog."""
@@ -308,14 +324,17 @@ def worklog_owners(
     A stream owns a worklog the way ``position`` shows one (ADR 0020):
     - ``event``: its last worklog ref names the path;
     - ``name``: it has no worklog ref, and the path is the slug-named worklog
-      ``position`` would pick for it;
+      ``position`` would pick for it (``_stream_slugs``: the slug, then the slug without
+      its issue id);
     - ``legacy``: it has no worklog ref and is named ``feature/<worklog file name>``
       (journals from before v0.11).
     The most exact binding wins. A stream whose events name the worklog, live or
     finished, leaves nothing to a name. Among names, ``<slug>.worklog.md`` beats a
-    prefix, then the longer slug: a parent stream ``epic/auth`` does not take the child's
-    ``auth-login.worklog.md``. A stream with no flow event owns nothing. Streams come
-    back in name order.
+    prefix, then the longer slug, then the full slug beats one without its issue id: a
+    parent stream ``epic/auth`` does not take the child's ``auth-login.worklog.md``, and
+    ``feat/demo`` takes ``demo.worklog.md`` from ``fix/1290-demo``. A stream's first slug
+    that names the file is its best one. A stream with no flow event owns nothing.
+    Streams come back in name order.
     """
     relative = path
     candidate = Path(path).expanduser()
@@ -328,7 +347,7 @@ def worklog_owners(
     legacy = FEATURE_STREAM_PREFIX + _slug_from_artifact(path)
 
     by_event: List[str] = []
-    by_name: List[Tuple[Tuple[bool, int], str]] = []
+    by_name: List[Tuple[Tuple[bool, int, bool], str]] = []
     for stream in sorted(by_stream):
         events = by_stream[stream]
         if not _has_flow_event(events):
@@ -338,8 +357,9 @@ def worklog_owners(
             if _names_artifact(relative, bound):
                 by_event.append(stream)
             continue
-        slug = stream.rsplit("/", 1)[-1]
-        if not _slug_names_file(slug, name):
+        slugs = _stream_slugs(stream)
+        slug = next((s for s in slugs if _slug_names_file(s, name)), None)
+        if slug is None:
             continue
         owns = stream == legacy
         if not owns:
@@ -348,7 +368,9 @@ def worklog_owners(
                 relative
             )
         if owns:
-            by_name.append(((name == f"{slug}.worklog.md", len(slug)), stream))
+            by_name.append((
+                (name == f"{slug}.worklog.md", len(slug), slug == slugs[0]), stream
+            ))
 
     owning = by_event
     if not owning and by_name:
@@ -451,8 +473,12 @@ def _free_slug_named_worklog(
     homes: Dict[str, str],
     now: Optional[datetime],
 ) -> Optional[str]:
-    """The newest worklog in the worklog home named for the stream's last path segment,
-    that no other live stream's events name; None when there is none.
+    """The newest free worklog in the worklog home that the stream's slug names, or None.
+
+    A worklog is free when no other live stream's events name it. ``_stream_slugs``
+    gives the slugs, most exact first: the last path segment, then that segment without
+    its issue id (#43). A weaker slug counts only when the stronger one names no free
+    worklog.
 
     A name counts when it is ``<slug>.worklog.md`` or starts with ``<slug>-`` or
     ``<slug>.``: a substring match would let a short slug take another feature's
@@ -463,11 +489,12 @@ def _free_slug_named_worklog(
     """
     from fnmatch import fnmatch
 
-    slug = stream.rsplit("/", 1)[-1]
-    if not slug:
+    slugs = _stream_slugs(stream)
+    if not slugs:
         return None
     home = homes.get("worklog", DEFAULT_ARTIFACT_HOMES["worklog"])
-    found: List[Tuple[str, float]] = []
+    # One list per slug: a file goes to the first slug that names it.
+    found_by_slug: List[List[Tuple[str, float]]] = [[] for _ in slugs]
     for directory, pattern in _worklog_home_dirs(project_dir, home):
         try:
             entries = list(os.scandir(project_dir / directory))
@@ -475,7 +502,10 @@ def _free_slug_named_worklog(
             continue
         for entry in entries:
             name = entry.name
-            if not _slug_names_file(slug, name) or not fnmatch(name, pattern):
+            index = next(
+                (i for i, slug in enumerate(slugs) if _slug_names_file(slug, name)), None
+            )
+            if index is None or not fnmatch(name, pattern):
                 continue
             try:
                 if not entry.is_file():
@@ -483,8 +513,10 @@ def _free_slug_named_worklog(
                 mtime = entry.stat().st_mtime
             except OSError:
                 continue
-            found.append((f"{directory}/{name}" if directory else name, mtime))
-    if not found:
+            found_by_slug[index].append(
+                (f"{directory}/{name}" if directory else name, mtime)
+            )
+    if not any(found_by_slug):
         return None
 
     claimed: List[str] = []
@@ -498,15 +530,16 @@ def _free_slug_named_worklog(
             _normalized_ref(ref) for ref in _committed_refs(events)
             if classify_artifact(ref, homes) == "worklog"
         )
-    free = [
-        (path, mtime) for path, mtime in sorted(found)
-        if not any(
-            own and (_normalized_ref(path) == own
-                     or _normalized_ref(path).endswith("/" + own))
-            for own in claimed
-        )
-    ]
-    if not free:
-        return None
-    # `max` keeps the first of equal mtimes, and `free` is in path order.
-    return max(free, key=lambda item: item[1])[0]
+    for found in found_by_slug:
+        free = [
+            (path, mtime) for path, mtime in sorted(found)
+            if not any(
+                own and (_normalized_ref(path) == own
+                         or _normalized_ref(path).endswith("/" + own))
+                for own in claimed
+            )
+        ]
+        if free:
+            # `max` keeps the first of equal mtimes, and `free` is in path order.
+            return max(free, key=lambda item: item[1])[0]
+    return None

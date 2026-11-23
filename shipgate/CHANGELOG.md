@@ -2,6 +2,39 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.30.2 — three follow-ups: an index sync has its own 90 s timeout, a slug that starts with an issue id names a worklog too, and `feature` tells a teammate to record its lead.
+
+**A catch-up sync of the code graph never finished (#19).** `codegraph sync` ran under the
+30 s limit of a query. After many changes, for example a branch switch or a rebase, a sync
+took 20 s on a repository of about 850 files and 36 s on one of about 1,900. The limit
+killed it, its work was lost, and the next run started the same catch-up. So the repository
+stayed on the regex scanner.
+- The sync now runs under `SYNC_TIMEOUT`, 90 s. A query keeps 30 s, and a build 120 s.
+  The sync limit stays under the Bash tool's default of 120 s, which caps the whole
+  `signals.py` call, so a slow sync still ends in the regex fallback.
+- A sync that times out gives the reason `graph-sync-timeout`, not `graph-timeout`, so a
+  slow catch-up reads apart from a hung query. Its note says to run `codegraph sync` once by
+  hand. `SHIPGATE_CODEGRAPH_TIMEOUT` still sets one timeout for every call, the sync
+  included.
+
+**A slug with an issue id named no worklog (#43, ADR 0020 amendment).** The slug of
+`fix/1290-date-off-by-one` is `1290-date-off-by-one`, and it does not name
+`date-off-by-one.worklog.md`. Until an event named the worklog, `position` showed none and the
+Stop gate skipped its ticks as `no-stream`.
+- When the slug starts with an issue id of ASCII digits and a dash, the slug without that id
+  names a worklog too. `position` reads it only when the full slug leaves no free worklog.
+- The most exact binding still wins. Among names, `<slug>.worklog.md` beats a prefix match,
+  the longer slug beats the shorter, and the full slug beats the slug without its issue id.
+  So `feat/demo` keeps `demo.worklog.md` when `fix/1290-demo` is live too.
+- This widens what the Stop gate can block. No file under `hooks/` changed: the hook runs
+  `journal.py check`, and `check` and `position` share the new rule.
+
+**A teammate's stream did not record its lead (#45).** `flow-started` and `deviation` take
+`report_to` since 0.27.0, and `handoff` prints it, but no skill said to write it. The
+`feature` skill now says it: a session that a lead's brief started puts the lead and the
+command to reach it in `flow-started`'s `report_to`. After a `/clear`, `handoff` still prints
+`report to` with that lead.
+
 v0.30.1 — `journal.py` is an entry point over the package `scripts/_journal/`: the code moved, unedited, into 22 modules, and a journal run starts about 34 ms faster where Python caches bytecode.
 
 **One file of 7,826 lines held the whole journal (#61, ADR 0027).** A session that read it
