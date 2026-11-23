@@ -479,9 +479,9 @@ new phase:
    re-review the whole MR/PR again.
 4. **Push, reply in each thread** with what changed (or why you disagree), and resolve the
    threads you've addressed.
-5. Hand back to the MR watcher (if declared) and wait. On merge, do residual ledger triage
-   only. The main Capture already ran when the review verdict landed, so anything new here
-   came from this feedback cycle.
+5. Hand back to the MR watcher (if declared) and wait. On merge, run the close-out (`feature`,
+   **Close-out**). Its first step is the residual ledger triage. The main Capture already ran
+   when the review verdict landed, so anything new here came from this feedback cycle.
 
 **When a finding is disputed**, by the user before the push or by a reviewer in a thread,
 **steel-man** first. State the strongest case for their position: the real concern it

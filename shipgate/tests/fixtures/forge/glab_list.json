@@ -1,0 +1,41 @@
+[
+  {
+    "iid": 7,
+    "state": "merged",
+    "web_url": "https://gitlab.forge.invalid/g/p/-/merge_requests/7",
+    "source_branch": "feat/7-x",
+    "sha": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+    "target_branch": "main",
+    "merged_at": "2026-11-20T10:02:11.000Z",
+    "merge_commit_sha": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c",
+    "squash_commit_sha": null,
+    "source_project_id": 41,
+    "target_project_id": 41
+  },
+  {
+    "iid": 8,
+    "state": "closed",
+    "web_url": "https://gitlab.forge.invalid/g/p/-/merge_requests/8",
+    "source_branch": "feat/8-y",
+    "sha": "2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e",
+    "target_branch": "main",
+    "merged_at": null,
+    "merge_commit_sha": null,
+    "squash_commit_sha": null,
+    "source_project_id": 41,
+    "target_project_id": 41
+  },
+  {
+    "iid": 9,
+    "state": "opened",
+    "web_url": "https://gitlab.forge.invalid/g/p/-/merge_requests/9",
+    "source_branch": "fix/9-z",
+    "sha": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f",
+    "target_branch": "main",
+    "merged_at": null,
+    "merge_commit_sha": null,
+    "squash_commit_sha": null,
+    "source_project_id": 41,
+    "target_project_id": 41
+  }
+]

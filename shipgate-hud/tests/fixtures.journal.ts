@@ -37,13 +37,19 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-1",
+          "ts": "2026-10-01T11:59:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:59:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "epic-golden",
         "task_ids": [],
@@ -78,13 +84,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:57:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "fix/7-golden-nested",
         "task_ids": [],
@@ -151,8 +160,10 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:54:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:53:00+00:00",
         "publish": {
@@ -161,6 +172,7 @@ export const STATUS_GOLDEN = {
           "kind": "authorized",
           "seq": 42
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-flow",
         "task_ids": [
@@ -204,13 +216,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:38:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:37:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-named",
         "task_ids": [],
@@ -241,13 +256,16 @@ export const STATUS_GOLDEN = {
           "type": "flow-started"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-started",
         "task_ids": [],
@@ -288,13 +306,19 @@ export const STATUS_GOLDEN = {
           "type": "gate-decision"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-user",
+          "ts": "2026-10-01T11:29:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-user",
         "task_ids": [],
@@ -329,13 +353,16 @@ export const STATUS_GOLDEN = {
           "type": "review-verdict"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:26:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-signals",
         "task_ids": [],
@@ -377,13 +404,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:18:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dispositions",
         "task_ids": [],
@@ -418,13 +448,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "dormant",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-09-21T11:31:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dormant",
         "task_ids": [],
@@ -459,13 +492,16 @@ export const STATUS_GOLDEN = {
           "type": "flow-completed"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "terminal",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:33:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-done",
         "task_ids": [],
@@ -546,8 +582,10 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:54:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:53:00+00:00",
         "publish": {
@@ -556,6 +594,7 @@ export const STATUS_GOLDEN = {
           "kind": "authorized",
           "seq": 42
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-flow",
         "task_ids": [
@@ -592,13 +631,19 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-1",
+          "ts": "2026-10-01T11:59:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:59:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "epic-golden",
         "task_ids": [],
@@ -633,13 +678,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:57:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "fix/7-golden-nested",
         "task_ids": [],
@@ -681,13 +729,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:38:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:37:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-named",
         "task_ids": [],
@@ -718,13 +769,16 @@ export const STATUS_GOLDEN = {
           "type": "flow-started"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-started",
         "task_ids": [],
@@ -765,13 +819,19 @@ export const STATUS_GOLDEN = {
           "type": "gate-decision"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-user",
+          "ts": "2026-10-01T11:29:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-user",
         "task_ids": [],
@@ -806,13 +866,16 @@ export const STATUS_GOLDEN = {
           "type": "review-verdict"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:26:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-signals",
         "task_ids": [],
@@ -854,13 +917,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:18:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dispositions",
         "task_ids": [],
@@ -895,13 +961,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "dormant",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-09-21T11:31:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dormant",
         "task_ids": [],
@@ -950,13 +1019,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:57:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "fix/7-golden-nested",
         "task_ids": [],
@@ -991,13 +1063,19 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-1",
+          "ts": "2026-10-01T11:59:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:59:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "epic-golden",
         "task_ids": [],
@@ -1064,8 +1142,10 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:54:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:53:00+00:00",
         "publish": {
@@ -1074,6 +1154,7 @@ export const STATUS_GOLDEN = {
           "kind": "authorized",
           "seq": 42
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-flow",
         "task_ids": [
@@ -1117,13 +1198,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:38:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:37:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-named",
         "task_ids": [],
@@ -1154,13 +1238,16 @@ export const STATUS_GOLDEN = {
           "type": "flow-started"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-started",
         "task_ids": [],
@@ -1201,13 +1288,19 @@ export const STATUS_GOLDEN = {
           "type": "gate-decision"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-user",
+          "ts": "2026-10-01T11:29:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-user",
         "task_ids": [],
@@ -1242,13 +1335,16 @@ export const STATUS_GOLDEN = {
           "type": "review-verdict"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:26:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-signals",
         "task_ids": [],
@@ -1290,13 +1386,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:18:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dispositions",
         "task_ids": [],
@@ -1331,13 +1430,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "dormant",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-09-21T11:31:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dormant",
         "task_ids": [],
@@ -1388,13 +1490,19 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-1",
+          "ts": "2026-10-01T11:59:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:59:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "epic-golden",
         "task_ids": [],
@@ -1429,13 +1537,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:57:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "fix/7-golden-nested",
         "task_ids": [],
@@ -1502,8 +1613,10 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:54:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:53:00+00:00",
         "publish": {
@@ -1512,6 +1625,7 @@ export const STATUS_GOLDEN = {
           "kind": "authorized",
           "seq": 42
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-flow",
         "task_ids": [
@@ -1555,13 +1669,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:38:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:37:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-named",
         "task_ids": [],
@@ -1592,13 +1709,16 @@ export const STATUS_GOLDEN = {
           "type": "flow-started"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-started",
         "task_ids": [],
@@ -1639,13 +1759,19 @@ export const STATUS_GOLDEN = {
           "type": "gate-decision"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-user",
+          "ts": "2026-10-01T11:29:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-user",
         "task_ids": [],
@@ -1680,13 +1806,16 @@ export const STATUS_GOLDEN = {
           "type": "review-verdict"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:26:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-signals",
         "task_ids": [],
@@ -1728,13 +1857,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:18:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dispositions",
         "task_ids": [],
@@ -1769,13 +1901,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "dormant",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-09-21T11:31:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dormant",
         "task_ids": [],
@@ -1827,13 +1962,19 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-1",
+          "ts": "2026-10-01T11:59:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:59:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": true,
         "stream": "epic-golden",
         "task_ids": [],
@@ -1868,13 +2009,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:57:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "fix/7-golden-nested",
         "task_ids": [],
@@ -1941,8 +2085,10 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:54:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:53:00+00:00",
         "publish": {
@@ -1951,6 +2097,7 @@ export const STATUS_GOLDEN = {
           "kind": "authorized",
           "seq": 42
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-flow",
         "task_ids": [
@@ -1994,13 +2141,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:38:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:37:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-named",
         "task_ids": [],
@@ -2031,13 +2181,16 @@ export const STATUS_GOLDEN = {
           "type": "flow-started"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-started",
         "task_ids": [],
@@ -2078,13 +2231,19 @@ export const STATUS_GOLDEN = {
           "type": "gate-decision"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-user",
+          "ts": "2026-10-01T11:29:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-user",
         "task_ids": [],
@@ -2119,13 +2278,16 @@ export const STATUS_GOLDEN = {
           "type": "review-verdict"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:26:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-signals",
         "task_ids": [],
@@ -2167,13 +2329,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:18:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dispositions",
         "task_ids": [],
@@ -2208,13 +2373,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "dormant",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-09-21T11:31:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dormant",
         "task_ids": [],
@@ -2269,13 +2437,19 @@ export const STATUS_GOLDEN = {
           "type": "gate-decision"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-user",
+          "ts": "2026-10-01T11:29:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": true,
         "stream": "feature/golden-user",
         "task_ids": [],
@@ -2310,13 +2484,21 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": {
+          "session": "session-golden-1",
+          "ts": "2026-10-01T11:59:00+00:00"
+        },
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": {
+          "minutes": 1
+        },
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:59:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "epic-golden",
         "task_ids": [],
@@ -2351,13 +2533,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-10-01T11:57:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "fix/7-golden-nested",
         "task_ids": [],
@@ -2424,8 +2609,10 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:54:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:53:00+00:00",
         "publish": {
@@ -2434,6 +2621,7 @@ export const STATUS_GOLDEN = {
           "kind": "authorized",
           "seq": 42
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-flow",
         "task_ids": [
@@ -2477,13 +2665,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:38:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "implement",
         "phase_entered_at": "2026-10-01T11:37:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-named",
         "task_ids": [],
@@ -2514,13 +2705,16 @@ export const STATUS_GOLDEN = {
           "type": "flow-started"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": null,
         "phase_entered_at": null,
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-started",
         "task_ids": [],
@@ -2555,13 +2749,16 @@ export const STATUS_GOLDEN = {
           "type": "review-verdict"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:26:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-signals",
         "task_ids": [],
@@ -2603,13 +2800,16 @@ export const STATUS_GOLDEN = {
           ],
           "ts": "2026-10-01T11:18:00+00:00"
         },
+        "last_writer": null,
         "lifecycle": "live",
         "open_designs": [],
+        "other_session": null,
         "phase": "review",
         "phase_entered_at": "2026-10-01T11:19:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dispositions",
         "task_ids": [],
@@ -2644,13 +2844,16 @@ export const STATUS_GOLDEN = {
           "type": "phase-entered"
         },
         "last_verify": null,
+        "last_writer": null,
         "lifecycle": "dormant",
         "open_designs": [],
+        "other_session": null,
         "phase": "workspace",
         "phase_entered_at": "2026-09-21T11:31:00+00:00",
         "publish": {
           "kind": "held"
         },
+        "pull_request": null,
         "session_match": false,
         "stream": "feature/golden-dormant",
         "task_ids": [],

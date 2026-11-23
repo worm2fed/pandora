@@ -160,9 +160,10 @@ go from the user; an unattended project, which has no user to answer, needs that
     instruction, not trivia. Say what you're registering as you do it.
   - **feature**, resume detection: a watcher event naming an issue is a valid resume
     trigger. Map it: reviewer comments → the review-feedback cycle (defined in the
-    `review` skill); own MR/PR merged → residual ledger triage only — the main Capture
-    already ran when review passed (then the next child issue, if any); a watched one merged →
-    resume the held work per its note; conflicts / failed CI → fix before review continues.
+    `review` skill); own MR/PR merged → the close-out (`journal.py closeout`), whose first
+    step is the residual ledger triage (then the next child issue, if any); a watched one
+    merged → resume the held work per its note; conflicts / failed CI → fix before review
+    continues.
 - The watcher is strictly read-only. It suggests; the user triggers every resume.
 - Optional, when a **Journal** is configured: a watcher may append what it observes to
   `watch/<project>!<iid>` streams via the plugin's `journal.py` (`baseline`,
@@ -171,6 +172,15 @@ go from the user; an unattended project, which has no user to answer, needs that
   crashed tick loses the intervening history; journalling makes the snapshot a cache and
   the history reconstructable. Suggestion, not a requirement — a watcher that doesn't do
   this still works exactly as described above.
+
+## Close-out
+
+<!-- Default when absent: the close-out runs its built-in steps only. `journal.py closeout`
+     lists these steps after the update of the integration branch and before the report.
+     Each step here waits for the user's one answer: a project's steps are arbitrary
+     commands, so none runs with no question. -->
+
+- <Label>: <the action, e.g. tag the version-bump commit>
 
 ## Branching
 

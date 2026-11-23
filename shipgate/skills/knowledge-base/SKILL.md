@@ -188,7 +188,8 @@ tell what was judged not worth keeping.
 no residual triage and no next child issue. Then append `flow-completed` {reason} straight
 after `capture-done`. Make it the second line of the same `append --batch` (stdin form: see
 `verify`). That event lets a finished stream leave every later session's status brief. A
-stream nobody closes is read as live work forever.
+stream nobody closes is read as live work forever. After `mr-opened`, the close-out writes
+`flow-completed` once the merge is observed, with its evidence (`feature`, **Close-out**).
 
 A missing or unreadable database is an infrastructure failure, not a reason to skip the
 append. Surface it loudly. Continue un-journaled only with the user's acknowledgement.

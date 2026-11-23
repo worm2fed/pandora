@@ -2,6 +2,80 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.30.0 — a smaller status brief and the close-out of a merged stream: the brief prints the bound streams and one count line, `journal.py closeout` plans the close-out from forge and git evidence, and `journal.py sweep` proposes an end for each dormant stream.
+
+**The brief cost about 7,400 characters at every session start (#31, ADR 0024).** It
+printed every open stream, and a stream stayed open after its PR merged. On a copy of a
+production journal (26 open streams: 6 live, 20 dormant; 69 finished), the six live streams
+the session did not drive took 72% of it.
+- **Plain `status` prints only the bound streams in full**: the one this session drives and
+  the one the checkout names. Every other stream goes into one count line, for example
+  `not shown: 4 live, 20 dormant, 67 finished — list: journal.py streams --open · close
+  dormant: journal.py sweep`. A zero count is left out. On that copy, with the hook's
+  header: 7,392 → 266 characters on the integration branch, and 7,714 → 1,372 in a
+  worktree that binds the newest live stream. The size no longer grows with the number of
+  streams. `--all`, `--feature` and `--json` print what they printed before; `--json` gains
+  `last_writer`, `pull_request` and `other_session` per stream.
+- **The ownership mark.** A bound stream that another session wrote within 30 minutes
+  prints `ownership : another session wrote this 12m ago`. Hook rows and the rows of the
+  approval path do not count; the count line says how many of the others carry it.
+- **`journal.py streams --open | --dormant [--json]`** lists the streams the brief counts:
+  lifecycle, phase, last event, idle days, the PR/MR URL and the ownership mark.
+- `feature` runs `streams --open` before it opens a new stream or says nothing is in flight
+  when no stream is bound, then `handoff` for the one to resume.
+- After `mr-opened`, the bound block and `handoff` print `close-out : after the merge, run
+  journal.py closeout --stream=<s>`.
+- The recorder's line after a partial write now prints `status --all`, because plain
+  `status` no longer shows an unbound stream.
+
+**After a merge, nothing in the plugin acted (#31, ADR 0025, ADR 0026).** A lead closed each
+stream by hand: tag the release, update `main`, tick the tracking issue, append
+`flow-completed`, remove the worktree, delete the branch.
+- **`journal.py closeout --stream <s>`** prints an observe script; the flow runs it, and it
+  writes the forge's PR/MR state (`gh` or `glab`), the integration branch git names
+  (`origin/HEAD`), the refs, the refs merged into it, its first-parent line, `git worktree
+  list` and the stream worktree's `git status --porcelain --ignored
+  --untracked-files=normal` into a fresh directory. The rerun with `--observed <dir>`
+  decides from that evidence: the forge first, git ancestry as the fallback; the user's word
+  is never evidence. A stream with no PR/MR on a forge that answered is never merged. With
+  no forge evidence, git calls a branch merged only when a merge commit took its tip off the
+  integration branch's first-parent line, so a branch cut from it with no commit of its own
+  never reads as merged. The close-out acts only on the branch named exactly as the stream,
+  and on the recorded PR/MR or one whose head is the stream; any other stream exits 4 and
+  names `journal.py sweep`. A PR/MR that did not merge exits 4 with no step. A merged one
+  gets the steps in order, each `[run]`, `[ask]` or `[skip]` (done already, so a rerun
+  resumes): capture, `flow-completed` with its evidence, the update of the integration
+  branch on a clean tree, the project's own steps, the report, and last, in one Bash call,
+  the worktree removal and `git branch -d`. `journal.py` still runs no subprocess.
+- **The built-in local steps run with no question; the project's own steps wait for one.**
+  So does the worktree removal when the worktree holds an ignored or untracked path, or its
+  files were not observed: git deletes ignored files with the worktree, so the step lists
+  the count and the first paths, and an unchosen removal keeps the worktree and its branch.
+  The flow asks one `AskUserQuestion` with the header `Close-out`, each option with its
+  command beside its label, records the answer as the user's `gate-decision` at gate
+  `close-out`, and runs only the chosen steps. No step takes `--force`, `-f` or `-D`; a step
+  git refuses stops.
+- **A squash-merged branch.** `git branch -d` refuses it, so its deletion is an `[ask]`
+  step: `git update-ref -d refs/heads/<b> <oid>`, guarded by the commit the forge merged.
+  It runs in the last Bash call after the worktree removal, because git refuses to remove a
+  worktree whose branch ref is gone (ADR 0026 amendment).
+- **A new optional config section, `## Close-out`**, declares the project's own post-merge
+  steps: `- <Label>: <action>`. Each one is an arbitrary command, so each waits for the
+  one close-out question. This repo's config names the tag and the tick in the tracking
+  issue.
+- **`journal.py sweep`** proposes `flow-completed` (merged), `flow-abandoned` (closed
+  unmerged), `unknown` or keep for each dormant stream, from one forge list query, each
+  with its source. It guesses nothing: it reads the branch and the PR/MR head of the
+  stream's exact name, and the recorded PR/MR. With none of them the proposal is
+  `unknown`, the user decides, and the line shows what the sweep looked for. `sweep
+  --observed <dir> --apply` appends the terminal ones after one confirmation, appends
+  nothing for `unknown` or keep, and skips and names a stream that moved after the evidence
+  was observed.
+- `flow-completed` and `flow-abandoned` take optional `reason`, `evidence` and `url`.
+- `feature` routes the user's "merged" and a watcher's `merged` event to a new
+  **Close-out** section; `review` and `knowledge-base` point at it. No hook reads the word.
+- No hook file and no hook contract changes.
+
 v0.29.0 — the security review sees the change: a briefed reviewer reads the working tree before the commit, the built-in `/security-review` runs on the commit before the push, and the verdict names the review and the files it read.
 
 **The built-in `/security-review` reviewed an empty diff (#40).** `feature` and `review`
