@@ -143,7 +143,7 @@ def _render_ledger(status: Dict[str, Any]) -> List[str]:
     entries = ledger["entries"]
     line = (
         f"ledger       : {entries} untriaged "
-        f"{'entry' if entries == 1 else 'entries'} in {ledger['path']}"
+        f"{'entry' if entries == 1 else 'entries'} in {_clip(ledger['path'])}"
     )
     if ledger.get("nudge"):
         line += "  — worth triaging (see knowledge-base)"
@@ -172,7 +172,7 @@ def _render_dormant(feature: Dict[str, Any]) -> str:
 
 def _render_feature(feature: Dict[str, Any]) -> List[str]:
     lines = [
-        f"{_one_line(feature['stream'])}  (v{feature['version']})"
+        f"{_clip(feature['stream'])}  (v{feature['version']})"
         + ("  · this session" if feature.get("session_match") else "")
         + ("  · terminal" if feature.get("terminal") else "")
     ]

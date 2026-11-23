@@ -2,10 +2,10 @@
 type: adr
 title: "0003. Canonical actors; session attribution from the last session-started"
 created: 2026-09-02
-updated: 2026-11-20
+updated: 2026-11-23
 tags:
   - adr
-status: accepted (label default amended by 0005; event_session amended by 0010; fallback retired 2026-11-20, shipgate 0.27.1, by 0005's amendment)
+status: accepted (label default amended by 0005; event_session amended by 0010; fallback retired 2026-11-20, shipgate 0.27.1, by 0005's amendment; the stored session retired 2026-11-23, shipgate 0.30.3, by 0005's second amendment)
 date: 2026-09-02
 issue: "none / ad-hoc"
 related: ["../prd/journal-cost-and-workflows.md", "0001-sqlite-flow-journal.md"]
@@ -56,5 +56,7 @@ for a single-user tool, and an explicit `@label` overrides the default. *Amended
 the label now comes from the appending shell's `CLAUDE_CODE_SESSION_ID` when it is set, so
 concurrent sessions keep their own; `meta.current_session` remains the fallback. *Amended by
 ADR 0005's 2026-11-20 amendment (#46):* the fallback is retired, and an append with no
-variable records no session; the key stays as a diagnostic only. Role becomes
+variable records no session; the key stays as a diagnostic only. *Amended by ADR 0005's
+2026-11-23 amendment (#51):* the hook no longer writes the key, and `session` is a no-op for
+one release. Role becomes
 queryable (`stats` groups by it), and the Stop gate's rule B starts working for skills.

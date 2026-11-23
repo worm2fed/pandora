@@ -383,13 +383,13 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
     (or nothing) otherwise. The commit and publish gates are the exception: the recorder
     or the user records the go, never you, in any form (form: `review`, **The user's
     go**). A worker that appends passes `--actor worker`.
-    The form is `role[@label]`. If you omit the label, `append` fills in the current
-    session, except for the sessionless roles `user` and `watcher`. Their label is never
-    a session id. A `user` event records the session that wrote it under
-    `data.recorded_by` instead, so the user's decisions still bind this session to the
-    stream. The go rows of the commit and publish gates are the exception: a go request,
-    a witness and a go with the marker `question` or `prompt` bind no session (ADR 0023
-    §13).
+    The form is `role[@label]`. If you omit the label, `append` fills in the session in
+    `CLAUDE_CODE_SESSION_ID`. A shell with no such variable records no session. The
+    sessionless roles `user` and `watcher` never take a session id as their label. A
+    `user` event records the session that wrote it under `data.recorded_by` instead, so
+    the user's decisions still bind this session to the stream. The go rows of the commit
+    and publish gates are the exception: a go request, a witness and a go with the marker
+    `question` or `prompt` bind no session (ADR 0023 §13).
 
   Hooks capture what the harness can see: artifact writes, session start and end. The Stop
   hook blocks a session that did one of two things:

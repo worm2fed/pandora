@@ -196,7 +196,7 @@ branch), then the checked-out branch's. Every other stream goes into one count l
 | `check --session ID [--json] [--record]` | what the flow still owes (the Stop hook's source): `findings`, the worklogs it `skipped` and why, and the `waivers` that would clear the findings. `--record` stamps the run as the last check: one `meta` value, no event |
 | `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review". `go` counts the go records by marker (`dialog`, `shell`, `question`, `prompt`) |
 | `streams --open \| --dormant [--json]` | one line per open (or dormant) stream: lifecycle, phase, last event, idle days, the PR/MR URL, and the ownership mark when `CLAUDE_CODE_SESSION_ID` names another session than the last writer |
-| `log`, `streams`, `session --set/--get`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, the session that started last (a diagnostic; no append reads it), schema, health, portability. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
+| `log`, `streams`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, schema, health, portability. `session` is retired: it reads and writes nothing, and a later release removes it. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
@@ -225,8 +225,7 @@ it. The message lists the open keys and the `review-disposition` row that closes
 `role[@label]` with role ∈ `orchestrator | worker | user | hook | watcher`; omit it and the append is attributed to the orchestrator plus
 the appending session — `CLAUDE_CODE_SESSION_ID` from the shell's environment (a subagent's
 shell carries its parent's). A shell with no such variable records no session, so its row
-binds and counts for no session; `session --get` only reports the session that started last
-(ADR 0005). `user` and
+binds and counts for no session (ADR 0005). `user` and
 `watcher` never take a session label. A `user` event records the appending session as
 `data.recorded_by` instead, so `status --session`, `check` and `stats` count the session that
 recorded the user's decision (ADR 0010). A stream ends with `flow-completed` and leaves the

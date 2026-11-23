@@ -14,7 +14,8 @@ from _common import find_project, run_journal
 
 # The appends after which a fresh session pays off. journal.py decides whether a verdict
 # counts (only `not-ready` does) and whether the context is past the threshold. The hook's
-# NUDGE_WORDS and journal.py's NUDGE_EVENTS name the same two (a test holds them equal).
+# NUDGE_WORDS and NUDGE_EVENTS in scripts/_journal/handoff.py name the same two (a test
+# holds them equal).
 BOUNDARY_EVENTS = ("design-committed", "review-verdict")
 # `append`'s text summary: `appended <type> to <stream>: seq <n>, version <n>`.
 APPEND_SUMMARY = (
