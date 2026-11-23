@@ -2,10 +2,10 @@
 type: adr
 title: "0005. The session label comes from the appending shell; status --session"
 created: 2026-10-08
-updated: 2026-11-20
+updated: 2026-11-23
 tags:
   - adr
-status: accepted (decisions 1 and 2 amended by 0010; amended 2026-11-20, shipgate 0.27.1)
+status: accepted (decisions 1 and 2 amended by 0010; amended 2026-11-20, shipgate 0.27.1; amended 2026-11-23, shipgate 0.30.3)
 date: 2026-10-08
 issue: "none / ad-hoc"
 related: ["0003-session-attribution-via-current-session.md", "../../../shipgate-hud/docs/adr/0001-sibling-plugin-fed-by-the-journal-cli.md"]
@@ -20,6 +20,9 @@ related: ["0003-session-attribution-via-current-session.md", "../../../shipgate-
 > **Amended 2026-11-20 (shipgate 0.27.1, #46):** the fallback to `meta.current_session` is retired. An append
 > from a shell with no `CLAUDE_CODE_SESSION_ID` records no session. See the Amendment
 > section.
+>
+> **Amended 2026-11-23 (shipgate 0.30.3, #51):** the hook no longer stores the session, and
+> `journal.py session` is a no-op for one release. See the second amendment.
 
 ## Context
 
@@ -131,3 +134,37 @@ branch until it writes a row of its own. Rule C of the Stop gate does not see a 
 approval path (ADR 0023) appended with no session names no session, so it can never match a
 witness through a borrowed id. `stats` and `check` counts on rows written before this change
 stay as written.
+
+## Amendment (2026-11-23, #51): the stored session is retired
+
+### Context
+
+Decision 3 of the amendment above kept `meta.current_session` as a diagnostic: the
+SessionStart hook wrote it, and `session --get` printed it. Since #46 no append reads it.
+The hook still ran `journal.py session --set` on every start. That was one subprocess per
+start for a value that nothing reads. When the call failed, the hook told the session that
+its appends "will carry no session label", which was no longer true. The Bash tool's shell
+carries `CLAUDE_CODE_SESSION_ID` since Claude Code 2.1.132, so no skill needs the stored
+value either.
+
+### Decision
+
+1. **The hook stops storing the session.** The SessionStart hook no longer runs
+   `session --set` and no longer adds the attribution notice. It still passes the session
+   id to `status --session`.
+2. **`journal.py session` stays one release as a no-op.** It accepts `--set ID`, `--get`
+   and `--json` as before. It reads no sidecar, opens no journal, writes nothing and
+   exits 0. It prints that it is retired; with `--json` it prints
+   `{"current_session": null, "retired": true}`. A later release removes it. A removal
+   now would change the CLI contract: a user's script that still calls the command would
+   fail with a usage error. In this repository only the hook
+   called it: shipgate-hud, the skills and the evals never did.
+3. **Old journals keep the row.** Nothing reads or writes `meta.current_session`, so no
+   migration removes it. The tests that prove such a row never labels an append write it
+   with SQL.
+
+### Consequences
+
+A session start costs one journal run less. A journal created from now on holds no
+`current_session` row. Decision 3 of the amendment of 2026-11-20 is retired; the rest of
+this ADR stands.

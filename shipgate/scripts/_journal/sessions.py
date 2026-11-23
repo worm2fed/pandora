@@ -7,31 +7,10 @@ import sqlite3
 from typing import Any, Dict, Optional
 
 from .vocab import (
-    ACTOR_ROLES, InfraError, RECORDED_BY_KEY, RECORDED_BY_ROLES, SESSION_ENV,
-    SESSIONLESS_ROLES, UsageError,
+    ACTOR_ROLES, RECORDED_BY_KEY, RECORDED_BY_ROLES, SESSION_ENV, SESSIONLESS_ROLES,
+    UsageError,
 )
-from .store import _set_meta, _table_exists, Event, get_meta
-
-
-def current_session(conn: sqlite3.Connection) -> Optional[str]:
-    """The session id the SessionStart hook stored last, if any (ADR 0003).
-
-    Diagnostic only, for `session --get`: the session that started last. Since #46 no
-    append reads it as its own session (ADR 0005, amendment 2026-11-20).
-    """
-    if not _table_exists(conn, "meta"):
-        return None
-    return get_meta(conn, "current_session") or None
-
-
-def set_current_session(conn: sqlite3.Connection, session_id: str) -> None:
-    """Record the session id (ADR 0003). One statement, so no explicit transaction."""
-    if not _table_exists(conn, "meta"):
-        raise InfraError(
-            "this journal has no meta table, so the session cannot be recorded — "
-            "run `journal.py init`"
-        )
-    _set_meta(conn, "current_session", session_id)
+from .store import Event
 
 
 def parse_actor(
@@ -71,10 +50,11 @@ def appending_session(conn: sqlite3.Connection) -> Optional[str]:
     """The session running this append (ADR 0005): the shell's ``CLAUDE_CODE_SESSION_ID``,
     else None.
 
-    Never ``meta.current_session``: that names the session that started last, which need
-    not be the one appending (#46). A shell with no variable — a mod's process run, a client
-    older than 2.1.132, a terminal outside Claude Code — records no session, so its row
-    binds and counts for none. ``conn`` stays in the signature for its callers.
+    Never ``meta.current_session``, which an older SessionStart hook left in a journal: it
+    names the session that started last, which need not be the one appending (#46). A
+    shell with no variable — a mod's process run, a client older than 2.1.132, a terminal
+    outside Claude Code — records no session, so its row binds and counts for none.
+    ``conn`` stays in the signature for its callers.
     """
     return os.environ.get(SESSION_ENV, "").strip() or None
 

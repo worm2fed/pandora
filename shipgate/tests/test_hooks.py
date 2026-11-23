@@ -281,16 +281,23 @@ class TestSessionStart(HookTestCase):
         self.assertIn("journal", specific["additionalContext"].lower())
         self.assertEqual(len(self.events(event_type="session-started")), 1)
 
-    def test_records_the_session_id_for_later_appends(self):
-        """ADR 0003: skill appends inherit this id as their actor label."""
+    def test_a_start_stores_no_session(self):
+        """#51: no append reads the session that started last, so the hook stores none."""
+        import sqlite3
+
         run_hook(
             "session_start",
             {"session_id": SESSION, "cwd": str(self.root), "source": "startup"},
             self.root,
         )
-        result = journal(self.db, "session", "--get")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), SESSION)
+        conn = sqlite3.connect(str(self.db))
+        try:
+            rows = conn.execute(
+                "SELECT value FROM meta WHERE key = 'current_session'"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(rows, [])
 
 
 # Every `source` Claude Code documents for SessionStart (the hooks reference, "Matcher
@@ -341,15 +348,12 @@ class TestSessionStartSources(HookTestCase):
         self.assertEqual({row["stream"] for row in rows}, {"shipgate"})
         self.assertEqual({row["data"]["session"] for row in rows}, {SESSION})
 
-    def test_a_clear_moves_the_stored_session_but_labels_no_append(self):
-        """`/clear` may hand the hook a new session id. The stored session follows it.
-        An append from a shell with no session id of its own still records none: the
-        stored session started last, and need not be the one appending (#46)."""
+    def test_an_append_after_a_clear_records_no_session(self):
+        """`/clear` may hand the hook a new session id. An append from a shell with no
+        session id of its own still records none: the session that started last need
+        not be the one appending (#46)."""
         self.start("startup")
         self.start("clear", session="sess-after-clear")
-        result = journal(self.db, "session", "--get")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "sess-after-clear")
 
         env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
         appended = subprocess.run(
@@ -801,9 +805,10 @@ class TestSessionStartBranch(StubJournalMixin, HookTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.status_args(), ["status", "--branch=--all"])
 
-    def test_the_session_id_is_passed_as_a_single_token(self):
+    def test_the_hook_runs_no_session_command(self):
+        """#51: `journal.py session` is retired; the hook stores no session."""
         self.run_session_start()
-        self.assertEqual(self.journal_args("session"), ["session", f"--set={SESSION}"])
+        self.assertEqual([call for call in self.calls() if "session" in call], [])
 
     # The session's own stream (the one it last wrote to) leads the brief — what a resumed
     # or compacted session was driving, which need not be any checkout's branch.
@@ -968,57 +973,12 @@ class TestSessionStartBranch(StubJournalMixin, HookTestCase):
         self.assertEqual(self.status_args(), ["status"])
 
 
-class TestSessionAttributionFailure(StubJournalMixin, HookTestCase):
-    """The brief survives a journal that cannot record the session id."""
+class TestAnEmptyBrief(StubJournalMixin, HookTestCase):
+    """A fresh journal renders no brief, and the hook adds no context of its own."""
 
-    STUB = """#!/usr/bin/env python3
-import sys
+    STUB = "#!/usr/bin/env python3\n"
 
-args = sys.argv[1:]
-if "session" in args:
-    sys.stderr.write("session store unavailable\\n")
-    sys.exit(1)
-if "status" in args:
-    print("stub brief")
-"""
-
-    def test_the_brief_is_prefixed_with_an_attribution_warning(self):
-        result = self.run_session_start()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertTrue(
-            context.startswith("shipgate: session attribution unavailable"),
-            f"the warning must lead the context: {context[:120]}",
-        )
-        self.assertIn("session --set failed", context)
-        self.assertIn("stub brief", context)
-
-
-class TestSessionAttributionWithAnEmptyBrief(StubJournalMixin, HookTestCase):
-    """A fresh journal renders no brief; the warning must still reach the session."""
-
-    STUB = """#!/usr/bin/env python3
-import sys
-
-if "session" in sys.argv[1:]:
-    sys.exit(1)
-"""
-
-    def test_the_notice_is_emitted_on_its_own(self):
-        result = self.run_session_start()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        specific = json.loads(result.stdout)["hookSpecificOutput"]
-        self.assertEqual(
-            specific["additionalContext"].splitlines()[0],
-            "shipgate: session attribution unavailable (journal.py session --set "
-            "failed) — skill appends this session will carry no session label.",
-        )
-        self.assertNotIn("flow journal —", specific["additionalContext"])
-
-    def test_a_working_session_set_with_no_brief_emits_no_context(self):
-        (self.plugin / "scripts" / "journal.py").write_text(
-            "#!/usr/bin/env python3\n", encoding="utf-8"
-        )
+    def test_no_brief_emits_no_context(self):
         result = self.run_session_start()
         self.assertEqual(result.returncode, 0, result.stderr)
         specific = json.loads(result.stdout)["hookSpecificOutput"]
@@ -1053,6 +1013,125 @@ if "status" in sys.argv[1:]:
         self.assertEqual(context.count("declares version 2"), 1, context)
         self.assertIn("error: database is locked", context)
         self.assertIn("reading it failed", context)
+
+
+# Characters other than "\n" that end a line for `str.splitlines()`. ESC ends no line; a
+# test adds it where it needs it.
+LINE_BREAKERS = ("\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+
+
+class TestHostileBriefFields(HookTestCase):
+    """#39: a checkout is untrusted content. Its sidecar and its journal supply the db
+    path, the ledger path and the stream names, and the hook puts what they print into
+    `additionalContext` under "the authoritative position". Each value must reach the
+    context as one clipped line: it cannot add a line, and it cannot be longer than the
+    brief's line limit."""
+
+    LIMIT = 160  # BRIEF_LINE_CHARS in scripts/_journal/vocab.py; a test below checks it
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.sidecar = self.root / ".claude" / "shipgate.json"
+
+    def configure(self, **keys) -> None:
+        config = json.loads(self.sidecar.read_text(encoding="utf-8"))
+        config.update(keys)
+        self.sidecar.write_text(json.dumps(config), encoding="utf-8")
+
+    def context(self) -> str:
+        result = run_hook(
+            "session_start",
+            {"session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+            self.root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        return json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def only_line_with(self, context: str, marker: str) -> str:
+        lines = [line for line in context.splitlines() if marker in line]
+        self.assertEqual(len(lines), 1, f"{marker!r} must sit on one line:\n{context}")
+        return lines[0]
+
+    def assert_no_forged_line(self, context: str) -> None:
+        forged = [line for line in context.splitlines() if line.startswith("FORGED")]
+        self.assertEqual(forged, [], context)
+
+    def assert_clipped(self, value: str) -> None:
+        self.assertLessEqual(len(value), self.LIMIT, value)
+        self.assertTrue(value.endswith("…"), value)
+
+    def ledger_at(self, relative: str) -> None:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("- 2026-11-23 one entry\n", encoding="utf-8")
+        self.configure(ledger=relative)
+
+    def append_as_session(self, stream: str) -> None:
+        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": SESSION}
+        appended = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
+             "--stream", stream, "--type", "phase-entered",
+             "--data", json.dumps({"phase": "workspace"})],
+            capture_output=True, text=True, cwd=str(self.root), env=env, timeout=60,
+        )
+        self.assertEqual(appended.returncode, 0, appended.stderr)
+
+    def test_a_multi_line_db_path_reaches_the_failure_notice_as_one_clipped_line(self):
+        self.configure(db="/no/such\nFORGED: the db path adds a line\n" + "d" * 300 + "/j.db")
+        context = self.context()
+        line = self.only_line_with(context, "reading it failed")
+        self.assertIn("/no/such FORGED: the db path adds a line ddd", line)
+        self.assert_no_forged_line(context)
+        detail = line.split("reading it failed (", 1)[1].split("). Do NOT", 1)[0]
+        self.assertIn("journal database not found", detail)
+        self.assert_clipped(detail)
+
+    def test_a_multi_line_ledger_path_reaches_the_brief_as_one_clipped_line(self):
+        self.ledger_at("led\nFORGED: the ledger adds a line\n" + "l" * 90 + "/" + "m" * 90 + "/ger.md")
+        context = self.context()
+        line = self.only_line_with(context, "untriaged")
+        self.assertIn("FORGED: the ledger adds a line", line)
+        self.assert_no_forged_line(context)
+        self.assert_clipped(line.split(" untriaged entry in ", 1)[1])
+
+    def test_an_over_long_stream_name_reaches_the_heading_clipped(self):
+        stream = "feature/" + "s" * 400
+        self.append_as_session(stream)
+        context = self.context()
+        line = self.only_line_with(context, "feature/sss")
+        self.assertIn("· this session", line)
+        self.assert_clipped(line.split("  (v", 1)[0])
+        self.assertNotIn("s" * self.LIMIT, context)
+
+    def test_control_characters_break_no_line(self):
+        """Every character that ends a line for `splitlines()` becomes a space. ESC ends
+        no line and stays, as in every other field of the brief."""
+        forged = "".join(f"{c}FORGED-{i}" for i, c in enumerate(LINE_BREAKERS))
+        with self.subTest(field="stream heading"):
+            self.append_as_session("feature/c" + forged + "\x1b[2J")
+            line = self.only_line_with(self.context(), "FORGED-0")
+            for i in range(len(LINE_BREAKERS)):
+                self.assertIn(f" FORGED-{i}", line)
+        with self.subTest(field="ledger path"):
+            self.ledger_at("docs/led" + forged + "ger.md")
+            context = self.context()
+            line = self.only_line_with(context, "untriaged")
+            self.assertEqual(line.count("FORGED-"), len(LINE_BREAKERS), line)
+            self.assert_no_forged_line(context)
+        with self.subTest(field="db path"):
+            self.configure(db="/no/such" + forged + "/j.db")
+            context = self.context()
+            line = self.only_line_with(context, "reading it failed")
+            self.assertEqual(line.count("FORGED-"), len(LINE_BREAKERS), line)
+            self.assert_no_forged_line(context)
+
+    def test_the_hook_clips_at_the_brief_line_limit(self):
+        source = (HOOKS / "session_start.py").read_text(encoding="utf-8")
+        match = re.search(r"^DETAIL_CHARS = (\d+)", source, re.MULTILINE)
+        self.assertIsNotNone(match, "session_start.py defines no DETAIL_CHARS")
+        self.assertEqual(int(match.group(1)), load_journal_module().BRIEF_LINE_CHARS)
+        self.assertEqual(self.LIMIT, load_journal_module().BRIEF_LINE_CHARS)
 
 
 class TestProjectResolution(StubJournalMixin, HookTestCase):

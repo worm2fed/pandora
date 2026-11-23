@@ -739,8 +739,8 @@ class TestSessionMatch(JournalTestCase):
 class TestSessionlessAppend(JournalTestCase):
     """Issue #46: two sessions share one journal, and one appends from a shell with no
     CLAUDE_CODE_SESSION_ID (a mod's process run, an older client, a terminal outside
-    Claude Code). The SessionStart hook stored the other session's id last. The row must
-    record no session, so it binds and counts for neither."""
+    Claude Code). An older SessionStart hook stored the other session's id last. The row
+    must record no session, so it binds and counts for neither."""
 
     A = "aaaaaaaa-0000-4000-8000-00000000000a"
     B = "bbbbbbbb-0000-4000-8000-00000000000b"
@@ -748,9 +748,8 @@ class TestSessionlessAppend(JournalTestCase):
     def setUp(self):
         super().setUp()
         self.init_db()
-        # A starts, then B: the hook's stored session is B's.
-        self.journal("--db", self.db, "session", "--set", self.A, rc=OK)
-        self.journal("--db", self.db, "session", "--set", self.B, rc=OK)
+        # A starts, then B: an older hook's stored session is B's.
+        self.store_legacy_session(self.B)
         self.append_as(self.A, "feat/x", "flow-started", {"request": "A's work"})
         self.append_as(self.B, "fix/1290-date-off-by-one", "flow-started",
                        {"request": "B's work"})

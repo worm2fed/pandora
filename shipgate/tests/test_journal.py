@@ -158,6 +158,19 @@ class JournalTestCase(unittest.TestCase):
         finally:
             conn.close()
 
+    def store_legacy_session(self, session_id):
+        """The `meta.current_session` row that an older SessionStart hook left in a
+        journal (ADR 0003). No append reads it (#46), and nothing writes it since #51."""
+        conn = sqlite3.connect(str(self.db))
+        try:
+            with conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta (key, value) "
+                    "VALUES ('current_session', ?)", (session_id,),
+                )
+        finally:
+            conn.close()
+
 
 # ---------------------------------------------------------------------------
 # init / schema
@@ -405,7 +418,7 @@ class TestActorCanon(JournalTestCase):
         self.init_db()
 
     def set_session(self, session_id):
-        self.journal("--db", self.db, "session", "--set", session_id, rc=OK)
+        self.store_legacy_session(session_id)
 
     def actor_of(self, stream="feature/x"):
         return self.events(stream)[-1]["actor"]
@@ -453,8 +466,9 @@ class TestActorCanon(JournalTestCase):
         )
         self.assertEqual(self.actor_of(), "worker@sub-3")
 
-    # Two sessions open on one project: the later starter owns meta.current_session, so
-    # the label comes from the appending shell's own CLAUDE_CODE_SESSION_ID instead.
+    # Two sessions open on one project: an older hook stored the later starter in
+    # meta.current_session, so the label comes from the appending shell's own
+    # CLAUDE_CODE_SESSION_ID instead.
     def append_from_session(self, session_id, *args):
         self.journal("--db", self.db, "append", "--stream", "feature/x",
                      "--type", "flow-suspended", *args, rc=OK, session_env=session_id)
@@ -606,36 +620,35 @@ class TestActorCanon(JournalTestCase):
             self.event_of("orchestrator@S2", {"recorded_by": "S1"}), "S2"
         )
 
-    def test_session_get_reads_what_set_wrote(self):
-        self.set_session("S1")
-        out = self.journal("--db", self.db, "session", "--get", "--json", rc=OK).stdout
-        self.assertEqual(json.loads(out)["current_session"], "S1")
-
-    def test_session_set_reports_the_id(self):
-        proc = self.journal("--db", self.db, "session", "--set", "S1", rc=OK)
-        self.assertIn("S1", proc.stdout)
-
-    def test_session_get_before_any_set_is_null(self):
-        out = self.journal("--db", self.db, "session", "--get", "--json", rc=OK).stdout
-        self.assertIsNone(json.loads(out)["current_session"])
-
-    def test_reading_a_session_before_init_is_none(self):
-        """Read and write agree that a journal without `meta` is not a failure to hide."""
-        sqlite3.connect(str(self.root / "empty.db")).close()
-        out = self.journal(
-            "--db", self.root / "empty.db", "session", "--get", "--json", rc=OK
-        ).stdout
-        self.assertIsNone(json.loads(out)["current_session"])
-
-    def test_setting_a_session_before_init_says_to_init(self):
-        sqlite3.connect(str(self.root / "empty.db")).close()
-        proc = self.journal(
-            "--db", self.root / "empty.db", "session", "--set", "S1", rc=INFRA
+    # #51: no append reads the session that started last, so `session` is retired. It
+    # stays one release as a no-op, so an old caller of `--set` or `--get` still exits 0.
+    def test_session_is_a_retired_no_op(self):
+        for argv in (["--set", "S1"], ["--set=S1"], ["--get"], ["--get", "--set=S1"], []):
+            with self.subTest(argv=argv):
+                proc = self.journal("--db", self.db, "session", *argv, rc=OK)
+                self.assertIn("retired", proc.stdout)
+                self.assertEqual(proc.stderr, "")
+        self.assertEqual(
+            self.sql("SELECT value FROM meta WHERE key = 'current_session'"), []
         )
-        self.assertIn("journal.py init", proc.stdout + proc.stderr)
 
-    def test_session_needs_one_of_set_or_get(self):
-        self.journal("--db", self.db, "session", rc=USAGE)
+    def test_session_get_reads_no_legacy_row(self):
+        self.store_legacy_session("S1")
+        out = self.journal("--db", self.db, "session", "--get", "--json", rc=OK).stdout
+        self.assertEqual(json.loads(out), {"current_session": None, "retired": True})
+
+    def test_session_opens_no_journal(self):
+        absent = self.root / "absent.db"
+        self.journal("--db", absent, "session", "--set", "S1", rc=OK)
+        self.assertFalse(absent.exists())
+
+    def test_session_reads_no_sidecar(self):
+        """A corrupt sidecar fails every command that resolves a journal. The retired
+        command resolves none, so it still exits 0."""
+        self.write(".claude/shipgate.json", "{not json")
+        proc = self.journal("session", "--set", "S1", rc=OK)
+        self.assertIn("retired", proc.stdout)
+        self.assertEqual(proc.stderr, "")
 
     def test_event_session_reads_the_actor_suffix(self):
         module = load_journal_module()

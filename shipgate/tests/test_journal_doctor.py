@@ -514,7 +514,7 @@ class TestStats(JournalTestCase):
 
     def test_the_stored_session_is_not_counted(self):
         """Issue #46: a sessionless append does not borrow the stored session."""
-        self.journal("--db", self.db, "session", "--set", "session-1", rc=OK)
+        self.store_legacy_session("session-1")
         self.append_event("feature/x", "deviation", {"note": "a"})
         self.append_event("feature/x", "deviation", {"note": "b"}, "--actor", "user")
         self.assertEqual(self.row()["sessions"], 0)

@@ -19,7 +19,6 @@ from .vocab import (
 from .text import _one_line
 from .project import artifact_homes, ledger_summary, Resolution, resolve_db
 from .store import apply_migrations, connect, read_events
-from .sessions import current_session, set_current_session
 from .fold import stream_lifecycle
 from .append import append_event, AppendResult
 from .status import build_status, render_status
@@ -141,14 +140,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_session = subparsers.add_parser(
         "session",
-        help="read or set the session that started last (a diagnostic; append reads "
-             "its session from CLAUDE_CODE_SESSION_ID only)",
+        help="retired: reads and writes nothing (append reads its session from "
+             "CLAUDE_CODE_SESSION_ID only); a later release removes it",
     )
     _add_db_flag(p_session)
     p_session.add_argument("--set", dest="set_id", default=None, metavar="ID",
-                           help="record ID as the session that started last")
-    p_session.add_argument("--get", action="store_true",
-                           help="print the session that started last")
+                           help="ignored (retired)")
+    p_session.add_argument("--get", action="store_true", help="ignored (retired)")
     p_session.add_argument("--json", action="store_true",
                            help="machine-readable output")
 
@@ -584,26 +582,14 @@ def cmd_vocab(args, resolution: Resolution) -> int:
 
 
 def cmd_session(args, resolution: Resolution) -> int:
-    if bool(args.set_id) == bool(args.get):
-        raise UsageError("session takes exactly one of --set ID or --get")
-    conn = connect(resolution.db_path)
-    try:
-        if args.set_id:
-            set_current_session(conn, args.set_id)
-            session_id = args.set_id
-        else:
-            session_id = current_session(conn)
-    finally:
-        conn.close()
-
+    """Retired (#51, ADR 0005 amendment of 2026-11-23): one release of grace for an old
+    caller of ``--set`` or ``--get``. It reads no sidecar (``main`` dispatches it before
+    ``resolve_db``), opens no journal and writes nothing."""
     if args.json:
-        print(json.dumps({"current_session": session_id}, sort_keys=True))
-    elif args.set_id:
-        print(f"session that started last set to {session_id}")
-    elif session_id:
-        print(session_id)
+        print(json.dumps({"current_session": None, "retired": True}, sort_keys=True))
     else:
-        print("no session start recorded")
+        print("journal.py session is retired: no append reads the session that started "
+              "last, so this command reads and writes nothing")
     return EXIT_OK
 
 
@@ -964,9 +950,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         # `vocab` is static reference data — it must answer even where no journal
         # exists, since the likeliest moment to ask "what are the names?" is before
-        # a project has one.
-        if args.command == "vocab":
-            return cmd_vocab(args, None)
+        # a project has one. The retired `session` reads nothing, not even a sidecar.
+        if args.command in ("vocab", "session"):
+            return COMMANDS[args.command](args, None)
         resolution = resolve_db(getattr(args, "db", None), Path.cwd())
         return COMMANDS[args.command](args, resolution)
     except JournalError as exc:

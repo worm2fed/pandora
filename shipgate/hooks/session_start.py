@@ -7,9 +7,6 @@ every source Claude Code names for the event: `startup`, `resume`, `clear`, `com
 again. One session can therefore hold several `session-started` rows. Nothing reads them
 as a window: `journal.py check` selects a session's rows by their session id, and `stats`
 counts sessions as a set.
-
-The session id is also handed to `journal.py session --set`, because a skill's shell
-cannot see it and `append` needs it to attribute skill-written events (ADR 0003).
 """
 
 from __future__ import annotations
@@ -47,6 +44,9 @@ HEAD_REF_PREFIX = "ref: refs/heads/"
 # passed to `status --session`. The id is the evidence the journal binds the session's own
 # stream on, so a strange payload loses that evidence, never the brief.
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# The brief's line limit: BRIEF_LINE_CHARS in scripts/_journal/vocab.py (a test holds
+# the two equal).
+DETAIL_CHARS = 160
 
 
 def _read_first_line(path):
@@ -193,6 +193,18 @@ def _bounded(iterable, limit):
         yield item
 
 
+def _clip(text):
+    """`text` on one line and at most DETAIL_CHARS long: the rule of `_clip` in
+    scripts/_journal/text.py.
+
+    The failure detail is the journal's stderr, and it can echo the sidecar's `db` path. A
+    checkout is untrusted content, so a line break in that path must not add a line under
+    the heading of the authoritative position.
+    """
+    flat = " ".join(text.split())
+    return flat if len(flat) <= DETAIL_CHARS else flat[:DETAIL_CHARS - 1] + "…"
+
+
 def main() -> None:
     if likely_journaled() is None:
         sys.exit(0)
@@ -209,20 +221,10 @@ def main() -> None:
         "session-started",
         {"session": session_id, "source": payload.get("source") or "startup"},
     )
-    attributed = run_journal(project, ["session", f"--set={session_id}"])
-    notice = (
-        ""
-        if attributed is not None and attributed.returncode == 0
-        else (
-            "shipgate: session attribution unavailable (journal.py session --set "
-            "failed) — skill appends this session will carry no session label.\n\n"
-        )
-    )
     # A sidecar from a newer shipgate: say so once, here, and keep reading the keys
     # this shipgate knows. Computed only once a project is found.
     version_note = sidecar_version_note(project.sidecar)
-    if version_note:
-        notice += f"shipgate: {version_note}\n\n"
+    notice = f"shipgate: {version_note}\n\n" if version_note else ""
 
     watched = watch_paths(project)
 
@@ -253,7 +255,8 @@ def main() -> None:
             detail = "\n".join(
                 line for line in detail.splitlines()
                 if line.strip() != f"journal.py: {version_note}"
-            ).strip()
+            )
+        detail = _clip(detail)
         emit(
             {
                 "hookSpecificOutput": {

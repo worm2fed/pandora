@@ -2,6 +2,38 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.30.3 — the status brief clips its last three fields, and the SessionStart hook no longer stores the session.
+
+**Three fields of the brief were not clipped (#39).** A checkout is untrusted content: its
+`.claude/shipgate.json` and its journal supply the values that the SessionStart hook puts
+into the session context, under the heading "the authoritative position". Three of them
+could carry a line break or any length:
+- the error detail of a failed `status` call, which can echo the sidecar's `db` path. The
+  hook now collapses it to one line and clips it to 160 characters, the brief's line limit
+  (`BRIEF_LINE_CHARS`). A test holds the hook's copy of the limit equal to the journal's;
+- the ledger path in the brief's `ledger` line. It now goes through `_clip`;
+- the stream name in the brief's stream heading. It now goes through `_clip`, not only
+  `_one_line`.
+
+Each character that ends a line for `str.splitlines()`, for example `\r` or U+2028,
+becomes one space. The `close-out` line still prints its command whole: a cut command would
+name another stream. The command stays on one line, because `closeout_command` prints no
+command for a name that does not print on one line.
+
+**The SessionStart hook no longer stores the session (#51, ADR 0005 amendment).** Since
+0.27.1 no append reads `meta.current_session`. The hook still ran `journal.py session --set`
+on every start, and on a failure it said that appends "will carry no session label", which
+was no longer true.
+- The hook no longer runs `session --set` and no longer adds that notice. A session start
+  runs the journal once less.
+- `journal.py session` stays one release as a no-op. It accepts `--set ID`, `--get` and
+  `--json`. It reads no sidecar, opens no journal, writes nothing, exits 0 and prints
+  that it is retired. A later release removes it. Only the hook called it: shipgate-hud,
+  the skills and the evals never did.
+- Old journals keep their `current_session` row. Nothing reads or writes it.
+- `feature` now says where an omitted label comes from: the session in
+  `CLAUDE_CODE_SESSION_ID`. A shell with no such variable records no session.
+
 v0.30.2 — three follow-ups: an index sync has its own 90 s timeout, a slug that starts with an issue id names a worklog too, and `feature` tells a teammate to record its lead.
 
 **A catch-up sync of the code graph never finished (#19).** `codegraph sync` ran under the
