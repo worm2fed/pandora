@@ -188,6 +188,8 @@ def build_position(
       the newest file (by mtime) in the worklog home named for the stream's last path
       segment ``<slug>`` (``<slug>.worklog.md``, or a name that starts with ``<slug>-``
       or ``<slug>.``) that no other live stream's events name (``worklog_from: name``).
+      When there is none and the slug starts with an issue id (``1290-demo``), the slug
+      without it (``demo``) gets the same lookup (#43).
       ``prd`` is the ``data.prd`` of the last ``clarify-passed``.
     - ``tasks``: ``parse_build_plan`` over the worklog, each task id once (its first
       line wins), each with ``done`` (a ``task-done`` in this stream names it) and

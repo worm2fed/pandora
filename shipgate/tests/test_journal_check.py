@@ -348,6 +348,33 @@ class TestCheck(JournalTestCase):
         report = json.loads(self.check(rc=CHECK).stdout)
         self.assertEqual([f["stream"] for f in report["findings"]], ["feat/auth-login"])
 
+    def test_43_the_slug_without_its_issue_id_gates_its_worklog(self):
+        self.worklog("- [x] T001 — first")
+        self.append_event("fix/1290-demo", "phase-entered", {"phase": "workspace"})
+        self.captured()
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual([f["stream"] for f in report["findings"]], ["fix/1290-demo"])
+        self.assertEqual(report["skipped"], [])
+
+    def test_43_the_full_slug_beats_the_slug_without_its_issue_id(self):
+        self.worklog("- [x] T001 — first")
+        self.append_event("fix/1290-demo", "phase-entered", {"phase": "workspace"})
+        self.append_event("feat/demo", "phase-entered", {"phase": "workspace"})
+        self.captured()
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual([f["stream"] for f in report["findings"]], ["feat/demo"])
+
+    def test_43_an_exact_name_without_the_issue_id_beats_a_prefix(self):
+        """`epic/auth` prefixes `auth-login.worklog.md`; `fix/12-auth-login` names it
+        exactly once its issue id is removed."""
+        self.write("docs/prd/auth-login.worklog.md",
+                   WORKLOG_TEMPLATE.format(tasks="- [x] T001 — first"))
+        self.append_event("epic/auth", "phase-entered", {"phase": "workspace"})
+        self.append_event("fix/12-auth-login", "phase-entered", {"phase": "workspace"})
+        self.captured("docs/prd/auth-login.worklog.md")
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual([f["stream"] for f in report["findings"]], ["fix/12-auth-login"])
+
     def test_a_parent_stream_does_not_reopen_a_finished_childs_worklog(self):
         self.write("docs/prd/auth-login.worklog.md",
                    WORKLOG_TEMPLATE.format(tasks="- [x] T001 — first"))

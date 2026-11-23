@@ -621,6 +621,38 @@ class TestFreshen(GraphCase):
         self.assertEqual((result.available, result.state, result.reason),
                          (False, "failed", "graph-sync"))
 
+    def test_19_sync_runs_under_its_own_timeout_and_a_query_under_the_call_timeout(self):
+        """#19: a catch-up sync can take 20-40 s; the 30 s call limit killed it. The sync
+        limit stays below the Bash tool's default of 120 s, which caps the whole
+        `signals.py` call: a sync at 120 s would kill the call before its fallback."""
+        seen = []
+        real = subprocess.run
+
+        def spy(argv, **kwargs):
+            if argv and argv[0] != "git":
+                seen.append((argv[1], kwargs.get("timeout")))
+            return real(argv, **kwargs)
+
+        with mock.patch.object(self.cg.subprocess, "run", spy):
+            self.assertEqual(self.select().sync, "sync")
+            self.cg.tests_reached(self.repo.path, self.repo.path, ["a.py"],
+                                 ["a.py", "b.py"])
+        timeouts = dict(seen)
+        self.assertEqual(timeouts["sync"], 90.0)
+        self.assertLessEqual(timeouts["sync"] + self.cg.CALL_TIMEOUT, 120.0)
+        self.assertEqual(timeouts["--version"], self.cg.CALL_TIMEOUT)
+        self.assertEqual(timeouts["affected"], self.cg.CALL_TIMEOUT)
+
+    def test_19_a_hung_sync_has_its_own_reason_and_note(self):
+        self.mode("hang")
+        os.environ["SHIPGATE_CODEGRAPH_TIMEOUT"] = "1"  # the override covers sync too
+        result = self.select()
+        self.assertEqual((result.available, result.state, result.reason),
+                         (False, "failed", "graph-sync-timeout"))
+        note = self.cg.graph_note(result.reason)
+        self.assertIn("codegraph sync", note)
+        self.assertNotIn(str(self.repo.path), note)
+
 
 class TestEnvironment(GraphCase):
     """FR-016: every call runs with telemetry and the daemon off, in the repo."""

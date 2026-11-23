@@ -255,9 +255,13 @@ skipped for want of a branch. The Stop hook enforces the build-side gates only (
 - A Build Plan box is ticked in a worklog this session wrote, and no stream that owns the
   worklog holds its `task-done`. A stream owns a worklog the way `position` shows one: its
   committing events name it (the worklog refs `position` reads, ADR 0009), or it has no
-  worklog ref and its slug names the file. A journal from before v0.11 also binds by the
-  stream name `feature/<worklog name>`. The most exact binding wins: an event ref beats a
-  name, and `<slug>.worklog.md` beats a prefix match.
+  worklog ref and its slug names the file. Here the slug is the whole last path segment of
+  the stream name, issue id included, unlike `<slug>` in the **Branching** pattern. When it
+  starts with an issue id, the slug without the id names a file too:
+  `fix/1290-date-off-by-one` names `date-off-by-one.worklog.md`. A journal from before
+  v0.11 also binds by the stream name `feature/<worklog name>`. The most exact binding
+  wins: an event ref beats a name, `<slug>.worklog.md` beats a prefix match, the longer
+  slug beats the shorter, and the full slug beats the slug without its issue id.
 - The session recorded a forced `task-done` that no passing `verify-run` names. `append`
   refuses the plain one, so only `--force` reaches this rule.
 
@@ -469,15 +473,21 @@ Measured costs, one machine, one run each:
 | one backend service | 1,469 | 7 s | 125 MB |
 | an umbrella root of 28 child repos, nested clones excluded | — | 87 s | 680 MB |
 
-A `sync` takes 0.7–2.4 s per child repository. In an umbrella, each child repository owns its
-own index, and every call names the child with `--repo`.
+A `sync` takes 0.7–2.4 s per child repository when the index is close to the working tree.
+After many changes, for example a branch switch, a rebase or a pull, the sync catches up: 20
+s on a repository of about 850 files, 36 s on one of about 1,900. So a sync has its own
+timeout of 90 s. A query has 30 s, and a build 120 s. The sync limit stays under the Bash
+tool's default of 120 s, which caps the whole `signals.py` call. A sync that times out
+loses its work, and the reason is `graph-sync-timeout`: run `codegraph sync` once yourself,
+and the next call syncs quickly. In an umbrella, each child repository owns its own
+index, and every call names the child with `--repo`.
 
 The only configuration is one optional bullet under `## Code tooling`:
 `Code graph: auto | off | root`. `auto` is the default. `off` always uses the regex scanner.
 `root` uses an index at the umbrella root, which you build yourself with your own
 `codegraph.json` and its exclude list for nested clones. shipgate never builds a root index.
-**Root mode needs the codegraph MCP server running.** Without it, a `sync` on the root takes
-55–66 s, the 30 s call timeout stops it, and the regex scanner runs. In `root` mode, the
+**Root mode needs the codegraph MCP server running.** Without it, every call first syncs the
+root, and that takes 55–66 s. In `root` mode, the
 `graph` passthrough returns codegraph's own output, so its paths are relative to the umbrella
 root, not to the child repository. The `--graph` flag overrides the bullet for one call.
 

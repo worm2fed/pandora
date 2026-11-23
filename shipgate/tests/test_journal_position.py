@@ -11,7 +11,7 @@ import json
 import os
 import unittest
 
-from test_journal import INFRA, JournalTestCase, OK, USAGE
+from test_journal import INFRA, JournalTestCase, OK, USAGE, load_journal_module
 
 
 # The keys `position --json` printed in shipgate 0.20.0. A later release adds keys and
@@ -229,6 +229,43 @@ class TestPosition(JournalTestCase):
         self.touch("docs/prd/1290-demo.worklog.md", 1_000)
         self.assertEqual(self.position("fix/1290-demo")["artifacts"]["worklog"],
                          "docs/prd/1290-demo.worklog.md")
+
+    def test_43_the_slug_without_its_issue_id_names_a_worklog(self):
+        self.append_event("fix/1290-demo", "flow-started", {"request": "x"})
+        self.touch("docs/prd/demo.worklog.md", 1_000)
+        artifacts = self.position("fix/1290-demo")["artifacts"]
+        self.assertEqual((artifacts["worklog"], artifacts["worklog_from"]),
+                         ("docs/prd/demo.worklog.md", "name"))
+
+    def test_43_the_full_slug_beats_the_slug_without_its_issue_id(self):
+        self.append_event("fix/1290-demo", "flow-started", {"request": "x"})
+        self.touch("docs/prd/1290-demo.worklog.md", 1_000)
+        self.touch("docs/prd/demo.worklog.md", 2_000)  # newer, but the weaker name
+        self.assertEqual(self.position("fix/1290-demo")["artifacts"]["worklog"],
+                         "docs/prd/1290-demo.worklog.md")
+
+    def test_43_the_slug_without_its_issue_id_skips_a_claimed_worklog(self):
+        """Each slug keeps `position`'s rule: a worklog a live stream names is left to it."""
+        self.append_event("fix/1290-demo", "flow-started", {"request": "x"})
+        self.touch("docs/prd/demo.worklog.md", 1_000)
+        self.design(stream="epic/demo", worklog="docs/prd/demo.worklog.md")
+        self.assertIsNone(self.position("fix/1290-demo")["artifacts"]["worklog"])
+
+    def test_43_only_one_leading_issue_id_of_ascii_digits_is_removed(self):
+        self.touch("docs/prd/demo.worklog.md", 1_000)
+        for stream in ("fix/1290", "fix/1290-", "fix/v2-demo", "fix/demo-1290",
+                       "fix/12-34-demo"):
+            with self.subTest(stream=stream):
+                self.append_event(stream, "flow-started", {"request": "x"})
+                self.assertIsNone(self.position(stream)["artifacts"]["worklog"])
+        slugs = load_journal_module()._stream_slugs
+        self.assertEqual(slugs("fix/1290-date-off-by-one"),
+                         ["1290-date-off-by-one", "date-off-by-one"])
+        self.assertEqual(slugs("fix/12-34-demo"), ["12-34-demo", "34-demo"])
+        self.assertEqual(slugs("fix/\u0661\u0662-demo"), ["\u0661\u0662-demo"])
+        self.assertEqual(slugs("fix/1290-"), ["1290-"])
+        self.assertEqual(slugs("feat/demo"), ["demo"])
+        self.assertEqual(slugs("fix/"), [])
 
     def test_a_worklog_another_live_stream_names_is_left_to_it(self):
         self.append_event(self.S, "flow-started", {"request": "x"})

@@ -358,7 +358,11 @@ deliverable**: its own branch, its own MR/PR, its own review. Work them one at a
     status brief lists no stream of that name, the first phase skill to run opens it. It
     writes `flow-started` in the same append as its own event. The normal case is on `main`,
     before `workspace` has made the branch. The integration branch is never a stream. "There
-    is no stream yet" is never a reason to skip an event.
+    is no stream yet" is never a reason to skip an event. A session that a lead's brief started
+    reports to that lead, not to the user. Put the lead and the command the brief gives to
+    reach it in `flow-started`'s `report_to`. On a stream that exists already, a `deviation`
+    with `report_to` records it. `handoff` prints the newest one as `report to`, so the
+    session still knows its lead after a `/clear`.
   - **Pointer, not prose.** The worklog / PRD / ADR holds the text. The event holds `refs`
     (paths, section anchors, seq numbers) and one sentence. For exactly this reason, the
     journal refuses a payload over 1 KB on a work stream.
