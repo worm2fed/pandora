@@ -202,8 +202,9 @@ interface, from the journal shipgate already keeps.
   journal's SQLite file, run a copy of the script, or build a payload the hook cannot read.
 
   The gate passes the command in these cases: the stream may publish; neither the branch
-  nor the session has a stream; the project has no sidecar; no `journal.py` is found; or no
-  surface is drawing (`claude -p`). A read that fails never passes. The gate writes only
+  nor the session has a stream; the project has no sidecar, or its sidecar declares no
+  journal (`"db": null`); no `journal.py` is found; or no surface is drawing (`claude -p`).
+  A read that fails never passes. The gate writes only
   the approval that **Approve publishing** records, and remembers nothing else, so after
   **Let it through once** the next publish command asks again. The gate trusts the journal.
   It is a net for a forgetful model, not a boundary against a deliberate one.
@@ -224,17 +225,19 @@ the view now reads `Off`, the HUD detects again, once.
 The detection runs after the tool call or the prompt has passed on, never in its way. This
 also works where organization-managed settings skip `classic.*` hooks for user mods. In a
 project with no sidecar, that detection is one directory walk per session id, and it runs
-no process.
+no process. In a project whose sidecar declares no journal, it also reads that one file, and
+it runs no process.
 
 ## What it needs
 
 - Claude Code **2.1.290 or newer** (the mods API; early access, so a release may move it).
-- **shipgate 0.22.0 or newer.** The HUD's `plugin.json` declares it as a dependency
-  (`>=0.22.0`), so installing or updating the HUD brings a matching shipgate. A shipgate
+- **shipgate 0.32.0 or newer.** The HUD's `plugin.json` declares it as a dependency
+  (`>=0.32.0`), so installing or updating the HUD brings a matching shipgate. A shipgate
   outside the range keeps the HUD disabled, and `claude plugin list` names the requirement.
-  0.22.0 prints a label for each folded finding key in `position --json`. 0.21.0 added the
-  trace and the folded finding states, and records a finding's state when the review
-  decides it.
+  0.32.0 reads `"db": null` as "no journal", as this HUD does, so the HUD never shows a
+  project as journal-less while shipgate's hooks treat it as journaled. 0.22.0 prints a
+  label for each folded finding key in `position --json`. 0.21.0 added the trace and the
+  folded finding states, and records a finding's state when the review decides it.
 - **The read floor stays 0.21.0.** A 0.21.0 `journal.py` prints no label. The HUD reads it,
   and the keys draw with no label. A `journal.py` that lags further behind (a lagging
   project install, a `journalScript` option, a `--plugin-dir` copy) and prints no `trace`
@@ -254,7 +257,11 @@ no process.
   hooks do).
 
 In a project **without** that sidecar the mod draws nothing, opens no pane, runs no
-process and touches no store. `/hud` still exists and says so.
+process and touches no store. `/hud` still exists and says so. A sidecar whose `db` is JSON
+`null` declares that the project has no journal (shipgate ADR 0028): the HUD treats that
+project as one without a sidecar, and so do shipgate's hooks. The nearest sidecar decides,
+so a session in a subdirectory of that project gets the same. A sidecar the HUD cannot read
+or parse is not such a declaration: the pane shows `journal.py`'s failure, as before.
 
 ## Install
 
@@ -321,8 +328,8 @@ What the pane shows:
 - **An older shipgate:** a `journal.py` that does not know `position`, or whose `position`
   prints no `trace` key, gets a pane that names the minimum shipgate version (0.21.0).
 - **A newer sidecar:** the sidecar `.claude/shipgate.json` carries a `version`. When that
-  version is an integer higher than 1, the pane shows one warning line above everything
-  else: `.claude/shipgate.json declares version 2; this HUD knows version 1 and reads only
+  version is an integer higher than 2, the pane shows one warning line above everything
+  else: `.claude/shipgate.json declares version 3; this HUD knows version 2 and reads only
   the keys it knows`. The refresh still runs with the keys the HUD knows. A newer sidecar is
   never a failed read.
 

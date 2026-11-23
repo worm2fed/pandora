@@ -5,6 +5,7 @@ import type { CommandRunInput, On, PromptSubmitInput, RenderSurface } from 'clau
 import { AUTHORIZED, EXAMPLE_FEATURE, EXAMPLE_POSITION, EXAMPLE_STREAM, SIDECAR, featureOf, olderStatus } from './fixtures'
 import type { FeatureJson, PositionJson } from './fixtures'
 import { POSITION_GOLDEN, STATUS_GOLDEN } from './fixtures.journal'
+import { SIDECAR_CASES } from './fixtures.sidecar'
 import {
   BAND,
   CUT_RUN,
@@ -64,6 +65,23 @@ const dir = (name: string) => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0
 
 /** The text the pane shows for the example stream's plan: T001 done, T002 failing, T003 ticked and unrecorded, T004 open. */
 const EXAMPLE_PLAN = '1/4 done · 1 unrecorded · 1 failing'
+
+/** The example sidecar at version 2 with `"db": null`: a project that declares no journal (shipgate ADR 0028, J2). */
+const NO_JOURNAL_SIDECAR = { ...SIDECAR, version: 2, db: null }
+
+/** The sidecar in the session's project root (START's). */
+const ROOT_SIDECAR = `${START.cwd}/.claude/shipgate.json`
+
+/** journal.py's runs among the recorded runs, whatever the subcommand. */
+const journalRuns = (runs: readonly string[][]): string[][] => runs.filter(argv => argv[0] === 'python3')
+
+/** Does the pane show the Off view (no journal found)? */
+const isOffShown = async ($: Engine): Promise<boolean> => {
+  const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+  const off = (await pane.find({ type: 'Text', text: 'No shipgate journal found in this project.' })) !== undefined
+  await pane.unmount()
+  return off
+}
 
 /** A world's own Bash tool, so a journal append can run and refresh the position. */
 const appendWorld = (on: On): void => {
@@ -1273,6 +1291,30 @@ describe('register', () => {
       expect(asked).toEqual([])
     })
 
+    test('a sidecar with "db": null: a push passes to the verdict beneath as with no sidecar, no process runs, nobody is asked', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on, { sidecar: () => NO_JOURNAL_SIDECAR })
+      const { asked } = gateWorld(on)
+      // before any detection: the gate locates the project itself
+      expect(await check($, 'git push')).toMatchObject(BENEATH)
+      await $.session.start(START)
+      expect(await check($, 'gh pr create --fill')).toMatchObject(BENEATH)
+      expect(runs).toEqual([])
+      expect(asked).toEqual([])
+    })
+
+    test('a sidecar read the person cut holds the push, never passes it as "no journal"', async ($, on) => {
+      engineWorld(on)
+      on('fs.read', { path: /\/\.claude\/shipgate\.json$/ }, async () => ({ deny: '$.fs.read(.claude/shipgate.json) aborted' }))
+      const { runs } = journaledWorld(on)
+      const { asked } = gateWorld(on)
+      const verdict = await check($, 'git push')
+      expect(runs).toEqual([])
+      expect(asked.length).toBe(1)
+      expect(asked[0]).toContain('the journal read was cut before it finished')
+      expect(verdict.decision).toBe('deny')
+    })
+
     test('an unreviewed stream: the push is held and the dialog names the stream and the command', async ($, on) => {
       engineWorld(on)
       const { runs } = journaledWorld(on)
@@ -1765,7 +1807,7 @@ describe('register', () => {
   })
 
   describe('a sidecar newer than this HUD knows', () => {
-    const WARNING = '.claude/shipgate.json declares version 2; this HUD knows version 1 and reads only the keys it knows'
+    const WARNING = '.claude/shipgate.json declares version 3; this HUD knows version 2 and reads only the keys it knows'
 
     /** The pane's warning line and whether the stream still draws, read once. */
     const paneShows = async ($: Engine): Promise<{ readonly warning: boolean; readonly stream: boolean }> => {
@@ -1776,22 +1818,33 @@ describe('register', () => {
       return { warning: warning !== undefined && warning.props.color === 'warning', stream: stream !== undefined }
     }
 
-    test('version 2: one warning line in the pane, and the refresh still runs with the keys the HUD knows; back at version 1 the line goes', async ($, on) => {
+    test('version 3: one warning line in the pane, and the refresh still runs with the keys the HUD knows; back at version 2 the line goes', async ($, on) => {
       engineWorld(on)
       appendWorld(on)
-      let sidecar: unknown = { ...SIDECAR, version: 2 }
+      let sidecar: unknown = { ...SIDECAR, version: 3 }
       const { runs } = journaledWorld(on, { sidecar: () => sidecar })
       await $.session.start(START)
       expect(positionRuns(runs).length).toBe(1)
       expect(await paneShows($)).toEqual({ warning: true, stream: true })
-      sidecar = SIDECAR
+      sidecar = { ...SIDECAR, version: 2 }
       await refreshByAppend($)
       expect(await paneShows($)).toEqual({ warning: false, stream: true })
     })
 
-    test('F15: a refresh that finds no journal.py still reads the sidecar: version 2 warns, and a version-1 sidecar clears the warning', async ($, on) => {
+    test('version 2, the version shipgate writes: no warning line, and the stream draws', async ($, on) => {
       engineWorld(on)
-      let sidecar: unknown = { ...SIDECAR, version: 2 }
+      const { runs } = journaledWorld(on, { sidecar: () => ({ ...SIDECAR, version: 2 }) })
+      await $.session.start(START)
+      expect(positionRuns(runs).length).toBe(1)
+      expect(await paneShows($)).toEqual({ warning: false, stream: true })
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect(await pane.find({ type: 'Text', text: /declares version/ })).toBeUndefined()
+      await pane.unmount()
+    })
+
+    test('F15: a refresh that finds no journal.py still reads the sidecar: version 3 warns, and a version-2 sidecar clears the warning', async ($, on) => {
+      engineWorld(on)
+      let sidecar: unknown = { ...SIDECAR, version: 3 }
       // no journal.py anywhere the HUD looks
       on('fs.exists', { path: /\/journal\.py$/ }, async () => ({ value: false }))
       journaledWorld(on, { sidecar: () => sidecar })
@@ -1805,16 +1858,172 @@ describe('register', () => {
       }
       await $.session.start(START)
       expect(await shown()).toEqual({ noScript: true, warning: true })
-      sidecar = SIDECAR
+      sidecar = { ...SIDECAR, version: 2 }
       await $.command.run(HUD_COMMAND)
       expect(await shown()).toEqual({ noScript: true, warning: false })
     })
 
-    test('a version that is no integer above 1 draws no warning', async ($, on) => {
+    test('a version that is no integer above 2 draws no warning', async ($, on) => {
       engineWorld(on)
-      journaledWorld(on, { sidecar: () => ({ ...SIDECAR, version: '2' }) })
+      journaledWorld(on, { sidecar: () => ({ ...SIDECAR, version: '3' }) })
       await $.session.start(START)
       expect(await paneShows($)).toEqual({ warning: false, stream: true })
+    })
+  })
+
+  describe('a sidecar that declares no journal ("db": null, shipgate ADR 0028 J2)', () => {
+    // pins of today's sidecar read (`readSidecar`) and the view for a found sidecar: they hold before and after J2
+
+    test('pin: a project with no sidecar reads no file and runs no process: at start, on /hud, on a push, a tool call and a prompt', async ($, on) => {
+      engineWorld(on)
+      const reads: string[] = []
+      on('fs.read', async (_$, e) => {
+        reads.push(e.path)
+        return { deny: `no such file: ${e.path}` }
+      })
+      on('tool.check', { tool: 'Bash' }, async () => ({ decision: 'allow' as const, reason: 'beneath' }))
+      const { runs } = bareWorld(on)
+      appendWorld(on)
+      await $.session.start(START)
+      await $.command.run(HUD_COMMAND)
+      expect(await $.tool.check({ tool: 'Bash', input: { command: 'git push' } })).toMatchObject({ decision: 'allow', reason: 'beneath' })
+      await refreshByAppend($)
+      await $.prompt.submit({ text: 'go on', origin: { kind: 'composer' }, wait: false })
+      expect(reads).toEqual([])
+      expect(runs).toEqual([])
+    })
+
+    test('pin: a found sidecar is read at the project root, once per refresh, and the stream draws', async ($, on) => {
+      engineWorld(on)
+      appendWorld(on)
+      const { reads } = journaledWorld(on)
+      const sidecarReads = (): string[] => reads.filter(path => path.endsWith('/.claude/shipgate.json'))
+      await $.session.start(START)
+      expect(sidecarReads().length).toBeGreaterThan(0)
+      expect(sidecarReads().every(path => path === ROOT_SIDECAR)).toBe(true)
+      const before = sidecarReads().length
+      await refreshByAppend($)
+      expect(sidecarReads()).toEqual([...Array(before + 1)].map(() => ROOT_SIDECAR))
+      expect(await isOffShown($)).toBe(false)
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect(await pane.find({ type: 'Text', text: EXAMPLE_PLAN })).toBeDefined()
+      await pane.unmount()
+    })
+
+    test('pin: a sidecar that is not JSON keeps the project: journal.py runs, the stream draws, the homes are shipgate\'s defaults', async ($, on) => {
+      engineWorld(on)
+      on('fs.read', { path: /\/\.claude\/shipgate\.json$/ }, async () => ({ value: '{"db": null,' }))
+      const { runs } = journaledWorld(on)
+      on('tool.call', { tool: ['Write', 'Edit'] }, async () => ({ result: { filePath: 'x', content: '' } }))
+      await $.session.start(START)
+      expect(statusRuns(runs).length).toBe(1)
+      expect(positionRuns(runs).length).toBe(1)
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect(await pane.find({ type: 'Text', text: EXAMPLE_PLAN })).toBeDefined()
+      await pane.unmount()
+      // shipgate's default home `docs/prd/*.md`: a write there refreshes
+      const before = statusRuns(runs).length
+      await $.tool.call({ tool: 'Write', tool_use_id: 'w-default', file_path: 'docs/prd/x.md', content: '' })
+      expect(statusRuns(runs).length).toBe(before + 1)
+    })
+
+    test('pin: a sidecar that cannot be read keeps the project: journal.py runs and the stream draws', async ($, on) => {
+      engineWorld(on)
+      on('fs.read', { path: /\/\.claude\/shipgate\.json$/ }, async () => ({ deny: 'EACCES: permission denied' }))
+      const { runs } = journaledWorld(on)
+      await $.session.start(START)
+      expect(statusRuns(runs).length).toBe(1)
+      expect(await isOffShown($)).toBe(false)
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect(await pane.find({ type: 'Text', text: EXAMPLE_PLAN })).toBeDefined()
+      await pane.unmount()
+    })
+
+    test('"db": null: the Off view, no process runs, no pane opens, and the sidecar is read once', async ($, on) => {
+      const { opened } = engineWorld(on)
+      const { runs, reads } = journaledWorld(on, { sidecar: () => NO_JOURNAL_SIDECAR })
+      await $.session.start(START)
+      expect(runs).toEqual([])
+      expect(opened).toEqual([])
+      expect(reads).toEqual([ROOT_SIDECAR])
+      expect(await isOffShown($)).toBe(true)
+      const band = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...BAND })
+      expect(await band.find({ key: 'open-hud' })).toBeUndefined()
+      await band.unmount()
+      // /hud opens nothing and runs nothing either, and says why
+      const answer = await $.command.run(HUD_COMMAND)
+      expect(JSON.stringify(answer)).toContain('declares no journal')
+      expect(JSON.stringify(answer)).toContain('/shipgate:setup')
+      expect(opened).toEqual([])
+      expect(runs).toEqual([])
+    })
+
+    test('"db": null: a journal append, a write, a prompt and a tick run nothing and read the sidecar no more', async ($, on) => {
+      const { clock } = engineWorld(on)
+      const { runs, reads, asked } = journaledWorld(on, { sidecar: () => NO_JOURNAL_SIDECAR })
+      appendWorld(on)
+      on('tool.call', { tool: ['Write', 'Edit'] }, async () => ({ result: { filePath: 'x', content: '' } }))
+      await $.session.start(START)
+      const looked = asked.length
+      const read = reads.length
+      await refreshByAppend($)
+      await $.tool.call({ tool: 'Write', tool_use_id: 'w-home', file_path: 'docs/prd/x.md', content: '' })
+      await $.prompt.submit({ text: 'go on', origin: { kind: 'composer' }, wait: false })
+      await clock.advance(60_000)
+      expect(runs).toEqual([])
+      expect(asked.length).toBe(looked)
+      expect(reads.length).toBe(read)
+    })
+
+    test('"db": null in the project root: a session in a subdirectory is Off too; the walk stops there, never at a sidecar above it', async ($, on) => {
+      const nested = `${START.cwd}/source/svc`
+      const ABOVE = '/tmp/.claude/shipgate.json'
+      engineWorld(on, { root: nested })
+      const asked: string[] = []
+      const sidecarReads: string[] = []
+      // a no-journal sidecar in the project root, a journaled one in the directory above it
+      on('fs.exists', { path: /\/\.claude\/shipgate\.json$/ }, async (_$, e) => {
+        asked.push(e.path)
+        return { value: e.path === ROOT_SIDECAR || e.path === ABOVE }
+      })
+      on('fs.read', { path: /\/\.claude\/shipgate\.json$/ }, async (_$, e) => {
+        sidecarReads.push(e.path)
+        return { value: JSON.stringify(e.path === ROOT_SIDECAR ? NO_JOURNAL_SIDECAR : SIDECAR) }
+      })
+      const { runs } = journaledWorld(on)
+      await $.session.start({ ...START, cwd: nested })
+      expect(asked).toEqual([`${nested}/.claude/shipgate.json`, `${START.cwd}/source/.claude/shipgate.json`, ROOT_SIDECAR])
+      expect(sidecarReads).toEqual([ROOT_SIDECAR])
+      expect(runs).toEqual([])
+      expect(await isOffShown($)).toBe(true)
+    })
+
+    test('"db": null with a newer version: Off, and no version warning', async ($, on) => {
+      engineWorld(on)
+      const { runs } = journaledWorld(on, { sidecar: () => ({ ...NO_JOURNAL_SIDECAR, version: 3 }) })
+      await $.session.start(START)
+      expect(runs).toEqual([])
+      const pane = await $.ui.mount({ plugin: 'shipgate-hud', surface: 'terminal', ...PANE })
+      expect(await pane.find({ type: 'Text', text: 'No shipgate journal found in this project.' })).toBeDefined()
+      expect(await pane.find({ type: 'Text', text: /declares version/ })).toBeUndefined()
+      await pane.unmount()
+    })
+
+    // The pin to shipgate's hooks (fixtures.sidecar.ts, generated from `load_project`): Off exactly
+    // where Python read the text as an object and the hooks find no project; every other text keeps
+    // today's view, a project whose journal.py runs (an unparsed one shows journal.py's failure).
+    describe('every settings text of the table shared with shipgate\'s hooks', () => {
+      for (const row of SIDECAR_CASES) {
+        const isOff = row.parsed && row.hooks === 'none'
+        test(`${row.name}: ${isOff ? 'Off, and no journal.py run' : 'a project: journal.py runs'}`, async ($, on) => {
+          engineWorld(on)
+          on('fs.read', { path: /\/\.claude\/shipgate\.json$/ }, async () => ({ value: row.text }))
+          const { runs } = journaledWorld(on)
+          await $.session.start(START)
+          expect(await isOffShown($)).toBe(isOff)
+          expect(journalRuns(runs).length > 0).toBe(!isOff)
+        })
+      }
     })
   })
 

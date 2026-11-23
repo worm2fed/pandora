@@ -320,8 +320,8 @@ def record_bash_claims(payload):
 
 
 # The words a boundary append prints (ADR 0022). A Bash call whose stdout holds neither
-# skips the nudge without importing it. `_nudge.BOUNDARY_EVENTS` and journal.py's
-# `NUDGE_EVENTS` name the same two; a test holds the three equal.
+# skips the nudge without importing it. `_nudge.BOUNDARY_EVENTS` and `NUDGE_EVENTS` in
+# scripts/_journal/handoff.py name the same two; a test holds the three equal.
 NUDGE_WORDS = ("design-committed", "review-verdict")
 
 

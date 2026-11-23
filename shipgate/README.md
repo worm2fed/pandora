@@ -196,7 +196,7 @@ branch), then the checked-out branch's. Every other stream goes into one count l
 | `check --session ID [--json] [--record]` | what the flow still owes (the Stop hook's source): `findings`, the worklogs it `skipped` and why, and the `waivers` that would clear the findings. `--record` stamps the run as the last check: one `meta` value, no event |
 | `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review". `go` counts the go records by marker (`dialog`, `shell`, `question`, `prompt`) |
 | `streams --open \| --dormant [--json]` | one line per open (or dormant) stream: lifecycle, phase, last event, idle days, the PR/MR URL, and the ownership mark when `CLAUDE_CODE_SESSION_ID` names another session than the last writer |
-| `log`, `streams`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, schema, health, portability. `session` is retired: it reads and writes nothing, and a later release removes it. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys no shipgate reader uses, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
+| `log`, `streams`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, schema, health, portability. `session` is retired: it reads and writes nothing, and a later release removes it. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys that `settings.schema.json` does not name, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
@@ -232,12 +232,19 @@ recorded the user's decision (ADR 0010). A stream ends with `flow-completed` and
 status brief.
 
 The sidecar `.claude/shipgate.json` declares its format `version`. This shipgate knows
-version 1. A sidecar with a higher integer version comes from a newer shipgate. The
-SessionStart hook then adds one warning line to the session context, and `journal.py` prints
-the same line on stderr once per run. Both keep working with the keys they know. `doctor`
-reports the raw `version` and `stray_keys`: the keys outside `version`, `db`, `ledger`,
-`artifact_homes` and `enforce`. `setup`'s update mode stops on a newer version, and it drops
-stray keys when it regenerates the sidecar. `signals.py` reads no sidecar key, so it makes no
+version 2, the `x-version` of `settings.schema.json`. A sidecar with a higher integer
+version comes from a newer shipgate. The SessionStart hook then adds one warning line to
+the session context, and `journal.py` prints the same line on stderr once per run. Both keep
+working with the keys they know. `doctor` reports the raw `version` and `stray_keys`: the
+keys that `settings.schema.json` does not name. `setup`'s update mode stops on a newer
+version, and it drops stray keys when it regenerates the sidecar.
+
+A sidecar whose `db` is JSON `null` declares that the project has no journal (ADR 0028).
+The sidecar still marks the project root, and every hook acts as in a project with no
+sidecar: no journal run, no gate, no output. A `journal.py` command that needs a journal
+exits 1 and says why. Only `null` counts: a missing `db` keeps the default journal, and so
+does a `db` of another type. So does a file that holds `NaN` or `Infinity`, because
+shipgate-hud cannot read it. `signals.py` reads no sidecar key, so it makes no
 version check.
 
 Each phase skill names its stream before it works — the branch the work takes, per the
@@ -296,8 +303,9 @@ under the header `Commit` or `Publish`, the gate word as the first option.
   the stream of the branch holds a commit go, and `git push`, `git subtree push`,
   `gh pr create` and `glab mr create` until it holds a publish go. A ready verdict is no
   go. The hook asks `journal.py authorize` for the branch of the command's directory. It
-  does nothing on a project with no sidecar, on a branch with no stream or a finished one,
-  or when the sidecar sets `enforce.command_gate` to `false` (an unattended project). A
+  does nothing on a project with no sidecar or with a sidecar that declares no journal
+  (`"db": null`), on a branch with no stream or a finished one, or when the sidecar sets
+  `enforce.command_gate` to `false` (an unattended project). A
   dry run is held like any commit or push. A failure of git or the journal lets the
   command run.
 - **The forgery net.** The same hook refuses a model's command that appends a go as yours:

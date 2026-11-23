@@ -437,9 +437,9 @@ describe('views: the pane, by view', () => {
   }
 
   test('a newer sidecar: one warning line above the pane of any view but Off; none at the known version', async ($, on) => {
-    const text = '.claude/shipgate.json declares version 2; this HUD knows version 1 and reads only the keys it knows'
-    expect(sidecarVersionText(2)).toBe(text)
-    drawPane(on, bound(FLOW), { ...FRESH, sidecarVersion: 2 })
+    const text = '.claude/shipgate.json declares version 3; this HUD knows version 2 and reads only the keys it knows'
+    expect(sidecarVersionText(3)).toBe(text)
+    drawPane(on, bound(FLOW), { ...FRESH, sidecarVersion: 3 })
     const ui = await mountOwn($, PANE_DRAW)
     const warning = await ui.find({ type: 'Text', text })
     expect(warning?.props.color).toBe('warning')
@@ -460,7 +460,7 @@ describe('views: the pane, by view', () => {
   }
 
   test('a newer sidecar over Off draws no warning; no newer sidecar draws none either', async ($, on) => {
-    drawPane(on, { kind: 'Off' }, { ...FRESH, sidecarVersion: 2 })
+    drawPane(on, { kind: 'Off' }, { ...FRESH, sidecarVersion: 3 })
     const ui = await mountOwn($, PANE_DRAW)
     expect(await ui.find({ type: 'Text', text: /declares version/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'No shipgate journal found in this project.' })).toBeDefined()

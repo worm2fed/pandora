@@ -41,6 +41,7 @@ import {
   type StatusFeature,
   branchName,
   decodePosition,
+  declaresNoJournal,
   decodeSidecarHomes,
   decodeStatus,
   isoTime,
@@ -284,13 +285,16 @@ const absoluteIn = (base: string, path: string): string => (path.startsWith('/')
 /** A project-relative path made absolute under the located project root; unchanged (session-relative) without one. */
 const inProject = (path: string): string => (path.startsWith('/') || projectRoot === null ? path : `${prefixOf(projectRoot)}${path}`)
 
+/** The sidecar's path in `dir`. */
+const sidecarIn = (dir: string): string => `${dir === '/' ? '' : dir}/${SIDECAR}`
+
 /**
  * The directory the sidecar marks as the project: `dir`, or the nearest ancestor holding one —
  * a session opened inside a nested repo of an umbrella finds the umbrella's journal this way,
  * as shipgate's hooks do. Null when no ancestor has a sidecar; a cut is a `Cut` failure.
  */
 async function sidecarAbove($: Engine, dir: string): Promise<Result<Rejection, string | null>> {
-  const isHere = await existsRun($, `${dir === '/' ? '' : dir}/${SIDECAR}`)
+  const isHere = await existsRun($, sidecarIn(dir))
   if (!isHere.ok) return isHere
   if (isHere.value) return ok(dir)
   if (dir === '/') return ok(null)
@@ -298,8 +302,32 @@ async function sidecarAbove($: Engine, dir: string): Promise<Result<Rejection, s
   return sidecarAbove($, cut <= 0 ? '/' : dir.slice(0, cut))
 }
 
-/** The project the session is in: the sidecar at the session root or above it (`sidecarAbove`). */
-const locateProject = async ($: Engine): Promise<Result<Rejection, string | null>> => sidecarAbove($, await sessionRoot($))
+/**
+ * Does the sidecar in `dir` declare no journal (`declaresNoJournal`, shipgate ADR 0028 J2)? Read
+ * once. False when it cannot be read or does not parse: the project stays, so journal.py's
+ * failure shows and the publish gate holds, never turned off by a broken file. A cut read is a
+ * `Cut` failure.
+ */
+async function declaresNoJournalIn($: Engine, dir: string): Promise<Result<Rejection, boolean>> {
+  const text = await readRun($, sidecarIn(dir))
+  if (!text.ok) return text
+  const parsed = text.value === null ? null : parseJson(text.value)
+  return ok(parsed !== null && parsed.ok && declaresNoJournal(parsed.value))
+}
+
+/**
+ * The project the session is in: the nearest sidecar at the session root or above it
+ * (`sidecarAbove`). Null when there is none, or when that sidecar declares no journal: the walk
+ * stops at the nearest sidecar either way, as shipgate's hooks do. Only a found sidecar is read,
+ * so a project with no sidecar costs the walk alone. A cut is a `Cut` failure.
+ */
+async function locateProject($: Engine): Promise<Result<Rejection, string | null>> {
+  const found = await sidecarAbove($, await sessionRoot($))
+  if (!found.ok || found.value === null) return found
+  const declared = await declaresNoJournalIn($, found.value)
+  if (!declared.ok) return declared
+  return ok(declared.value ? null : found.value)
+}
 
 /** A written path relative to the project root; null when it lies outside it. */
 async function projectRelative($: Engine, path: string): Promise<string | null> {
@@ -487,11 +515,12 @@ export type Binding =
   | { readonly kind: 'Unbound'; readonly nearby: readonly StreamName[] }
 
 /**
- * One refresh's outcome. `NoProject`: no sidecar here or above. `NoJournalScript`: journal.py
- * was not found. `Outdated`: a journal run showed journal.py older than the shipgate this HUD
- * needs (`sign`: how); a known state, never a failure. `Cut`: the person cut the call the
- * refresh ran in; nothing is written. `Failed`: a journal run failed, never read as "no
- * stream". `Unbound` / `Bound`: as `Binding`, with the bound stream's position.
+ * One refresh's outcome. `NoProject`: no sidecar here or above, or the nearest one declares no
+ * journal (`locateProject`). `NoJournalScript`: journal.py was not found. `Outdated`: a journal
+ * run showed journal.py older than the shipgate this HUD needs (`sign`: how); a known state,
+ * never a failure. `Cut`: the person cut the call the refresh ran in; nothing is written.
+ * `Failed`: a journal run failed, never read as "no stream". `Unbound` / `Bound`: as `Binding`,
+ * with the bound stream's position.
  */
 export type Refreshed =
   | { readonly kind: 'NoProject' }
@@ -865,7 +894,7 @@ const uiOf = ($: Engine, e: ResolveInput): Ui =>
 /** Is the project journaled? Read off the view: any view but `Off` is (no atom of its own). */
 const isJournaled = async ($: Engine): Promise<boolean> => (await read($, view)).kind !== 'Off'
 
-/** Locate the project again; a project with no sidecar turns the view `Off`. A cut writes nothing and is a `Cut` failure. */
+/** Locate the project again; no project (no sidecar, or one that declares no journal) turns the view `Off`. A cut writes nothing and is a `Cut` failure. */
 async function detect($: Engine): Promise<Result<Rejection, boolean>> {
   const located = await locateProject($)
   if (!located.ok) return located
@@ -1631,7 +1660,9 @@ export const register: Register = (on, options) => {
     const project = await detectSession($)
     if (!project.ok) return {} // cut by the person: nothing to open
     if (!project.value) {
-      return { text: `shipgate-hud: no ${SIDECAR} in this project or any directory above it — run /shipgate:setup to create a flow journal.` }
+      return {
+        text: `shipgate-hud: no flow journal here — no ${SIDECAR} in this project or any directory above it, or the nearest one declares no journal ("db": null). Run /shipgate:setup to create a flow journal.`,
+      }
     }
     await $.ui.open({ id: PANE_ID, title: 'shipgate', focus: true, closeOnEscape: true })
     await refresh($)

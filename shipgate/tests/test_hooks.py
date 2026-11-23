@@ -480,17 +480,18 @@ class TestSessionStartSidecarVersion(HookTestCase):
         return json.loads(result.stdout)["hookSpecificOutput"].get("additionalContext", "")
 
     def test_a_newer_version_adds_one_note_to_the_context(self):
-        self.set_version(2)
+        self.set_version(3)
         context = self.context()
-        self.assertEqual(context.count("declares version 2"), 1, context)
-        self.assertIn("knows version 1", context)
+        self.assertEqual(context.count("declares version 3"), 1, context)
+        self.assertIn("knows version 2", context)
         self.assertIn("Update shipgate.", context)
         # The brief is still there: the hook keeps working with the keys it knows.
         self.assertIn("journal", context.lower())
         self.assertEqual(len(self.events(event_type="session-started")), 1)
 
     def test_a_known_or_absent_version_adds_no_note(self):
-        for version in (1, None, 0, "2", True):
+        """Version 2 is the settings file of ADR 0028: this shipgate writes and knows it."""
+        for version in (2, 1, None, 0, "3", True):
             with self.subTest(version=version):
                 self.set_version(version)
                 self.assertNotIn("declares version", self.context())
@@ -500,26 +501,25 @@ class TestSidecarVersionNote(unittest.TestCase):
     def test_only_an_integer_above_the_known_version_warns(self):
         from _common import SIDECAR_VERSION, sidecar_version_note
 
-        self.assertEqual(SIDECAR_VERSION, 1)
-        note = sidecar_version_note({"version": 2})
+        self.assertEqual(SIDECAR_VERSION, 2)
+        note = sidecar_version_note({"version": 3})
         self.assertEqual(
             note,
-            ".claude/shipgate.json declares version 2; this shipgate knows version 1 "
+            ".claude/shipgate.json declares version 3; this shipgate knows version 2 "
             "and reads only the keys it knows. Update shipgate.",
         )
         self.assertNotIn("\n", note)
-        for sidecar in ({"version": 1}, {"version": 0}, {}, {"version": "2"},
-                        {"version": True}, {"version": 2.0}, {"version": None}, None, []):
+        for sidecar in ({"version": 2}, {"version": 1}, {"version": 0}, {},
+                        {"version": "3"}, {"version": True}, {"version": 3.0},
+                        {"version": None}, None, []):
             with self.subTest(sidecar=sidecar):
                 self.assertIsNone(sidecar_version_note(sidecar))
 
-    def test_the_known_keys(self):
-        from _common import SIDECAR_KEYS
+    def test_the_known_keys_are_the_schema_s(self):
+        """ADR 0028: the schema names every key; the hooks keep no list of their own."""
+        import _common
 
-        # Every key a shipgate reader uses: the hooks, journal.py (`ledger` feeds the
-        # status ledger count) and setup's sidecar shape.
-        self.assertEqual(SIDECAR_KEYS,
-                         ("version", "db", "ledger", "artifact_homes", "enforce"))
+        self.assertFalse(hasattr(_common, "SIDECAR_KEYS"))
 
 
 class TestMarkerPath(unittest.TestCase):
@@ -992,7 +992,7 @@ class TestSidecarVersionOnAFailedStatus(StubJournalMixin, HookTestCase):
     STUB = """#!/usr/bin/env python3
 import sys
 
-note = ".claude/shipgate.json declares version 2; this shipgate knows version 1 and reads only the keys it knows. Update shipgate."
+note = ".claude/shipgate.json declares version 3; this shipgate knows version 2 and reads only the keys it knows. Update shipgate."
 sys.stderr.write("journal.py: " + note + "\\n")
 if "status" in sys.argv[1:]:
     sys.stderr.write("error: database is locked\\n")
@@ -1003,14 +1003,14 @@ if "status" in sys.argv[1:]:
         super().setUp()
         sidecar = self.root / ".claude" / "shipgate.json"
         config = json.loads(sidecar.read_text())
-        config["version"] = 2
+        config["version"] = 3
         sidecar.write_text(json.dumps(config), encoding="utf-8")
 
     def test_the_note_appears_once_and_the_real_error_stays(self):
         result = self.run_session_start()
         self.assertEqual(result.returncode, 0, result.stderr)
         context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertEqual(context.count("declares version 2"), 1, context)
+        self.assertEqual(context.count("declares version 3"), 1, context)
         self.assertIn("error: database is locked", context)
         self.assertIn("reading it failed", context)
 
@@ -4644,6 +4644,405 @@ class TestContextNudge(HookTestCase):
         self.write_transcript(usage_record(900_000))
         with tempfile.TemporaryDirectory() as other:
             self.assertIsNone(self.post(stdout, cwd=Path(other).resolve()))
+
+
+# --------------------------------------------------------------------------
+# ADR 0028, J2: a settings file marks the project root, and `"db": null` declares no
+# journal. Every hook then acts as in a project with no settings file: exit 0, no output,
+# no journal run, no file written. A malformed value never turns a gate off.
+# --------------------------------------------------------------------------
+
+HOMES = {
+    "worklog": "docs/prd/*.worklog.md",
+    "prd": "docs/prd/*.md",
+    "adr": "docs/adr/*.md",
+}
+DB_NULL_SETTINGS = {
+    "version": 2,
+    "db": None,
+    "artifact_homes": HOMES,
+    "enforce": {"stop_gate": True, "auto_capture": True, "command_gate": True},
+    "autonomy": "executive",
+}
+# A boundary append's summary line: a journaled PostToolUse on Bash reads the transcript
+# after it and asks the journal for the nudge.
+BOUNDARY_STDOUT = "appended design-committed to feature/feat: seq 9, version 9"
+
+
+def write_settings(root: Path, settings) -> None:
+    """The project settings file: a dict as JSON, a str as text, bytes as they are."""
+    path = root / ".claude" / "shipgate.json"
+    path.parent.mkdir(exist_ok=True)
+    if isinstance(settings, bytes):
+        path.write_bytes(settings)
+    elif isinstance(settings, str):
+        path.write_text(settings, encoding="utf-8")
+    else:
+        path.write_text(json.dumps(settings), encoding="utf-8")
+
+
+def every_hook_event(root: Path, artifact: Path, transcript: Path) -> dict:
+    """One payload per event shipgate's hooks handle, as {label: (hook, payload)}."""
+    base = {"session_id": SESSION, "cwd": str(root)}
+    relative = artifact.relative_to(root).as_posix()
+    events = {
+        f"SessionStart {source}": ("session_start", {**base, "source": source})
+        for source in SESSION_START_SOURCES
+    }
+    events.update({
+        "Stop": ("stop", {**base, "stop_hook_active": False}),
+        "UserPromptSubmit": ("reply", {
+            **base, "hook_event_name": "UserPromptSubmit", "prompt_id": "p-1",
+            "prompt": "commit"}),
+        "PostToolUse Write": ("post_tool_use", {
+            **base, "tool_name": "Write", "tool_input": {"file_path": str(artifact)}}),
+        "PostToolUse Edit": ("post_tool_use", {
+            **base, "tool_name": "Edit", "tool_input": {"file_path": str(artifact)}}),
+        "PostToolUse Bash": ("post_tool_use", {
+            **base, "tool_name": "Bash",
+            "tool_input": {"command": f"cat > {relative} <<'EOF'\nx\nEOF"},
+            "tool_response": {"stdout": BOUNDARY_STDOUT,
+                              "bashEditDiff": {"changedFiles": [str(artifact)]}},
+            "duration_ms": 1500, "transcript_path": str(transcript)}),
+        "PostToolUse AskUserQuestion": ("reply", {
+            **base, "hook_event_name": "PostToolUse", "tool_name": "AskUserQuestion",
+            "prompt_id": "p-1", "tool_use_id": "t-1",
+            **question_payload("Commit", "Commit")}),
+        "FileChanged": ("file_changed", {
+            **base, "file_path": str(artifact), "event": "change"}),
+        "PreToolUse git commit": ("pre_tool_use", {
+            **base, "tool_name": "Bash", "tool_input": {"command": "git commit -m x"}}),
+        "PreToolUse git push": ("pre_tool_use", {
+            **base, "tool_name": "Bash", "tool_input": {"command": "git push origin HEAD"}}),
+    })
+    return events
+
+
+def tree_of(root: Path) -> list:
+    """Every file and directory under `root`, `.git` left out, as sorted relative paths."""
+    return sorted(
+        path.relative_to(root).as_posix() for path in root.rglob("*")
+        if ".git" not in path.relative_to(root).parts
+    )
+
+
+class TestADbNullProjectIsInert(unittest.TestCase):
+    """SC-003: a project whose settings file says `"db": null` pays what a project with no
+    settings file pays: each hook exits 0, prints nothing and writes nothing."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name).resolve()
+        init_git_checkout(self.root, "feat/1-x")
+        (self.root / "docs" / "prd").mkdir(parents=True)
+        self.worklog = self.root / "docs" / "prd" / f"{SLUG}.worklog.md"
+        self.worklog.write_text(WORKLOG_TWO_TICKED, encoding="utf-8")
+        self.transcript = self.root / "transcript.jsonl"
+        self.transcript.write_text(json.dumps(usage_record(900_000)) + "\n",
+                                   encoding="utf-8")
+        write_settings(self.root, DB_NULL_SETTINGS)
+        self.user_dir = Path(self._tmp.name + "-user")
+        self.user_dir.mkdir()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+        import shutil
+
+        shutil.rmtree(self.user_dir, ignore_errors=True)
+
+    def test_every_hook_is_silent_and_writes_nothing(self):
+        before = tree_of(self.root)
+        for label, (hook, payload) in every_hook_event(
+                self.root, self.worklog, self.transcript).items():
+            with self.subTest(event=label):
+                result = run_hook(hook, payload, self.root,
+                                  env_extra={"CLAUDE_CONFIG_DIR": str(self.user_dir)})
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (0, "", ""))
+                self.assertEqual(tree_of(self.root), before)
+        self.assertEqual(list(self.root.rglob("*.db")), [])
+        self.assertEqual(list(self.user_dir.iterdir()), [])
+
+    def test_a_nested_directory_of_the_project_is_inert_too(self):
+        """The walk stops at the nearest settings file: a session in a subdirectory finds
+        the same "no journal"."""
+        nested = self.root / "docs" / "prd"
+        before = tree_of(self.root)
+        for hook, payload in (
+            ("session_start", {"session_id": SESSION, "cwd": str(nested),
+                               "source": "startup"}),
+            ("stop", {"session_id": SESSION, "cwd": str(nested),
+                      "stop_hook_active": False}),
+        ):
+            with self.subTest(hook=hook):
+                result = run_hook(hook, payload, nested)
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (0, "", ""))
+        self.assertEqual(tree_of(self.root), before)
+
+
+class TestADbNullProjectRunsNoJournal(StubJournalMixin, HookTestCase):
+    """J2: no hook starts journal.py in a project that declares no journal, even when a
+    journal sits at the default path from an earlier setup."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.worklog.write_text(WORKLOG_TWO_TICKED, encoding="utf-8")
+        self.transcript = self.root / "transcript.jsonl"
+        self.transcript.write_text(json.dumps(usage_record(900_000)) + "\n",
+                                   encoding="utf-8")
+
+    def run_all(self) -> None:
+        for label, (hook, payload) in every_hook_event(
+                self.root, self.worklog, self.transcript).items():
+            with self.subTest(event=label):
+                result = run_hook(hook, payload, self.root,
+                                  hooks_dir=self.plugin / "hooks")
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (0, "", ""))
+
+    def test_no_hook_runs_the_journal(self):
+        write_settings(self.root, DB_NULL_SETTINGS)
+        self.run_all()
+        self.assertFalse((self.plugin / "calls.log").exists(),
+                         "a hook started journal.py in a project with no journal")
+
+    def test_the_same_project_with_a_db_runs_it(self):
+        """The control: with `db` set, the same events do reach the journal."""
+        write_settings(self.root, {**DB_NULL_SETTINGS, "db": ".claude/shipgate.db"})
+        result = self.run_session_start()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any("session-started" in args for args in self.calls()),
+                        self.calls())
+
+
+class TestADbNullProjectPassesTheGates(CommandGateCase):
+    """The Stop gate and the command gate, with a live stream that would block: once the
+    settings file says `"db": null`, both pass silently and the journal gains no row."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        started = journal(self.db, "append", "--stream", STREAM, "--type",
+                          "phase-entered", "--data", json.dumps({"phase": "workspace"}))
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.worklog.write_text(WORKLOG_ONE_TICKED, encoding="utf-8")
+        run_hook("post_tool_use", {
+            "session_id": SESSION, "cwd": str(self.root), "tool_name": "Edit",
+            "tool_input": {"file_path": str(self.worklog)}}, self.root)
+        self.journaled = json.loads(
+            (self.root / ".claude" / "shipgate.json").read_text(encoding="utf-8"))
+
+    def test_the_journaled_project_blocks(self):
+        """The control: the same state blocks the stop and holds the commit."""
+        self.assertEqual(json.loads(self.stop().stdout)["decision"], "block")
+        self.assertHeld("git commit -m x", "commit")
+        self.assertHeld("git push origin HEAD", "publish")
+
+    def test_db_null_passes_both_gates_and_writes_no_row(self):
+        write_settings(self.root, {**self.journaled, "version": 2, "db": None})
+        rows = len(self.events())
+        result = self.stop()
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+        for command in GATED:
+            with self.subTest(command=command):
+                self.assertPassed(command)
+        self.assertEqual(len(self.events()), rows)
+
+
+class TestTheUserSettingsFileMarksNoProject(unittest.TestCase):
+    """FR-004: `shipgate.settings.json` in the Claude config directory, or in `~/.claude`,
+    never makes a project journaled: no walk finds that name."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name).resolve()
+        (self.home / ".claude").mkdir()
+        self.root = self.home / "work" / "project"
+        (self.root / "docs" / "prd").mkdir(parents=True)
+        self.worklog = self.root / "docs" / "prd" / f"{SLUG}.worklog.md"
+        self.worklog.write_text(WORKLOG_TWO_TICKED, encoding="utf-8")
+        self.transcript = self.root / "transcript.jsonl"
+        self.transcript.write_text(json.dumps(usage_record(900_000)) + "\n",
+                                   encoding="utf-8")
+        user = {"version": 2, "db": ".claude/shipgate.db", "autonomy": "executive",
+                "artifact_homes": HOMES, "enforce": {"stop_gate": True}}
+        self.user_file = self.home / ".claude" / "shipgate.settings.json"
+        self.user_file.write_text(json.dumps(user), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_every_hook_stays_inert(self):
+        # The project and the Claude config directory: where a journal, a marker or a
+        # settings file could appear. The rest of HOME is left out, because a Python may
+        # keep its own cache there (Library/Caches on macOS).
+        watched = (self.home / ".claude", self.home / "work")
+        before = [tree_of(path) for path in watched]
+        for env in ({"HOME": str(self.home), "CLAUDE_CONFIG_DIR": ""},
+                    {"HOME": str(self.home),
+                     "CLAUDE_CONFIG_DIR": str(self.home / ".claude")}):
+            for label, (hook, payload) in every_hook_event(
+                    self.root, self.worklog, self.transcript).items():
+                with self.subTest(event=label, config_dir=env["CLAUDE_CONFIG_DIR"]):
+                    result = run_hook(hook, payload, self.root, env_extra=env)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                     (0, "", ""))
+        self.assertEqual([tree_of(path) for path in watched], before)
+        self.assertEqual(list(self.home.rglob("*.db*")), [])
+        self.assertIsNone(find_project(str(self.root)))
+
+
+class TestArtifactHomesThatAreNoObject(HookTestCase):
+    """An `artifact_homes` that is no object captures nothing and raises nothing: the
+    session still gets its brief, and the hooks record no artifact."""
+
+    def test_capture_stops_and_the_brief_stays(self):
+        for homes in ("docs/prd/*.md", ["docs/prd/*.md"], 7, True):
+            with self.subTest(homes=homes):
+                sidecar = json.loads(
+                    (self.root / ".claude" / "shipgate.json").read_text(encoding="utf-8"))
+                write_settings(self.root, {**sidecar, "artifact_homes": homes})
+                written = len(self.events(event_type="artifact-written"))
+                result = run_hook("post_tool_use", {
+                    "session_id": SESSION, "cwd": str(self.root), "tool_name": "Write",
+                    "tool_input": {"file_path": str(self.worklog)}}, self.root)
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (0, "", ""))
+                changed = run_hook("file_changed", {
+                    "session_id": SESSION, "cwd": str(self.root),
+                    "file_path": str(self.worklog), "event": "change"}, self.root)
+                self.assertEqual(changed.returncode, 0)
+                self.assertEqual(json.loads(changed.stdout)["hookSpecificOutput"],
+                                 {"hookEventName": "FileChanged", "watchPaths": []})
+                self.assertEqual(len(self.events(event_type="artifact-written")), written)
+                started = run_hook("session_start", {
+                    "session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+                    self.root)
+                self.assertEqual(started.returncode, 0, started.stderr)
+                output = json.loads(started.stdout)["hookSpecificOutput"]
+                self.assertEqual(output["watchPaths"], [])
+                self.assertIn("shipgate flow journal", output["additionalContext"])
+
+    def test_project_artifact_globs_never_raise(self):
+        from _common import Project
+
+        for homes in ("docs/*.md", ["docs/*.md"], 7, None, True,
+                      {"prd": 5, "adr": "docs/adr/*.md"}):
+            with self.subTest(homes=homes):
+                project = Project(str(self.root), {"artifact_homes": homes})
+                expected = ["docs/adr/*.md"] if isinstance(homes, dict) else []
+                self.assertEqual(project.artifact_globs, expected)
+                self.assertFalse(project.covers(str(self.worklog)))
+
+
+# A settings file whose values are malformed: the hooks use each key's default, so the
+# project stays journaled and every gate stays on (FR-006).
+MALFORMED_VALUES = {
+    "db a number": {"db": 0},
+    "db a list": {"db": [".claude/shipgate.db"]},
+    "db an empty string": {"db": ""},
+    "db false": {"db": False},
+    "enforce a string": {"enforce": "off"},
+    "enforce switches that are no boolean": {"enforce": {
+        "stop_gate": "false", "auto_capture": 0, "command_gate": None}},
+    "artifact_homes a string": {"artifact_homes": "docs/prd/*.md"},
+    "a version above 2": {"version": 3},
+    # Python's json reads NaN and Infinity; JavaScript's JSON.parse (the HUD) refuses them.
+    # Such a file never declares no journal, so the hooks and the HUD agree: journaled.
+    "db null in a file that holds NaN": {"db": None, "x": float("nan")},
+    "db null in a file that holds -Infinity": {"db": None, "x": float("-inf")},
+}
+# A settings file the hooks cannot read: they fail open, as before ADR 0028 (no project).
+UNREADABLE = {
+    "not JSON": "{not json",
+    "not an object": '[{"db": ".claude/shipgate.db"}]',
+    "not UTF-8": b'{"db": ".claude/shipgate.db", "x": "\xff\xfe"}',
+    "a byte order mark": '\ufeff{"db": ".claude/shipgate.db"}',
+}
+# Deep enough that Python 3.9's json gives up (RecursionError); a newer json may read it.
+DEEPLY_NESTED = ('{"db": ".claude/shipgate.db", "x": ' + "[" * 100_000 + "]" * 100_000
+                 + "}")
+
+
+class TestHostileSettingsFiles(CommandGateCase):
+    """A settings file is untrusted content. A malformed value never turns a gate off; a
+    file the hooks cannot read fails open, as it did before, and never prints a traceback."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        started = journal(self.db, "append", "--stream", STREAM, "--type",
+                          "phase-entered", "--data", json.dumps({"phase": "workspace"}))
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.worklog.write_text(WORKLOG_ONE_TICKED, encoding="utf-8")
+        run_hook("post_tool_use", {
+            "session_id": SESSION, "cwd": str(self.root), "tool_name": "Edit",
+            "tool_input": {"file_path": str(self.worklog)}}, self.root)
+        self.journaled = json.loads(
+            (self.root / ".claude" / "shipgate.json").read_text(encoding="utf-8"))
+        self.transcript = self.root / "transcript.jsonl"
+        self.transcript.write_text(json.dumps(usage_record(10_000)) + "\n",
+                                   encoding="utf-8")
+
+    def test_a_malformed_value_keeps_every_gate_on(self):
+        for label, values in MALFORMED_VALUES.items():
+            with self.subTest(form=label):
+                write_settings(self.root, {**self.journaled, **values})
+                stopped = self.stop()
+                self.assertEqual(stopped.returncode, 0, stopped.stderr)
+                self.assertEqual(json.loads(stopped.stdout)["decision"], "block")
+                self.assertHeld("git commit -m x", "commit")
+                self.assertHeld("git push origin HEAD", "publish")
+                started = run_hook("session_start", {
+                    "session_id": SESSION, "cwd": str(self.root), "source": "startup"},
+                    self.root)
+                self.assertEqual(started.returncode, 0, started.stderr)
+                self.assertIn("shipgate flow journal",
+                              json.loads(started.stdout)["hookSpecificOutput"]
+                              ["additionalContext"])
+
+    def test_a_malformed_value_never_breaks_a_hook(self):
+        for label, values in MALFORMED_VALUES.items():
+            write_settings(self.root, {**self.journaled, **values})
+            for event, (hook, payload) in every_hook_event(
+                    self.root, self.worklog, self.transcript).items():
+                with self.subTest(form=label, event=event):
+                    result = run_hook(hook, payload, self.root)
+                    self.assertEqual(result.returncode, 0)
+                    self.assertEqual(result.stderr, "")
+
+    def test_an_unreadable_file_fails_open_quietly(self):
+        rows = len(self.events())
+        for label, text in UNREADABLE.items():
+            write_settings(self.root, text)
+            with self.subTest(form=label):
+                self.assertIsNone(find_project(str(self.root)))
+            for event, (hook, payload) in every_hook_event(
+                    self.root, self.worklog, self.transcript).items():
+                with self.subTest(form=label, event=event):
+                    result = run_hook(hook, payload, self.root)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                     (0, "", ""))
+        self.assertEqual(len(self.events()), rows)
+
+    def test_a_deeply_nested_file_never_breaks_a_hook(self):
+        """The json of the running Python decides: a parse that gives up fails open as
+        above; a parse that succeeds reads a journaled project, its gates on. Either way
+        each hook exits 0 and prints no traceback."""
+        write_settings(self.root, DEEPLY_NESTED)
+        for event, (hook, payload) in every_hook_event(
+                self.root, self.worklog, self.transcript).items():
+            with self.subTest(event=event):
+                result = run_hook(hook, payload, self.root)
+                self.assertEqual((result.returncode, result.stderr), (0, ""))
+                if result.stdout:
+                    json.loads(result.stdout)
+        try:
+            project = find_project(str(self.root))
+        except RecursionError:
+            project = None  # this Python's json gives up: the hooks failed open above
+        if project is not None:
+            self.assertEqual(json.loads(self.stop().stdout)["decision"], "block")
+            self.assertHeld("git commit -m x", "commit")
 
 
 if __name__ == "__main__":

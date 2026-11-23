@@ -2,6 +2,54 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.32.0 — `"db": null` declares no journal, and the settings file is version 2 (PR 2 of 3 for #60).
+
+**A project can have settings and no journal (#60, ADR 0028, J2).** The settings file
+`.claude/shipgate.json` still marks the project root. A `db` of JSON `null` in it now
+declares that the project has no journal.
+- Every hook then acts as in a project with no settings file: SessionStart, Stop,
+  UserPromptSubmit, PostToolUse (the file tools, Bash and AskUserQuestion), FileChanged
+  and PreToolUse each exit 0, print nothing, start no `journal.py` and write no file. The
+  Stop gate and the command gate do not apply, because there is no journal to check.
+- The walk for the settings file stops at that file, as before. A session in a
+  subdirectory of the project, or in a nested repo, finds the same "no journal".
+- Only `null` declares no journal. A missing `db` keeps the default database
+  `.claude/shipgate.db`, as before. A `db` of any other type (a number, a list, `false`, an
+  empty string) is a bad value and also keeps the default, so a malformed value never
+  turns a gate off.
+- Only a file in strict JSON declares no journal. Python's json reads `NaN`, `Infinity`
+  and `-Infinity`, and shipgate-hud's `JSON.parse` refuses them, so a file that holds one
+  keeps its journal, and the hooks, `journal.py` and the HUD agree.
+- A `journal.py` command that needs a journal exits 1 with `this project declares no
+  journal ("db": null in <path>)`. `vocab`, `session` and `config` still run. An explicit
+  `--db` still wins.
+- No release of shipgate writes `"db": null` yet. The migration release (PR 3) lets
+  `/shipgate:setup` write it for a project that declines the journal but sets a project
+  setting.
+
+**A team with mixed versions.** shipgate 0.31.0 and older read `"db": null` as the
+default database, so their hooks treat the project as journaled. With no journal file
+there, their SessionStart says on every session start that reading the journal failed,
+and their gates pass because the journal read fails. If such a release runs `journal.py
+init` there, it starts a journal that shipgate 0.32.0 ignores. Update every machine of
+the team before a settings file says `"db": null`. shipgate-hud 0.12.0 needs this release.
+
+**The settings file is version 2.** The hooks and `journal.py` know version 2, the
+`x-version` of `settings.schema.json`, and a test pins the two. A version-2 file no longer
+prints "declares version 2". A version above 2 still prints one warning, and the known
+keys are still read.
+
+**Smaller changes.**
+- An `artifact_homes` that is no object no longer stops a hook. The hooks capture no
+  artifact, SessionStart prints the brief with no watched paths, and FileChanged answers
+  with an empty watch list. Before, both printed nothing, and PostToolUse on Bash lost its
+  context nudge.
+- `journal.py doctor`'s `stray_keys` are the keys that `settings.schema.json` does not
+  name. Before, they were the keys outside the hooks' own list, so a setting such as
+  `autonomy` read as stray. With no readable schema, `doctor` still prints its report and
+  says the stray keys are unknown.
+- A comment in `hooks/post_tool_use.py` names the real home of `NUDGE_EVENTS`.
+
 v0.31.0 — the settings reader: a schema, one resolver and `journal.py config` (PR 1 of 3 for #60).
 
 **One resolver for every setting (#60, ADR 0028).** shipgate's settings are values from

@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -85,6 +87,44 @@ class TestDoctor(JournalTestCase):
         text = self.journal("--db", self.db, "doctor", rc=OK).stdout
         self.assertIn("sidecar version : 2", text)
         self.assertIn("stray keys      : auto_merge, watch", text)
+
+    def test_a_key_the_schema_names_is_no_stray_key(self):
+        """ADR 0028: `stray_keys` are the keys `settings.schema.json` does not name."""
+        self.write_sidecar({
+            "version": 2, "db": str(self.db), "ledger": "docs/ledger.md",
+            "artifact_homes": {}, "enforce": {}, "autonomy": "executive",
+            "orchestration": {"review": "workflow"}, "writing_style": "ste-80",
+            "code_graph": "auto", "code_signals": {"window_months": 12},
+            "handoff": "500k", "forge": "github", "watch": True,
+        })
+        proc = self.journal("--db", self.db, "doctor", "--json", rc=OK)
+        self.assertEqual(json.loads(proc.stdout)["sidecar"]["stray_keys"], ["watch"])
+
+    def test_a_missing_schema_leaves_the_report_standing(self):
+        """`doctor` is the command for a broken install: with no `settings.schema.json` it
+        still prints its report and its exit code, and says the stray keys are unknown."""
+        import shutil
+
+        plugin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(plugin), True)
+        shipgate = Path(__file__).resolve().parent.parent
+        for part in ("scripts", "hooks"):
+            shutil.copytree(shipgate / part, plugin / part,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        self.write_sidecar({"version": 2, "db": str(self.db), "watch": True})
+        journal = [sys.executable, str(plugin / "scripts" / "journal.py"), "--db",
+                   str(self.db), "doctor"]
+        proc = subprocess.run(journal + ["--json"], capture_output=True, text=True,
+                              cwd=str(self.root), timeout=60)
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        sidecar = json.loads(proc.stdout)["sidecar"]
+        self.assertTrue(sidecar["found"])
+        self.assertIsNone(sidecar["stray_keys"])
+        text = subprocess.run(journal, capture_output=True, text=True,
+                              cwd=str(self.root), timeout=60)
+        self.assertEqual(text.returncode, OK, text.stderr)
+        self.assertIn("stray keys      : unknown (settings.schema.json unreadable)",
+                      text.stdout)
 
     def test_a_ledger_key_is_no_stray_key(self):
         """`ledger` is read by `status` (the ledger count): update mode must keep it."""

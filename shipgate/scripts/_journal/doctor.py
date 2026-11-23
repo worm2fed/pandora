@@ -8,7 +8,7 @@ import sqlite3
 from typing import Any, Dict, Optional
 
 from .vocab import DEFAULT_ARTIFACT_HOMES, DEFAULT_LEDGER, EVENT_VOCABULARY
-from .plugin import _config, _hooks_common
+from .plugin import _config
 from .text import _one_line
 from .project import Resolution, sidecar_db_path
 from .store import pending_migrations, read_schema_version
@@ -28,6 +28,10 @@ def run_doctor(conn: sqlite3.Connection, resolution: Resolution) -> Dict[str, An
 
     sidecar_report: Dict[str, Any] = {"found": False}
     if resolution.sidecar is not None:
+        try:
+            schema_keys: Optional[Any] = _config.load_schema()["properties"]
+        except OSError:
+            schema_keys = None  # an incomplete install: the report still stands
         declared = sidecar_db_path(resolution.sidecar)
         config = resolution.sidecar.config
         sidecar_report = {
@@ -37,9 +41,10 @@ def run_doctor(conn: sqlite3.Connection, resolution: Resolution) -> Dict[str, An
             "agrees": bool(declared) and declared == resolution.db_path,
             # The raw `version`, or None: a newer one means a newer shipgate wrote it.
             "version": config.get("version"),
-            # Keys no shipgate template names; `setup`'s update mode drops them.
-            "stray_keys": sorted(
-                key for key in config if key not in _hooks_common.SIDECAR_KEYS
+            # Keys the settings schema does not name (ADR 0028); `setup`'s update mode
+            # drops them. None when the schema cannot be read.
+            "stray_keys": None if schema_keys is None else sorted(
+                key for key in config if key not in schema_keys
             ),
         }
 
@@ -216,11 +221,15 @@ def render_doctor(report: Dict[str, Any]) -> str:
     sidecar_lines = []
     if sidecar["found"]:
         version = sidecar.get("version")
-        stray = sidecar.get("stray_keys") or []
+        stray = sidecar.get("stray_keys")
+        if stray is None:
+            stray_text = "unknown (settings.schema.json unreadable)"
+        else:
+            stray_text = ", ".join(stray) if stray else "none"
         sidecar_lines = [
             "sidecar version : "
             + ("—" if version is None else json.dumps(version, sort_keys=True)),
-            f"stray keys      : {', '.join(stray) if stray else 'none'}",
+            f"stray keys      : {stray_text}",
         ]
     pending = report["pending_migrations"]
     lines = [

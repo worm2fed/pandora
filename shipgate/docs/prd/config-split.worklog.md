@@ -374,7 +374,7 @@ T050 judges it on Opus and on Fable.
 
 ## PR 2 — the journal marker and the HUD (hooks: full `/security-review`, separate merge question)
 
-- [ ] T020 — Hook tests first — file(s): `shipgate/tests/test_hooks.py` — done when: they
+- [x] T020 — Hook tests first — file(s): `shipgate/tests/test_hooks.py` — done when: they
   fail, and show that with a settings file holding `"db": null` each hook (SessionStart,
   Stop, UserPromptSubmit, PostToolUse on Write and on Bash, PostToolUse on
   AskUserQuestion, FileChanged, PreToolUse on `git commit`) exits 0, prints nothing, runs
@@ -382,35 +382,35 @@ T050 judges it on Opus and on Fable.
   that an `artifact_homes` string captures nothing and raises nothing; and that a user
   settings file at `$CLAUDE_CONFIG_DIR/shipgate.settings.json` never makes a project
   journaled. The existing no-op tests (`test_hooks.py:2346`, `:4640`) stay green.
-- [ ] T021 — The hook change — file(s): `shipgate/hooks/_common.py` (`load_project` at
+- [x] T021 — The hook change — file(s): `shipgate/hooks/_common.py` (`load_project` at
   `:335`, `SIDECAR_VERSION` and `SIDECAR_KEYS` at `:44`-`45`, `artifact_globs` at `:305`)
   — done when: T020 passes; `SIDECAR_KEYS` and its test at `test_hooks.py:522` are gone;
   the no-op path still imports nothing before the sidecar is found.
-- [ ] T022 — `"db": null` in the journal CLI — file(s):
+- [x] T022 — `"db": null` in the journal CLI — file(s):
   `shipgate/scripts/_journal/project.py` (`resolve_db` at `:93`, `sidecar_db_path` at
   `:138`), `shipgate/scripts/_journal/doctor.py` (`stray_keys` at `:41`),
   `shipgate/tests/test_journal.py`, `shipgate/tests/test_journal_doctor.py` — done when: a
   command that needs a journal exits 1 with `this project declares no journal ("db": null
   in <path>)`; `vocab`, `session` and `config` still run; `doctor`'s `stray_keys` are the
   keys the schema does not name; tests cover each.
-- [ ] T023 — One version, pinned — file(s): `shipgate/tests/test_hud_contract.py` — done
+- [x] T023 — One version, pinned — file(s): `shipgate/tests/test_hud_contract.py` — done
   when: a test reads `settings.schema.json` and checks that `x-version` equals
   `hooks/_common.SIDECAR_VERSION` and the HUD's `KNOWN_SIDECAR_VERSION`
   (`shipgate-hud/hooks/journal.ts:958`, read as text), and that the schema's default homes
   equal `vocab.DEFAULT_ARTIFACT_HOMES` and the HUD's table (`journal.ts:237`).
-- [ ] T024 — HUD pins first — file(s): `shipgate-hud/tests/register.test.ts`,
+- [x] T024 — HUD pins first — file(s): `shipgate-hud/tests/register.test.ts`,
   `shipgate-hud/tests/journal.test.ts` — done when: tests pin today's `readSidecar`
   (`register.tsx:446`) and the view for a found sidecar, and new failing tests show that a
   sidecar with `"db": null` gives the Off view and no journal run, and that version 2
   gives no warning.
-- [ ] T025 — The HUD change — file(s): `shipgate-hud/hooks/journal.ts`
+- [x] T025 — The HUD change — file(s): `shipgate-hud/hooks/journal.ts`
   (`KNOWN_SIDECAR_VERSION`, a `db` decoder), `shipgate-hud/hooks/register.tsx`
   (`readSidecar`, the detect path at `:866`) — done when: T024 passes with the full HUD
   suite, and T023 passes.
-- [ ] T026 — Security review — file(s): the PR 2 diff — done when: the `review` skill's
+- [x] T026 — Security review — file(s): the PR 2 diff — done when: the `review` skill's
   security pass ran on the uncommitted diff (hooks and the HUD hooks), and the built-in
   `/security-review` runs on the commit before the push, per this repo's flow.
-- [ ] T027 — Release PR 2 — file(s): `shipgate/.claude-plugin/plugin.json`,
+- [x] T027 — Release PR 2 — file(s): `shipgate/.claude-plugin/plugin.json`,
   `shipgate-hud/.claude-plugin/plugin.json` (version, and `dependencies` → `shipgate >=`
   the new shipgate version), `.claude-plugin/marketplace.json` (both entries),
   `shipgate/CHANGELOG.md`, `shipgate-hud/CHANGELOG.md` — done when: both versions are
@@ -653,3 +653,190 @@ alone (two files, three hunks, one test each).
 - F15 LOW `shipgate/scripts/signals.py:324` — `signals.py` named a broken settings file
   that no key it reads reached. Fixed: it names a broken file only when the walk of
   `code_signals` or `code_graph` reached it.
+
+## PR 2 — notes, deviations and measurements
+
+- 2026-11-23 — Baselines at `9bd8121`: the shipgate suite, run on a scratch copy of
+  `origin/main`, ran 1825 tests, 15 skipped, in 648 s. Its one failure,
+  `test_closeout.TestThisRepoConfig`, reads this repo's `.claude/shipgate.md`, which the
+  scratch copy lacks. The HUD suite passed 1001 tests.
+- 2026-11-23 — The rule (gate decision): only a settings file that parses as a JSON object
+  with its own `db` key set to `null` declares no journal. A `db` of another type keeps the
+  default journal, so a malformed value never turns a gate off. A file the hooks cannot
+  read keeps failing open, as before.
+- 2026-11-23 — Deviation: the pin of the HUD's rule to the hooks' rule is a new generated
+  file, `shipgate-hud/tests/fixtures.sidecar.ts`. `test_hud_contract.py` writes the hooks'
+  verdict on 29 settings texts into it, and the HUD's tests check every row. The lead asked
+  for this pin; the Build Plan did not name the file.
+- 2026-11-23 — Deviation: T025 names `readSidecar`, but the check lives in
+  `locateProject`, which `detect`, the refresh and the publish gate all reach.
+  `readSidecar` is unchanged. A journaled project's detection and refresh read the
+  settings file twice.
+- 2026-11-23 — Deviation: files outside T027's list changed. `shipgate-hud/README.md`
+  (the dependency floor, the version-2 warning, the `"db": null` behaviour) and the `/hud`
+  text in `register.tsx` for a project with no journal: both were wrong for a `"db": null`
+  project.
+- 2026-11-23 — A deeply nested settings file depends on the Python: 3.9's json gives up
+  (the hooks fail open, as before), and 3.15's json reads it (the project is journaled,
+  its gates on). The test accepts both and checks exit 0 and no traceback.
+  `load_project` does not catch `RecursionError`, so nothing changes from today.
+- 2026-11-23 — In a linked worktree, a main checkout whose settings file says
+  `"db": null` still gives the location of the worktree's relative journal (the default
+  path there), as before. The worktree's own file decides whether it has a journal.
+- 2026-11-23 — T026 order: the review skill's security pass runs after T027, as the
+  session brief says. The built-in `/security-review` runs on the commit before the push.
+- 2026-11-23 — Deviation: T025 names "a `db` decoder" for the HUD. The HUD gets a boolean
+  predicate, `declaresNoJournal`, because the HUD needs only the yes or no; it reads no
+  other use of `db`.
+- 2026-11-23 — Only a file in strict JSON declares no journal (review round 1, F1).
+  Python's json reads `NaN`, `Infinity` and `-Infinity`; the HUD's `JSON.parse` refuses
+  them. `_common.parse_sidecar` marks such a file, and the hooks and `journal.py` then keep
+  its journal, so all three readers agree. A settings file over 4 MiB is a third state:
+  the engine's `fs.read` refuses it, so the HUD keeps the project and shows `journal.py`'s
+  answer, while the hooks read it. Nobody writes such a file; the HUD then holds more,
+  never less.
+- 2026-11-23 — T026 is ticked on the briefed security pass of the uncommitted diff (21 of
+  21 changed files read, no finding at confidence 8 or more). Its second half, the
+  built-in `/security-review` on the commit, runs after the commit and before the push.
+- 2026-11-23 — Accepted by the user, through the lead: shipgate 0.32.0 and shipgate-hud
+  0.12.0; the rejected finding `post_tool_use.py:364` (the session's own directory
+  decides); and the HUD's Off view for a `"db": null` file with a byte order mark or bytes
+  that are not UTF-8. Open for the merge question: FR-006 asks the SessionStart brief to
+  name each bad key once, but the PR 3 settings line (T040, T041) names only `autonomy`,
+  `orchestration`, `writing_style` and `code_graph`; a bad `db`, `enforce` or
+  `artifact_homes` is named nowhere. That is PR 3 scope.
+- 2026-11-23 — Raw U+FEFF characters stand in source on `main` already, at
+  `shipgate/hooks/pre_tool_use.py:950` and `shipgate/tests/test_journal.py:894`. This
+  change leaves them as they are.
+- 2026-11-23 — Notes for new issues. (1) `handoff` and `position` count only the stream's
+  own `task-done`. On a plan that several PRs share, this stream's brief shows T001-T012 as
+  "ticked with no task-done", and the HUD's Plan tab shows them as unrecorded, while the
+  Stop gate (`check.py`) counts every stream that owns the worklog. (2) `journal.py config`
+  prints a version-above-2 warning twice (`find_sidecar` and the resolver); the same in
+  0.31.0. (3) `journal.py` prints a traceback for a settings file that is not UTF-8
+  (`project._load_sidecar`); the same in 0.31.0 (PR 1's note (a)). (4) The HUD's walk uses
+  `fs.exists` and the hooks' walk uses `isfile`, so a directory or a FIFO named
+  `.claude/shipgate.json` stops only the HUD; the same in 0.11.1. (5) A settings file
+  changed to `"db": null` during a session: the HUD shows `journal.py`'s failure until the
+  next detection; the publish gate detects first, so it passes correctly.
+- 2026-11-23 — Lessons. A backslash-u escape typed into an Edit argument landed as the raw
+  character again (a BOM in a test string); the fix went through Python with `chr()`, and
+  a byte scan against `origin/main` checked every changed file. Python 3.15's json reads
+  100 000 levels of nesting that 3.9 to 3.11 refuse, so a hostile-form test must accept
+  both outcomes. On a migration, the parity gate confirmed two lens findings with probes
+  and found a third case (the BOM decode) that the lens fan missed.
+
+### No-op path, before and after
+
+Each hook run 20 times on this machine (Python 3.15.2), before (`origin/main`) and after,
+interleaved. "No settings file" is the no-op path. Files opened: outside the standard
+library and the hook script itself.
+
+| Event | No settings file, before | No settings file, after | `"db": null`, before | `"db": null`, after |
+| --- | --- | --- | --- | --- |
+| SessionStart | 31.0 / 33.5 ms | 31.0 / 33.1 ms | 193.7 / 201.5 ms | 32.4 / 34.8 ms |
+| Stop | 24.1 / 26.9 | 24.1 / 26.5 | 110.3 / 115.2 | 31.5 / 35.1 |
+| UserPromptSubmit | 24.4 / 26.3 | 24.7 / 26.6 | 109.5 / 116.5 | 31.7 / 33.8 |
+| PostToolUse Write | 25.5 / 28.1 | 24.8 / 28.0 | 32.0 / 34.4 | 32.1 / 34.7 |
+| PostToolUse Bash | 24.9 / 27.0 | 24.8 / 27.3 | 33.4 / 35.9 | 32.3 / 34.7 |
+| PostToolUse AskUserQuestion | 24.3 / 26.6 | 24.4 / 27.1 | 109.5 / 117.0 | 31.5 / 34.8 |
+| FileChanged | 23.4 / 25.7 | 23.7 / 25.2 | 31.3 / 33.4 | 30.2 / 32.3 |
+| PreToolUse `git commit` | 39.0 / 42.1 | 39.5 / 43.4 | 55.4 / 60.6 | 38.1 / 40.1 |
+
+Median / worst. Files opened with no settings file: 1 before and 1 after for each hook
+(`hooks/_common`'s compiled module). With `"db": null`: before, 2 to 5 different files
+(the settings file, `.git`, `/dev/null` from git, the transcript, the hook modules) and
+`journal.py` runs; after, 2 (the settings file and the module), and 3 on PostToolUse Bash
+after a boundary append (the nudge module too), with no `journal.py` run. Every run exited
+0. With no settings file, every run printed nothing before and after. With `"db": null`,
+before, SessionStart printed a failed-journal notice and FileChanged printed a watch list;
+after, every hook printed nothing. No run wrote a file.
+
+After the fix round of review round 1 (which changed `_common.py`), an interleaved re-run of
+the no-op path gave medians within 0.5 ms of `origin/main` for every event, with one file
+opened. A `"db": null` project still printed nothing and wrote nothing on every event.
+
+### Review round 1 (PR 2)
+
+The `workflow` fan (run `wf_754a97ff-bd5`) ran 3 lenses: 16 findings, 13 after dedupe, 6
+above the floor of 60, 0 refuters (no BLOCKER or HIGH), 6 survivors, 0 killed. The briefed
+security review read all 21 changed files and found nothing at confidence 8 or more. The
+parity gate made about 2,580 comparisons against `9bd8121` and found 3 LOW differences (F1,
+F6 and the decode case below).
+
+- F1 MEDIUM `shipgate/hooks/_common.py:346` — a `"db": null` file that also holds `NaN` or
+  `Infinity` made the hooks inert, while the HUD could not parse it and held publishing.
+  Fixed: only a file in strict JSON declares no journal, in the hooks and in `journal.py`;
+  two golden rows pin it.
+- F2 MEDIUM `shipgate/README.md:234` — the README still said version 1 and listed the old
+  stray keys. Fixed: version 2, the schema's keys, and one paragraph on `"db": null`.
+- F3 LOW `shipgate/docs/prd/config-split.worklog.md:710` — a 116-column line. Fixed:
+  rewrapped.
+- F4 LOW `shipgate/tests/test_hooks.py:995` — the stub of a failed status still took
+  version 2 as the newer version. Fixed: version 3.
+- F6 LOW `shipgate/scripts/_journal/doctor.py:43` — `doctor` exited 1 when the schema file
+  was missing, where 0.31.0 printed its report. Fixed: it reports the stray keys as unknown.
+- F7 LOW `shipgate-hud/hooks/journal.ts:966` — T025's "`db` decoder" became a predicate with
+  no worklog line. Fixed: the deviation line above.
+- F8 LOW `shipgate/README.md:299` — the command gate's pass cases did not name a `"db": null`
+  sidecar. Fixed, and the `pre_tool_use.py` docstring too.
+
+#### Rejected findings
+
+- `shipgate/hooks/post_tool_use.py:364` (LOW 70): a Write into another journaled project
+  from a session whose own directory says `"db": null` is not captured. In the common case
+  a session with no settings file captures nothing either, because `likely_journaled` stops
+  it; only a session whose `CLAUDE_PROJECT_DIR` is journaled and whose cwd sits in a
+  `"db": null` project differs. The session's own directory decides, as in
+  `resolve_project`. The user accepted this on 2026-11-23.
+- `shipgate-hud/hooks/register.tsx:312` (LOW 50): a `"db": null` file with a byte order
+  mark or bytes that are not UTF-8 may turn the HUD Off if the engine decodes it. Accepted
+  as an improvement (gate decision): the hooks already read that file as no project, and
+  the file says `"db": null`. The user accepted this on 2026-11-23.
+- `shipgate-hud/hooks/register.tsx:297` (LOW 55): the HUD's walk uses `fs.exists`, the
+  hooks' walk `isfile`, so a directory named `.claude/shipgate.json` stops only the HUD.
+  The same in 0.11.1; a note for a new issue.
+- `shipgate/hooks/_common.py:310` (LOW 30): a non-object `artifact_homes` captures nothing
+  in the hooks but gives the defaults in `journal.py`. The design and T020 ask for exactly
+  this.
+- `shipgate/hooks/_common.py:362` (LOW 30): `declares_no_journal` checks `isinstance`
+  again. Kept: `journal.py` calls it too.
+- `shipgate/hooks/_common.py:340` (LOW 25): `read_sidecar` keeps the term "sidecar". The
+  hooks use it throughout; the glossary change is T049 (PR 3).
+- `shipgate/skills/setup/SKILL.md:130` (LOW 25): `setup` still writes `"version": 1`. A
+  version-1 file is known and silent; `setup` is T046 (PR 3).
+
+### Review round 2 (PR 2)
+
+One fresh reviewer re-reviewed the fix diff with all lenses, the security criteria
+included. It confirmed F1 to F8 fixed on evidence: the code lines and the tests that pin
+them. It confirmed the reasoning of the rejected `post_tool_use.py:364` finding. It probed
+`parse_sidecar` against `json.load` on 8 inputs (values, errors, a BOM, `1e400`, a long
+integer, deep nesting) and found no change for a file without the three constants. It
+found three new LOW findings, all in prose. The orchestrator fixed them and checked the
+three lines alone, because they change no code.
+
+- F9 LOW `shipgate/docs/prd/config-split.worklog.md:669` — the row count said 27; the
+  golden file holds 29 rows. Fixed, and the same count in the HUD CHANGELOG.
+- F10 LOW `shipgate/README.md:199` — the command table still defined `stray_keys` as the
+  keys no shipgate reader uses. Fixed: the keys that `settings.schema.json` does not name.
+- F11 LOW `shipgate/README.md:244` — the README did not say that a file holding `NaN` or
+  `Infinity` keeps its journal. Fixed: one sentence.
+
+### Review round 3 (PR 2)
+
+After the push of `9d6557d`, a run of the new tests on Python 3.9.6 found two test defects.
+The hooks passed on 3.9. The orchestrator fixed both tests alone, because the fix changes
+no product code, and ran them on 3.9.6 and 3.15.2.
+
+- F12 LOW `shipgate/tests/test_hooks.py:5034` — the deep-nesting test called
+  `find_project` in its own process, and 3.9's json raised `RecursionError` there. Fixed:
+  the test reads that as "no project", as the hooks do.
+- F13 LOW `shipgate/tests/test_hooks.py:4886` — with `HOME` set to the temp directory, the
+  macOS system Python writes its own cache under `HOME/Library`, so the "nothing written"
+  check failed. Fixed: the test watches the project and the Claude config directory, and
+  finds no journal file anywhere under `HOME`.
+
+On 3.9.6, `test_hooks.py` still fails 6 subtests of `test_the_fast_path_reads_no_file`
+(`TestPreToolUseNoOpPath`, `TestCommandGateReadsNoFile`). They fail the same way on
+`origin/main`: a note for a new issue.
