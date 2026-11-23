@@ -14,6 +14,7 @@ import subprocess
 import sys
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 from test_journal import (
     _pin_rows, _PinStream, _recent_ts, _StreamRows, JOURNAL, JournalTestCase,
@@ -1111,6 +1112,112 @@ class TestLedgerInStatus(JournalTestCase):
 
         self.write("docs/ledger.md", "")
         self.assertNotIn("ledger", self.journal("status", rc=OK).stdout.lower())
+
+
+class TestLedgerAndHomesSettings(JournalTestCase):
+    """T010 (#60): `ledger` and `artifact_homes` come through the settings resolver,
+    and their defaults from the schema. Each edge case keeps its value from before."""
+
+    SCHEMA = JOURNAL.parent.parent / "settings.schema.json"
+
+    def setUp(self):
+        super().setUp()
+        self.module = load_journal_module()
+        user_dir = self.root / "user-config"
+        user_dir.mkdir()
+        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(user_dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        schema = json.loads(self.SCHEMA.read_text(encoding="utf-8"))["properties"]
+        self.default_ledger = schema["ledger"]["default"]
+        self.default_homes = {kind: node["default"] for kind, node
+                              in schema["artifact_homes"]["properties"].items()}
+
+    def sidecar(self, **keys):
+        config = {"version": 2, "db": ".claude/shipgate.db"}
+        config.update(keys)
+        path = self.write(".claude/shipgate.json", json.dumps(config))
+        return self.module._load_sidecar(path, self.root)
+
+    def ledger_path(self, sidecar):
+        return self.module.ledger_summary(self.root, sidecar)["path"]
+
+    # -- ledger ------------------------------------------------------------
+
+    def test_no_sidecar_gives_the_schema_ledger(self):
+        self.assertEqual(self.ledger_path(None), self.default_ledger)
+
+    def test_a_declared_ledger_is_used(self):
+        self.assertEqual(self.ledger_path(self.sidecar(ledger="notes/inbox.md")),
+                         "notes/inbox.md")
+
+    def test_a_non_string_ledger_gives_the_default(self):
+        for value in (5, ["docs/ledger.md"], None, True):
+            with self.subTest(value=value):
+                self.assertEqual(self.ledger_path(self.sidecar(ledger=value)),
+                                 self.default_ledger)
+
+    def test_an_empty_ledger_gives_the_default(self):
+        self.assertEqual(self.ledger_path(self.sidecar(ledger="")), self.default_ledger)
+
+    def test_a_whitespace_ledger_is_kept_as_written(self):
+        self.assertEqual(self.ledger_path(self.sidecar(ledger="  ")), "  ")
+
+    def test_the_ledger_default_comes_from_the_schema(self):
+        # The vocab constant stays for the hooks and the HUD; the reader must not use it.
+        scope = self.module.ledger_summary.__globals__
+        with mock.patch.dict(scope, {"DEFAULT_LEDGER": "drifted/ledger.md"}):
+            self.assertEqual(self.ledger_path(self.sidecar()), self.default_ledger)
+            self.assertEqual(self.ledger_path(None), self.default_ledger)
+
+    # -- artifact_homes ----------------------------------------------------
+
+    def homes(self, sidecar):
+        return self.module.artifact_homes(sidecar)
+
+    def test_no_sidecar_gives_the_schema_homes(self):
+        self.assertEqual(self.homes(None), self.default_homes)
+
+    def test_a_sidecar_without_homes_gives_the_defaults(self):
+        self.assertEqual(self.homes(self.sidecar()), self.default_homes)
+
+    def test_a_non_object_homes_gives_the_defaults(self):
+        for value in ("docs/*.md", ["docs/prd/*.md"], 3, None):
+            with self.subTest(value=value):
+                self.assertEqual(self.homes(self.sidecar(artifact_homes=value)),
+                                 self.default_homes)
+
+    def test_a_declared_home_overrides_its_default(self):
+        homes = self.homes(self.sidecar(artifact_homes={"adr": "decisions/*.md"}))
+        self.assertEqual(homes, dict(self.default_homes, adr="decisions/*.md"))
+
+    def test_a_non_string_home_is_skipped_and_keeps_its_default(self):
+        homes = self.homes(self.sidecar(artifact_homes={
+            "prd": 5, "adr": "decisions/*.md", "worklog": None, "spec": ["x"]}))
+        self.assertEqual(homes, dict(self.default_homes, adr="decisions/*.md"))
+
+    def test_an_empty_home_is_kept_as_written(self):
+        homes = self.homes(self.sidecar(artifact_homes={"prd": ""}))
+        self.assertEqual(homes, dict(self.default_homes, prd=""))
+
+    def test_an_extra_kind_is_kept_after_the_defaults(self):
+        homes = self.homes(self.sidecar(artifact_homes={
+            "spec": "docs/spec/*.md", "prd": "p/*.md", "runbook": "ops/*.md"}))
+        self.assertEqual(homes, dict(self.default_homes, prd="p/*.md",
+                                     spec="docs/spec/*.md", runbook="ops/*.md"))
+        self.assertEqual(list(homes), list(self.default_homes) + ["spec", "runbook"])
+
+    def test_the_homes_return_a_plain_copy(self):
+        first = self.homes(None)
+        first["prd"] = "changed"
+        self.assertEqual(self.homes(None), self.default_homes)
+
+    def test_the_homes_defaults_come_from_the_schema(self):
+        scope = self.module.artifact_homes.__globals__
+        drifted = {"prd": "drift/*.md", "adr": "drift/*.md", "worklog": "drift/*.md"}
+        with mock.patch.dict(scope, {"DEFAULT_ARTIFACT_HOMES": drifted}):
+            self.assertEqual(self.homes(None), self.default_homes)
+            self.assertEqual(self.homes(self.sidecar()), self.default_homes)
 
 
 class TestBriefPins(_PinStream, JournalTestCase):

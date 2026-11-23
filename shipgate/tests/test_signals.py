@@ -717,6 +717,157 @@ class TestConfig(SignalsCase):
         self.assertEqual(set(source.values()), {"shipgate.md"})
 
 
+class TestSettingsFiles(SignalsCase):
+    """ADR 0028: `code_signals` and `code_graph` come from the settings files through
+    the per-key resolver; the `shipgate.md` lines stay a legacy layer."""
+
+    # The fixture of TestConfig, without running its tests a second time.
+    setUp = TestConfig.setUp
+    config = TestConfig.config
+    write_config = TestConfig.write_config
+
+    def write_settings(self, where: Path, data):
+        target = where / ".claude" / "shipgate.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        text = data if isinstance(data, str) else json.dumps(data)
+        target.write_text(text, encoding="utf-8")
+        return target
+
+    def user_settings_env(self, data):
+        """An environment whose `CLAUDE_CONFIG_DIR` holds a user settings file."""
+        directory = self.tmp / "settings-dir"
+        directory.mkdir(exist_ok=True)
+        target = directory / "shipgate.settings.json"
+        target.write_text(json.dumps(data), encoding="utf-8")
+        return dict(hermetic_env(), CLAUDE_CONFIG_DIR=str(directory)), target
+
+    def test_a_settings_file_value_beats_the_code_signals_section(self):
+        mod = load_signals_module()
+        self.write_config(self.repo.path, "## Code signals\n- Window: `18`\n"
+                                          "- Fix pattern: `^(fix|bug)`\n")
+        self.write_settings(self.repo.path, {"version": 1,
+                                             "code_signals": {"window_months": 3}})
+        cfg = self.config()
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (3, "^(fix|bug)"))
+        self.assertEqual(cfg["source"], {"window_months": "shipgate.json",
+                                         "fix_pattern": "shipgate.md",
+                                         "exclude": "default",
+                                         "ranking_exclude": "default",
+                                         "code_graph": "default"})
+        loaded = mod.load_config_layers(self.repo.path)
+        self.assertEqual(loaded.values, {"window_months": 3, "fix_pattern": "^(fix|bug)"})
+
+    def test_a_settings_file_sets_every_code_signals_key_and_the_code_graph(self):
+        self.write_settings(self.repo.path, {
+            "code_signals": {"window_months": 6, "fix_pattern": "^oops",
+                             "exclude": ["gen/"], "ranking_exclude": []},
+            "code_graph": "off"})
+        cfg = self.config()
+        self.assertEqual((cfg["window_months"], cfg["fix_pattern"], cfg["exclude"][-1],
+                          cfg["ranking_exclude"], cfg["code_graph"]),
+                         (6, "^oops", "gen/", [], "off"))
+        self.assertEqual(set(cfg["source"].values()), {"shipgate.json"})
+
+    def test_unset_settings_keys_stay_defaults(self):
+        """`fix_pattern` and `ranking_exclude` default to null (the built-in): a settings
+        file without them leaves them out of the file values."""
+        mod = load_signals_module()
+        self.write_settings(self.repo.path, {"version": 1, "code_graph": "off"})
+        loaded = mod.load_config_layers(self.repo.path)
+        self.assertEqual((loaded.values, loaded.source),
+                         ({"code_graph": "off"}, {"code_graph": "shipgate.json"}))
+        cfg = self.config()
+        self.assertEqual((cfg["fix_pattern"], cfg["ranking_exclude"]),
+                         (mod.DEFAULT_FIX_PATTERN, list(mod.DEFAULT_RANKING_EXCLUDES)))
+
+    def test_the_user_settings_file_sets_the_code_graph_only(self):
+        env, _ = self.user_settings_env({"code_graph": "off",
+                                         "code_signals": {"window_months": 4}})
+        cfg = self.config(env=env)
+        self.assertEqual((cfg["code_graph"], cfg["source"]["code_graph"]),
+                         ("off", "user settings"))
+        # `code_signals` is a project setting: the user file cannot set it.
+        self.assertEqual((cfg["window_months"], cfg["source"]["window_months"]),
+                         (12, "default"))
+
+    def test_a_project_code_tooling_line_beats_the_user_settings_file(self):
+        env, _ = self.user_settings_env({"code_graph": "root"})
+        self.write_config(self.repo.path, "## Code tooling\n- Code graph: `off`\n")
+        cfg = self.config(env=env)
+        self.assertEqual((cfg["code_graph"], cfg["source"]["code_graph"]),
+                         ("off", "shipgate.md"))
+
+    def test_the_flags_beat_a_settings_file_value(self):
+        self.write_settings(self.repo.path, {"code_signals": {"window_months": 3},
+                                             "code_graph": "off"})
+        cfg = self.config("--window", "6", "--graph", "root")
+        self.assertEqual((cfg["window_months"], cfg["code_graph"]), (6, "root"))
+        self.assertEqual((cfg["source"]["window_months"], cfg["source"]["code_graph"]),
+                         ("flag", "flag"))
+
+    def test_a_bad_settings_value_is_a_usage_error(self):
+        for data, key, value, allowed in (
+                ({"code_graph": "sometimes"}, "code_graph", '"sometimes"',
+                 "auto, off, root"),
+                ({"code_signals": {"window_months": 0}}, "code_signals.window_months",
+                 "0", "an integer from 1 to 1200")):
+            with self.subTest(data=data):
+                target = self.write_settings(self.repo.path, data)
+                proc = self.signals("hotspots", "--repo", self.repo.path, "--json",
+                                    rc=USAGE)
+                self.assertEqual(proc.stdout, "")
+                for part in (str(target), key, value, allowed):
+                    self.assertIn(part, proc.stderr)
+
+    def test_a_bad_user_settings_value_is_a_usage_error(self):
+        env, target = self.user_settings_env({"code_graph": "never"})
+        proc = self.signals("hotspots", "--repo", self.repo.path, "--json", env=env,
+                            rc=USAGE)
+        self.assertIn(str(target), proc.stderr)
+        self.assertIn("never", proc.stderr)
+
+    def test_a_settings_file_that_is_not_json_does_not_stop_the_run(self):
+        target = self.write_settings(self.repo.path, "{not json")
+        self.write_config(self.repo.path, "## Code signals\n- Window: `5`\n")
+        proc = self.signals("hotspots", "--repo", self.repo.path, "--json")
+        cfg = json.loads(proc.stdout)["config"]
+        self.assertEqual((cfg["window_months"], cfg["source"]["window_months"]),
+                         (5, "shipgate.md"))
+        self.assertIn(str(target), proc.stderr)
+        self.assertIn("not valid JSON", proc.stderr)
+        self.assertEqual(len(proc.stderr.strip().splitlines()), 1)
+
+    def test_a_settings_file_that_is_not_utf8_does_not_stop_the_run(self):
+        """Review round 1: before ADR 0028 signals.py never read the sidecar, so a file
+        with bytes that are not UTF-8 must not stop it either."""
+        target = self.write_settings(self.repo.path, "{}")
+        Path(target).write_bytes(b'{"code_graph": "\xff"}')
+        self.write_config(self.repo.path, "## Code signals\n- Window: `5`\n")
+        proc = self.signals("hotspots", "--repo", self.repo.path, "--json")
+        cfg = json.loads(proc.stdout)["config"]
+        self.assertEqual(cfg["window_months"], 5)
+        self.assertIn(str(target), proc.stderr)
+        self.assertNotIn("schema", proc.stderr)
+
+    def test_a_broken_file_no_read_key_reaches_says_nothing(self):
+        """Review round 2: the project file sets every key this script reads, so the
+        walk never reaches the broken user settings file."""
+        env, target = self.user_settings_env({})
+        target.write_text("{oops", encoding="utf-8")
+        self.write_settings(self.repo.path, {"code_graph": "off"})
+        proc = self.signals("hotspots", "--repo", self.repo.path, "--json", env=env)
+        self.assertEqual(json.loads(proc.stdout)["config"]["code_graph"], "off")
+        self.assertEqual(proc.stderr, "")
+
+    def test_a_bad_code_signals_line_stays_silent(self):
+        """A legacy Window outside 1..1200 is dropped with no message, as before."""
+        self.write_config(self.umbrella, "## Code signals\n- Window: `9`\n")
+        self.write_config(self.repo.path, "## Code signals\n- Window: `0`\n")
+        cfg = self.config()  # `signals_json` checks that stderr is empty
+        self.assertEqual((cfg["window_months"], cfg["source"]["window_months"]),
+                         (9, "shipgate.md"))
+
+
 class TestRankingExclude(SignalsCase):
     """ADR 0013, amended 0.22.0: release files churn on every release, so `ranking`
     leaves them out. The table and `files` keep every file."""

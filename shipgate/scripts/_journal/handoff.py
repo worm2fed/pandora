@@ -13,7 +13,9 @@ from typing import Dict, List, Optional, Sequence, TypedDict
 from .vocab import BRIEF_DECISION_LIMIT, PHASE_ORDER
 from .plugin import _config, closeout_command
 from .text import _clip, _one_line, _short_ts, _string_list, _string_or_none
-from .project import _config_files, _config_label
+from .project import (
+    _config_files, _config_label, project_settings, require_setting, setting_source,
+)
 from .store import Event, read_events
 from .fold import _newest_string, pull_request
 from .artifacts import _safe_ref
@@ -55,6 +57,14 @@ class HandoffRule(TypedDict):
     more: int
 
 
+class HandoffSetting(TypedDict):
+    """One resolved setting as the brief prints it: its value and where it came from
+    (``setting_source``)."""
+
+    value: str
+    source: str
+
+
 class HandoffDoc(TypedDict):
     """What ``handoff`` prints: the position plus what a fresh session needs."""
 
@@ -67,6 +77,8 @@ class HandoffDoc(TypedDict):
     decisions: List[str]
     decisions_earlier: int
     rules: List[HandoffRule]
+    # The resolved `autonomy` setting (ADR 0028), printed above the Autonomy section.
+    autonomy: HandoffSetting
     # FR-017: the newest `mr-opened`, which makes `render_handoff` name the close-out.
     pull_request: Optional[Dict[str, Optional[str]]]
 
@@ -207,11 +219,14 @@ def build_handoff(
 ) -> HandoffDoc:
     """The handoff brief for ``stream`` (ADR 0021): ``build_position`` plus the request,
     the reporting target, the next phase and task, the open gates, the latest decisions
-    and the config rules. It reads the journal, the files the events name and the config
-    files; nothing from the session that runs it. A stream with no events raises
-    ``InfraError``, as ``position`` does.
+    and the config rules. It reads the journal, the files the events name, the config
+    files and the settings files; nothing from the session that runs it. A stream with
+    no events raises ``InfraError``, as ``position`` does. An ``autonomy`` value outside
+    its set in a settings file raises ``UsageError`` (``require_setting``).
     """
     position = build_position(conn, stream, project_dir, homes, now=now)
+    resolved = project_settings(project_dir, start)
+    autonomy = require_setting(resolved, "autonomy")
     events = read_events(conn, stream=stream)
     tasks = position["tasks"] or []
     decisions = [
@@ -229,6 +244,10 @@ def build_handoff(
         "decisions": shown,
         "decisions_earlier": len(decisions) - len(shown),
         "rules": handoff_rules(project_dir, start),
+        "autonomy": {
+            "value": str(autonomy),
+            "source": setting_source(resolved.get("autonomy"), project_dir),
+        },
         "pull_request": pull_request(events),
     }
 
@@ -305,6 +324,10 @@ def render_handoff(doc: HandoffDoc) -> str:
         "(implement: Committing)."
     )
     for rule in doc["rules"]:
+        if rule["section"] == "Autonomy":
+            autonomy = doc["autonomy"]
+            lines.append(f"  Autonomy mode: {_one_line(autonomy['value'])} "
+                         f"({_one_line(autonomy['source'])})")
         if rule["source"] is None:
             lines.append(f"  {rule['section']}: none configured")
             continue
@@ -320,14 +343,12 @@ def render_handoff(doc: HandoffDoc) -> str:
 # The context nudge (ADR 0022): the line the PostToolUse hook adds after a phase
 # boundary, past the handoff threshold. The hook measures; this decides.
 NUDGE_EVENTS = ("design-committed", "review-verdict")
-SESSION_SECTION = "session"
-HANDOFF_KEY = "handoff"
 DEFAULT_HANDOFF_TOKENS = 500_000
 _THRESHOLD_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([km]?)$")
 
 
 def parse_handoff_threshold(value: Optional[str]) -> Optional[int]:
-    """The handoff threshold a `Handoff:` value names, in tokens; None for `off`.
+    """The handoff threshold a `handoff` value names, in tokens; None for `off`.
 
     `500k`, `1m`, `1.5m` and `250000` read as written, backticks and case ignored. An
     empty, zero, negative or unreadable value falls back to the default: a nudge too
@@ -345,15 +366,14 @@ def parse_handoff_threshold(value: Optional[str]) -> Optional[int]:
 
 
 def handoff_threshold(project_dir: Path, start: Optional[Path] = None) -> Optional[int]:
-    """The `Handoff:` threshold of the nearest config file whose `## Session` section
-    is present (ADR 0018), else the default; None when it says `off`."""
-    owner = _config.section_owner(_config_files(project_dir, start), SESSION_SECTION)
-    if owner is None:
-        return DEFAULT_HANDOFF_TOKENS
-    for key, value in _config.section_bullets(owner.text, SESSION_SECTION):
-        if key == HANDOFF_KEY:
-            return parse_handoff_threshold(_config.bullet_value(value))
-    return DEFAULT_HANDOFF_TOKENS
+    """The resolved ``handoff`` setting in tokens (ADR 0028); None when it says `off`.
+
+    The nudge runs from a hook, so this never refuses: a value outside its set gives
+    the default. A settings file may hold an integer (``300000``) or a string
+    (``"500k"``); a legacy ``## Session`` `Handoff:` line still counts.
+    """
+    value = project_settings(project_dir, start).value("handoff")
+    return parse_handoff_threshold(None if value is None else str(value))
 
 
 def _tokens_label(tokens: int) -> str:

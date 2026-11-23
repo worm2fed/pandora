@@ -4,13 +4,15 @@
 """
 
 from . import (
-    vocab, plugin, text, project, store, sessions, approval, fold, artifacts, shapes, gates,
-    append, status, reply, check, position, handoff, closeout, stats, doctor, transfer, cli,
+    vocab, plugin, text, project, settings, store, sessions, approval, fold, artifacts,
+    shapes, gates, append, status, reply, check, position, handoff, closeout, stats,
+    doctor, transfer, cli,
 )
 
 _LAYERS = (
-    vocab, plugin, text, project, store, sessions, approval, fold, artifacts, shapes, gates,
-    append, status, reply, check, position, handoff, closeout, stats, doctor, transfer, cli,
+    vocab, plugin, text, project, settings, store, sessions, approval, fold, artifacts,
+    shapes, gates, append, status, reply, check, position, handoff, closeout, stats,
+    doctor, transfer, cli,
 )
 
 

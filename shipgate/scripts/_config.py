@@ -18,10 +18,14 @@ umbrella); this module reads, filters and resolves it. Nothing here writes or ex
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from datetime import date
 from pathlib import Path
-from typing import Callable, Iterator, List, NamedTuple, Optional, Sequence, Tuple
+from typing import (
+    Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple,
+)
 
 CONFIG_RELPATH = os.path.join(".claude", "shipgate.md")
 USER_CONFIG_NAME = "shipgate.md"
@@ -398,3 +402,661 @@ def section_owner(files: Sequence[ConfigFile], section: str,
                 else section_present(config.text, section)):
             return config
     return None
+
+
+# --------------------------------------------------------------------------
+# Settings (ADR 0028): the settings files, the schema and the per-key resolver
+# --------------------------------------------------------------------------
+
+SETTINGS_RELPATH = os.path.join(".claude", "shipgate.json")
+# The user settings file. No walk for `.claude/shipgate.json` finds this name, so it
+# never marks a project as journaled (PRD FR-004).
+USER_SETTINGS_NAME = "shipgate.settings.json"
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "settings.schema.json"
+
+SOURCE_PROJECT = "project"
+SOURCE_USER = "user"
+# A setting's `x-scope`: `project` keys come from the project settings file only.
+SCOPE_PROJECT = "project"
+SCOPE_ANY = "any"
+SOURCE_LEGACY = "legacy"
+SOURCE_DEFAULT = "default"
+
+# Problem kinds. `bad-value`, `not-json` and `bad-legacy` carry the key's file; the
+# first two stop a strict reader (`Resolved.require`), the others are warnings.
+BAD_VALUE = "bad-value"
+BAD_LEGACY = "bad-legacy"
+UNKNOWN_KEY = "unknown-key"
+SCOPE = "scope"
+NEWER_VERSION = "version"
+NOT_JSON = "not-json"
+
+EXIT_INFRA = 1
+EXIT_USAGE = 2
+
+
+def user_settings_path() -> Optional[Path]:
+    """`$CLAUDE_CONFIG_DIR/shipgate.settings.json` when the variable is set and not
+    empty, else `~/.claude/shipgate.settings.json`; None when the home directory cannot
+    be found. The rule of `user_config_path`."""
+    config = user_config_path()
+    return None if config is None else config.with_name(USER_SETTINGS_NAME)
+
+
+_SCHEMA_CACHE: List[Dict[str, Any]] = []
+
+
+def load_schema() -> Dict[str, Any]:
+    """`settings.schema.json`, parsed once per process. The plugin ships it beside
+    `scripts/`; a missing or broken file is an incomplete install, so this raises
+    OSError. Callers read the result and never change it."""
+    if _SCHEMA_CACHE:
+        return _SCHEMA_CACHE[0]
+    with open(SCHEMA_PATH, encoding="utf-8") as handle:
+        try:
+            schema = json.load(handle)
+        except ValueError as exc:
+            schema = exc
+    if not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict):
+        # An OSError, so every caller's install-error path reports it (exit 1).
+        detail = f": {schema}" if isinstance(schema, ValueError) else ""
+        raise OSError(f"{SCHEMA_PATH} is not a settings schema (shipgate install "
+                      f"incomplete){detail}")
+    _SCHEMA_CACHE.append(schema)
+    return schema
+
+
+class Problem(NamedTuple):
+    kind: str  # bad-value | bad-legacy | unknown-key | scope | version | not-json
+    path: str  # the file that holds it
+    key: Optional[str]  # `group.leaf`, a group, a top-level key; None for the file
+    value: Any
+    message: str  # one line: the file, the key, the value and what is allowed
+
+
+class Setting(NamedTuple):
+    value: Any
+    source: str  # project | user | legacy | default
+    path: Optional[str]  # the file; None for a default
+    section: Optional[str] = None  # the config section of a legacy value
+    # Why a strict reader refuses this value: a value outside its set in the settings
+    # file that decided the key (the value is then the default), or a settings file the
+    # walk reached that cannot be read (the walk skipped it). None when it is sound.
+    problem: Optional["Problem"] = None
+
+
+class LegacyLine(NamedTuple):
+    path: str
+    section: str
+    bullet: str
+    key: str
+    value: str  # as written
+
+
+class SettingsError(Exception):
+    """A strict reader's refusal: exit 2 for a value outside its set, 1 for a settings
+    file that cannot be read as a JSON object."""
+
+    def __init__(self, problem: Problem) -> None:
+        super().__init__(problem.message)
+        self.problem = problem
+        self.exit_code = EXIT_INFRA if problem.kind == NOT_JSON else EXIT_USAGE
+
+
+class Resolved(NamedTuple):
+    settings: Dict[str, Setting]  # every leaf key, schema order
+    problems: List[Problem]
+    legacy: List[LegacyLine]  # every legacy line the layers hold
+    legacy_until: Optional[str]  # the schema's grace date
+    legacy_ended: bool  # the grace date is in the past
+
+    def get(self, key: str) -> Setting:
+        return self.settings[key]
+
+    def keys(self, key: str) -> List[str]:
+        """The leaf keys KEY names: itself, or each leaf of a group. KeyError for a
+        key the schema and the files do not hold."""
+        if key in self.settings:
+            return [key]
+        leaves = [k for k in self.settings if k.startswith(key + ".")]
+        if not leaves:
+            raise KeyError(key)
+        return leaves
+
+    def value(self, key: str) -> Any:
+        """The value of a leaf, or a dict of the leaves of a group. The default on a
+        problem: the hook-path rule (PRD FR-006)."""
+        leaves = self.keys(key)
+        if leaves == [key]:
+            return self.settings[key].value
+        return {k[len(key) + 1:]: self.settings[k].value for k in leaves}
+
+    def require(self, key: str) -> Any:
+        """``value(key)``, or SettingsError when a leaf of KEY carries a problem: a
+        value outside its set in the settings file that decided it (exit 2), or a
+        settings file that the walk reached and could not read (exit 1). A value
+        outside its set wins over a file that cannot be read. An extra kind of a group
+        (`artifact_homes.design`) with a value outside its set is refused with its group.
+        """
+        leaves = self.keys(key)
+        found = [self.settings[leaf].problem for leaf in leaves
+                 if self.settings[leaf].problem is not None]
+        groups = {leaf.split(".", 1)[0] for leaf in leaves}
+        found += [p for p in self.problems
+                  if p.kind == BAD_VALUE and p.key is not None and "." in p.key
+                  and p.key not in self.settings and p.key.split(".", 1)[0] in groups]
+        for problem in sorted(found, key=lambda p: p.kind != BAD_VALUE):
+            raise SettingsError(problem)
+        return self.value(key)
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def _is_int(value: Any) -> bool:
+    # `bool` is an `int` in Python, and `true` is no count.
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+_TYPE_CHECKS: Dict[str, Callable[[Any], bool]] = {
+    "string": lambda v: isinstance(v, str),
+    "integer": _is_int,
+    "boolean": lambda v: isinstance(v, bool),
+    "array": lambda v: isinstance(v, list),
+    "object": lambda v: isinstance(v, dict),
+    "null": lambda v: v is None,
+}
+
+
+def _valid(value: Any, node: Dict[str, Any]) -> bool:
+    """VALUE against the schema subset the settings use: type, enum, minimum,
+    maximum, minLength, pattern, items, anyOf and `x-format: regex`."""
+    if "anyOf" in node:
+        return any(_valid(value, option) for option in node["anyOf"])
+    if "enum" in node and value not in node["enum"]:
+        return False
+    types = node.get("type")
+    if types is not None:
+        types = [types] if isinstance(types, str) else list(types)
+        if not any(_TYPE_CHECKS[t](value) for t in types):
+            return False
+    if _is_int(value):
+        if "minimum" in node and value < node["minimum"]:
+            return False
+        if "maximum" in node and value > node["maximum"]:
+            return False
+    if isinstance(value, str):
+        if len(value) < node.get("minLength", 0):
+            return False
+        if "pattern" in node and not _matches(node["pattern"], value):
+            return False
+        if node.get("x-format") == "regex":
+            try:
+                re.compile(value)
+            except re.error:
+                return False
+    if isinstance(value, list) and "items" in node:
+        return all(_valid(item, node["items"]) for item in value)
+    return True
+
+
+def _matches(pattern: str, value: str) -> bool:
+    """`pattern` as JSON Schema reads it (ECMA-262): a `$` at the end matches only at
+    the end of the value. Python's `$` also matches before a final line break."""
+    match = re.search(pattern, value)
+    if match is None:
+        return False
+    if pattern.endswith("$") and not pattern.endswith("\\$"):
+        return match.end() == len(value)
+    return True
+
+
+def _allowed(node: Dict[str, Any]) -> str:
+    """What NODE allows, in words, for a refusal."""
+    if "x-allowed" in node:
+        return str(node["x-allowed"])
+    if "anyOf" in node:
+        return " or ".join(_allowed(option) for option in node["anyOf"])
+    if "enum" in node:
+        return ", ".join(v if isinstance(v, str) else _json_text(v) for v in node["enum"])
+    types = node.get("type")
+    types = [types] if isinstance(types, str) else list(types or [])
+    words = []
+    for kind in types:
+        if kind == "integer":
+            low, high = node.get("minimum"), node.get("maximum")
+            if low is not None and high is not None:
+                words.append(f"an integer from {low} to {high}")
+            elif low is not None:
+                words.append(f"an integer of {low} or more")
+            else:
+                words.append("an integer")
+        elif kind == "string":
+            if node.get("x-format") == "regex":
+                words.append("a valid regex")
+            elif "pattern" in node:
+                words.append(f"a string that matches {node['pattern']}")
+            else:
+                words.append("a non-empty string")
+        elif kind == "array":
+            words.append("a list of non-empty strings")
+        elif kind == "boolean":
+            words.append("true or false")
+        elif kind == "object":
+            words.append("an object")
+        elif kind == "null":
+            words.append("null")
+    return " or ".join(words) or "a valid value"
+
+
+def _bad_value(path: str, key: str, value: Any, node: Dict[str, Any],
+               kind: str = BAD_VALUE, where: str = "") -> Problem:
+    # A key can carry a name from the file (an extra artifact kind): JSON-encode one
+    # that is no plain name, so the message stays on one line.
+    shown = key if re.fullmatch(r"[\w.-]+", key) else _json_text(key)
+    return Problem(kind, path, key, value,
+                   f"{path}{where}: {shown} = {_json_text(value)} is not one of: "
+                   f"{_allowed(node)}")
+
+
+def _read_settings_file(path: Optional[Path],
+                        problems: List[Problem]) -> Optional[Dict[str, Any]]:
+    """The JSON object of one settings file; None when it is absent or unreadable (a
+    `not-json` problem for one that exists but is no JSON object)."""
+    if path is None:
+        return None
+    try:
+        if not path.is_file():
+            return None
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    except ValueError as exc:  # UnicodeDecodeError
+        problems.append(Problem(NOT_JSON, str(path), None, None,
+                                f"{path} is not valid UTF-8: {exc}"))
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, RecursionError) as exc:  # RecursionError: nesting too deep
+        problems.append(Problem(NOT_JSON, str(path), None, None,
+                                f"{path} is not valid JSON: {exc}"))
+        return None
+    if not isinstance(data, dict):
+        problems.append(Problem(NOT_JSON, str(path), None, None,
+                                f"{path} must contain a JSON object"))
+        return None
+    return data
+
+
+def _leaf_nodes(schema: Dict[str, Any]
+                ) -> List[Tuple[str, Optional[str], Dict[str, Any]]]:
+    """`(key, leaf, node)` for every leaf of the schema, in schema order; `leaf` is
+    None for a key that is no object of named leaves."""
+    out: List[Tuple[str, Optional[str], Dict[str, Any]]] = []
+    for key, node in schema["properties"].items():
+        if node.get("type") == "object" and "properties" in node:
+            for leaf, sub in node["properties"].items():
+                out.append((key, leaf, sub))
+        else:
+            out.append((key, None, node))
+    return out
+
+
+def _file_layer(data: Optional[Dict[str, Any]], path: Optional[Path], role: str,
+                schema: Dict[str, Any], problems: List[Problem]) -> Dict[str, Any]:
+    """The valid leaf values of one settings file, `group.leaf` keyed. Each value
+    outside its set, unknown key, `project` key in the user file and newer version is
+    a problem."""
+    out: Dict[str, Any] = {}
+    if data is None or path is None:
+        return out
+    where = str(path)
+    props = schema["properties"]
+    newest = schema.get("x-version")
+    for key, value in data.items():
+        node = props.get(key)
+        if node is None:
+            problems.append(Problem(UNKNOWN_KEY, where, key, value,
+                                    f"{where}: unknown key {_json_text(key)}; it is ignored"))
+            continue
+        if key == "version":
+            # The format of this file: each file has its own, never a scope problem.
+            if not _valid(value, node):
+                problems.append(_bad_value(where, key, value, node))
+                continue
+            if _is_int(newest) and value > newest:
+                problems.append(Problem(
+                    NEWER_VERSION, where, key, value,
+                    f"{where} declares version {value}; this shipgate knows version "
+                    f"{newest} and reads only the keys it knows. Update shipgate."))
+            if role == SOURCE_PROJECT:
+                out[key] = value
+            continue
+        if role == SOURCE_USER and node.get("x-scope") == SCOPE_PROJECT:
+            problems.append(Problem(
+                SCOPE, where, key, value,
+                f"{where}: {key} is a project setting; the user settings file cannot set "
+                f"it, so it is ignored"))
+            continue
+        if node.get("type") == "object" and "properties" in node:
+            if not isinstance(value, dict):
+                problems.append(_bad_value(where, key, value, node))
+                continue
+            extra = node.get("additionalProperties")
+            for leaf, leaf_value in value.items():
+                name = f"{key}.{leaf}"
+                sub = node["properties"].get(leaf)
+                if sub is None and isinstance(extra, dict):
+                    sub = extra
+                if sub is None:
+                    problems.append(Problem(
+                        UNKNOWN_KEY, where, name, leaf_value,
+                        f"{where}: unknown key {_json_text(name)}; it is ignored"))
+                    continue
+                if _valid(leaf_value, sub):
+                    out[name] = leaf_value
+                else:
+                    problems.append(_bad_value(where, name, leaf_value, sub))
+            continue
+        if _valid(value, node):
+            out[key] = value
+        else:
+            problems.append(_bad_value(where, key, value, node))
+    return out
+
+
+# --------------------------------------------------------------------------
+# Legacy lines: settings an existing config still writes as `- Key: value` bullets.
+# The parse of each section is the one its reader used before ADR 0028, so a legacy
+# line gives today's value. `lean_config.py --move-settings` shares this reader.
+# --------------------------------------------------------------------------
+
+_WORD_RE = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def _legacy_word(value: str) -> Optional[str]:
+    """The first word of a bullet value (its first backticked span, else the bare
+    text), lower-cased with emphasis dropped; None for a placeholder or no word. The
+    way a model reads `Mode: **executive** — …`."""
+    found = bullet_value(value)
+    if found is None:
+        return None
+    match = _WORD_RE.search(re.sub(r"[`*_]", "", found).lower())
+    return match.group(0) if match else None
+
+
+def legacy_code_graph(value: str) -> Optional[str]:
+    """The first backticked span, else the bare value, lower-cased; None for a
+    placeholder. The `Code graph` rule before ADR 0028 (`signals.parse_code_graph`)."""
+    found = bullet_value(value)
+    return None if found is None else found.lower()
+
+
+def legacy_handoff(value: str) -> Optional[str]:
+    """A `Handoff:` value as the settings file writes it (`500k`, `off`), or None for
+    a placeholder. Not checked: `_legacy_value` checks it against the schema."""
+    found = bullet_value(value)
+    return None if found is None else found.strip("`").strip().lower()
+
+
+def forge_cli(value: Optional[str]) -> Optional[str]:
+    """The CLI a **Forge & tracker** ``Forge:`` value names (``GitHub — CLI: gh``), or
+    the one its forge implies; None for a placeholder or another forge."""
+    if not value or is_placeholder_value(value.strip()):
+        return None
+    named = re.search(r"CLI:\s*`?([A-Za-z]+)", value)
+    if named:
+        cli = named.group(1).lower()
+        return cli if cli in ("gh", "glab") else None
+    lowered = value.lower()
+    if "github" in lowered:
+        return "gh"
+    if "gitlab" in lowered:
+        return "glab"
+    return None
+
+
+FORGE_OF_CLI = {"gh": "github", "glab": "gitlab"}
+CLI_OF_FORGE = {forge: cli for cli, forge in FORGE_OF_CLI.items()}
+
+
+def _legacy_forge(value: str) -> Optional[str]:
+    if is_placeholder(value):
+        return None
+    cli = forge_cli(value)
+    # Another forge reads as a bad value: no CLI the close-out can run.
+    return FORGE_OF_CLI.get(cli, value.strip()) if cli else value.strip()
+
+
+CODE_SIGNALS_KEYS = {"window": "window_months", "fix pattern": "fix_pattern",
+                     "exclude": "exclude", "ranking exclude": "ranking_exclude"}
+
+
+def code_signals_lines(text: str, max_window: int = 1200
+                       ) -> Tuple[Dict[str, Any], List[Tuple[str, str, str]]]:
+    """The `## Code signals` section: `(values, bad)`. Only backticked values count.
+
+    VALUES holds the keys that carry a usable value. BAD holds `(key, bullet, value)`
+    for a bullet with a backticked value that is not usable: a window that is no
+    integer from 1 to MAX_WINDOW, or a regex that does not compile. A `<placeholder>`
+    or a bare value is absent, as before. A `Ranking exclude` whose backticked spans
+    are all empty is `[]`, which turns the built-in ranking excludes off.
+    """
+    out: Dict[str, Any] = {}
+    bad: List[Tuple[str, str, str]] = []
+    for key, value in section_bullets(text, "code signals", keep_case=True):
+        name = CODE_SIGNALS_KEYS.get(key.lower())
+        if name is None or name in out:
+            continue
+        spans = [s.strip() for s in BACKTICK_RE.findall(value)]
+        if name == "ranking_exclude" and spans and not any(spans):
+            out[name] = []
+            continue
+        spans = [s for s in spans if not is_placeholder(s)]
+        if not spans:
+            continue
+        if name == "window_months":
+            try:
+                months = int(spans[0])
+            except ValueError:
+                bad.append((name, key, value))
+                continue
+            if 1 <= months <= max_window:
+                out[name] = months
+            else:
+                bad.append((name, key, value))
+        elif name == "fix_pattern":
+            try:
+                re.compile(spans[0])
+            except re.error:
+                bad.append((name, key, value))
+                continue
+            out[name] = spans[0]
+        else:
+            # Separate spans or one comma-separated span: both are a list of globs.
+            globs = [g.strip() for span in spans for g in span.split(",")]
+            out[name] = [g for g in globs if g]
+    return out, bad
+
+
+# Per section: how a bullet reads (None for Code signals, which reads whole), and the
+# rule that makes the section present (ADR 0018's general rule unless named).
+_LEGACY_PARSERS: Dict[str, Callable[[str], Optional[Any]]] = {
+    "autonomy": _legacy_word,
+    "orchestration.review": _legacy_word,
+    "orchestration.explore": _legacy_word,
+    "writing_style": _legacy_word,
+    "code_graph": legacy_code_graph,
+    "handoff": legacy_handoff,
+    "forge": _legacy_forge,
+}
+
+
+def _legacy_keys(schema: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any], str, str]]:
+    """`(key, node, section, bullet)` for each leaf with an `x-legacy` source."""
+    out = []
+    for key, leaf, node in _leaf_nodes(schema):
+        legacy = node.get("x-legacy")
+        if isinstance(legacy, dict):
+            name = key if leaf is None else f"{key}.{leaf}"
+            out.append((name, node, str(legacy["section"]), str(legacy["key"])))
+    return out
+
+
+def legacy_lines(files: Sequence[ConfigFile], schema: Dict[str, Any]
+                 ) -> List[LegacyLine]:
+    """Every legacy line FILES hold: each bullet with a value (not a placeholder) that
+    a schema key names as its `x-legacy` source. Read whole, owners aside."""
+    found: List[LegacyLine] = []
+    for config in files:
+        for key, _node, section, bullet in _legacy_keys(schema):
+            for name, value in section_bullets(config.text, section.lower(),
+                                               keep_case=True):
+                if name.lower() == bullet.lower() and _value_present(value):
+                    found.append(LegacyLine(str(config.path), section, bullet, key,
+                                            value.strip()))
+                    break
+    return found
+
+
+def _legacy_layer(files: Sequence[ConfigFile], schema: Dict[str, Any],
+                  problems: List[Problem]) -> Dict[str, Tuple[str, Any, ConfigFile]]:
+    """Per legacy key, the value its section owner gives (ADR 0018):
+    `{key: (role, value, file)}`. A value outside its set is a `bad-legacy` problem
+    and gives nothing, so the next layer applies."""
+    out: Dict[str, Tuple[str, Any, ConfigFile]] = {}
+    by_section: Dict[str, List[Tuple[str, Dict[str, Any], str]]] = {}
+    for key, node, section, bullet in _legacy_keys(schema):
+        by_section.setdefault(section, []).append((key, node, bullet))
+    for section, keys in by_section.items():
+        name = section.lower()
+        if name == "code signals":
+            window = schema["properties"]["code_signals"]["properties"]["window_months"]
+            most = window.get("maximum", 1200)
+            for config in files:
+                values, bad = code_signals_lines(config.text, most)
+                for leaf, bullet, value in bad:
+                    node = schema["properties"]["code_signals"]["properties"][leaf]
+                    problems.append(_bad_value(
+                        str(config.path), f"code_signals.{leaf}", value.strip(), node,
+                        BAD_LEGACY, f" ## {section} {bullet}"))
+                if values:
+                    for leaf, value in values.items():
+                        out[f"code_signals.{leaf}"] = (config.role, value, config)
+                    break
+            continue
+        owner = section_owner(files, name)
+        if owner is None:
+            continue
+        bullets = section_bullets(owner.text, name, keep_case=True)
+        for key, node, bullet in keys:
+            raw = next((v for k, v in bullets if k.lower() == bullet.lower()), None)
+            if raw is None:
+                continue
+            value = _LEGACY_PARSERS[key](raw)
+            if value is None:
+                continue
+            if _valid(value, node):
+                out[key] = (owner.role, value, owner)
+            else:
+                problems.append(_bad_value(str(owner.path), key, raw.strip(), node,
+                                           BAD_LEGACY, f" ## {section} {bullet}"))
+    return out
+
+
+def _grace(schema: Dict[str, Any], today: Optional[date]) -> Tuple[Optional[str], bool]:
+    until = schema.get("x-legacy-until")
+    if not isinstance(until, str):
+        return None, False
+    try:
+        last = date.fromisoformat(until)
+    except ValueError:
+        return until, False
+    return until, (today or date.today()) > last
+
+
+def resolve_settings(project_file: Optional[Path], md_files: Sequence[ConfigFile],
+                     user_file: Optional[Path], schema: Optional[Dict[str, Any]] = None,
+                     today: Optional[date] = None) -> Resolved:
+    """Each setting's value, source and problems (ADR 0028, L1). Per key, nearest
+    first: the project settings file, a project-side legacy line, the user settings
+    file, a user legacy line, the default. MD_FILES are `read_layers`' files.
+
+    The walk stops at the first layer that decides a key: a valid value gives it, and
+    a value outside its set in a settings file gives the default with a `bad-value`
+    problem, so a farther layer never matters. A legacy line outside its set is a
+    `bad-legacy` problem and the walk goes on. A settings file that cannot be read is
+    skipped; the keys whose walk reached it carry that `not-json` problem. It never
+    raises on a value and never exits: `Resolved.require` lets a strict caller refuse.
+    The schema is read from the plugin unless SCHEMA is given."""
+    schema = schema if schema is not None else load_schema()
+    problems: List[Problem] = []
+    project = _file_layer(_read_settings_file(project_file, problems), project_file,
+                          SOURCE_PROJECT, schema, problems)
+    user = _file_layer(_read_settings_file(user_file, problems), user_file,
+                       SOURCE_USER, schema, problems)
+    legacy = _legacy_layer(md_files, schema, problems)
+
+    def file_state(path: Optional[Path]) -> Tuple[Optional[Problem], Dict[str, Problem]]:
+        """The file's `not-json` problem, and its `bad-value` problems by key."""
+        where = str(path) if path is not None else None
+        broken = next((p for p in problems if p.kind == NOT_JSON and p.path == where),
+                      None)
+        bad = {p.key: p for p in problems
+               if p.kind == BAD_VALUE and p.path == where and p.key is not None}
+        return broken, bad
+
+    project_broken, project_bad = file_state(project_file)
+    user_broken, user_bad = file_state(user_file)
+
+    settings: Dict[str, Setting] = {}
+    leaves = [(k if leaf is None else f"{k}.{leaf}", node)
+              for k, leaf, node in _leaf_nodes(schema)]
+    # An extra artifact kind that a settings file names is a leaf too.
+    known = {name for name, _ in leaves}
+    for layer in (project, user):
+        for name in layer:
+            if name not in known:
+                leaves.append((name, {}))
+                known.add(name)
+    props = schema["properties"]
+    for name, node in leaves:
+        group = name.split(".", 1)[0]
+        scope = props.get(group, {}).get("x-scope", SCOPE_ANY)
+        section = node.get("x-legacy", {}).get("section")
+        default = Setting(node.get("default"), SOURCE_DEFAULT, None)
+        reached: Optional[Problem] = None  # a skipped file this walk passed
+        found: Optional[Setting] = None
+        layers = (
+            (project, project_broken, project_bad, project_file, SOURCE_PROJECT),
+            "legacy-project",
+            (user, user_broken, user_bad, user_file, SOURCE_USER),
+            "legacy-user",
+        )
+        for layer in layers:
+            if isinstance(layer, str):
+                entry = legacy.get(name)
+                if entry is None or (entry[0] == ROLE_USER) != (layer == "legacy-user"):
+                    continue
+                found = Setting(entry[1], SOURCE_LEGACY, str(entry[2].path), section)
+                break
+            values, broken, bad, path, source = layer
+            if source == SOURCE_USER and scope == SCOPE_PROJECT:
+                continue  # the user file cannot set a project key
+            if broken is not None:
+                reached = reached or broken
+                continue
+            refusal = bad.get(name) or bad.get(group)
+            if refusal is not None:
+                found = default._replace(problem=refusal)
+                break
+            if name in values:
+                found = Setting(values[name], source, str(path))
+                break
+        found = found or default
+        if reached is not None and found.problem is None:
+            found = found._replace(problem=reached)
+        settings[name] = found
+    until, ended = _grace(schema, today)
+    return Resolved(settings, problems, legacy_lines(md_files, schema), until, ended)

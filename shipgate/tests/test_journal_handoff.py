@@ -54,11 +54,21 @@ class TestHandoff(JournalTestCase):
         path.write_text(text, encoding="utf-8")
 
     def handoff(self, stream=S, rc=OK, cwd=None):
+        return self.handoff_run(stream, rc, cwd).stdout
+
+    def handoff_run(self, stream=S, rc=OK, cwd=None):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         env["CLAUDE_CONFIG_DIR"] = str(self.user_dir)
         proc = run_journal(["handoff", "--stream", stream], cwd=cwd or self.root, env=env)
         self.assertEqual(proc.returncode, rc, msg=proc.stdout + proc.stderr)
-        return proc.stdout
+        return proc
+
+    def settings(self, **keys):
+        """Add KEYS to the project settings file (the sidecar)."""
+        path = self.root / ".claude" / "shipgate.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.update(keys)
+        path.write_text(json.dumps(data), encoding="utf-8")
 
     def designed(self, **flow):
         flow.setdefault("request", "#1234 build the demo")
@@ -345,6 +355,51 @@ class TestHandoff(JournalTestCase):
         self.assertNotIn("/etc/", brief)
         self.assertNotIn("../outside.md", brief)
 
+    # -- the resolved autonomy (ADR 0028, #60) --------------------------------
+
+    def mode_line(self, brief):
+        """The `Autonomy mode` line and the line after it."""
+        lines = brief.splitlines()
+        at = next(i for i, line in enumerate(lines) if "Autonomy mode:" in line)
+        return lines[at], lines[at + 1]
+
+    def test_a_legacy_mode_line_is_named_above_the_quoted_section(self):
+        self.designed()
+        brief = self.handoff()
+        self.assertEqual(self.mode_line(brief), (
+            "  Autonomy mode: executive (legacy .claude/shipgate.md ## Autonomy)",
+            "  Autonomy (.claude/shipgate.md):",
+        ))
+        self.assertIn("    - Extra escalations: publishing a release", brief)
+
+    def test_the_project_settings_file_names_the_mode(self):
+        self.settings(autonomy="ask")
+        self.designed()
+        brief = self.handoff()
+        self.assertEqual(self.mode_line(brief), (
+            "  Autonomy mode: ask (project .claude/shipgate.json)",
+            "  Autonomy (.claude/shipgate.md):",
+        ))
+        # The prose section stays quoted: it carries the extra escalations.
+        self.assertIn("    - Mode: executive", brief)
+
+    def test_no_mode_anywhere_is_the_default(self):
+        self.write(".claude/shipgate.md", "# demo\n")
+        self.designed()
+        self.assertEqual(self.mode_line(self.handoff()), (
+            "  Autonomy mode: ask (default)",
+            "  Autonomy: none configured",
+        ))
+
+    def test_a_bad_mode_in_the_settings_file_exits_2(self):
+        self.settings(autonomy="sometimes")
+        self.designed()
+        proc = self.handoff_run(rc=USAGE)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn(str(self.root / ".claude" / "shipgate.json"), proc.stderr)
+        self.assertIn('autonomy = "sometimes"', proc.stderr)
+        self.assertIn("ask, executive", proc.stderr)
+
 
 class TestNudge(JournalTestCase):
     """`nudge --stream <s> --event <type> --tokens <n>`: the one line the PostToolUse
@@ -365,6 +420,18 @@ class TestNudge(JournalTestCase):
     def config(self, text, user=False):
         target = (self.user_dir if user else self.root / ".claude") / "shipgate.md"
         target.write_text(text, encoding="utf-8")
+
+    def settings(self, user=False, **keys):
+        """Add KEYS to the project settings file (the sidecar), or write them as the
+        user settings file."""
+        if user:
+            (self.user_dir / "shipgate.settings.json").write_text(
+                json.dumps(keys), encoding="utf-8")
+            return
+        path = self.root / ".claude" / "shipgate.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.update(keys)
+        path.write_text(json.dumps(data), encoding="utf-8")
 
     def nudge(self, event, tokens, stream=S, rc=OK, seq=None):
         """`seq` defaults to the newest `event` on `stream`, as the hook passes it."""
@@ -419,6 +486,34 @@ class TestNudge(JournalTestCase):
         self.config("# me\n\n## Session\n\n- Handoff: off\n", user=True)
         self.config("# demo\n\n## Session\n\n- Handoff: 200k\n")
         self.assertIn("threshold (200k)", self.nudge("design-committed", 250_000))
+
+    def test_the_project_settings_file_beats_a_legacy_session_line(self):
+        self.designed()
+        self.config("# demo\n\n## Session\n\n- Handoff: 200k\n")
+        for value, below, at, label in (("1m", 999_000, 1_000_000, "1m"),
+                                        (300000, 299_000, 300_000, "300k")):
+            with self.subTest(value=value):
+                self.settings(handoff=value)
+                self.assertEqual(self.nudge("design-committed", below), "")
+                self.assertIn(f"threshold ({label})", self.nudge("design-committed", at))
+        self.settings(handoff="off")
+        self.assertEqual(self.nudge("design-committed", 5_000_000), "")
+
+    def test_the_user_settings_file_supplies_it(self):
+        self.designed()
+        self.settings(user=True, handoff="1m")
+        self.assertEqual(self.nudge("design-committed", 900_000), "")
+        self.assertIn("threshold (1m)", self.nudge("design-committed", 1_000_000))
+
+    def test_a_bad_value_in_a_settings_file_is_the_default_and_exits_0(self):
+        self.designed()
+        for user in (False, True):
+            for value in ("soon", 0):
+                with self.subTest(user=user, value=value):
+                    self.settings(user=user, handoff=value)
+                    self.assertEqual(self.nudge("design-committed", 499_999), "")
+                    self.assertIn("threshold (500k)",
+                                  self.nudge("design-committed", 500_000, rc=OK))
 
     def test_a_not_ready_verdict_nudges_a_ready_one_does_not(self):
         self.verdict("not-ready")

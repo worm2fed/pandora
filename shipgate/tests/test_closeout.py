@@ -431,12 +431,94 @@ class TestForgeChoice(unittest.TestCase):
         self.assertIsNone(self.j.forge_from_url(None))
 
     def test_the_config_names_the_cli(self):
+        """The legacy `Forge:` reader, which moved to `_config.forge_cli` (ADR 0028)."""
         for value, want in (("GitHub — CLI: `gh`, pull requests.", "gh"),
                             ("GitLab — CLI: glab", "glab"),
                             ("GitHub", "gh"), ("GitLab", "glab"),
                             ("Gitea — CLI: tea", None), ("<GitHub | GitLab>", None)):
             with self.subTest(value=value):
-                self.assertEqual(self.j.forge_from_config(value), want)
+                self.assertEqual(self.j._config.forge_cli(value), want)
+
+
+class TestConfiguredForge(unittest.TestCase):
+    """T009: `configured_forge` reads the `forge` setting through the resolver (ADR
+    0028). The settings file wins; a legacy `Forge:` line still gives the CLI."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.j = load_journal_module()
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        (self.root / ".claude").mkdir()
+        self.user = self.root / "user-config"
+        self.user.mkdir()
+        env = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.user)})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def settings(self, data, where=None):
+        path = where or self.root / ".claude" / "shipgate.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def legacy(self, value, where=None):
+        path = where or self.root / ".claude" / "shipgate.md"
+        path.write_text("# demo\n\n## Forge & tracker\n\n- Forge: " + value + "\n",
+                        encoding="utf-8")
+
+    def forge(self):
+        return self.j.configured_forge(self.root)
+
+    def test_the_settings_file_names_the_forge(self):
+        for value, want in (("github", "gh"), ("gitlab", "glab")):
+            with self.subTest(value=value):
+                self.settings({"version": 1, "forge": value})
+                self.assertEqual(self.forge(), want)
+
+    def test_the_settings_file_beats_a_legacy_line(self):
+        self.legacy("GitHub — CLI: `gh`, pull requests.")
+        self.settings({"version": 1, "forge": "gitlab"})
+        self.assertEqual(self.forge(), "glab")
+
+    def test_a_legacy_line_still_names_the_cli(self):
+        for value, want in (("GitHub — CLI: `gh`, pull requests.", "gh"),
+                            ("GitLab — CLI: glab", "glab"), ("GitLab", "glab")):
+            with self.subTest(value=value):
+                self.legacy(value)
+                self.assertEqual(self.forge(), want)
+
+    def test_another_forge_or_a_placeholder_gives_none(self):
+        """A legacy line outside the set is a warning, never a refusal: None, as
+        before ADR 0028."""
+        for value in ("Gitea — CLI: tea", "<GitHub | GitLab>"):
+            with self.subTest(value=value):
+                self.legacy(value)
+                self.assertIsNone(self.forge())
+
+    def test_nothing_set_gives_none(self):
+        self.assertIsNone(self.forge())
+
+    def test_the_user_settings_file_cannot_set_it(self):
+        """`forge` is a project setting: the user settings file's value is ignored. A
+        user legacy line still applies, as before."""
+        self.settings({"version": 1, "forge": "gitlab"},
+                      self.user / "shipgate.settings.json")
+        self.assertIsNone(self.forge())
+        self.legacy("GitLab — CLI: glab", self.user / "shipgate.md")
+        self.assertEqual(self.forge(), "glab")
+
+    def test_a_bad_value_in_the_settings_file_is_a_usage_error(self):
+        self.legacy("GitHub — CLI: `gh`, pull requests.")
+        self.settings({"version": 1, "forge": "bitbucket"})
+        with self.assertRaises(self.j.UsageError) as caught:
+            self.forge()
+        self.assertEqual(caught.exception.exit_code, 2)
+        message = str(caught.exception)
+        for part in (str(self.root / ".claude" / "shipgate.json"), "forge",
+                     '"bitbucket"', "github, gitlab"):
+            self.assertIn(part, message)
 
 
 class TestCloseoutRules(unittest.TestCase):
@@ -778,6 +860,19 @@ class CloseoutCase(unittest.TestCase):
         return [line.strip() for line in text.splitlines()
                 if re.match(r"^\s+\d+\. \[", line)]
 
+    def settings(self, extra):
+        """Add EXTRA to the project settings file, which already names the db."""
+        path = self.root / ".claude" / "shipgate.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.update(extra)
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def assert_bad_forge(self, proc):
+        self.assertEqual(proc.stdout, "")
+        for part in (str(self.root / ".claude" / "shipgate.json"), "forge",
+                     '"bitbucket"', "github, gitlab"):
+            self.assertIn(part, proc.stderr)
+
     def events(self):
         out = self.run_j("--db", self.db, "log", "--json", rc=0).stdout
         return json.loads(out)["events"]
@@ -1004,6 +1099,25 @@ class TestCloseout(CloseoutCase):
                       'run claude plugin tag --push in shipgate/; "Prune" runs: git '
                       'remote prune origin; "Delete branch feat/7-x" runs: git -C ', ask)
         self.assertIn(f"update-ref -d refs/heads/feat/7-x {HEAD}", ask)
+
+    def test_the_forge_setting_chooses_the_cli(self):
+        """T009: with a URL whose host names no forge, the `forge` setting decides."""
+        self.settings({"forge": "gitlab"})
+        self.opened()
+        text = self.closeout()
+        self.assertIn("glab mr list --source-branch=feat/7-x", text)
+        self.assertNotIn("gh pr", text)
+
+    def test_a_bad_forge_setting_stops_the_close_out(self):
+        """T009: a value outside its set in the settings file exits 2 and names the
+        file, the key, the value and the set, even when the URL names the forge."""
+        self.URL = "https://github.com/o/r/pull/7"
+        self.opened()
+        self.settings({"forge": "bitbucket"})
+        for args in ((), ("--observed", self.observed())):
+            with self.subTest(args=args):
+                proc = self.run_j("closeout", "--stream", self.S, *args, rc=2)
+                self.assert_bad_forge(proc)
 
     def test_no_question_without_an_ask_step(self):
         (self.root / ".claude" / "shipgate.md").write_text(
@@ -1545,6 +1659,25 @@ class TestSweep(CloseoutCase):
         text = self.sweep()
         self.assertEqual(text.count("gh pr list --state all"), 1, text)
         self.assertNotIn("glab", text)
+
+    def test_the_forge_setting_beats_the_recorded_urls(self):
+        """T009: the `forge` setting chooses the list query; the URLs do not."""
+        self.settings({"forge": "gitlab"})
+        self.dormant("feat/1-a", url="https://github.example.invalid/o/r/pull/1")
+        self.load()
+        text = self.sweep()
+        self.assertEqual(text.count("glab mr list --all"), 1, text)
+        self.assertNotIn("gh pr", text)
+
+    def test_a_bad_forge_setting_stops_the_sweep(self):
+        """T009: a value outside its set in the settings file exits 2, even when the
+        config's legacy line names a forge."""
+        self.dormant("feat/1-a", url="https://github.example.invalid/o/r/pull/1")
+        self.load()
+        self.settings({"forge": "bitbucket"})
+        for args in ((), ("--observed", self.evidence([]))):
+            with self.subTest(args=args):
+                self.assert_bad_forge(self.run_j("sweep", *args, rc=2))
 
     def test_with_no_forge_and_no_url_the_sweep_reads_git_only(self):
         (self.root / ".claude" / "shipgate.md").write_text(

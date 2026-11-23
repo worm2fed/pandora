@@ -18,6 +18,7 @@ from .vocab import (
 )
 from .text import _one_line
 from .project import artifact_homes, ledger_summary, Resolution, resolve_db
+from .settings import cmd_config
 from .store import apply_migrations, connect, read_events
 from .fold import stream_lifecycle
 from .append import append_event, AppendResult
@@ -137,6 +138,20 @@ def build_parser() -> argparse.ArgumentParser:
              "when given no type",
     )
     p_vocab.set_defaults(func=cmd_vocab)
+
+    p_config = subparsers.add_parser(
+        "config",
+        help="each setting's resolved value and its source: the project settings file, "
+             "the user settings file, a legacy shipgate.md line or the default "
+             "(ADR 0028); needs no journal",
+    )
+    p_config.add_argument("keys", nargs="*", metavar="KEY",
+                          help="a setting (orchestration.review) or a group "
+                               "(orchestration); all when none")
+    p_config.add_argument("--json", action="store_true", help="machine-readable output")
+    p_config.add_argument("--start", default=None, metavar="DIR",
+                          help="resolve as from DIR (default: the working directory)")
+    p_config.set_defaults(func=cmd_config)
 
     p_session = subparsers.add_parser(
         "session",
@@ -924,6 +939,7 @@ def cmd_import(args, resolution: Resolution) -> int:
 COMMANDS = {
     "init": cmd_init,
     "vocab": cmd_vocab,
+    "config": cmd_config,
     "append": cmd_append,
     "session": cmd_session,
     "status": cmd_status,
@@ -951,7 +967,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # `vocab` is static reference data — it must answer even where no journal
         # exists, since the likeliest moment to ask "what are the names?" is before
         # a project has one. The retired `session` reads nothing, not even a sidecar.
-        if args.command in ("vocab", "session"):
+        # `config` reads the settings files and the config, never the journal.
+        if args.command in ("vocab", "session", "config"):
             return COMMANDS[args.command](args, None)
         resolution = resolve_db(getattr(args, "db", None), Path.cwd())
         return COMMANDS[args.command](args, resolution)

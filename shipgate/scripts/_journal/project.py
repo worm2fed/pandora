@@ -9,9 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
-from .vocab import (
-    DEFAULT_ARTIFACT_HOMES, DEFAULT_LEDGER, InfraError, LEDGER_NUDGE_THRESHOLD,
-)
+from .vocab import InfraError, LEDGER_NUDGE_THRESHOLD, UsageError
 from .plugin import (
     _config, _hooks_common, DEFAULT_DB_RELPATH, journaled_root, SIDECAR_RELPATH,
 )
@@ -155,12 +153,7 @@ def ledger_summary(
     nudge past ~15 unpromoted entries, and counting lines is a job for a script rather
     than for a model's attention.
     """
-    declared = None
-    if sidecar is not None:
-        value = sidecar.config.get("ledger")
-        if isinstance(value, str) and value:
-            declared = value
-    relative = declared or DEFAULT_LEDGER
+    relative = _sidecar_settings(sidecar).value("ledger")
     path = _resolve_against(project_dir, relative)
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -184,16 +177,19 @@ def count_ledger_entries(text: str) -> int:
 
 
 def artifact_homes(sidecar: Optional[Sidecar]) -> Dict[str, str]:
-    if sidecar is None:
-        return dict(DEFAULT_ARTIFACT_HOMES)
-    homes = sidecar.config.get("artifact_homes")
-    if not isinstance(homes, dict):
-        return dict(DEFAULT_ARTIFACT_HOMES)
-    merged = dict(DEFAULT_ARTIFACT_HOMES)
-    for key, value in homes.items():
-        if isinstance(value, str):
-            merged[key] = value
-    return merged
+    """A glob per artifact kind: the schema defaults, with each home the sidecar sets
+    over them, and each extra kind it names after them. A home that is no string keeps
+    its default; an `artifact_homes` that is no object gives the defaults."""
+    return dict(_sidecar_settings(sidecar).value("artifact_homes"))
+
+
+def _sidecar_settings(sidecar: Optional[Sidecar]) -> Any:
+    """The settings of the sidecar alone (ADR 0028). `ledger` and `artifact_homes` are
+    project settings with no legacy line, so the sidecar or the schema default gives
+    them. No markdown or user file is read: `status` runs from SessionStart. Read with
+    `.value`: a bad value gives the default and never raises."""
+    return _config.resolve_settings(sidecar.path if sidecar is not None else None,
+                                    [], None)
 
 
 def _config_label(config: Any, project_dir: Path) -> str:
@@ -240,3 +236,54 @@ def config_candidates(project_dir: Path,
 def _config_files(project_dir: Path, start: Optional[Path]) -> List[Any]:
     return _config.read_layers(config_candidates(project_dir, start),
                                _config.user_config_path())
+
+
+def project_settings(project_dir: Path, start: Optional[Path] = None) -> Any:
+    """Every setting of the project at ``project_dir`` (ADR 0028): its settings file
+    (``.claude/shipgate.json``), the config layers of ``config_candidates`` and the user
+    files. ``_config.Resolved``; it never raises on a value, so a hook-path command
+    reads ``.value`` and a strict one calls ``require_setting``."""
+    project_file = project_dir / SIDECAR_RELPATH
+    return _config.resolve_settings(
+        project_file if project_file.is_file() else None,
+        _config_files(project_dir, start),
+        _config.user_settings_path(),
+    )
+
+
+def require_setting(resolved: Any, key: str) -> Any:
+    """``resolved.require(key)`` for a strict journal command: a value outside its set
+    is a UsageError (exit 2), a settings file that is no JSON object an InfraError
+    (exit 1). Both name the file, and the first the key, the value and what is allowed.
+    """
+    try:
+        return resolved.require(key)
+    except _config.SettingsError as exc:
+        if exc.exit_code == _config.EXIT_INFRA:
+            raise InfraError(str(exc)) from exc
+        raise UsageError(str(exc)) from exc
+
+
+def _display_path(path: str, project_dir: Path) -> str:
+    """A settings or config file as the output names it: relative to the project root
+    when it sits below it, else with the home directory as ``~``."""
+    try:
+        return Path(path).resolve().relative_to(project_dir.resolve()).as_posix()
+    except (ValueError, OSError, RuntimeError):
+        pass
+    home = os.path.expanduser("~")
+    if home not in ("", "~") and (path == home or path.startswith(home + os.sep)):
+        return "~" + path[len(home):]
+    return path
+
+
+def setting_source(setting: Any, project_dir: Path) -> str:
+    """Where a setting came from, as ``journal.py config`` and the handoff brief print
+    it: ``project <path>``, ``user <path>``, ``legacy <path> ## <Section>`` or
+    ``default``."""
+    if setting.source == _config.SOURCE_DEFAULT or setting.path is None:
+        return "default"
+    shown = _display_path(setting.path, project_dir)
+    if setting.source == _config.SOURCE_LEGACY:
+        return f"legacy {shown} ## {setting.section}"
+    return f"{setting.source} {shown}"

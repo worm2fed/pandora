@@ -4201,6 +4201,8 @@ class TestPrintedGoRequestsRunAsPrinted(ReplyHookCase):
         for part in ("hooks", "scripts"):
             shutil.copytree(SHIPGATE / part, self.plugin / part,
                             ignore=shutil.ignore_patterns("__pycache__"))
+        # The settings schema ships beside `scripts/` (ADR 0028); `status` reads it.
+        shutil.copy2(SHIPGATE / "settings.schema.json", self.plugin)
         self.script = self.plugin / "scripts" / "journal.py"
 
     def tearDown(self) -> None:
