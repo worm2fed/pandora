@@ -2,6 +2,36 @@
 
 All notable changes to the **shipgate-hud** plugin, newest first.
 
+v0.12.0 — a sidecar with `"db": null` shows no journal, and the HUD knows sidecar version 2.
+
+**`"db": null` declares no journal (shipgate #60, shipgate ADR 0028, J2).** shipgate 0.32.0
+reads a `db` of JSON `null` in `.claude/shipgate.json` as "this project has no journal",
+and its hooks then act as in a project with no sidecar. The HUD now does the same.
+- The HUD reads the nearest sidecar once when it finds one. When its `db` is `null`, the
+  view is `Off`: the band and the pane draw nothing, no `journal.py` process runs, and a
+  publish command passes as in a project with no sidecar. `/hud` says why.
+- The walk still stops at the nearest sidecar, so a session in a subdirectory of that
+  project gets the same.
+- Only a parsed `null` counts. A missing `db`, a `db` of another type, and a sidecar that
+  cannot be read or parsed keep today's view: `journal.py` runs, and its failure shows in
+  the pane, with the publish gate holding. A broken file never turns the gate off.
+- A project with no sidecar costs what it cost before: the directory walk, no read and no
+  process.
+
+**Sidecar version 2.** The HUD knows version 2, the version of shipgate's settings schema.
+A version-2 sidecar no longer shows the "declares version 2" warning. A version above 2
+still shows one warning line, and the refresh goes on with the keys the HUD knows.
+
+**The dependency is `shipgate >=0.32.0`.** An older shipgate reads `"db": null` as the
+default journal, so its hooks would treat a project as journaled while this HUD shows it
+as journal-less. With 0.32.0 the two agree.
+- A test pins the rule: shipgate's contract test writes `tests/fixtures.sidecar.ts`, the
+  hooks' verdict on each of 29 sidecar texts, and the HUD's tests check its own rule
+  against every row.
+- An older HUD with shipgate 0.32.0, in a project whose sidecar says `"db": null`, shows
+  `journal.py`'s failure ("this project declares no journal") and holds publish commands.
+  Update the HUD with shipgate.
+
 v0.11.1 — an approval from the publish dialog records the session that approved.
 
 **The approval append named the wrong session (shipgate #46, HUD ADR 0010 amended).** The

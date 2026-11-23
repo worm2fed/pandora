@@ -1119,19 +1119,20 @@ class TestSidecarVersion(JournalTestCase):
         )
 
     def test_a_newer_version_warns_once_on_stderr_and_keeps_working(self):
-        self.write_sidecar(version=2)
+        self.write_sidecar(version=3)
         proc = self.journal("init", rc=OK)
         self.assertEqual(proc.stderr.count("journal.py: "), 1, proc.stderr)
-        self.assertIn("declares version 2", proc.stderr)
-        self.assertIn("knows version 1", proc.stderr)
+        self.assertIn("declares version 3", proc.stderr)
+        self.assertIn("knows version 2", proc.stderr)
         self.assertTrue((self.root / ".claude" / "shipgate.db").exists())
         appended = self.journal("append", "--stream", "feature/x", "--type",
                                 "flow-suspended", rc=OK)
-        self.assertEqual(appended.stderr.count("declares version 2"), 1)
+        self.assertEqual(appended.stderr.count("declares version 3"), 1)
 
     def test_a_known_or_absent_version_is_silent(self):
-        for extra in ({"version": 1}, {}, {"version": 0}, {"version": True},
-                      {"version": "2"}):
+        """Version 2 is the settings file of ADR 0028: this shipgate knows it."""
+        for extra in ({"version": 2}, {"version": 1}, {}, {"version": 0},
+                      {"version": True}, {"version": "3"}):
             with self.subTest(sidecar=extra):
                 self.write_sidecar(**extra)
                 proc = self.journal("init", rc=OK)
@@ -1497,6 +1498,93 @@ class TestDbResolution(JournalTestCase):
     def test_default_db_path_when_no_sidecar(self):
         self.journal("init", rc=OK)
         self.assertTrue((self.root / ".claude" / "shipgate.db").exists())
+
+
+class TestADbNullProject(JournalTestCase):
+    """ADR 0028, J2: `"db": null` declares that the project has no journal. A command
+    that needs one stops and says why; the commands that read no journal still run."""
+
+    NEEDS_A_JOURNAL = (
+        ("init",),
+        ("status",),
+        ("status", "--json"),
+        ("append", "--stream", "feature/x", "--type", "flow-suspended"),
+        ("log",),
+        ("position", "--stream", "feature/x", "--json"),
+        ("handoff", "--stream", "feature/x"),
+        ("streams", "--open"),
+        ("check", "--session", "s1", "--json"),
+        ("authorize", "--gate", "commit", "--branch", "feature/x", "--json"),
+        ("doctor",),
+        ("export",),
+        ("stats",),
+    )
+
+    def write_settings(self, **settings):
+        claude = self.root / ".claude"
+        claude.mkdir(exist_ok=True)
+        path = claude / "shipgate.json"
+        path.write_text(json.dumps({"version": 2, **settings}), encoding="utf-8")
+        return path
+
+    def test_a_command_that_needs_a_journal_stops_and_says_why(self):
+        path = self.write_settings(db=None)
+        nested = self.root / "a" / "b"
+        nested.mkdir(parents=True)
+        for args in self.NEEDS_A_JOURNAL:
+            for cwd in (self.root, nested):
+                with self.subTest(args=args, cwd=cwd.name):
+                    proc = self.journal(*args, cwd=cwd, rc=INFRA)
+                    self.assertEqual(
+                        proc.stderr.strip(),
+                        'error: this project declares no journal ("db": null in '
+                        f"{path.resolve()})",
+                    )
+                    self.assertEqual(proc.stdout, "")
+        self.assertEqual(list(self.root.rglob("*.db*")), [])
+
+    def test_the_commands_that_read_no_journal_still_run(self):
+        self.write_settings(db=None, autonomy="executive")
+        self.journal("vocab", rc=OK)
+        self.journal("session", rc=OK)
+        proc = self.journal("config", "autonomy", "db", "--json", rc=OK)
+        settings = json.loads(proc.stdout)["settings"]
+        self.assertEqual(settings["autonomy"]["value"], "executive")
+        self.assertIsNone(settings["db"]["value"])
+        self.assertEqual(list(self.root.rglob("*.db*")), [])
+
+    def test_an_explicit_db_flag_still_wins(self):
+        self.write_settings(db=None)
+        self.journal("--db", self.db, "init", rc=OK)
+        self.journal("--db", self.db, "append", "--stream", "feature/x", "--type",
+                     "flow-suspended", rc=OK)
+        self.assertFalse((self.root / ".claude" / "shipgate.db").exists())
+
+    def test_a_file_with_nan_or_infinity_declares_nothing(self):
+        """The HUD's JSON.parse refuses NaN and Infinity, so such a file never declares no
+        journal: journal.py, the hooks and the HUD all read the project as journaled."""
+        claude = self.root / ".claude"
+        claude.mkdir(exist_ok=True)
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(constant=constant):
+                (claude / "shipgate.json").write_text(
+                    '{"version": 2, "db": null, "x": %s}' % constant, encoding="utf-8")
+                self.journal("init", rc=OK)
+                self.assertTrue((claude / "shipgate.db").exists())
+                self.journal("status", rc=OK)
+                (claude / "shipgate.db").unlink()
+
+    def test_a_db_of_another_type_keeps_the_default_journal(self):
+        """Only null declares no journal: a malformed `db` never turns the journal off."""
+        for value in (0, [], "", False, {}, "null"):
+            with self.subTest(db=value):
+                self.write_settings(db=value)
+                default = self.root / ".claude" / "shipgate.db"
+                expected = self.root / "null" if value == "null" else default
+                self.journal("init", rc=OK)
+                self.assertTrue(expected.exists())
+                self.journal("status", rc=OK)
+                expected.unlink()
 
 
 HANDOFF_WORKLOG = """# Worklog: demo

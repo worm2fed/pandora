@@ -24,6 +24,8 @@ class Sidecar(NamedTuple):
     path: Path
     project_dir: Path
     config: Dict[str, Any]
+    # False when the file holds NaN or Infinity (`_hooks_common.parse_sidecar`).
+    strict: bool = True
 
 
 class Resolution(NamedTuple):
@@ -54,13 +56,13 @@ def _load_sidecar(path: Path, project_dir: Path) -> Sidecar:
     except OSError as exc:
         raise InfraError(f"cannot read sidecar {path}: {exc}") from exc
     try:
-        config = json.loads(raw)
+        config, strict = _hooks_common.parse_sidecar(raw)
     except ValueError as exc:
         raise InfraError(f"sidecar {path} is not valid JSON: {exc}") from exc
     if not isinstance(config, dict):
         raise InfraError(f"sidecar {path} must contain a JSON object")
     _warn_sidecar_version(config)
-    return Sidecar(path=path, project_dir=project_dir, config=config)
+    return Sidecar(path=path, project_dir=project_dir, config=config, strict=strict)
 
 
 # Set once the newer-sidecar warning is printed: once per process is enough.
@@ -96,7 +98,9 @@ def resolve_db(db_flag: Optional[str], cwd: Path) -> Resolution:
     *project directory* (never the cwd, because hooks invoke this script from
     arbitrary directories), or against the main worktree when that directory is a
     linked worktree with a committed sidecar. With no sidecar, the default under
-    the cwd.
+    the cwd. A sidecar whose ``db`` is null declares no journal (ADR 0028, J2): the
+    hooks' rule, and this raises ``InfraError`` (exit 1) for every command that needs
+    one.
     """
     sidecar = find_sidecar(cwd)
     project_dir = sidecar.project_dir if sidecar else cwd.resolve()
@@ -112,6 +116,10 @@ def resolve_db(db_flag: Optional[str], cwd: Path) -> Resolution:
         )
 
     if sidecar is not None:
+        if _hooks_common.declares_no_journal(sidecar.config, sidecar.strict):
+            raise InfraError(
+                f'this project declares no journal ("db": null in {sidecar.path})'
+            )
         # The hooks' rule, so both reach one journal: a relative db (the default one
         # included) resolves against the sidecar's directory, or against the main
         # worktree in a linked worktree that carries a committed sidecar.

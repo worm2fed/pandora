@@ -10,7 +10,8 @@ held until the stream of its branch holds the user's go for the commit gate, and
 for the publish gate. `gated_commands` finds them in the lexed line; the branch is read in
 the command's directory (git's `-C`, or a literal `cd` before it, else the payload's
 `cwd`), and `journal.py authorize` answers for that branch. A `hold` is a `deny` with the
-journal's message. A project with no sidecar, `enforce.command_gate: false`, a directory
+journal's message. A project with no sidecar or one whose sidecar declares no journal
+(`"db": null`), `enforce.command_gate: false`, a directory
 with no branch, a branch with no stream or a finished one, and any failure of git or the
 journal pass the command (§15). A dry run is held like any commit or push: its flags
 cannot be read safely from the words (`--dry-run --no-dry-run`, `-m --dry-run`).

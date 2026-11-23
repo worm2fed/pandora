@@ -38,11 +38,11 @@ SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 SESSION_ID_PATTERN = r"\A[A-Za-z0-9_-]{1,128}\Z"
 REQUESTS_SUFFIX = ".requests"
 _SESSION_ID_RE = None
-# The sidecar format this shipgate writes and reads, and every key a shipgate reader uses:
-# the hooks read `db`, `artifact_homes` and `enforce`; journal.py reads `ledger` too. A
-# newer shipgate may write a higher version: this one warns and reads only these keys.
-SIDECAR_VERSION = 1
-SIDECAR_KEYS = ("version", "db", "ledger", "artifact_homes", "enforce")
+# The settings file format this shipgate writes and reads: `x-version` of
+# `settings.schema.json`, which names every key (ADR 0028; a test pins the two). The hooks
+# read `db`, `artifact_homes` and `enforce`. A newer shipgate may write a higher version:
+# this one warns and reads only the keys it knows.
+SIDECAR_VERSION = 2
 
 
 def _session_id_re():
@@ -264,17 +264,19 @@ def sidecar_db_path(root, sidecar):
     A relative `db` (the default one included) resolves against the sidecar's directory,
     except in a linked worktree of a repository that commits its sidecar: there it
     resolves against the main worktree, when that holds a sidecar too, so every worktree
-    shares the main checkout's journal instead of starting an empty one of its own.
+    shares the main checkout's journal instead of starting an empty one of its own. The
+    main checkout's file gives the place only: whether this project has a journal at all
+    is its own file's word (`load_project`), so a main `db` of null reads as the default.
     """
     if os.path.isabs(_declared_db(sidecar)):
         return _declared_db(sidecar)
     main = main_worktree(root)
-    # isfile first, as journaled_root does: load_project's open() would block on a FIFO.
+    # isfile first, as journaled_root does: read_sidecar's open() would block on a FIFO.
     if main is not None and os.path.isfile(os.path.join(main, SIDECAR_RELPATH)):
-        project = load_project(main)
-        if project is not None:
+        main_sidecar = read_sidecar(main)
+        if main_sidecar is not None:
             # The main checkout's own setting, never followed further: one hop at most.
-            return _own_db_path(project.root, project.sidecar)
+            return _own_db_path(main, main_sidecar)
     return _own_db_path(root, sidecar)
 
 
@@ -304,7 +306,10 @@ class Project:
 
     @property
     def artifact_globs(self):
-        homes = self.sidecar.get("artifact_homes") or {}
+        """The glob of each artifact home; none when `artifact_homes` is no object."""
+        homes = self.sidecar.get("artifact_homes")
+        if not isinstance(homes, dict):
+            return []
         return [pattern for pattern in homes.values() if isinstance(pattern, str)]
 
     def enforces(self, knob):
@@ -332,16 +337,62 @@ class Project:
         return any(fnmatch(relative, pattern) for pattern in self.artifact_globs)
 
 
-def load_project(root):
-    """Parse the sidecar at `root`. Returns None if it is unreadable or malformed."""
+def parse_sidecar(text):
+    """The settings file's text as JSON: `(value, strict)`. ValueError when it is no JSON.
+
+    `strict` is False when the text holds `NaN`, `Infinity` or `-Infinity`: Python's json
+    reads them, and JavaScript's JSON.parse, which shipgate-hud reads the file with,
+    refuses them. journal.py parses the file here too, so the three readers share one rule.
+    """
     import json
 
+    constants = []
+
+    def constant(name):
+        constants.append(name)
+        return float(name)
+
+    return json.loads(text, parse_constant=constant), not constants
+
+
+def _settings_at(root):
+    """The settings file at `root`: `(dict, strict)`, or `(None, True)` when it is
+    unreadable or no object."""
     try:
         with open(os.path.join(root, SIDECAR_RELPATH), encoding="utf-8") as handle:
-            sidecar = json.load(handle)
+            sidecar, strict = parse_sidecar(handle.read())
     except (OSError, ValueError):
-        return None  # A corrupt sidecar disables hooks; it never crashes a session.
-    if not isinstance(sidecar, dict):
+        return None, True  # A corrupt sidecar disables hooks; it never crashes a session.
+    return (sidecar, strict) if isinstance(sidecar, dict) else (None, True)
+
+
+def read_sidecar(root):
+    """The settings file at `root` as a dict, or None when it is unreadable or no object."""
+    return _settings_at(root)[0]
+
+
+def declares_no_journal(sidecar, strict):
+    """True when the settings file says `"db": null` (ADR 0028, J2).
+
+    Only a `db` key whose value is JSON null declares no journal, and only in a file
+    that is strict JSON (`parse_sidecar`): the HUD cannot read a file with `NaN` or
+    `Infinity`, so such a file keeps its journal, and the hooks, journal.py and the HUD
+    agree. A missing `db` keeps the default journal, and a `db` of any other type is a
+    bad value that also keeps it: a malformed value never turns a gate off.
+    """
+    return (strict and isinstance(sidecar, dict) and "db" in sidecar
+            and sidecar["db"] is None)
+
+
+def load_project(root):
+    """The journaled project whose settings file sits at `root`, or None.
+
+    None when the file is unreadable or malformed, and when it declares no journal
+    (`"db": null`): the file still marks the project root, so the walk stops here, and
+    every hook acts as in a project with no settings file.
+    """
+    sidecar, strict = _settings_at(root)
+    if sidecar is None or declares_no_journal(sidecar, strict):
         return None
     return Project(root=root, sidecar=sidecar)
 

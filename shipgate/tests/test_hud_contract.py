@@ -517,5 +517,227 @@ class TestHudContract(unittest.TestCase):
         self.assertNotIn(str(Path(tempfile.gettempdir()).resolve()), text)
 
 
+# --------------------------------------------------------------------------
+# One version and one journal marker (ADR 0028, decision 2 and J2)
+# --------------------------------------------------------------------------
+
+SHIPGATE = TESTS_DIR.parent
+SCHEMA = SHIPGATE / "settings.schema.json"
+HUD_JOURNAL = HUD / "hooks" / "journal.ts"
+SIDECAR_GOLDEN = HUD / "tests" / "fixtures.sidecar.ts"
+
+# Settings-file texts, and the name each row carries in the golden file. The hooks'
+# `load_project` decides each row; the HUD's rule must agree (shipgate-hud's
+# `declaresNoJournal`). Generic values only: this is a public repository.
+SIDECAR_TEXTS = {
+    "db null": '{"version": 2, "db": null}',
+    "db null alone": '{"db": null}',
+    "db null with settings": (
+        '{"version": 2, "db": null, "autonomy": "executive", '
+        '"enforce": {"stop_gate": true}}'
+    ),
+    "db null and a newer version": '{"version": 3, "db": null}',
+    "db null, the last of two db keys": '{"db": ".claude/shipgate.db", "db": null}',
+    "db string, the last of two db keys": '{"db": null, "db": ".claude/shipgate.db"}',
+    "no db key": '{"version": 2}',
+    "an empty object": "{}",
+    "db default": '{"version": 2, "db": ".claude/shipgate.db"}',
+    "db an empty string": '{"db": ""}',
+    "db a number": '{"db": 0}',
+    "db false": '{"db": false}',
+    "db a list": '{"db": []}',
+    "db an object": '{"db": {}}',
+    "db the word null": '{"db": "null"}',
+    "db NaN": '{"db": NaN}',
+    "db null in a file that holds NaN": '{"db": null, "x": NaN}',
+    "db null in a file that holds Infinity": '{"db": null, "x": Infinity}',
+    "db null one level down": '{"settings": {"db": null}}',
+    "a newer version": '{"version": 3}',
+    "enforce a string": '{"enforce": "off"}',
+    "an enforce switch a string": '{"enforce": {"stop_gate": "false"}}',
+    "artifact_homes a string": '{"artifact_homes": "docs/*.md"}',
+    "not JSON": "not json",
+    "an empty file": "",
+    "a list": '[{"db": null}]',
+    "a string": '"db"',
+    "the JSON null": "null",
+    "a byte order mark": '\ufeff{"db": null}',
+}
+
+
+def _refuse_constant(name):
+    raise ValueError(f"{name} is no JSON")
+
+
+def strict_json(text):
+    """`text` parsed as strict JSON, which JavaScript's JSON.parse also reads; None when
+    it is not: Python's json alone reads NaN, Infinity and -Infinity."""
+    try:
+        return json.loads(text, parse_constant=_refuse_constant)
+    except ValueError:
+        return None
+
+
+def lenient_json(text):
+    """`text` as Python's json reads it, NaN and Infinity included; None when it is no
+    JSON."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def load_hooks_common():
+    """The hooks' `_common.py`, loaded by path under a name of its own."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "sg_hooks_common_contract", SHIPGATE / "hooks" / "_common.py")
+    assert spec is not None and spec.loader is not None
+    common = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(common)
+    return common
+
+
+def hooks_verdicts() -> list:
+    """Each settings text with what the hooks make of it: `project` when
+    `_common.load_project` finds a journaled project, else `none`; and `parsed`, whether
+    the text is a JSON object both Python's json and JavaScript's JSON.parse read: no
+    `NaN`, `Infinity` or `-Infinity` (the HUD keeps its own view of a file it cannot
+    parse: a project, as before)."""
+    common = load_hooks_common()
+    rows = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / ".claude").mkdir()
+        for name, text in SIDECAR_TEXTS.items():
+            (root / ".claude" / "shipgate.json").write_bytes(text.encode("utf-8"))
+            parsed = isinstance(strict_json(text), dict)
+            project = common.load_project(str(root))
+            rows.append({"name": name, "text": text,
+                         "hooks": "none" if project is None else "project",
+                         "parsed": parsed})
+    return rows
+
+
+def render_sidecar_golden(rows: list) -> str:
+    return "\n".join([
+        HEADER,
+        f"// Regenerate: {REGEN_ENV}=1 python3 -m unittest discover -s shipgate/tests "
+        "-k HudContract",
+        "// Each settings-file text and what shipgate's hooks make of it",
+        "// (`hooks/_common.load_project`): `project` is a journaled project, `none` is not.",
+        "// `parsed`: the text is a JSON object that Python's json and JavaScript's",
+        "// JSON.parse both read. The HUD's rule must agree on every parsed row, and must",
+        "// keep the project for every other row (ADR 0028, J2).",
+        "",
+        "export interface SidecarCase {",
+        "  readonly name: string",
+        "  readonly text: string",
+        "  readonly hooks: 'project' | 'none'",
+        "  readonly parsed: boolean",
+        "}",
+        "",
+        "export const SIDECAR_CASES: readonly SidecarCase[] = "
+        + json.dumps(rows, indent=2, ensure_ascii=True),
+        "",
+    ])
+
+
+def hud_constant(name: str) -> str:
+    """The text of an `export const <name> = …` line of the HUD's journal.ts."""
+    text = HUD_JOURNAL.read_text(encoding="utf-8")
+    match = re.search(rf"^export const {name}\b[^=]*= (.+)$", text, re.MULTILINE)
+    if match is None:
+        raise AssertionError(f"journal.ts has no `export const {name}`")
+    return match.group(1).strip()
+
+
+def hud_table(name: str) -> dict:
+    """A `const <name>: … = { k: 'v', … }` object literal of journal.ts, as a dict."""
+    text = HUD_JOURNAL.read_text(encoding="utf-8")
+    match = re.search(rf"^const {name}\b[^=]*= \{{([^}}]*)\}}", text, re.MULTILINE)
+    if match is None:
+        raise AssertionError(f"journal.ts has no `const {name}` object")
+    return dict(re.findall(r"(\w+): '([^']*)'", match.group(1)))
+
+
+@unittest.skipUnless(HUD.is_dir(), "shipgate-hud is not in this checkout")
+class TestHudContractSettingsVersion(unittest.TestCase):
+    """T023: the schema's version and default homes are the hooks', journal.py's and the
+    HUD's copies."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+
+    def test_the_version_is_one_number(self):
+        self.assertEqual(self.schema["x-version"], load_hooks_common().SIDECAR_VERSION)
+        self.assertEqual(str(self.schema["x-version"]), hud_constant("KNOWN_SIDECAR_VERSION"))
+        self.assertEqual(self.schema["properties"]["version"]["default"],
+                         self.schema["x-version"])
+
+    def test_the_default_homes_are_one_table(self):
+        from test_journal import load_journal_module
+
+        homes = {kind: node["default"] for kind, node in
+                 self.schema["properties"]["artifact_homes"]["properties"].items()}
+        self.assertEqual(homes, dict(load_journal_module().DEFAULT_ARTIFACT_HOMES))
+        self.assertEqual(homes, hud_table("DEFAULT_ARTIFACT_HOMES"))
+
+
+@unittest.skipUnless(HUD.is_dir(), "shipgate-hud is not in this checkout")
+class TestHudContractJournalMarker(unittest.TestCase):
+    """J2: the HUD and the hooks read one rule for "this project declares no journal".
+    The golden file carries the hooks' verdict on each settings text; the HUD's tests read
+    it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rows = hooks_verdicts()
+
+    def test_the_golden_file_is_the_hooks_verdict(self):
+        actual = render_sidecar_golden(self.rows)
+        if os.environ.get(REGEN_ENV) == "1":
+            SIDECAR_GOLDEN.write_text(actual, encoding="utf-8")
+            return
+        if not SIDECAR_GOLDEN.is_file():
+            self.fail(f"{SIDECAR_GOLDEN} is missing — generate it with {REGEN_ENV}=1")
+        expected = SIDECAR_GOLDEN.read_text(encoding="utf-8")
+        if actual == expected:
+            return
+        diff = "".join(difflib.unified_diff(
+            expected.splitlines(True), actual.splitlines(True),
+            "fixtures.sidecar.ts (committed)", "the hooks (now)", n=2,
+        ))
+        self.fail("the hooks' journal marker no longer matches the HUD's golden file. "
+                  f"Regenerate it with {REGEN_ENV}=1 and update the HUD's rule:\n"
+                  f"{diff[:6000]}")
+
+    def test_db_null_alone_declares_no_journal(self):
+        """A strict JSON object: `none` exactly when its `db` is null. An object only
+        Python reads (NaN, Infinity): `project`, whatever its `db`, so the HUD, which
+        cannot read it, agrees. No object at all: `none`, the hooks fail open."""
+        for row in self.rows:
+            with self.subTest(case=row["name"]):
+                strict = strict_json(row["text"])
+                if isinstance(strict, dict):
+                    declares_none = "db" in strict and strict["db"] is None
+                    expected = "none" if declares_none else "project"
+                elif isinstance(lenient_json(row["text"]), dict):
+                    expected = "project"
+                else:
+                    expected = "none"
+                self.assertEqual(row["hooks"], expected)
+
+    def test_the_rows_cover_every_verdict(self):
+        verdicts = {(row["hooks"], row["parsed"]) for row in self.rows}
+        self.assertEqual(verdicts, {("none", True), ("project", True), ("none", False),
+                                    ("project", False)})
+        self.assertIn(("project", False), {
+            (row["hooks"], row["parsed"]) for row in self.rows
+            if '"db": null' in row["text"]})
+
+
 if __name__ == "__main__":
     unittest.main()

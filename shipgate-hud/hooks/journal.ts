@@ -954,8 +954,20 @@ const decodeTrace: Decoder<Trace> = (value, path) => {
 /** The trace of a stream with no event that records one. */
 export const EMPTY_TRACE: Trace = { reviewRanking: null, designRanking: null, signalsGaps: [] }
 
-/** The sidecar `version` this HUD knows (shipgate's `SIDECAR_VERSION`): it reads the keys of version 1 only. */
-export const KNOWN_SIDECAR_VERSION = 1
+/** The sidecar `version` this HUD knows (shipgate's `SIDECAR_VERSION`): it reads the keys of version 2. */
+export const KNOWN_SIDECAR_VERSION = 2
+
+/**
+ * Does the sidecar declare that the project has no journal? True exactly when it is a plain
+ * object with an own `db` key whose value is JSON null (shipgate ADR 0028, J2), the rule of
+ * shipgate's hooks (`hooks/_common.declares_no_journal`). A missing `db` keeps the default
+ * journal; a `db` of any other type (a string, `"null"` among them, a number, `false`, a list,
+ * an object) is no declaration; a value that is not a plain object declares nothing.
+ */
+export function declaresNoJournal(raw: unknown): boolean {
+  const sidecar = recordOf(raw)
+  return sidecar !== null && Object.hasOwn(sidecar, 'db') && sidecar['db'] === null
+}
 
 /**
  * The sidecar's `version` when it is a safe integer higher than KNOWN_SIDECAR_VERSION: a newer
