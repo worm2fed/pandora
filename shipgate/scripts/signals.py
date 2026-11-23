@@ -46,7 +46,6 @@ EXIT_USAGE = 2
 
 OUTPUT_VERSION = 1
 
-CONFIG_SECTION = "code signals"
 TOOLING_SECTION = "code tooling"  # holds the one `Code graph` bullet
 GRAPH_MODES = ("auto", "off", "root")
 DEFAULT_GRAPH_MODE = "auto"
@@ -202,8 +201,14 @@ section_bullets = _config.section_bullets
 _is_placeholder = _config.is_placeholder
 _BACKTICK_RE = _config.BACKTICK_RE
 USER_SOURCE = "user shipgate.md"
-_CONFIG_KEYS = {"window": "window_months", "fix pattern": "fix_pattern",
-                "exclude": "exclude", "ranking exclude": "ranking_exclude"}
+SETTINGS_SOURCE = "shipgate.json"  # the project settings file (ADR 0028)
+USER_SETTINGS_SOURCE = "user settings"  # `$CLAUDE_CONFIG_DIR/shipgate.settings.json`
+# The settings this script reads, and the key each fills in `LoadedConfig.values`.
+_SETTINGS_KEYS = {"code_signals.window_months": "window_months",
+                  "code_signals.fix_pattern": "fix_pattern",
+                  "code_signals.exclude": "exclude",
+                  "code_signals.ranking_exclude": "ranking_exclude",
+                  "code_graph": "code_graph"}
 
 
 def parse_code_signals(text: str) -> Dict[str, Any]:
@@ -212,58 +217,23 @@ def parse_code_signals(text: str) -> Dict[str, Any]:
     Returns only the keys that carry a usable value — a `<placeholder>`, a
     non-backticked value, a non-integer window or an invalid regex is absent. One
     exception: a `Ranking exclude` whose backticked spans are all empty is `[]`, which
-    turns the built-in ranking excludes off.
+    turns the built-in ranking excludes off. The one parser is
+    `_config.code_signals_lines`; the resolver reads the section through it too.
     """
-    bullets = section_bullets(text, CONFIG_SECTION)
-    out: Dict[str, Any] = {}
-    for key, value in bullets:
-        name = _CONFIG_KEYS.get(key)
-        if name is None or name in out:
-            continue
-        spans = [s.strip() for s in _BACKTICK_RE.findall(value)]
-        if name == "ranking_exclude" and spans and not any(spans):
-            out[name] = []
-            continue
-        spans = [s for s in spans if not _is_placeholder(s)]
-        if not spans:
-            continue
-        if name == "window_months":
-            try:
-                months = int(spans[0])
-            except ValueError:
-                continue
-            if 1 <= months <= MAX_WINDOW_MONTHS:
-                out[name] = months
-        elif name == "fix_pattern":
-            try:
-                re.compile(spans[0])
-            except re.error:
-                continue
-            out[name] = spans[0]
-        else:
-            # Separate spans or one comma-separated span: both are a list of globs.
-            globs = [g.strip() for span in spans for g in span.split(",")]
-            out[name] = [g for g in globs if g]
-    return out
+    return _config.code_signals_lines(text, MAX_WINDOW_MONTHS)[0]
 
 
 def parse_code_graph(text: str) -> Dict[str, str]:
     """The `Code graph` bullet of `## Code tooling`, lower-cased and not yet checked.
 
     A backticked value wins over the bare text; a `<placeholder>` or an empty value
-    is absent. `load_config` rejects a value outside GRAPH_MODES.
+    is absent. The one parser is `_config.legacy_code_graph`; the resolver ignores a
+    value outside GRAPH_MODES (`load_config_layers` names it on stderr).
     """
     for key, value in section_bullets(text, TOOLING_SECTION):
-        if key != "code graph":
-            continue
-        value = value.strip()
-        if _is_placeholder(value):
-            return {}
-        spans = _BACKTICK_RE.findall(value)
-        value = spans[0].strip() if spans else value
-        if _is_placeholder(value):
-            return {}
-        return {"code_graph": value.lower()}
+        if key == "code graph":
+            mode = _config.legacy_code_graph(value)
+            return {} if mode is None else {"code_graph": mode}
     return {}
 
 
@@ -317,40 +287,79 @@ def _config_candidates(repo: Path, start: Optional[Path]) -> List[Tuple[Path, st
 
 
 class LoadedConfig(NamedTuple):
-    values: Dict[str, Any]  # only the keys some shipgate.md set
-    source: Dict[str, str]  # per key: `shipgate.md` or `user shipgate.md`
-    files: List[Dict[str, str]]  # the files read, precedence order: {path, role}
+    values: Dict[str, Any]  # only the keys some file set
+    # per key: `shipgate.json`, `user settings`, `shipgate.md` or `user shipgate.md`
+    source: Dict[str, str]
+    files: List[Dict[str, str]]  # the config files read, precedence order: {path, role}
     inherit: str  # umbrella | none
 
 
+def _settings_file(repo: Path, start: Optional[Path]) -> Optional[Path]:
+    """The project settings file: `.claude/shipgate.json` at the root the hooks' walk
+    finds from START (else REPO), when it is a file."""
+    root = journaled_root(str(start or repo))
+    if root is None:
+        return None
+    path = Path(root) / _config.SETTINGS_RELPATH
+    return path if path.is_file() else None
+
+
 def load_config_layers(repo: Path, start: Optional[Path] = None) -> LoadedConfig:
-    """Read the config layers (ADR 0018): each section comes whole from the nearest
-    file that holds it with a real value; the user file is the last layer. A `Code
-    graph` value outside GRAPH_MODES is a UsageError naming its file."""
+    """Read `code_signals` and `code_graph` through the settings resolver (ADR 0028).
+
+    Per key, nearest first: the project settings file, a project-side line in
+    `shipgate.md`, the user settings file, a line in the user `shipgate.md`. The
+    `shipgate.md` lines keep ADR 0018's rule: each section comes whole from the nearest
+    file that holds it with a real value. A value outside its set in a settings file is
+    a UsageError. A `Code graph` line outside GRAPH_MODES is named on stderr and the
+    next layer applies. A settings file that is no JSON object is named on stderr, and
+    the other layers apply."""
     files = _config.read_layers(_config_candidates(Path(repo), start),
                                 _config.user_config_path())
+    try:
+        resolved = _config.resolve_settings(_settings_file(Path(repo), start), files,
+                                            _config.user_settings_path())
+    except OSError as exc:  # `load_schema`: the plugin's own file
+        raise InfraError(str(exc)) from exc
+    # A broken settings file is named once, and only when a key this script reads
+    # reached it in the walk.
+    broken = {}
+    for key in _SETTINGS_KEYS:
+        problem = resolved.get(key).problem
+        if problem is not None and problem.kind == _config.NOT_JSON:
+            broken.setdefault(problem.path, problem)
+    for problem in broken.values():
+        print(f"warning: {problem.message}; it is ignored", file=sys.stderr)
+    for problem in resolved.problems:
+        if problem.kind == _config.BAD_LEGACY and problem.key == "code_graph":
+            print(f"warning: {problem.message}; it is ignored", file=sys.stderr)
+    # A broken settings file is a warning here (exit 1 from `require`): the walk skips
+    # it, so only a value outside its set stops the run.
+    for key in ("code_signals", "code_graph"):
+        try:
+            resolved.require(key)
+        except _config.SettingsError as exc:
+            if exc.exit_code == EXIT_USAGE:
+                raise UsageError(str(exc)) from exc
+
+    roles = {str(f.path): f.role for f in files}
+
+    def label(setting: Any) -> str:
+        if setting.source == _config.SOURCE_PROJECT:
+            return SETTINGS_SOURCE
+        if setting.source == _config.SOURCE_USER:
+            return USER_SETTINGS_SOURCE
+        return USER_SOURCE if roles.get(setting.path) == _config.ROLE_USER \
+            else "shipgate.md"
+
     cfg: Dict[str, Any] = {}
     source: Dict[str, str] = {}
-
-    def label(owner: Any) -> str:
-        return USER_SOURCE if owner.role == _config.ROLE_USER else "shipgate.md"
-
-    # Code signals is present only with a usable backticked value (the parser's rule).
-    owner = _config.section_owner(files, CONFIG_SECTION,
-                                  lambda text: bool(parse_code_signals(text)))
-    if owner is not None:
-        for key, value in parse_code_signals(owner.text).items():
-            cfg[key] = value
-            source[key] = label(owner)
-    owner = _config.section_owner(files, TOOLING_SECTION)
-    if owner is not None:
-        mode = parse_code_graph(owner.text).get("code_graph")
-        if mode is not None:
-            if mode not in GRAPH_MODES:
-                raise UsageError(f"{owner.path}: the Code graph value must be auto, off "
-                                 f"or root, not `{mode}`")
-            cfg["code_graph"] = mode
-            source["code_graph"] = label(owner)
+    for key, name in _SETTINGS_KEYS.items():
+        setting = resolved.get(key)
+        if setting.source == _config.SOURCE_DEFAULT:
+            continue
+        cfg[name] = setting.value
+        source[name] = label(setting)
     decider = _config.nearest_project_side(files)
     inherit = (_config.inherit_mode(decider.text) if decider is not None
                else _config.INHERIT_UMBRELLA)

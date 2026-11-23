@@ -19,7 +19,7 @@ from .vocab import (
 )
 from .plugin import _config, _journal_prefix, NO_COMMAND
 from .text import _clip, _one_line, _printable, _short_ts, _string_or_none
-from .project import _config_files, _config_label
+from .project import _config_files, _config_label, project_settings, require_setting
 from .store import _parse_ts, list_streams, read_events
 from .fold import _newest_string, fold_stream, is_work_stream
 from .append import append_event
@@ -331,23 +331,6 @@ def forge_from_url(url: Optional[str]) -> Optional[str]:
     return None
 
 
-def forge_from_config(value: Optional[str]) -> Optional[str]:
-    """The CLI a **Forge & tracker** ``Forge:`` value names (``GitHub — CLI: gh``), or
-    the one its forge implies; None for a placeholder or another forge."""
-    if not value or _config.is_placeholder_value(value.strip()):
-        return None
-    named = re.search(r"CLI:\s*`?([A-Za-z]+)", value)
-    if named:
-        cli = named.group(1).lower()
-        return cli if cli in ("gh", "glab") else None
-    lowered = value.lower()
-    if "github" in lowered:
-        return "gh"
-    if "gitlab" in lowered:
-        return "glab"
-    return None
-
-
 GH_PR_FIELDS = ("state,url,headRefName,headRefOid,baseRefName,mergedAt,mergeCommit,"
                 "isCrossRepository")
 # A sweep reads every PR/MR in one query: gh pages itself up to this many; glab reads
@@ -468,7 +451,6 @@ def closeout_rules(project_dir: Path, start: Optional[Path] = None) -> List[Clos
     return rules
 
 
-FORGE_SECTION = "forge & tracker"
 CLOSEOUT_HEADER = "Close-out"
 
 
@@ -480,16 +462,13 @@ _RECORDER_WORDS = frozenset(GATE_WORDS) | GENERAL_WORDS
 
 
 def configured_forge(project_dir: Path, start: Optional[Path] = None) -> Optional[str]:
-    """The forge CLI the nearest **Forge & tracker** section's ``Forge:`` bullet names.
-    The integration branch is never read from the config: the observe script reads it
-    from git (``base.txt``)."""
-    owner = _config.section_owner(_config_files(project_dir, start), FORGE_SECTION)
-    if owner is None:
-        return None
-    for key, value in _config.section_bullets(owner.text, FORGE_SECTION):
-        if key == "forge":
-            return forge_from_config(value)
-    return None
+    """The forge CLI the ``forge`` setting names (ADR 0028): ``gh``, ``glab``, or None
+    when it is unset. The resolver also reads a legacy **Forge & tracker** ``Forge:``
+    line. A value outside the set in a settings file is a UsageError (exit 2). The
+    integration branch is never read from the config: the observe script reads it from
+    git (``base.txt``)."""
+    forge = require_setting(project_settings(project_dir, start), "forge")
+    return _config.CLI_OF_FORGE.get(forge) if forge else None
 
 
 class CloseoutStep(TypedDict):
@@ -575,7 +554,9 @@ def build_closeout(
         raise InfraError(f"no events for stream {stream!r}")
     folded = fold_stream(events)
     pr = folded["pull_request"] or {}
-    forge = forge_from_url(pr.get("url")) or configured_forge(project_dir, start)
+    # Read before the URL: a bad setting stops every close-out, not only some.
+    configured = configured_forge(project_dir, start)
+    forge = forge_from_url(pr.get("url")) or configured
     facts = {"stream": stream, "branch": stream, "url": pr.get("url"),
              "project_dir": str(project_dir)}
     report_to = _newest_string(events, "report_to")

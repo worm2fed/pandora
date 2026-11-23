@@ -1613,6 +1613,7 @@ decisions    :
 rules that bind:
   - The repo's CLAUDE.md files load at session start and stay binding; this brief does not copy them.
   - Commit only when the user asks, and stage only the files you changed (implement: Committing).
+  Autonomy mode: executive (legacy .claude/shipgate.md ## Autonomy)
   Autonomy (.claude/shipgate.md):
     - Mode: executive
     - Extra escalations: publishing a release

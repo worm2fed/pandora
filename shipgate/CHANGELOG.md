@@ -2,6 +2,61 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.31.0 — the settings reader: a schema, one resolver and `journal.py config` (PR 1 of 3 for #60).
+
+**One resolver for every setting (#60, ADR 0028).** shipgate's settings are values from
+fixed sets: `autonomy`, `orchestration.review` and `.explore`, `writing_style`,
+`code_graph`, `code_signals`, `handoff`, `forge`, and the keys the settings file
+`.claude/shipgate.json` holds today. A new schema, `settings.schema.json`, names each
+setting with its type or set, its default, its scope and the release that added it. Its
+`x-version` is 2. `scripts/_config.py` resolves each setting per key, nearest first: the
+project settings file, a legacy line in a project `shipgate.md`, the user settings file
+`$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else `~/.claude/shipgate.settings.json`), a
+legacy line in the user `shipgate.md`, the default. Objects merge per leaf key. A
+`project`-scope key in the user settings file is ignored and reported.
+- No project needs to change. Today's config lines are legacy lines, and they resolve to
+  the values they gave before. A later release moves them into the settings files with
+  `/shipgate:setup` and sets the date until which they are still read.
+- No hook changes. The hooks still read only `db`, `artifact_homes` and `enforce` from
+  the project settings file, and they never read the user settings file.
+
+**`journal.py config [KEY ...] [--json] [--start DIR]`** prints each setting's value and
+its source, one line per key: `orchestration.review = workflow  (legacy
+.claude/shipgate.md ## Orchestration)`. A source is `project <path>`, `user <path>`,
+`legacy <path> ## <Section>` or `default`. A `KEY` can be a group (`orchestration`). The
+command needs no journal database. It exits 2 when a printed key holds a value outside its
+set in a settings file, or when a key is unknown, and 1 when a settings file is not a JSON
+object. Every other problem (an unknown key in a file, a project key in the user file, a
+newer version, a bad legacy line) is one warning on stderr, and the exit stays 0.
+
+**The readers moved onto the resolver.**
+- `signals.py` reads `code_signals` and `code_graph` through it. `config.source` in
+  `--json` gains the labels `shipgate.json` and `user settings` for a settings-file value.
+  A legacy value keeps `shipgate.md` or `user shipgate.md`.
+- `journal.py nudge` reads the handoff threshold through it, and `handoff` prints
+  `Autonomy mode: <value> (<source>)` above the quoted Autonomy section.
+- `closeout` and `sweep` read `forge` (`github` or `gitlab`) through it. The Forge prose of
+  the config still names the CLI.
+- `status`, `position`, `check` and the others read `ledger` and `artifact_homes` through
+  it, with the defaults from the schema. The values do not change.
+
+**Behaviour changes.**
+- A legacy `Code graph` value outside `auto`, `off` and `root` no longer stops
+  `signals.py` with a usage error. It is ignored, stderr names it, and the next layer
+  applies.
+- A value outside its set in a settings file stops `signals.py`, `journal.py config`,
+  `handoff`, `closeout` and `sweep` with exit 2. The message names the file, the key, the
+  value and the allowed values. The commands a hook runs (`status`, `nudge`, `append`)
+  use the default instead. A legacy line with a bad value never stops a command.
+- A value outside its set decides its key: the key takes its default, and a farther
+  layer never applies. A bad value in the user settings file never hides a valid project
+  value.
+- A settings file that is not a JSON object, or not UTF-8, is skipped. When a key that
+  `journal.py config`, `handoff`, `closeout` or `sweep` reads could have come from it,
+  the command stops with exit 1. `signals.py` names the file on stderr and goes on.
+- A missing or broken `settings.schema.json` is an incomplete install: the commands that
+  read a setting exit 1 and say so.
+
 v0.30.3 — the status brief clips its last three fields, and the SessionStart hook no longer stores the session.
 
 **Three fields of the brief were not clipped (#39).** A checkout is untrusted content: its

@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "shipgate settings",
+  "description": "The settings of .claude/shipgate.json (the project settings file) and $CLAUDE_CONFIG_DIR/shipgate.settings.json (the user settings file). scripts/_config.py reads this file and layers the settings per key (ADR 0028). x-scope project: read from the project settings file only. x-legacy: the shipgate.md section and bullet that still set the key until the grace date. A default of null on a key that is not nullable means the reader's built-in value.",
+  "type": "object",
+  "x-version": 2,
+  "x-legacy-until": null,
+  "properties": {
+    "version": {
+      "description": "The format of this file. A value above x-version is a warning, and the known keys are still read.",
+      "type": "integer",
+      "minimum": 1,
+      "default": 2,
+      "x-scope": "project",
+      "x-since": "0.22.0"
+    },
+    "db": {
+      "description": "The journal database, relative to the project root. null declares no journal.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "default": ".claude/shipgate.db",
+      "x-scope": "project",
+      "x-since": "0.8.0"
+    },
+    "ledger": {
+      "description": "The ledger file, relative to the project root.",
+      "type": "string",
+      "minLength": 1,
+      "default": "docs/ledger.md",
+      "x-scope": "project",
+      "x-since": "0.22.0"
+    },
+    "artifact_homes": {
+      "description": "A glob per artifact kind. A kind this file does not set keeps its default.",
+      "type": "object",
+      "properties": {
+        "prd": {
+          "type": "string",
+          "default": "docs/prd/*.md"
+        },
+        "adr": {
+          "type": "string",
+          "default": "docs/adr/*.md"
+        },
+        "worklog": {
+          "type": "string",
+          "default": "docs/prd/*.worklog.md"
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      },
+      "x-scope": "project",
+      "x-since": "0.8.0"
+    },
+    "enforce": {
+      "description": "The hooks' enforcement switches. Each is on unless it is false.",
+      "type": "object",
+      "properties": {
+        "stop_gate": {
+          "type": "boolean",
+          "default": true
+        },
+        "auto_capture": {
+          "type": "boolean",
+          "default": true
+        },
+        "command_gate": {
+          "type": "boolean",
+          "default": true,
+          "x-since": "0.28.0"
+        }
+      },
+      "x-scope": "project",
+      "x-since": "0.8.0"
+    },
+    "autonomy": {
+      "description": "Who answers routine gate questions: the user (ask) or the orchestrator (executive).",
+      "enum": [
+        "ask",
+        "executive"
+      ],
+      "default": "ask",
+      "x-scope": "any",
+      "x-since": "0.31.0",
+      "x-legacy": {
+        "section": "Autonomy",
+        "key": "Mode"
+      }
+    },
+    "orchestration": {
+      "description": "How the review and explore fans run.",
+      "type": "object",
+      "properties": {
+        "review": {
+          "enum": [
+            "agents",
+            "workflow"
+          ],
+          "default": "agents",
+          "x-legacy": {
+            "section": "Orchestration",
+            "key": "review"
+          }
+        },
+        "explore": {
+          "enum": [
+            "agents",
+            "workflow"
+          ],
+          "default": "agents",
+          "x-legacy": {
+            "section": "Orchestration",
+            "key": "explore"
+          }
+        }
+      },
+      "x-scope": "any",
+      "x-since": "0.31.0"
+    },
+    "writing_style": {
+      "description": "The prose style of the documents shipgate writes.",
+      "enum": [
+        "plain",
+        "ste-80"
+      ],
+      "default": "plain",
+      "x-scope": "any",
+      "x-since": "0.31.0",
+      "x-legacy": {
+        "section": "Writing style",
+        "key": "Docs"
+      }
+    },
+    "code_graph": {
+      "description": "The code graph: auto, off, or root (build it at the project root).",
+      "enum": [
+        "auto",
+        "off",
+        "root"
+      ],
+      "default": "auto",
+      "x-scope": "any",
+      "x-since": "0.31.0",
+      "x-legacy": {
+        "section": "Code tooling",
+        "key": "Code graph"
+      }
+    },
+    "code_signals": {
+      "description": "The git history window and filters of signals.py.",
+      "type": "object",
+      "properties": {
+        "window_months": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1200,
+          "default": 12,
+          "x-legacy": {
+            "section": "Code signals",
+            "key": "Window"
+          }
+        },
+        "fix_pattern": {
+          "type": "string",
+          "minLength": 1,
+          "x-format": "regex",
+          "default": null,
+          "x-legacy": {
+            "section": "Code signals",
+            "key": "Fix pattern"
+          }
+        },
+        "exclude": {
+          "description": "Globs added to the built-in excludes.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": [],
+          "x-legacy": {
+            "section": "Code signals",
+            "key": "Exclude"
+          }
+        },
+        "ranking_exclude": {
+          "description": "Globs that replace the built-in ranking excludes; [] turns them off.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": null,
+          "x-legacy": {
+            "section": "Code signals",
+            "key": "Ranking exclude"
+          }
+        }
+      },
+      "x-scope": "project",
+      "x-since": "0.31.0"
+    },
+    "handoff": {
+      "description": "The context size past which the PostToolUse hook suggests a fresh session: off, a token count, or a count with k or m.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "string",
+          "pattern": "^(off|[0-9]+(\\.[0-9]+)?\\s*[km]?)$"
+        }
+      ],
+      "default": "500k",
+      "x-scope": "any",
+      "x-since": "0.31.0",
+      "x-legacy": {
+        "section": "Session",
+        "key": "Handoff"
+      },
+      "x-allowed": "off, a token count such as 300000, or a count with k or m such as 500k"
+    },
+    "forge": {
+      "description": "The forge the close-out and the sweep ask: github (gh) or gitlab (glab). Unset: the host of the PR URL.",
+      "enum": [
+        "github",
+        "gitlab"
+      ],
+      "default": null,
+      "x-scope": "project",
+      "x-since": "0.31.0",
+      "x-legacy": {
+        "section": "Forge & tracker",
+        "key": "Forge"
+      }
+    }
+  }
+}

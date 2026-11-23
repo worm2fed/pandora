@@ -288,13 +288,30 @@ class TestCodeGraphConfig(SignalsCase):
                                   f"## Code tooling\n- Code graph: {value}\n")
                 self.assertEqual(self.graph(), ("auto", "default"))
 
-    def test_an_invalid_value_is_a_usage_error(self):
+    def test_an_invalid_value_is_named_and_the_next_layer_applies(self):
+        """ADR 0028: a legacy `Code graph` value outside auto, off, root no longer stops
+        the run; stderr names it and the next layer applies."""
         self.write_config(self.repo.path, "## Code tooling\n- Code graph: `sometimes`\n")
-        proc = self.signals("hotspots", "--repo", self.repo.path, "--json", rc=USAGE)
+        proc = self.signals("hotspots", "--repo", self.repo.path, "--json")
+        cfg = json.loads(proc.stdout)["config"]
+        self.assertEqual((cfg["code_graph"], cfg["source"]["code_graph"]),
+                         ("auto", "default"))
+        # The next layer here is the user settings file.
+        config_dir = self.umbrella.parent / "config-dir"
+        config_dir.mkdir()
+        (config_dir / "shipgate.settings.json").write_text('{"code_graph": "root"}',
+                                                           encoding="utf-8")
+        env = dict(hermetic_env(), CLAUDE_CONFIG_DIR=str(config_dir))
+        proc = self.signals("hotspots", "--repo", self.repo.path, "--json", env=env)
+        cfg = json.loads(proc.stdout)["config"]
+        self.assertEqual((cfg["code_graph"], cfg["source"]["code_graph"]),
+                         ("root", "user settings"))
+        self.assertTrue(proc.stderr.startswith("warning: "), proc.stderr)
+        self.assertIn(str(self.repo.path / ".claude" / "shipgate.md"), proc.stderr)
         self.assertIn("Code graph", proc.stderr)
         self.assertIn("sometimes", proc.stderr)
-        self.assertIn("auto, off or root", proc.stderr)
-        self.assertEqual(proc.stdout, "")
+        self.assertIn("auto, off, root", proc.stderr)
+        self.assertEqual(len(proc.stderr.strip().splitlines()), 1)
 
     def test_the_repo_config_beats_the_umbrella_config(self):
         self.write_config(self.umbrella, "## Code tooling\n- Code graph: `root`\n")
