@@ -10,6 +10,13 @@ Every section is **optional**. Delete what you don't need. An absent section fal
 the next layer below, and in the end to the default noted per section. Keep entries short
 and imperative. Each line here is an instruction the skills follow verbatim.
 
+**Settings live in the settings files, not here.** A setting is a value from a fixed set,
+such as `autonomy`, `writing_style` or `artifact_homes`. Settings live in
+`.claude/shipgate.json` (the project settings file) and in
+`$CLAUDE_CONFIG_DIR/shipgate.settings.json`, else `~/.claude/shipgate.settings.json` (the user
+settings file). `journal.py config` prints each one with its source, and the README's
+Configuration section lists them all. This file holds behaviour in words.
+
 **How the config files layer.** This header and the README's Configuration section are the
 two homes of the rule; every skill cites them. The layers, nearest first:
 
@@ -35,7 +42,7 @@ and the same in every project. The sections marked "Usually personal" below belo
 
 Division of labor with `CLAUDE.md`: the repo's `CLAUDE.md` files stay the source of truth
 for *routing and code conventions*: where code belongs, build and test commands. The config
-carries the *process tooling*: where artifacts live, which forge and tracker, branch naming,
+carries the *process tooling* in words: the knowledge stores, the tracker, branch naming,
 which integrations to reach for. Don't duplicate CLAUDE.md content here.
 
 Subagents don't read these files themselves. The dispatching skill pastes the relevant
@@ -49,89 +56,27 @@ README explain each section; a project's config does not repeat them.
 
 ## Knowledge base
 
-<!-- Default when absent: PRDs to docs/prd/, ADRs to docs/adr/, worklogs beside the PRD
-     as <name>.worklog.md — plain markdown committed to the repo; knowledge capture to
-     repo docs; no wiki. -->
+<!-- Default when absent: knowledge capture to repo docs; no wiki. The PRD, ADR and
+     worklog homes and the ledger path are settings (`artifact_homes`, `ledger`). -->
 
 - Stores: <one line per store: name — purpose — transport (MCP server name, or in-repo
   path) — who may write to it>
-- PRD home: <path, e.g. `docs/prd/` or a wiki path>
-- ADR home: <path>
-- Worklog home: <path — usually beside the PRD as `<name>.worklog.md`>
 - Page conventions: <frontmatter shape, filename rules, link style, where templates live>
 - Store-specific skills: <any project/vault skills to prefer for reading/writing the store>
-- Ledger: <path of the project's append-cheap staging inbox for mid-flow learnings.
-  Default when absent: `docs/ledger.md`. Optionally map project promotion targets by entry
-  type: destinations may be stores above, specific wiki pages, a repo CLAUDE.md, an ADR
-  home, or a skill's SKILL.md (e.g. a personal code-style skill). List project targets only.
-  The built-in promotion defaults in the `knowledge-base` skill cover the rest: personal
-  workflow preferences go to the harness's built-in memory, everything else is dropped, and
-  promoted and dropped entries are removed. The promotion target for preferences is usually
-  personal: it belongs in the user file>
-
-## Journal
-
-<!-- Default when absent: no journal — phase is inferred from artifact shape (checkbox
-     state, [NEEDS CLARIFICATION] markers) exactly as shipgate has always worked. This
-     section is written by `/shipgate:setup`; you rarely hand-write it. -->
-
-- Database: <path, e.g. `.claude/shipgate.db` — where the append-only flow journal lives>
-
-When this section is present the project is **journaled**, and three things change:
-
-- **Position is recorded, not guessed.** Phase transitions, gate decisions, verify
-  evidence, and review verdicts are appended as events; `feature` routes from the
-  journal alone. Artifact inference is not a fallback here — a missing event reads as
-  "still in the previous phase" until it is recorded.
-- **Recording is enforced by the plugin's hooks**, not by remembering: artifact writes are
-  auto-captured, and the Stop hook blocks a session from ending while an expected event is
-  missing.
-  The hooks read `.claude/shipgate.json` (a generated sidecar holding the database path,
-  the artifact-home globs, and the ledger path) — `setup` writes it; never hand-edit it,
-  re-run `setup` instead. If that sidecar is absent, every hook exits immediately and the project
-  behaves as un-journaled.
-- **The database is local, disposable state.** Gitignore it (`shipgate.db*`); the
-  artifacts in git or your wiki remain the portable record. Moving machines degrades to
-  un-journaled behavior unless you carry it over with `journal.py export` / `import`.
-  Never mount it into a container: the journal runs in SQLite's WAL mode, which needs
-  filesystem locks a bind mount doesn't provide, and because WAL is a property of the
-  file the breakage outlives the container (recover with `PRAGMA journal_mode=DELETE`
-  from the host). If a bot runs a shipgate phase, it runs it on the host.
-
-**The journal does not replace the ledger.** The ledger holds *prose learnings* mid-flow
-and is deliberately lossy — entries are promoted to a durable home or dropped at triage,
-then removed, so an empty ledger is the healthy steady state. The journal holds
-*operational state* and is never emptied. Triage still writes learnings to the stores
-above; the journal only records **that** it happened, as a `capture-done` event. Don't
-park a learning in the journal — it is machine-local and gitignored, so anything durable
-left there is lost to your teammates and to your next machine. The sidecar does carry the
-ledger's path, so `status` can report how many untriaged entries are waiting; that is the
-`knowledge-base` skill's ~15-entry nudge made mechanical, and it is information only —
-the ledger never gates a session.
-
-**Event names and payload shapes are a fixed vocabulary.** `journal.py vocab` lists the
-types, `vocab --shape <type>` prints the payload each one takes, and `append` refuses
-anything else — an event named something plausible-but-unlisted is inert: it records, and
-no gate or report ever reads it, which looks like success. Pass `--new-type` to mint a
-genuinely new concept on purpose. `journal.py doctor` reports any off-vocabulary events
-already in a journal.
-
-**One stream per issue, named for its branch** (`fix/1290-date-off-by-one`). An epic's
-children are separate branches and so separate streams; a stream carrying two issues has a
-phase, a gate history and a verdict that describe neither of them.
-
-Dial enforcement down by setting `enforce.stop_gate`, `enforce.auto_capture` or
-`enforce.command_gate` to false in the sidecar (all three default true). With
-`enforce.command_gate` false, a model commits, pushes and opens an MR/PR with no recorded
-go from the user; an unattended project, which has no user to answer, needs that. Run
-`journal.py doctor` when anything looks stale.
+- Promotion targets: <where triage sends ledger entries, by entry type: destinations may be
+  stores above, specific wiki pages, a repo CLAUDE.md, an ADR home, or a skill's SKILL.md
+  (e.g. a personal code-style skill). List project targets only. The built-in promotion
+  defaults in the `knowledge-base` skill cover the rest: personal workflow preferences go to
+  the harness's built-in memory, everything else is dropped, and promoted and dropped
+  entries are removed. The promotion target for preferences is usually personal: it belongs
+  in the user file>
 
 ## Forge & tracker
 
-<!-- Default when absent: detect from `git remote get-url origin` — github.com → gh + PRs,
-     gitlab → glab + MRs. Issue context read via whatever CLI/MCP is available. -->
+<!-- Default when absent: issue context read via whatever CLI/MCP is available. The forge
+     itself is the `forge` setting: `github` (gh, PRs) or `gitlab` (glab, MRs); unset, the
+     host of the PR/MR URL or of the git remote decides. -->
 
-- Forge: <GitHub | GitLab | …> — CLI: <gh | glab | …>
 - Issue tracker: <where issues live (may be a different repo/project than the code) and
   the MCP/CLI to read them with>
 - MR/PR template: <where the canonical template lives + the exact command to fetch it>
@@ -165,7 +110,7 @@ go from the user; an unattended project, which has no user to answer, needs that
     merged → resume the held work per its note; conflicts / failed CI → fix before review
     continues.
 - The watcher is strictly read-only. It suggests; the user triggers every resume.
-- Optional, when a **Journal** is configured: a watcher may append what it observes to
+- Optional, on a journaled project: a watcher may append what it observes to
   `watch/<project>!<iid>` streams via the plugin's `journal.py` (`baseline`,
   `pipeline-flip`, `comments-added`, `merge-status`, `conflicts`, `approved`, `merged`,
   `closed`). Watchers typically keep a single overwritten snapshot file, so a missed or
@@ -207,19 +152,6 @@ go from the user; an unattended project, which has no user to answer, needs that
   review adds a canon lens that loads it, and the journal records it as `style` on the
   implement and review phase entries>
 
-## Writing style
-
-<!-- Usually personal: belongs in the user file. -->
-
-<!-- Default when absent: plain — the documents shipgate writes into this repo and forge
-     (PRD, ADR, worklog, ledger lines, MR/PR body, tracker comments) keep the prose style
-     they have today. `ste-80` applies the same "Writing for people" rule the reports to
-     the person driving the flow already follow: sentences of about 20 words with one idea
-     each, common words, one term per concept, one action per step, every fact kept. A
-     <placeholder> counts as absent. -->
-
-- Docs: <plain | ste-80>
-
 ## Security-sensitive areas
 
 <!-- Default when absent: auth, secrets, payments — the built-in judgment. -->
@@ -254,9 +186,10 @@ go from the user; an unattended project, which has no user to answer, needs that
 
 <!-- Default when absent: library docs from a context7-style MCP (resolve a library id,
      then query its docs) when the session has one, else training knowledge / WebFetch; no
-     LSP preference (grep/read); code graph `auto`. The Library docs line is the personal
-     one. A project file that declares this section replaces the user file's section whole,
-     so repeat the Library docs line there when you add a project line. -->
+     LSP preference (grep/read). The code graph is the `code_graph` setting. The Library
+     docs line is the personal one. A project file that declares this section replaces the
+     user file's section whole, so repeat the Library docs line there when you add a
+     project line. -->
 
 - Library docs: <the docs tool/MCP to consult for a dependency's current API before
   hand-rolling around it or answering from memory. Leave it out to use a context7-style
@@ -265,27 +198,6 @@ go from the user; an unattended project, which has no user to answer, needs that
 - Code navigation: <the LSP tool, if one is configured for the language — prefer
   goToDefinition / findReferences / hover over grep-and-read for symbol work in typed
   code; note any workspace quirks (root, server version) here>
-- Code graph: <auto, off or root. Leave it out for auto: scripts/signals.py uses
-  codegraph when it is installed and builds the index once. off always uses the regex
-  scanner. root uses the index at the umbrella root and never builds it.>
-
-## Code signals
-
-<!-- Default when absent: 12-month window, the built-in fix pattern (conventional-commit fix
-     types + fix/bug/hotfix/revert/regression words), the built-in excludes (vendor,
-     node_modules, dist, build, lockfiles, generated), and the built-in ranking excludes
-     (**/CHANGELOG.md, **/.claude-plugin/plugin.json, .claude-plugin/marketplace.json).
-     Values must be in backticks; a <placeholder> counts as absent. A Ranking exclude
-     value replaces the built-in ranking excludes. An empty value (``) turns them off. -->
-
-The one section a script reads rather than the model: `scripts/signals.py` takes these four
-bullets' backticked values (command-line flags still win), so the terminal and the flow
-compute the same numbers.
-
-- Window: `<months, e.g. 18>`
-- Fix pattern: `<regex over the commit subject>`
-- Exclude: `<extra globs, comma-separated, e.g. generated/, *.snap>`
-- Ranking exclude: `<globs the ranking leaves out, comma-separated, e.g. **/CHANGELOG.md>`
 
 ## Worker guardrails
 
@@ -305,28 +217,6 @@ broken one. One imperative line per rule, no rationale, no grouping:
 - <e.g. "Refresh `<schema dump file>` only with `<one command>`; never edit it by hand">
 - <e.g. "Recreate the test database with `<one script>`; never migrate it in place">
 
-## Orchestration
-
-<!-- Default when absent: `agents` for both — the hand-driven Agent fan the skills have
-     always used. -->
-
-- review: <agents | workflow>
-- explore: <agents | workflow>
-
-`workflow` runs that phase's fan-out through the `Workflow` tool and a script bundled with
-the plugin: the fan becomes deterministic (fixed lenses, in-script dedupe) and the raw
-reviewer/explorer reports never land in the orchestrator's context — findings come back
-schema-typed and deduped across lenses, and the orchestrator reads only that return. Review
-additionally sends its top-severity findings to refuters that must cite the line disproving
-them (capped, and off for the rest); explore just runs its lenses in parallel and merges
-their essential files. Neither is cheaper than the `agents` path — the fan-out itself is the
-cost, and the gain is structure, dedupe and context hygiene. `agents` keeps every subagent's
-full report inline, which costs context but leaves all of the judgment in the orchestrator's context.
-
-Degradation is automatic and never blocks: when the `Workflow` tool is unavailable in the
-harness or the user refuses the call, the phase runs its `agents` path and records a
-`deviation` event. The fan still happens, just the old way.
-
 ## Thinking lenses
 
 <!-- Default when absent: no lens skills are invoked — the phase skills apply each
@@ -344,23 +234,10 @@ harness or the user refuses the call, the phase runs its `agents` path and recor
 
 <!-- Usually personal: belongs in the user file. -->
 
-<!-- Default when absent: `ask` — every gate question goes to the user, exactly the
-     skills' built-in behavior. `executive`: the orchestrator answers routine gate
-     questions itself, records them and escalates the rest, by the executive contract in
-     the `feature` skill. The contract is the plugin's, so this section never restates it.
-     Extra escalations add cases to it. -->
+<!-- Default when absent: no extra escalations. The mode is the `autonomy` setting: `ask`
+     (the default) sends every gate question to the user; `executive` lets the orchestrator
+     answer routine gate questions itself, record them and escalate the rest, by the
+     executive contract in the `feature` skill. The contract is the plugin's, so this
+     section never restates it. Extra escalations add cases to it. -->
 
-- Mode: <ask | executive>
 - Extra escalations: <decisions that must always go to the user, if any>
-
-## Session
-
-<!-- Usually personal: belongs in the user file. -->
-
-<!-- Default when absent: `Handoff: 500k`. After a design-committed append, and after a
-     not-ready review verdict, the PostToolUse hook reads this session's context size from
-     its transcript. Past the threshold it adds one line that recommends a fresh session
-     from the handoff brief (`journal.py handoff`). The value is a token count such as
-     `500k`, `1m` or `300000`, or `off`. -->
-
-- Handoff: <tokens, e.g. `500k` | off>

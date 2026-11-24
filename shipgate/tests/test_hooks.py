@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -5000,6 +5001,24 @@ class TestHostileSettingsFiles(CommandGateCase):
                               json.loads(started.stdout)["hookSpecificOutput"]
                               ["additionalContext"])
 
+    def test_the_brief_names_each_bad_key_once(self):
+        """SC-004, FR-006 (T054): a value outside its set keeps the project journaled and
+        every gate on, and the SessionStart brief names each bad key once, the keys the
+        hooks read too."""
+        write_settings(self.root, {**self.journaled, "autonomy": "exec",
+                                   "enforce": {"stop_gate": "no"}, "db": 5})
+        started = run_hook("session_start", {
+            "session_id": SESSION, "cwd": str(self.root), "source": "startup"}, self.root)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        context = json.loads(started.stdout)["hookSpecificOutput"]["additionalContext"]
+        for key, shown in (("autonomy", '"exec"'), ("enforce.stop_gate", '"no"'),
+                           ("db", "5")):
+            with self.subTest(key=key):
+                named = [line for line in context.splitlines() if f" {key} = " in line]
+                self.assertEqual(len(named), 1, context)
+                self.assertIn(f"{key} = {shown}", named[0])
+        self.assertEqual(json.loads(self.stop().stdout)["decision"], "block")
+
     def test_a_malformed_value_never_breaks_a_hook(self):
         for label, values in MALFORMED_VALUES.items():
             write_settings(self.root, {**self.journaled, **values})
@@ -5011,6 +5030,8 @@ class TestHostileSettingsFiles(CommandGateCase):
                     self.assertEqual(result.stderr, "")
 
     def test_an_unreadable_file_fails_open_quietly(self):
+        """Every hook but SessionStart prints nothing; SessionStart says it in one line
+        (T053, `TestAnUnreadableSettingsFileIsNamed`)."""
         rows = len(self.events())
         for label, text in UNREADABLE.items():
             write_settings(self.root, text)
@@ -5020,8 +5041,11 @@ class TestHostileSettingsFiles(CommandGateCase):
                     self.root, self.worklog, self.transcript).items():
                 with self.subTest(form=label, event=event):
                     result = run_hook(hook, payload, self.root)
-                    self.assertEqual((result.returncode, result.stdout, result.stderr),
-                                     (0, "", ""))
+                    self.assertEqual((result.returncode, result.stderr), (0, ""))
+                    if hook == "session_start":
+                        self.assertIn("cannot be read", result.stdout)
+                    else:
+                        self.assertEqual(result.stdout, "")
         self.assertEqual(len(self.events()), rows)
 
     def test_a_deeply_nested_file_never_breaks_a_hook(self):
@@ -5043,6 +5067,118 @@ class TestHostileSettingsFiles(CommandGateCase):
         if project is not None:
             self.assertEqual(json.loads(self.stop().stdout)["decision"], "block")
             self.assertHeld("git commit -m x", "commit")
+
+
+
+# T053 (#60, the user's decision of 2026-11-23): a project settings file the hooks cannot
+# read as a JSON object turns every gate off, as before, and SessionStart says so in one
+# line. The hooks stay fail-open; the line names the file and never its content.
+UNREADABLE_MARKS = ("not json", "db", chr(0xFEFF))
+
+
+class TestAnUnreadableSettingsFileIsNamed(unittest.TestCase):
+    """SessionStart prints one line for a settings file it cannot read; every hostile
+    form exits 0 with no traceback and adds no line."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name).resolve()
+        self.root = self.base / "proj"
+        (self.root / ".claude").mkdir(parents=True)
+        self.user_dir = self.base / "user"
+        self.user_dir.mkdir()
+
+    def start(self, root=None):
+        root = root or self.root
+        result = run_hook("session_start", {"session_id": SESSION, "cwd": str(root),
+                                            "source": "startup"}, root,
+                          env_extra={"CLAUDE_CONFIG_DIR": str(self.user_dir)})
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        return result
+
+    def context(self, root=None) -> str:
+        result = self.start(root)
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "SessionStart")
+        self.assertNotIn("watchPaths", output)
+        return output["additionalContext"]
+
+    def assert_the_line(self, context: str, path_tail: str = ".claude/shipgate.json"):
+        self.assertEqual(len(context.splitlines()), 1, context)
+        self.assertTrue(context.startswith("shipgate: the settings file "), context)
+        self.assertIn("cannot be read", context)
+        self.assertIn("the shipgate gates are off in this project", context)
+        self.assertIn("journal.py doctor", context)
+        self.assertIn(path_tail, context)
+        self.assertTrue(context.isprintable(), repr(context))
+
+    def test_each_unreadable_form_is_one_line_without_its_content(self):
+        for label, text in UNREADABLE.items():
+            with self.subTest(form=label):
+                write_settings(self.root, text)
+                context = self.context()
+                self.assert_the_line(context)
+                after_path = context.split("shipgate.json", 1)[1]
+                for mark in UNREADABLE_MARKS:
+                    self.assertNotIn(mark, after_path)
+        self.assertEqual(sorted(p.name for p in (self.root / ".claude").iterdir()),
+                         ["shipgate.json"])
+        self.assertEqual(list(self.user_dir.iterdir()), [])
+
+    def test_a_readable_file_prints_no_line(self):
+        write_settings(self.root, {"version": 2, "db": None, "autonomy": "exec"})
+        self.assertEqual(self.start().stdout, "")
+        (self.root / ".claude" / "shipgate.json").unlink()
+        self.assertEqual(self.start().stdout, "")
+
+    def test_a_path_with_line_breaks_stays_on_one_line(self):
+        root = self.base / ("a" + chr(10) + "FORGED line" + chr(13) + "b" + chr(0x2028)
+                            + "c" + chr(27) + "[31m")
+        (root / ".claude").mkdir(parents=True)
+        write_settings(root, "{not json")
+        context = self.context(root)
+        self.assert_the_line(context)
+        self.assertFalse(any(line.startswith("FORGED") for line in context.splitlines()))
+
+    def test_an_over_long_path_is_clipped(self):
+        root = self.base
+        for index in range(12):
+            root = root / (chr(ord("a") + index) * 60)
+        (root / ".claude").mkdir(parents=True)
+        write_settings(root, "{not json")
+        context = self.context(root)
+        self.assert_the_line(context)
+        self.assertLess(len(context), 400)
+
+    def test_a_huge_file_is_one_line(self):
+        write_settings(self.root, "{" + '"db": "' + "x" * (8 * 1024 * 1024))
+        context = self.context()
+        self.assert_the_line(context)
+        self.assertLess(len(context), 400)
+
+    def test_a_fifo_or_a_directory_is_no_settings_file(self):
+        """The walk finds only a regular file, so neither marks a project, and the hook
+        never opens a FIFO (an open would block)."""
+        path = self.root / ".claude" / "shipgate.json"
+        path.mkdir()
+        self.assertEqual(self.start().stdout, "")
+        path.rmdir()
+        os.mkfifo(str(path))
+        started = time.monotonic()
+        self.assertEqual(self.start().stdout, "")
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_a_deeply_nested_file(self):
+        """3.9's json gives up: the line. A newer json reads it: a journaled project
+        whose journal is missing, so the failed-journal notice. Never a traceback."""
+        write_settings(self.root, DEEPLY_NESTED)
+        result = self.start()
+        context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        if context.startswith("shipgate: the settings file "):
+            self.assert_the_line(context)
+        else:
+            self.assertIn("reading it failed", context)
 
 
 if __name__ == "__main__":

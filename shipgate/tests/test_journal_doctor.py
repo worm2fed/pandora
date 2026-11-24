@@ -150,289 +150,201 @@ class TestDoctor(JournalTestCase):
         proc = self.journal("--db", self.db, "doctor", "--json", rc=OK)
         self.assertEqual(json.loads(proc.stdout)["sidecar"]["version"], "2")
 
-    # -- the config's Knowledge base against the sidecar (FR-014) ---------
+    # -- the settings report (#60, ADR 0028 D1; PRD FR-012) ---------------
+    # The config-against-sidecar drift check is gone: with one home per setting there
+    # is nothing to compare. The `settings` block names what `setup` must fix.
 
-    def write_config(self, *bullets):
-        text = "# shipgate configuration\n\n## Knowledge base\n\n"
-        text += "".join(f"- {bullet}\n" for bullet in bullets)
-        text += "\n## Journal\n\n- Database: `.claude/shipgate.db`\n"
-        self.write(".claude/shipgate.md", text)
+    def settings_report(self, *extra):
+        proc = self.journal("--db", self.db, "doctor", "--json", *extra, rc=OK)
+        return json.loads(proc.stdout)["settings"]
 
-    def doctor_config(self):
-        proc = self.journal("--db", self.db, "doctor", "--json", rc=OK)
-        return json.loads(proc.stdout)["config"]
+    def isolate_user_dir(self):
+        from unittest import mock
 
-    def test_a_ledger_the_config_names_and_the_sidecar_lacks_is_drift(self):
-        """The case seen in 3 of 7 sidecars: `status` then counts the default ledger."""
-        self.write_sidecar({"version": 1, "db": str(self.db)})
-        self.write_config("Ledger: `notes/ledger.md` (repo root). Promotion targets: drop.")
-        config = self.doctor_config()
-        self.assertTrue(config["found"])
-        self.assertEqual(
-            config["path"], str(self.root.resolve() / ".claude" / "shipgate.md")
-        )
-        self.assertEqual(config["ledger"], {
-            "config": "notes/ledger.md",
-            "sidecar": None,
-            "drift": "config names ledger `notes/ledger.md`; the sidecar has no ledger key",
-        })
-        self.assertEqual(config["drift"], [config["ledger"]["drift"]])
+        user = self.root / "user-config"
+        user.mkdir(exist_ok=True)
+        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(user)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return user
 
-    def test_a_ledger_that_differs_is_drift(self):
-        self.write_sidecar({"version": 1, "db": str(self.db), "ledger": "docs/ledger.md"})
-        self.write_config("Ledger: `notes/ledger.md`")
-        ledger = self.doctor_config()["ledger"]
-        self.assertEqual(ledger["sidecar"], "docs/ledger.md")
-        self.assertEqual(
-            ledger["drift"],
-            "ledger differs: config `notes/ledger.md`, sidecar `docs/ledger.md`",
-        )
+    def test_the_drift_block_is_gone(self):
+        self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db)})
+        self.write(".claude/shipgate.md",
+                   "## Knowledge base\n\n- Ledger: `notes/ledger.md`\n")
+        report = json.loads(
+            self.journal("--db", self.db, "doctor", "--json", rc=OK).stdout)
+        self.assertNotIn("config", report)
+        self.assertEqual(set(report["settings"]),
+                         {"problems", "legacy", "nested_files", "grace"})
+        text = self.journal("--db", self.db, "doctor", rc=OK).stdout
+        self.assertNotIn("drift", text)
+        self.assertNotIn("config          :", text)
 
-    def test_a_ledger_that_differs_only_by_a_dot_slash_agrees(self):
-        self.write_sidecar({"version": 1, "db": str(self.db), "ledger": "docs/ledger.md"})
-        self.write_config("Ledger: `./docs/ledger.md`")
-        config = self.doctor_config()
-        self.assertIsNone(config["ledger"]["drift"])
-        self.assertEqual(config["drift"], [])
+    def test_each_problem_is_named(self):
+        user = self.isolate_user_dir()
+        self.write_sidecar({"version": 3, "db": str(self.db), "autonomy": "exec",
+                            "publish_quiz": True})
+        (user / "shipgate.settings.json").write_text(
+            json.dumps({"forge": "github"}), encoding="utf-8")
+        self.write(".claude/shipgate.md", "## Code tooling\n\n- Code graph: `fast`\n")
+        problems = self.settings_report()["problems"]
+        kinds = sorted((p["kind"], p["key"]) for p in problems)
+        self.assertEqual(kinds, [
+            ("bad-legacy", "code_graph"), ("bad-value", "autonomy"),
+            ("scope", "forge"), ("unknown-key", "publish_quiz"), ("version", "version"),
+        ])
+        for problem in problems:
+            self.assertEqual(set(problem), {"kind", "path", "key", "value", "message"})
+        bad = next(p for p in problems if p["kind"] == "bad-value")
+        self.assertIn('autonomy = "exec" is not one of: ask, executive', bad["message"])
 
-    def test_a_sidecar_ledger_the_config_does_not_name_is_drift(self):
-        """Only off the default: a sidecar naming `docs/ledger.md` says what absence says."""
-        self.write_sidecar({"version": 1, "db": str(self.db), "ledger": "notes/ledger.md"})
-        self.write_config("PRD home: `docs/prd/`")
-        config = self.doctor_config()
-        self.assertEqual(config["section"], "present")
-        ledger = config["ledger"]
-        self.assertIsNone(ledger["config"])
-        self.assertEqual(
-            ledger["drift"],
-            "sidecar names ledger `notes/ledger.md`; the config names none "
-            "(default docs/ledger.md)",
-        )
-        self.write_sidecar({"version": 1, "db": str(self.db), "ledger": "docs/ledger.md"})
-        self.assertIsNone(self.doctor_config()["ledger"]["drift"])
+    def test_an_unreadable_user_settings_file_is_a_problem(self):
+        user = self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db)})
+        (user / "shipgate.settings.json").write_text("{oops", encoding="utf-8")
+        problems = self.settings_report()["problems"]
+        self.assertEqual([p["kind"] for p in problems], ["not-json"])
 
-    def test_a_home_whose_directory_differs_is_drift(self):
-        self.write_sidecar({
-            "version": 1, "db": str(self.db),
-            "artifact_homes": {"prd": "src/docs/prd/*.md"},
-        })
-        self.write_config("PRD home: `docs/prd/`", "ADR home: `design/adr/`")
-        config = self.doctor_config()
-        self.assertEqual(config["homes"]["prd"], {
-            "config": "docs/prd/",
-            "sidecar": "src/docs/prd/*.md",
-            "compared": True,
-            "drift": "prd home differs: config `docs/prd/`, sidecar glob `src/docs/prd/*.md`",
-        })
-        # A home the sidecar does not name is compared with the default glob.
-        self.assertEqual(config["homes"]["adr"]["sidecar"], None)
-        self.assertEqual(
-            config["homes"]["adr"]["drift"],
-            "adr home differs: config `design/adr/`, sidecar glob `docs/adr/*.md`",
-        )
-        self.assertEqual(config["drift"], [
-            config["homes"]["prd"]["drift"], config["homes"]["adr"]["drift"],
+    def test_each_legacy_line_is_listed(self):
+        user = self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db)})
+        self.write(".claude/shipgate.md",
+                   "## Autonomy\n\n- Mode: executive\n- Extra escalations: none\n\n"
+                   "## Orchestration\n\n- review: workflow\n")
+        (user / "shipgate.md").write_text("## Writing style\n\n- Docs: ste-80\n",
+                                          encoding="utf-8")
+        nested = self.root / "svc"
+        (nested / ".git").mkdir(parents=True)
+        self.write("svc/.claude/shipgate.md", "## Code tooling\n\n- Code graph: `off`\n")
+        legacy = self.settings_report()["legacy"]
+        rows = sorted((Path(r["path"]).relative_to(self.root.resolve()).as_posix()
+                       if r["path"].startswith(str(self.root.resolve())) else "user",
+                       r["section"], r["bullet"], r["key"], r["value"]) for r in legacy)
+        self.assertEqual(rows, [
+            (".claude/shipgate.md", "Autonomy", "Mode", "autonomy", "executive"),
+            (".claude/shipgate.md", "Orchestration", "review", "orchestration.review",
+             "workflow"),
+            ("svc/.claude/shipgate.md", "Code tooling", "Code graph", "code_graph",
+             "`off`"),
+            ("user", "Writing style", "Docs", "writing_style", "ste-80"),
         ])
 
-    def test_a_config_and_sidecar_that_agree_have_no_drift(self):
-        """A `<plugin>` segment reads as the glob's `*`; a trailing `/` is no difference."""
-        self.write_sidecar({
-            "version": 1, "db": str(self.db), "ledger": "docs/ledger.md",
-            "artifact_homes": {
-                "prd": "*/docs/prd/*.md", "adr": "docs/adr/*.md",
-                "worklog": "*/docs/prd/*.worklog.md",
-            },
-        })
-        self.write_config(
-            "PRD home: `<plugin>/docs/prd/` — artifacts live with the plugin.",
-            "ADR home: `docs/adr/` — sequential `NNNN-<title>.md`.",
-            "Worklog home: `<plugin>/docs/prd`",
-            "Ledger: `docs/ledger.md` (repo root, shared across plugins).",
-        )
-        config = self.doctor_config()
-        self.assertEqual(config["drift"], [])
-        self.assertIsNone(config["ledger"]["drift"])
-        for key in ("prd", "adr", "worklog"):
-            self.assertTrue(config["homes"][key]["compared"], msg=key)
-            self.assertIsNone(config["homes"][key]["drift"], msg=key)
-        self.assertEqual(config["homes"]["prd"]["config"], "<plugin>/docs/prd/")
+    def test_a_settings_file_below_the_project_root_is_named(self):
+        self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db)})
+        nested = self.root / "packages" / "web"
+        (nested / ".git").mkdir(parents=True)
+        self.write("packages/web/.claude/shipgate.json", json.dumps({"version": 2}))
+        self.assertEqual(self.settings_report()["nested_files"],
+                         [str(self.root.resolve() / "packages/web/.claude/shipgate.json")])
 
-    def test_a_home_written_as_prose_is_not_compared(self):
-        """`<name>.worklog.md` names a file pattern, not a directory: nothing to compare."""
-        self.write_sidecar({
-            "version": 1, "db": str(self.db),
-            "artifact_homes": {"worklog": "src/docs/prd/*.worklog.md"},
-        })
-        self.write_config("Worklog home: beside the PRD as `<name>.worklog.md`.")
-        config = self.doctor_config()
-        worklog = config["homes"]["worklog"]
-        self.assertFalse(worklog["compared"])
-        self.assertIsNone(worklog["drift"])
-        self.assertEqual(worklog["sidecar"], "src/docs/prd/*.worklog.md")
-        # An absent value is not compared either.
-        self.assertFalse(config["homes"]["prd"]["compared"])
-        self.assertIsNone(config["homes"]["prd"]["config"])
-        self.assertEqual(config["drift"], [])
+    def test_the_grace_date(self):
+        self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db)})
+        schema = json.loads((Path(__file__).resolve().parent.parent
+                             / "settings.schema.json").read_text(encoding="utf-8"))
+        grace = self.settings_report()["grace"]
+        self.assertEqual(grace["until"], schema["x-legacy-until"])
+        self.assertIsInstance(grace["ended"], bool)
 
-    def test_a_missing_config_file_is_reported_as_not_found(self):
-        """The block keeps one shape whether the file exists or not."""
-        self.write_sidecar({"version": 1, "db": str(self.db), "ledger": "notes/ledger.md"})
-        config = self.doctor_config()
-        path = self.root.resolve() / ".claude" / "shipgate.md"
-        empty_home = {"config": None, "sidecar": None, "compared": False, "drift": None}
-        self.assertEqual(config, {
-            "found": False,
-            "path": str(path),
-            "inherit": None,
-            "section": "absent",
-            "ledger": {"config": None, "sidecar": None, "drift": None},
-            "homes": {"prd": empty_home, "adr": empty_home, "worklog": empty_home},
-            "drift": [],
-        })
+    def test_the_text_form(self):
+        user = self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db), "autonomy": "exec"})
+        self.write(".claude/shipgate.md", "## Orchestration\n\n- review: workflow\n")
+        (user / "shipgate.md").write_text("## Writing style\n\n- Docs: ste-80\n",
+                                          encoding="utf-8")
+        lines = self.journal("--db", self.db, "doctor", rc=OK).stdout.splitlines()
+        head = [line for line in lines if line.startswith("settings        :")]
+        self.assertEqual(len(head), 1, lines)
+        self.assertIn("1 problem, 2 legacy lines, 0 nested settings files", head[0])
+        problem = [line for line in lines if line.startswith("problem         :")]
+        self.assertEqual(len(problem), 1)
+        self.assertIn('autonomy = "exec"', problem[0])
+        legacy = [line for line in lines if line.startswith("legacy line     :")]
+        self.assertEqual(len(legacy), 2)
+        self.assertIn(".claude/shipgate.md ## Orchestration review: workflow",
+                      "\n".join(legacy))
+
+    def test_the_text_form_shows_no_character_that_does_not_print(self):
+        """A checkout writes the legacy values and the keys: each `doctor` line stays one
+        line, and an escape or a line break from the file shows as `?` or a space."""
+        self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db),
+                            "artifact_homes": {"evil" + chr(27) + "[31m": 3},
+                            "x" + chr(7) + chr(27) + "[31m": True})
+        self.write(".claude/shipgate.md",
+                   "## Orchestration\n\n- review: `workflow`" + chr(27) + "[2J\n")
         text = self.journal("--db", self.db, "doctor", rc=OK).stdout
-        self.assertIn(f"config          : {path} — not found", text.splitlines())
-        self.assertNotIn("drift           :", text)
+        self.assertNotIn(chr(27), text)
+        self.assertNotIn(chr(7), text)
+        for line in text.splitlines():
+            if line.startswith(("problem", "legacy line", "stray keys", "sidecar")):
+                self.assertTrue(line.isprintable(), repr(line))
 
-    def test_a_knowledge_base_another_layer_owns_is_no_drift(self):
-        """ADR 0018: with no `## Knowledge base` in the project file, the umbrella's or
-        the user's file supplies it, and the sidecar mirrors that value."""
-        self.write_sidecar({
-            "version": 1, "db": str(self.db), "ledger": "notes/ledger.md",
-            "artifact_homes": {"prd": "src/docs/prd/*.md"},
-        })
-        self.write(
-            ".claude/shipgate.md",
-            "# shipgate configuration\n\n## Journal\n\n- Database: `.claude/shipgate.db`\n",
-        )
-        config = self.doctor_config()
-        self.assertTrue(config["found"])
-        self.assertEqual(config["section"], "absent")
-        self.assertEqual(config["ledger"], {
-            "config": None, "sidecar": "notes/ledger.md", "drift": None,
-        })
-        self.assertEqual(config["homes"]["prd"], {
-            "config": None, "sidecar": "src/docs/prd/*.md", "compared": False, "drift": None,
-        })
-        self.assertEqual(config["drift"], [])
-        text = self.journal("--db", self.db, "doctor", rc=OK).stdout
-        path = self.root.resolve() / ".claude" / "shipgate.md"
-        self.assertIn(
-            f"config          : {path} — no Knowledge base section", text.splitlines()
-        )
-        self.assertNotIn(f"config          : {path} — agrees", text.splitlines())
-
-    def test_a_knowledge_base_of_placeholders_only_is_absent(self):
-        """A section copied from the template and left unfilled names nothing."""
-        self.write_sidecar({"version": 1, "db": str(self.db), "ledger": "notes/ledger.md"})
-        self.write_config("PRD home: <path, e.g. `docs/prd/`>", "Ledger: <path>")
-        config = self.doctor_config()
-        self.assertEqual(config["section"], "absent")
-        self.assertIsNone(config["ledger"]["config"])
-        self.assertFalse(config["homes"]["prd"]["compared"])
-        self.assertEqual(config["drift"], [])
-
-    def test_a_recursive_sidecar_glob_compares_as_its_root_directory(self):
-        """`docs/prd/**/*.md` is a deliberate glob over subfolders, not a different home."""
-        self.write_sidecar({
-            "version": 1, "db": str(self.db),
-            "artifact_homes": {
-                "prd": "docs/prd/**/*.md", "adr": "*/docs/adr/**/**/*.md",
-            },
-        })
-        self.write_config("PRD home: `docs/prd/`", "ADR home: `<plugin>/docs/adr/`")
-        config = self.doctor_config()
-        for key in ("prd", "adr"):
-            self.assertTrue(config["homes"][key]["compared"], msg=key)
-            self.assertIsNone(config["homes"][key]["drift"], msg=key)
-        self.assertEqual(config["drift"], [])
-
-    def test_without_a_sidecar_the_config_values_are_reported_without_drift(self):
-        self.write_config("Ledger: `notes/ledger.md`", "PRD home: `src/docs/prd/`")
-        config = self.doctor_config()
-        self.assertTrue(config["found"])
-        self.assertEqual(config["inherit"], "umbrella")
-        self.assertEqual(config["ledger"], {
-            "config": "notes/ledger.md", "sidecar": None, "drift": None,
-        })
-        self.assertEqual(config["homes"]["prd"], {
-            "config": "src/docs/prd/", "sidecar": None, "compared": False, "drift": None,
-        })
-        for key in ("adr", "worklog"):
-            self.assertIsNone(config["homes"][key]["sidecar"], msg=key)
-            self.assertFalse(config["homes"][key]["compared"], msg=key)
-        self.assertEqual(config["drift"], [])
-        text = self.journal("--db", self.db, "doctor", rc=OK).stdout
-        path = self.root.resolve() / ".claude" / "shipgate.md"
-        self.assertIn(f"config          : {path} — no sidecar to compare", text.splitlines())
-        self.assertNotIn(f"config          : {path} — agrees", text.splitlines())
-
-    def test_the_inherit_mode_is_reported(self):
-        self.write_sidecar({"version": 1, "db": str(self.db)})
-        self.write(
-            ".claude/shipgate.md",
-            "# shipgate configuration\n\n- Inherit: `none`\n\n## Knowledge base\n\n",
-        )
-        self.assertEqual(self.doctor_config()["inherit"], "none")
-        self.write(".claude/shipgate.md", "# shipgate configuration\n")
-        self.assertEqual(self.doctor_config()["inherit"], "umbrella")
-
-    def test_the_text_form_carries_one_line_per_drift(self):
-        self.write_sidecar({
-            "version": 1, "db": str(self.db),
-            "artifact_homes": {"prd": "src/docs/prd/*.md"},
-        })
-        self.write_config("Ledger: `notes/ledger.md`", "PRD home: `docs/prd/`")
-        proc = self.journal("--db", self.db, "doctor", rc=OK)
-        path = self.root.resolve() / ".claude" / "shipgate.md"
-        lines = proc.stdout.splitlines()
-        self.assertIn(f"config          : {path} — DRIFT (2)", lines)
-        self.assertEqual(
-            [line for line in lines if line.startswith("drift           : ")],
-            [
-                "drift           : config names ledger `notes/ledger.md`; "
-                "the sidecar has no ledger key",
-                "drift           : prd home differs: config `docs/prd/`, "
-                "sidecar glob `src/docs/prd/*.md`",
-            ],
-        )
-        # The config line follows the sidecar lines.
-        self.assertGreater(
-            lines.index(f"config          : {path} — DRIFT (2)"),
-            next(i for i, line in enumerate(lines) if line.startswith("stray keys      :")),
-        )
-
-    def test_the_text_form_says_agrees_without_drift(self):
-        self.write_sidecar({"version": 1, "db": str(self.db), "ledger": "docs/ledger.md"})
-        self.write_config("Ledger: `docs/ledger.md`", "PRD home: `docs/prd/`")
-        proc = self.journal("--db", self.db, "doctor", rc=OK)
-        path = self.root.resolve() / ".claude" / "shipgate.md"
-        self.assertIn(f"config          : {path} — agrees", proc.stdout.splitlines())
-        self.assertNotIn("drift           :", proc.stdout)
-
-    def test_drift_leaves_the_exit_code_alone(self):
-        """Drift is information for `setup`'s update mode, not a doctor failure."""
-        self.write_sidecar({"version": 1, "db": str(self.db)})
-        self.write_config("Ledger: `notes/ledger.md`")
+    def test_settings_problems_leave_the_exit_code_alone(self):
+        self.isolate_user_dir()
+        self.write_sidecar({"version": 2, "db": str(self.db), "autonomy": "exec"})
         self.journal("--db", self.db, "doctor", rc=OK)
         self.journal("--db", self.db, "doctor", "--json", rc=OK)
 
+    def test_a_missing_schema_leaves_the_settings_block_empty(self):
+        import shutil
+
+        plugin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(plugin), True)
+        shipgate = Path(__file__).resolve().parent.parent
+        for part in ("scripts", "hooks"):
+            shutil.copytree(shipgate / part, plugin / part,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        self.write_sidecar({"version": 2, "db": str(self.db)})
+        proc = subprocess.run(
+            [sys.executable, str(plugin / "scripts" / "journal.py"), "--db",
+             str(self.db), "doctor", "--json"],
+            capture_output=True, text=True, cwd=str(self.root), timeout=60)
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        self.assertIsNone(json.loads(proc.stdout)["settings"])
+
     def test_the_json_keeps_every_existing_key(self):
+        self.isolate_user_dir()
         self.write_sidecar({"version": 1, "db": str(self.db)})
-        self.write_config("Ledger: `notes/ledger.md`")
         report = json.loads(
             self.journal("--db", self.db, "doctor", "--json", rc=OK).stdout
         )
         for key in (
             "db", "db_source", "integrity_check", "off_vocabulary", "journal_mode",
-            "schema_version", "pending_migrations", "events", "sidecar",
+            "schema_version", "pending_migrations", "events", "sidecar", "settings",
         ):
             self.assertIn(key, report)
         self.assertEqual(
             set(report["sidecar"]),
             {"found", "path", "db", "agrees", "version", "stray_keys"},
         )
-        self.assertIn("config", report)
 
+
+class TestAnUnreadableSettingsFile(JournalTestCase):
+    """T053 points the user at `journal.py doctor` for a settings file the hooks cannot
+    read. Each form exits 1 with a one-line error that names the file; none prints a
+    traceback."""
+
+    FORMS = {
+        "not JSON": b"{not json",
+        "not an object": b"[1]",
+        "not UTF-8": b'{"db": "x\xff"}',
+        "a byte order mark": b'\xef\xbb\xbf{"db": ".claude/shipgate.db"}',
+    }
+
+    def test_each_form_is_one_error_line(self):
+        (self.root / ".claude").mkdir()
+        path = self.root / ".claude" / "shipgate.json"
+        for label, raw in self.FORMS.items():
+            with self.subTest(form=label):
+                path.write_bytes(raw)
+                proc = self.journal("doctor", rc=1)
+                self.assertNotIn("Traceback", proc.stderr)
+                self.assertEqual(len(proc.stderr.strip().splitlines()), 1, proc.stderr)
+                self.assertIn("shipgate.json", proc.stderr)
 
 # ---------------------------------------------------------------------------
 # ledger visibility
@@ -617,11 +529,31 @@ class TestStats(JournalTestCase):
         self.decide()
         # `--all`: plain `status` prints no unbound stream since #31 (ADR 0024).
         rendered = self.journal("--db", self.db, "status", "--all", rc=OK).stdout
+        # The settings lines (#60) belong to the brief, not to the stream's block.
+        block = "\n".join(line for line in rendered.rstrip("\n").splitlines()
+                          if not line.startswith("settings:")).rstrip("\n")
         row = self.row()
-        self.assertEqual(
-            row["stream_render_bytes"], len(rendered.rstrip("\n").encode())
-        )
+        self.assertEqual(row["stream_render_bytes"], len(block.encode()))
         self.assertNotIn("brief_bytes", row)
+
+    def test_stats_runs_without_the_schema(self):
+        """An incomplete install: `stats` printed its counts before the settings lines
+        joined the brief, and still does; `brief_bytes` then leaves them out."""
+        import shutil
+
+        plugin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(plugin), True)
+        shipgate = Path(__file__).resolve().parent.parent
+        for part in ("scripts", "hooks"):
+            shutil.copytree(shipgate / part, plugin / part,
+                            ignore=shutil.ignore_patterns("__pycache__"))
+        self.append_event("feature/x", "flow-started", {"request": "build it"})
+        proc = subprocess.run(
+            [sys.executable, str(plugin / "scripts" / "journal.py"), "--db", str(self.db),
+             "stats", "--json"],
+            capture_output=True, text=True, cwd=str(self.root), timeout=60)
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        self.assertIn("brief_bytes", json.loads(proc.stdout)["totals"])
 
     def test_since_drops_older_events(self):
         self.append_event("feature/x", "deviation", {"note": "old"})

@@ -361,8 +361,10 @@ def _settings_at(root):
     try:
         with open(os.path.join(root, SIDECAR_RELPATH), encoding="utf-8") as handle:
             sidecar, strict = parse_sidecar(handle.read())
-    except (OSError, ValueError):
-        return None, True  # A corrupt sidecar disables hooks; it never crashes a session.
+    except (OSError, ValueError, RecursionError):
+        # A corrupt file disables the hooks; it never crashes a session. RecursionError:
+        # nesting deeper than this Python's json reads.
+        return None, True
     return (sidecar, strict) if isinstance(sidecar, dict) else (None, True)
 
 
@@ -384,6 +386,17 @@ def declares_no_journal(sidecar, strict):
             and sidecar["db"] is None)
 
 
+def _project_at(root):
+    """`(project, unreadable)` for the settings file at `root`: the journaled project,
+    else None; and the file's path when the hooks cannot read it as a JSON object."""
+    sidecar, strict = _settings_at(root)
+    if sidecar is None:
+        return None, os.path.join(root, SIDECAR_RELPATH)
+    if declares_no_journal(sidecar, strict):
+        return None, None
+    return Project(root=root, sidecar=sidecar), None
+
+
 def load_project(root):
     """The journaled project whose settings file sits at `root`, or None.
 
@@ -391,15 +404,21 @@ def load_project(root):
     (`"db": null`): the file still marks the project root, so the walk stops here, and
     every hook acts as in a project with no settings file.
     """
-    sidecar, strict = _settings_at(root)
-    if sidecar is None or declares_no_journal(sidecar, strict):
-        return None
-    return Project(root=root, sidecar=sidecar)
+    return _project_at(root)[0]
 
 
 def find_project(*candidates):
     root = journaled_root(*candidates)
     return load_project(root) if root else None
+
+
+def _payload_root(payload):
+    """The project root of a hook payload: the walk from its cwd, else (a malformed
+    payload) from the ambient directories. `resolve_project` says why."""
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    if isinstance(cwd, str) and cwd:
+        return journaled_root(cwd)
+    return journaled_root(os.environ.get("CLAUDE_PROJECT_DIR"), os.getcwd())
 
 
 def resolve_project(payload):
@@ -411,10 +430,17 @@ def resolve_project(payload):
     happens to be an ancestor of the hook process. Only a missing or non-string cwd
     falls back — that is a malformed payload, not a session saying "not here".
     """
-    cwd = payload.get("cwd") if isinstance(payload, dict) else None
-    if isinstance(cwd, str) and cwd:
-        return find_project(cwd)
-    return find_project(os.environ.get("CLAUDE_PROJECT_DIR"), os.getcwd())
+    return resolve_project_or_unreadable(payload)[0]
+
+
+def resolve_project_or_unreadable(payload):
+    """`(project, unreadable)`: `resolve_project`'s project, and, when there is none
+    because the hooks cannot read the settings file at the root as a JSON object, that
+    file's path (the hooks fail open, so every gate is off). One read of the file."""
+    root = _payload_root(payload)
+    if root is None:
+        return None, None
+    return _project_at(root)
 
 
 def watch_paths(project):

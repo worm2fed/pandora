@@ -144,12 +144,12 @@ worklog: "./structured-money-totals.worklog.md"
 EOF_F
 cat > .claude/shipgate.md <<'EOF_F'
 # shipgate — project config
-
-## Knowledge base
-- PRD home: `docs/prd/`
-- ADR home: `docs/adr/`
-
-## Autonomy
-- Mode: executive
 EOF_F
+cat > .claude/shipgate.json <<'JSON'
+{
+  "version": 2,
+  "db": null,
+  "autonomy": "executive"
+}
+JSON
 c 2026-09-15 "feat: billing base with PRDs and ADRs"

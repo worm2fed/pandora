@@ -2,6 +2,79 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.33.0 — settings move to the settings files, and `setup` moves them for you (PR 3 of 3 for #60).
+
+**Settings live in the settings files (#60, ADR 0028).** A setting is a value from a fixed
+set: `autonomy`, `orchestration.review` and `.explore`, `writing_style`, `code_graph`,
+`code_signals`, `handoff`, `forge`, and `version`, `db`, `ledger`, `artifact_homes`,
+`enforce`. They live in the project settings file `.claude/shipgate.json` and in the user
+settings file `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+`~/.claude/shipgate.settings.json`). `.claude/shipgate.md` keeps behaviour in words only.
+- Every skill and the `/shipgate` command read a setting from the `settings:` line of the
+  status brief, or with `journal.py config <key>`. Exit 2 from that command means a bad value:
+  the skill shows the message and stops. With no `python3`, a skill reads the two settings
+  files itself.
+- `config-template.md` loses the Journal, Orchestration, Writing style, Code signals and
+  Session sections and the setting bullets of the other sections. The README's
+  Configuration section lists every setting with its values, default and scope.
+
+**The grace date: 2027-01-23.** Legacy lines, the settings that an older `shipgate.md`
+still writes as bullets, are read as before until that date, and after it until the
+release that removes the read. No value changes on a calendar day. The status brief of a
+project with legacy lines says how many there are and when the grace ends; after the date
+it says that the grace has ended.
+
+The legacy lines include the Knowledge base section's `PRD home`, `ADR home`, `Worklog
+home` and `Ledger` bullets, when they name a repo path: until the grace date the skills
+keep a custom home that only the config names, and the hooks and `status` keep reading the
+settings file. A home outside the repo, such as a wiki, stays words.
+
+**`/shipgate:setup` moves them.** Update mode runs the new `lean_config.py
+--move-settings <project root>`. It moves each legacy line of the project config, the
+nested repos' configs and the user config into the matching settings file, by the key's
+scope. It shows the diff of every file and its notes first, and writes only with
+`--apply`. A line that does not parse stays and is named. A value from a nested repo's
+config applies to every repo after the move, and the note says so. Where the per-key rule
+would change a value, the move writes today's value into the project settings file, so
+every key resolves as before. One change is by design: a line that moves from your user
+config into the user settings file applies per key in every other project too, also where
+that project's own section hid it before (for example, a project whose own Autonomy section
+hid your mode takes your mode); the move names each such line. A home or ledger bullet moves
+only when the settings file already gives the same value; for any other, `setup` shows the
+difference and asks. A fresh `setup` writes a version-2 settings file and a config of words
+only. A project that declines the journal gets `"db": null` when it sets
+a project setting, and no settings file otherwise.
+
+**The status brief carries the settings.** `journal.py status` ends with a `settings:`
+line: `autonomy`, `orchestration.review`, `orchestration.explore`, `writing_style` and
+`code_graph`, each with its value and its source. Then one line per key that a settings
+file sets to a value outside its set, the keys the hooks read (`db`, `enforce`,
+`artifact_homes`) included; the default applies. Then one line per settings file that
+cannot be read, and the legacy line. Every piece a file supplies is one clipped line.
+`--json` gains `settings` and `legacy`.
+
+**A settings file the hooks cannot read is named (hook change).** When the project
+settings file is not a JSON object (not valid JSON, not UTF-8, a list, nested too deep),
+the hooks fail open as before, so every gate is off. SessionStart now says so in one line:
+the file cannot be read, the gates are off, run `journal.py doctor`. The line names the
+file by a clipped path and never repeats its content. A project with no settings file
+pays nothing for this: the no-op path opens the same one file as 0.32.0.
+
+**`journal.py doctor` reports the settings.** The `config` block and its drift check
+between the config and the settings file are gone: with one home per setting, nothing is
+left to compare. A `settings` block lists each problem (a bad value, a bad legacy line, an
+unknown key, a `project` key in the user settings file, a newer version, a file that is
+no JSON object), each legacy line, each settings file inside a nested repo, and the grace
+date. A settings file that is not UTF-8 now gives a one-line error, not a traceback.
+
+**Smaller changes.**
+- `journal.py stats` counts the settings lines in `brief_bytes`, the size of the real
+  brief.
+- The eval fixtures write their settings into `.claude/shipgate.json`; the seven with no
+  journal write `"db": null`.
+- The glossary defines setting, settings file, legacy line and grace date, and drops
+  sidecar.
+
 v0.32.0 — `"db": null` declares no journal, and the settings file is version 2 (PR 2 of 3 for #60).
 
 **A project can have settings and no journal (#60, ADR 0028, J2).** The settings file

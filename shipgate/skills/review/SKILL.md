@@ -56,14 +56,20 @@ what it is: ``- F1 MEDIUM `src/a.ts:12` — <one sentence>.``, or for a rejected
 ``- `src/a.ts:30` (LOW 40): <one sentence>.`` The HUD's verdict-only round shows that sentence
 under the finding's key.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
-> **Journaled project — name the stream before you start.** Three signs mark a journaled
-> project: a status brief headed "shipgate flow journal", a **Journal** section in the config,
-> or a `.claude/shipgate.json` sidecar. On such a project the verdict is owed to a stream. The
+> **Journaled project — name the stream before you start.** A project is journaled when
+> the status brief is present, or `.claude/shipgate.json` exists and `journal.py config db`
+> prints a `db` that is not null. On such a project the verdict is owed to a stream. The
 > stream is the branch under review:
 > - the checked-out branch, when it is a work branch;
 > - for a commit reviewed on the integration branch, the branch that the config's
@@ -192,10 +198,10 @@ command then reviews no code and reports no finding. So the pass runs twice:
 Each verdict names the security review it rests on, in `security_review` (form: **Record the
 outcome**).
 
-### When the config says `review: workflow`
+### When the `orchestration.review` setting is `workflow`
 
-The config's **Orchestration** section can route this fan through the `Workflow` tool
-instead. Do these steps:
+The `orchestration.review` setting (`agents` or `workflow`, default `agents`) can route this
+fan through the `Workflow` tool instead. Do these steps:
 
 - Build the brief exactly as above: diff ref, worklog, PRD, impact map, do-not-flag,
   pre-rulings.
@@ -409,7 +415,7 @@ verdict's `dispositions` stays the final word.
 
 **Before a fix round, offer a fresh session.** This applies after a `not-ready` verdict when
 this session also ran design or implement, or when a shipgate line said the context is past
-the handoff threshold. Print the brief with
+the `handoff` threshold. Print the brief with
 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" handoff --stream <branch>`, and
 recommend `/clear`, then `/shipgate`. The brief names the open findings and the fix round.
 
@@ -425,9 +431,9 @@ and extra re-checking adds cost without catching more.
 
 ## Opening the MR/PR (on the user's publish go)
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
 the worklog's round entries and Rejected findings, ledger lines, the MR/PR body and every
-reply in the review-feedback cycle; absent, a placeholder, or `plain`, write them as before.
+reply in the review-feedback cycle. When it is `plain`, the default, write them as before.
 
 When the change owed a security review, the built-in `/security-review` runs on the commit
 before the push (**The security review**, step 3).
@@ -493,9 +499,9 @@ not debated.
 Jot anything reusable from the review to the project **ledger** the moment it shows up.
 Examples: a finding class that recurred across files, a convention the reviewers had to infer,
 a check that would have caught the defect earlier. Write one dated line each, while you rank
-the findings, not recalled at Capture. The ledger path is the one the config declares, or
-`docs/ledger.md` when that file already exists. A project with neither gets no new file from a
-review:
+the findings, not recalled at Capture. The ledger is the file the `ledger` setting names
+(default `docs/ledger.md`). Write to it when a settings file sets `ledger` or when that file
+already exists. A project with neither gets no new file from a review:
 
 ```bash
 printf -- '- %s — <gotcha|style|decision>: <one line>\n' "$(date +%F)" >> docs/ledger.md
@@ -506,8 +512,9 @@ what you did not. Coverage honesty is part of the review.
 
 ## Record the outcome (journaled projects)
 
-On a project whose config declares a **Journal**, three moments here are events. Append each
-one when it happens:
+On a journaled project (the status brief is present, or `.claude/shipgate.json` exists and
+`journal.py config db` prints a `db` that is not null), three moments here are events. Append
+each one when it happens:
 - the Step 6 verdict, as it is stated, not after the MR/PR question;
 - the MR/PR going up;
 - reviewer feedback landing.

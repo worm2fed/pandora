@@ -12,9 +12,11 @@ or directly:
 
 from __future__ import annotations
 
+import atexit
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -51,9 +53,19 @@ def load_journal_module():
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 
 
+# An empty user config directory: a run with no env of its own never reads the user's
+# real `shipgate.md` or settings file (ADR 0018's isolation rule; #60 put the settings
+# line into the status brief). A test that sets CLAUDE_CONFIG_DIR itself keeps its value.
+_AMBIENT_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR")
+_EMPTY_CONFIG_DIR = tempfile.mkdtemp(prefix="shipgate-test-config-")
+atexit.register(shutil.rmtree, _EMPTY_CONFIG_DIR, True)
+
+
 def run_journal(args, cwd=None, env=None):
     if env is None:
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        if env.get("CLAUDE_CONFIG_DIR") == _AMBIENT_CONFIG_DIR:
+            env["CLAUDE_CONFIG_DIR"] = _EMPTY_CONFIG_DIR
     return subprocess.run(
         [sys.executable, str(JOURNAL)] + [str(a) for a in args],
         cwd=str(cwd) if cwd else None,

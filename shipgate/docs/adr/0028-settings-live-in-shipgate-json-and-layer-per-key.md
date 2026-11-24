@@ -280,8 +280,18 @@ The user can veto any of these.
 - The commands a hook runs (`status`, `nudge`, `append`) never exit 2 on a setting.
 - A legacy line resolves by ADR 0018's per-section owner, with no scope rule, so a
   section that hid a farther bullet still hides it.
-- `ledger` and `artifact_homes` get no legacy read: the settings file holds them already.
-  `setup` removes their config bullets after it shows any difference.
+- ~~`ledger` and `artifact_homes` get no legacy read: the settings file holds them already.
+  `setup` removes their config bullets after it shows any difference.~~ Corrected by the
+  user on 2026-11-24 (PR 3, review round 1, Q1 = B): that holds only where the settings file
+  sets them, and a project with no journal has no settings file. So `artifact_homes.prd`,
+  `.adr`, `.worklog` and `ledger` get a legacy read for repo paths until the grace date,
+  from the `PRD home`, `ADR home`, `Worklog home` and `Ledger` bullets of the config's
+  Knowledge base section, below the project settings file like every legacy line. The
+  skills (`journal.py config`) then keep the custom home; the hooks and `status` still read
+  the settings file only. A home that names no repo path (a wiki) gives no value and stays
+  words, and the skills say so in one sentence. `setup` removes a home bullet only when the
+  key resolves to the same value without it; for every other one it shows the difference
+  and asks.
 - The schema file is JSON Schema 2020-12, with `x-` annotations for the scope, the release,
   the legacy source, the version and the grace date. The validator in `_config.py` reads
   the subset it uses, in the style of `_journal/shapes.py:171`.

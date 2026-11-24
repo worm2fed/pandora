@@ -46,17 +46,83 @@ The script prints a summary line and a unified diff. It writes the file only wit
 ``--apply``, through a temporary file in the same directory, and keeps each kept line's
 line ending. A second run on its own output finds nothing to remove.
 
+``--move-settings <root>`` (ADR 0028) moves the legacy lines out of the configs into the
+settings files. A legacy line is a ``- Key: value`` bullet that a schema key names in its
+``x-legacy``. The parse is the resolver's own (``_config.legacy_lines``,
+``_config.legacy_value``). The script reads the project config
+``<root>/.claude/shipgate.md``, the config of each nested repo
+(``_config.nested_repo_dirs``), and the user config. A nested repo with its own settings
+file is a project of its own: the script skips it and says so.
+
+- A line in the project config or a nested config goes to the project settings file
+  ``<root>/.claude/shipgate.json``. A line in the user config goes to the user settings
+  file, when its key has the scope ``any``.
+- A user line that moves gets a note: a project whose own section hid that line takes
+  the user's value after the move.
+- A user line with a ``project`` key stays in the user config, because other projects
+  still read it. Its value is copied into the project settings file only when that line
+  set the key for this project before the move.
+- A nested value now applies to every repo, and a note says so. Nested values that differ
+  from each other, or from the value at the root, stay where they are (a conflict).
+- A line whose value does not parse stays, and the script names it.
+- A key that the target settings file sets already keeps that value. The line goes, and a
+  note shows a different value.
+- The ``Ledger``, ``PRD home``, ``ADR home`` and ``Worklog home`` bullets are legacy lines
+  too (``_config.legacy_home``), but the script never writes them into a settings file,
+  because the hooks would act on the value. A bullet of the project config goes only
+  when the key resolves to the same value without it: the value the project settings
+  file sets, else the default. A bullet with another value, or with no repo path, stays
+  and is named. A bullet that goes takes its other words with it, and a note says so,
+  except a ``Ledger`` bullet whose other text starts with the promotion targets: that
+  text stays, as a ``- Promotion targets:`` bullet. Such a bullet in a nested or user
+  config stays and is named.
+- The project config's ``Database`` bullet goes, after a note shows how it differs from
+  ``db``. One that holds more than its value stays whole.
+- The residue rules above apply. A comment right under a removed bullet, and indented
+  deeper, goes with it.
+- A settings file keeps its keys and their order. New keys follow in schema order, an
+  object gains its new leaves, and ``version`` becomes 2. A new project settings file
+  starts with ``"version": 2, "db": null``: the project has no journal, and a note says so.
+- Parity: from the root and from each nested repo, every setting resolves to the same
+  value after the move as before, except ``version`` and a value that the project
+  settings file now sets for every repo. Each other directory below the root with a
+  config (a scan of at most 6 levels and 2,000 directories, with a note when it stops)
+  keeps every value: a key whose value would change there keeps every line. A home or
+  the ledger is never pinned: a bullet whose removal would change its value anywhere
+  stays. A config section that hid a user line before
+  gets its value pinned in the project settings file, with a note. When a value still
+  differs, the script writes nothing and exits 1.
+
+The script refuses (exit 1) when ``.claude``, ``shipgate.json`` or ``shipgate.md`` of the
+project, or ``.claude`` or ``shipgate.md`` of a nested repo, is a symlink or resolves
+outside the project root, and when the project settings file is a user file. It writes a
+project-side file only as itself, never through a symlink; the user files may be links.
+It refuses (exit 2) a root with no settings file below a directory that holds one: the
+hooks take that directory as the project root.
+
+The script prints a summary line, the notes, the lines that stay with the reason, and a
+diff per file (a new file diffs from ``/dev/null``). A value from a config shows on one
+line, a character that does not print shows as ``?``, and a value is at most 120
+characters. A diff header names a path below the root relative to it, and a user file
+with ``~`` for the home directory. ``--json`` prints ``{files, moved,
+kept, notes, changed}``. With ``--apply`` it writes the settings files first, then the
+configs, each through a temporary file in its directory. It never creates a directory.
+A second run on the result changes nothing.
+
 Exit codes (also printed by ``--help``):
 
     0  ok, whether or not there is anything to remove
-    1  infrastructure failure (the file cannot be read or written, or the install is
-       incomplete)
-    2  usage error (missing file, bad flag)
+    1  infrastructure failure (a file cannot be read or written, a settings file is no
+       JSON object, a project file is a symlink, a move would change a setting, or the
+       install is incomplete)
+    2  usage error (missing file, bad flag, a root below a project root), or a settings
+       file with a version this shipgate does not write
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import difflib
 import errno
 import json
@@ -66,7 +132,9 @@ import stat
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple, Union
+from typing import (
+    Any, Dict, FrozenSet, List, NamedTuple, Optional, Sequence, Set, Tuple, Union,
+)
 
 # --------------------------------------------------------------------------
 # Constants
@@ -120,6 +188,8 @@ ANCHORS: List[Tuple[str, str]] = [
     (PROSE, "The user file uses the same section vocabulary"),
     (PROSE, "Subagents don't read these files themselves"),
     (PROSE, "`setup` writes a lean file"),
+    # The header's settings paragraph since the config split (ADR 0028).
+    (PROSE, "**Settings live in the settings files, not here.**"),
     # Per-section comments. Short leads, so a paragraph that opens the same way stays.
     (COMMENT, "Default when absent"),
     (COMMENT, "Only needed for umbrella"),
@@ -147,6 +217,7 @@ ANCHORS: List[Tuple[str, str]] = [
     (BULLET, "If declared, two skills honor it"),
     (BULLET, "The watcher is strictly read-only"),
     (BULLET, "Optional, when a **Journal** is configured"),
+    (BULLET, "Optional, on a journaled project"),
 ]
 
 PLACEHOLDER = "placeholder"
@@ -325,6 +396,22 @@ BOILERPLATE_SENTENCES = frozenset({
     "the repo's `.claude/shipgate.md` files, from the working directory up to the repo root",
     "the umbrella's `.claude/shipgate.md`, in an umbrella checkout",
     'the user file: `$CLAUDE_CONFIG_DIR/shipgate.md` when that variable is set and not empty, else `~/.claude/shipgate.md`',
+    # The template since the config split (ADR 0028): settings live in the settings files.
+    'Settings live in the settings files, not here',
+    'A setting is a value from a fixed set, such as `autonomy`, `writing_style` or `artifact_homes`',
+    'Settings live in `.claude/shipgate.json` (the project settings file) and in `$CLAUDE_CONFIG_DIR/shipgate.settings.json`, else `~/.claude/shipgate.settings.json` (the user settings file)',
+    "`journal.py config` prints each one with its source, and the README's Configuration section lists them all",
+    'This file holds behaviour in words',
+    'The config carries the process tooling in words: the knowledge stores, the tracker, branch naming, which integrations to reach for',
+    'Default when absent: knowledge capture to repo docs; no wiki',
+    'The PRD, ADR and worklog homes and the ledger path are settings (`artifact_homes`, `ledger`)',
+    'Default when absent: issue context read via whatever CLI/MCP is available',
+    'The forge itself is the `forge` setting: `github` (gh, PRs) or `gitlab` (glab, MRs); unset, the host of the PR/MR URL or of the git remote decides',
+    "Optional, on a journaled project: a watcher may append what it observes to `watch/<project>!<iid>` streams via the plugin's `journal.py` (`baseline`, `pipeline-flip`, `comments-added`, `merge-status`, `conflicts`, `approved`, `merged`, `closed`)",
+    'Default when absent: library docs from a context7-style MCP (resolve a library id, then query its docs) when the session has one, else training knowledge / WebFetch; no LSP preference (grep/read)',
+    'The code graph is the `code_graph` setting',
+    'Default when absent: no extra escalations',
+    'The mode is the `autonomy` setting: `ask` (the default) sends every gate question to the user; `executive` lets the orchestrator answer routine gate questions itself, record them and escalate the rest, by the executive contract in the `feature` skill',
 })
 
 # Catalogued sentences with a variable part, matched whole against a normalised sentence.
@@ -832,6 +919,20 @@ def plan(text: str, user_text: Optional[str] = None, drop_equal: bool = False,
     removed: Set[int] = set()
     for r in removals:
         removed.update(range(r.start, r.end + 1))
+    result, after, new_line = _without(raw, lines, blocks, removed)
+    return Plan(removals, mixed, equal_sections, shadowed_sections, result, lines, after,
+                new_line)
+
+
+def _without(raw: Sequence[str], lines: Sequence[str], blocks: Sequence[Block],
+             removed: Set[int], replaced: Optional[Dict[int, Tuple[int, str]]] = None
+             ) -> Tuple[str, List[str], Dict[int, int]]:
+    """(the text without the REMOVED line indices, its lines without endings, a kept
+    line's index → its index in the result). The blank-line rules of `_render` apply,
+    and each kept line keeps its own line ending. REPLACED maps a block's first line to
+    (its last line, the new text of the block, line endings included)."""
+    replaced = replaced or {}
+    swallowed = {i for start, (end, _text) in replaced.items() for i in range(start + 1, end + 1)}
     kept = _render(raw, blocks, removed)
     out: List[str] = []
     after: List[str] = []
@@ -844,11 +945,1089 @@ def plan(text: str, user_text: Optional[str] = None, drop_equal: bool = False,
             assert previous is not None
             out.append(raw[previous][len(lines[previous]):])
             after.append("")
-        else:
+        elif i in replaced:
+            text = replaced[i][1]
+            out.append(text)
+            after.extend(line.rstrip("\r\n") for line in split_lines(text))
+        elif i not in swallowed:
             out.append(raw[i])
             after.append(lines[i])
-    return Plan(removals, mixed, equal_sections, shadowed_sections, "".join(out), lines, after,
-                new_line)
+    return "".join(out), after, new_line
+
+
+# --------------------------------------------------------------------------
+# --move-settings (ADR 0028): legacy lines move into the settings files
+# --------------------------------------------------------------------------
+
+KIND_PROJECT = "project"
+KIND_NESTED = "nested"
+KIND_USER = "user"
+
+REASON_NO_PARSE = "does not parse"
+REASON_CONFLICT = "conflict"
+REASON_PROSE = "holds prose"
+REASON_PROJECT_KEY = ("a project setting: the user config keeps it for other projects until "
+                      "the grace date")
+REASON_DUPLICATE = "more than one bullet for this key"
+REASON_NOT_LOCATED = "cannot be removed safely: edit it by hand"
+REASON_NO_PROJECT_DIR = "no .claude directory at the project root for the settings file"
+REASON_NO_USER_DIR = "no directory for the user settings file"
+REASON_NO_REPO_PATH = ("gives no repo path that a setting can hold (a wiki, or words): keep "
+                       "it as words, or set {} in .claude/shipgate.json by hand")
+REASON_NOT_SET = ("differs from the default and the settings file does not set {0}: set {0} "
+                  "to {1} in .claude/shipgate.json, or delete the line")
+ECHO_CHARS = 120
+
+# The bullets whose value a settings file holds already: (section, bullet, setting). No
+# reader reads them, so they never go into a settings file; the settings file, or its
+# default, wins today.
+SETTINGS_BULLETS = (
+    ("Journal", "Database", "db"),
+    ("Knowledge base", "Ledger", "ledger"),
+    ("Knowledge base", "PRD home", "artifact_homes.prd"),
+    ("Knowledge base", "ADR home", "artifact_homes.adr"),
+    ("Knowledge base", "Worklog home", "artifact_homes.worklog"),
+)
+LEDGER = "ledger"
+PROMOTION_KEY = "Promotion targets"
+
+# A `- Key: value` bullet as `_config.section_bullets` reads it.
+KEY_BULLET_RE = re.compile(r"^\s*[-*+]\s+([^:]+?)\s*:\s*(.*)$")
+VALUE_SPAN_RE = re.compile(r"`[^`\n]*`")
+VALUE_NOTE_RE = re.compile(r"[ \t]*\([^()]*\)")
+LEAD_PUNCT_RE = re.compile(r"^[\s.,;:—–-]+")
+PROMOTION_LEAD_RE = re.compile(r"promotion targets\b[^:\n]{0,60}:[ \t]*", re.I)
+
+
+class MoveError(Exception):
+    """A refusal: CODE is the exit code."""
+
+    def __init__(self, message: str, code: int) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class Source(NamedTuple):
+    """A config that the move reads and may edit."""
+    path: Path
+    kind: str  # project | nested | user
+    text: str  # as read, line endings kept
+    raw: List[str]  # the lines with their endings
+    lines: List[str]  # the lines without endings
+    blocks: List[Block]
+
+
+class Line(NamedTuple):
+    """A legacy line whose value parses, and the blocks its removal takes."""
+    source: Source
+    key: str
+    section: str
+    bullet: str
+    raw: str  # the value as written
+    value: Any
+    cut: FrozenSet[int]  # block indices
+
+
+class Moved(NamedTuple):
+    key: str
+    from_path: str
+    section: str
+    bullet: str
+    value: str
+    to: str
+
+
+class Kept(NamedTuple):
+    path: str
+    section: str
+    bullet: str
+    value: str
+    reason: str
+
+
+class MovePlan(NamedTuple):
+    # {path, changed, created, diff}: the configs, then the settings files
+    files: List[Dict[str, Any]]
+    moved: List[Moved]
+    kept: List[Kept]
+    notes: List[str]
+    # (path, content, created, trusted): the settings files first. Only a user file may be
+    # reached through a symlink.
+    writes: List[Tuple[str, str, bool, bool]]
+
+
+def _echo(value: Any, limit: int = ECHO_CHARS) -> str:
+    """A value from a checkout, as a note or a kept line shows it: on one line, each
+    character that does not print shown as `?`, at most LIMIT characters."""
+    flat = _printable(" ".join(str(value).split()))
+    return flat if len(flat) <= limit else flat[:limit - 1] + "…"
+
+
+def _printable(text: str) -> str:
+    return "".join(c if c.isprintable() else "?" for c in text)
+
+
+def _shown(value: Any) -> str:
+    return _echo(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+
+
+def _header_path(path: Path, root: Path) -> Tuple[str, bool]:
+    """(PATH as a diff header names it, whether it lies below ROOT): relative to ROOT
+    below it, else with `~` for the home directory, else absolute."""
+    absolute = os.path.abspath(str(path))
+    base = os.path.abspath(str(root))
+    if absolute.startswith(base.rstrip(os.sep) + os.sep):
+        return os.path.relpath(absolute, base), True
+    home = os.path.expanduser("~")
+    if home != "~" and absolute.startswith(home.rstrip(os.sep) + os.sep):
+        return "~/" + os.path.relpath(absolute, home), False
+    return absolute, False
+
+
+def _inside(path: Path, root_real: str) -> bool:
+    real = os.path.realpath(str(path))
+    return real == root_real or real.startswith(root_real.rstrip(os.sep) + os.sep)
+
+
+def _refuse_link(path: Path, root_real: str) -> None:
+    """MoveError (exit 1) when PATH is a symlink, or resolves outside the project root:
+    a checkout could point a write at a file outside it."""
+    if os.path.islink(str(path)) or (os.path.lexists(str(path))
+                                     and not _inside(path, root_real)):
+        raise MoveError("{} is a symlink or resolves outside the project root {}; "
+                        "--move-settings writes nothing through it. Replace it with the "
+                        "file itself, then run this again".format(path, root_real),
+                        EXIT_INFRA)
+
+
+def _ancestor_project(root: Path) -> Optional[str]:
+    """The nearest directory above ROOT that holds `.claude/shipgate.json`: the walk of
+    the hooks (`hooks/_common.journaled_root`)."""
+    current = os.path.abspath(str(root))
+    while True:
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+        if os.path.isfile(os.path.join(current, _config.SETTINGS_RELPATH)):
+            return current
+
+
+def _same(a: Any, b: Any) -> bool:
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+
+def _real(path: Path) -> str:
+    return os.path.realpath(str(path))
+
+
+def _strip_path(value: str) -> str:
+    while value.startswith("./"):
+        value = value[2:]
+    return value.rstrip("/")
+
+
+def _leaf_keys(schema: Dict[str, Any]) -> List[str]:
+    """Every leaf key of the schema, `group.leaf` for an object, in schema order."""
+    out: List[str] = []
+    for key, node in schema["properties"].items():
+        if node.get("type") == "object" and "properties" in node:
+            out.extend(key + "." + leaf for leaf in node["properties"])
+        else:
+            out.append(key)
+    return out
+
+
+def _sets(data: Optional[Dict[str, Any]], key: str) -> bool:
+    """True when a settings file's DATA decides KEY: it holds the key, or holds its group
+    as a value that is no object (the resolver then refuses the whole group)."""
+    if data is None:
+        return False
+    group, _, leaf = key.partition(".")
+    if not leaf:
+        return key in data
+    return group in data and (not isinstance(data[group], dict) or leaf in data[group])
+
+
+def _setting(data: Optional[Dict[str, Any]], key: str) -> Any:
+    if data is None:
+        return None
+    group, _, leaf = key.partition(".")
+    value = data.get(group)
+    if not leaf:
+        return value
+    return value.get(leaf) if isinstance(value, dict) else value
+
+
+def _merged(data: Optional[Dict[str, Any]], writes: Dict[str, Any],
+            schema: Dict[str, Any], no_journal: bool) -> Dict[str, Any]:
+    """DATA with WRITES added: its keys keep their order, new keys follow in schema order,
+    an object gains leaves, and `version` is the schema's. A new file starts with
+    `version`, and with `"db": null` when NO_JOURNAL."""
+    newest = schema.get("x-version", 2)
+    if data is None:
+        out: Dict[str, Any] = {"version": newest}
+        if no_journal:
+            out["db"] = None
+    elif "version" in data:
+        out = dict(data)
+        out["version"] = newest
+    else:
+        out = {"version": newest}
+        out.update(data)
+    for key in _leaf_keys(schema):
+        if key not in writes:
+            continue
+        group, _, leaf = key.partition(".")
+        if leaf:
+            sub = dict(out[group]) if isinstance(out.get(group), dict) else {}
+            sub[leaf] = writes[key]
+            out[group] = sub
+        else:
+            out[key] = writes[key]
+    return out
+
+
+def _read_settings(path: Optional[Path], newest: int
+                   ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """(the JSON object, the text) of a settings file; (None, None) when there is none.
+    MoveError: exit 1 when it cannot be read as a JSON object, 2 when its version is no
+    version or one this shipgate does not write."""
+    if path is None or not os.path.lexists(str(path)):
+        return None, None
+    if not os.path.isfile(str(path)):
+        raise MoveError("{} is not a file".format(path), EXIT_INFRA)
+    try:
+        with open(str(path), "rb") as handle:
+            content = handle.read()
+    except OSError as exc:
+        raise MoveError("{}: {}".format(path, exc.strerror or exc), EXIT_INFRA)
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise MoveError("{} is not valid UTF-8".format(path), EXIT_INFRA) from None
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        raise MoveError("{} is not valid JSON: {}".format(path, exc), EXIT_INFRA) from None
+    if not isinstance(data, dict):
+        raise MoveError("{} must contain a JSON object".format(path), EXIT_INFRA)
+    version = data.get("version", newest)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise MoveError("{}: version = {} is not a version (an integer of 1 or more)".format(
+            path, json.dumps(version)), EXIT_USAGE)
+    if version > newest:
+        raise MoveError("{} declares version {}; this shipgate writes version {}. Update "
+                        "shipgate, then run this again.".format(path, version, newest),
+                        EXIT_USAGE)
+    return data, text
+
+
+def _source(path: Path, kind: str) -> Source:
+    try:
+        text = _read(str(path))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise MoveError("{}: {}".format(path, exc), EXIT_INFRA) from None
+    raw = split_lines(text)
+    lines = [line.rstrip("\r\n") for line in raw]
+    return Source(path, kind, text, raw, lines, parse_blocks(lines))
+
+
+def _sources(root: Path, user_config: Optional[Path], notes: List[str]
+             ) -> Tuple[List[Source], List[Path]]:
+    """The configs the move reads, each once: the project's, each nested repo's (`_config.
+    nested_repo_dirs`), the user's. And the nested repos whose config is read. MoveError
+    for a nested config reached through a symlink."""
+    root_real = os.path.realpath(str(root))
+    found: List[Source] = []
+    seen: Set[str] = set()
+
+    def add(path: Path, kind: str) -> bool:
+        if not path.is_file() or _real(path) in seen:
+            return False
+        found.append(_source(path, kind))
+        seen.add(_real(path))
+        return True
+
+    add(root / _config.CONFIG_RELPATH, KIND_PROJECT)
+    repos: List[Path] = []
+    for repo in _config.nested_repo_dirs(root):
+        config = repo / _config.CONFIG_RELPATH
+        if not os.path.lexists(str(config)):
+            continue
+        _refuse_link(repo / ".claude", root_real)
+        _refuse_link(config, root_real)
+        if not config.is_file():
+            continue
+        if os.path.lexists(str(repo / _config.SETTINGS_RELPATH)):
+            notes.append("skipped {}: it holds its own settings file, so it is a project of "
+                         "its own; run --move-settings there".format(repo))
+            continue
+        if add(config, KIND_NESTED):
+            repos.append(repo)
+    if user_config is not None:
+        add(user_config, KIND_USER)
+    return found, repos
+
+
+def _candidates(root: Path, start: Path) -> List[Tuple[Path, str]]:
+    """journal.py's layer list (`_journal/project.config_candidates`) from START, a
+    directory at or below ROOT: each config from START up to the repo that holds it is a
+    project file, then the configs of that repo's parent and of the root are umbrella
+    files. With no repo below the root, every config from START up to the root is a
+    project file."""
+    chain = [start]
+    while chain[-1] != root and chain[-1].parent != chain[-1]:
+        chain.append(chain[-1].parent)
+    repo = next((d for d in chain if os.path.lexists(str(d / ".git"))), None)
+    if repo is None or repo == root:
+        return [(d / _config.CONFIG_RELPATH, _config.ROLE_PROJECT) for d in chain]
+    candidates = [(d / _config.CONFIG_RELPATH, _config.ROLE_PROJECT)
+                  for d in chain[:chain.index(repo) + 1]]
+    for directory in dict.fromkeys((repo.parent, root)):
+        candidates.append((directory / _config.CONFIG_RELPATH, _config.ROLE_UMBRELLA))
+    return candidates
+
+
+def _disk_text(path: Path) -> Optional[str]:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _section_blocks(blocks: Sequence[Block], section: str) -> List[int]:
+    """The block indices of the section SECTION (lower-case) as `_config._walk_section`
+    reads it: from the first heading with that name, of any level, to the next heading of
+    its level or higher. A deeper heading that repeats the name moves that end."""
+    inside = False
+    level = 0
+    out: List[int] = []
+    for bi, block in enumerate(blocks):
+        if block.kind == "heading":
+            if inside and block.level <= level:
+                break
+            if block.text.lower() == section:
+                inside, level = True, block.level
+                continue
+        if inside:
+            out.append(bi)
+    return out
+
+
+def _bullet_key(line: str) -> Optional[str]:
+    match = KEY_BULLET_RE.match(line)
+    return match.group(1).strip().lower() if match else None
+
+
+def _the_bullet(source: Source, section: str, bullet: str) -> Optional[int]:
+    """The block of the one top-level `- <bullet>:` bullet of SECTION; None when there is
+    none, more than one, or it holds a comment marker."""
+    blocks, lines = source.blocks, source.lines
+    hits = [bi for bi in _section_blocks(blocks, section.lower())
+            if blocks[bi].kind == "bullet"
+            and _bullet_key(lines[blocks[bi].start]) == bullet.lower()]
+    if len(hits) != 1:
+        return None
+    block = blocks[hits[0]]
+    if any("<!--" in lines[i] or "-->" in lines[i] for i in range(block.start, block.end + 1)):
+        return None
+    return hits[0]
+
+
+def _reads_as(before: str, after: str, section: str, bullet: str,
+              new_key: Optional[str] = None) -> bool:
+    """True when AFTER reads, by `_config.section_bullets`, as BEFORE with its one BULLET
+    of SECTION gone, or, with NEW_KEY, replaced by one NEW_KEY bullet with a value."""
+    old = _config.section_bullets(before, section.lower(), keep_case=True)
+    new = _config.section_bullets(after, section.lower(), keep_case=True)
+    at = [i for i, (key, _value) in enumerate(old) if key.lower() == bullet.lower()]
+    if len(at) != 1:
+        return False
+    i = at[0]
+    if new_key is None:
+        return new == old[:i] + old[i + 1:]
+    if any(key.lower() == new_key.lower() for key, _value in old) or len(new) != len(old):
+        return False
+    return (new[i][0] == new_key and bool(new[i][1].strip())
+            and new[:i] + new[i + 1:] == old[:i] + old[i + 1:])
+
+
+def _bullet_cut(source: Source, section: str, bullet: str) -> Optional[FrozenSet[int]]:
+    """The blocks that the removal of the one BULLET of SECTION takes: the bullet, and
+    each closed comment right under it and indented deeper (a continuation). None when
+    the bullet is not one whole block, or its removal would change another bullet."""
+    bi = _the_bullet(source, section, bullet)
+    if bi is None:
+        return None
+    blocks, lines = source.blocks, source.lines
+    cut = {bi}
+    indent = _indent(lines[blocks[bi].start])
+    j = bi + 1
+    while (j < len(blocks) and blocks[j].kind == "comment" and blocks[j].removable
+           and blocks[j].start == blocks[j - 1].end + 1
+           and _indent(lines[blocks[j].start]) > indent):
+        cut.add(j)
+        j += 1
+    removed = {i for x in cut for i in range(blocks[x].start, blocks[x].end + 1)}
+    trial = "".join(line for i, line in enumerate(source.raw) if i not in removed)
+    return frozenset(cut) if _reads_as(source.text, trial, section, bullet) else None
+
+
+def _after_value(block_text: str, bullet: str) -> Optional[Tuple[str, str]]:
+    """(the marker, the text after the value) of a `- <bullet>: value …` block. The
+    value is its first backticked span, else its first word. A note in parentheses right
+    after the value goes with it, and so does the punctuation that follows. None when
+    text comes before the value."""
+    head = re.match(r"([ \t]*[-*+][ \t]+)" + re.escape(bullet) + r"[ \t]*:[ \t]*",
+                    block_text, re.I)
+    if head is None:
+        return None
+    rest = block_text[head.end():]
+    span = VALUE_SPAN_RE.match(rest)
+    if span:
+        after = rest[span.end():]
+    elif "`" in rest:
+        return None
+    else:
+        word = re.match(r"\S+", rest)
+        after = rest[word.end():] if word else rest
+    note = VALUE_NOTE_RE.match(after)
+    if note:
+        after = after[note.end():]
+    return head.group(1), LEAD_PUNCT_RE.sub("", after)
+
+
+def _promotion_bullet(marker: str, prose: str) -> Optional[str]:
+    """The `- Promotion targets: …` bullet that holds PROSE, which starts with
+    "Promotion targets" and its lead-in (`Promotion targets at triage:`); None when
+    nothing follows the lead-in."""
+    lead = PROMOTION_LEAD_RE.match(prose)
+    body = prose[lead.end():] if lead else prose[len(PROMOTION_KEY):].lstrip(" \t")
+    if not LEAD_PUNCT_RE.sub("", body).strip():
+        return None
+    return marker + PROMOTION_KEY + ":" + ("" if body[:1] in ("\r", "\n") else " ") + body
+
+
+def _settings_bullet_change(source: Source, section: str, bullet: str
+                            ) -> Tuple[str, Any]:
+    """What happens to a bullet that a settings file holds: ("cut", blocks) when it
+    holds only its value; ("replace", {first line: (last line, text)}) for a Ledger
+    bullet whose prose starts with the promotion targets; ("prose", None) when it holds
+    other prose or nested bullets, which stay; ("locate", None) when it cannot be
+    changed safely."""
+    bi = _the_bullet(source, section, bullet)
+    if bi is None:
+        return "locate", None
+    block = source.blocks[bi]
+    block_text = "".join(source.raw[block.start:block.end + 1])
+    split = _after_value(block_text, bullet)
+    if split is None:
+        return "prose", None
+    marker, prose = split
+    if not prose.strip():
+        cut = _bullet_cut(source, section, bullet)
+        return ("cut", cut) if cut is not None else ("locate", None)
+    if bullet.lower() != LEDGER or not prose.lower().startswith(PROMOTION_KEY.lower()):
+        return "prose", None
+    text = _promotion_bullet(marker, prose)
+    if text is None:
+        return "prose", None
+    trial = "".join(source.raw[:block.start]) + text + "".join(source.raw[block.end + 1:])
+    if not _reads_as(source.text, trial, section, bullet, PROMOTION_KEY):
+        return "prose", None
+    return "replace", {block.start: (block.end, text)}
+
+
+def _db_difference(where: str, value: str, data: Optional[Dict[str, Any]],
+                   schema: Dict[str, Any]) -> Optional[str]:
+    """The note on how a `Database` bullet's VALUE differs from `db` in the project
+    settings file's DATA (or its default); None when they agree."""
+    if data is None:
+        return "{}: the project has no settings file, so it has no journal; the bullet " \
+               "goes".format(where)
+    current = data["db"] if "db" in data else schema["properties"]["db"]["default"]
+    if current is None:
+        return "{} differs from db null in the project settings file: the project has no " \
+               "journal; the bullet goes".format(where)
+    if isinstance(current, str) and _strip_path(value) == _strip_path(current):
+        return None
+    return "{} differs from db {} in the project settings file; the settings file wins, and " \
+           "the bullet goes".format(where, _shown(current))
+
+
+def _text_diff(header: Tuple[str, bool], old: Optional[str], new: str) -> str:
+    """A unified diff of OLD (None for a file that does not exist) to NEW. HEADER is
+    `_header_path`'s: a path below the root gets the `a/` and `b/` prefixes."""
+    name, below = _printable(header[0]), header[1]
+    before = [] if old is None else [line.rstrip("\r\n") for line in split_lines(old)]
+    after = [line.rstrip("\r\n") for line in split_lines(new)]
+    if old is not None and before == after:
+        return ""
+    lines = difflib.unified_diff(
+        before, after,
+        fromfile="/dev/null" if old is None else ("a/" + name if below else name),
+        tofile="b/" + name if below else name, lineterm="")
+    return "\n".join(lines) + "\n"
+
+
+def _value_of(settings: Dict[str, Any], key: str, data: Optional[Dict[str, Any]]) -> Any:
+    """A resolved value for the parity check. With no project settings file the project
+    has no journal, so `db` is null there, as a new file with `"db": null` says."""
+    if key == "db" and data is None:
+        return None
+    setting = settings.get(key)
+    return None if setting is None else setting.value
+
+
+SCAN_DEPTH = 6
+SCAN_DIRS = 2000
+# Directories the scan for configs never enters: dependencies and build output.
+SCAN_SKIP = frozenset({"node_modules", "build", "dist", "target", "vendor",
+                       "venv", "__pycache__"})
+REASON_BELOW = "a config below the root at {} sets it differently"
+_PRD_KEY = "artifact_homes.prd"
+REASON_DIFFERS_FILE = ("differs from the settings file ({}): the skills read the bullet until "
+                       "the grace date, the hooks read the file; set the one you want and "
+                       "delete the other")
+REASON_HOME_ELSEWHERE = ("a home or the ledger outside the project config stays: set it in "
+                         ".claude/shipgate.json by hand, or delete the line")
+REASON_HOME_HELD = ("removing it would change {0} for {1}: keep it, or set {0} in "
+                    ".claude/shipgate.json")
+
+
+def _config_dirs(root: Path, notes: List[str]) -> List[Path]:
+    """Each directory below ROOT that holds `.claude/shipgate.md`, breadth first and
+    sorted. Dot-directories, `node_modules`, build and vendor output (SCAN_SKIP) and
+    symlinked directories are left out, and so is a directory with its own
+    `.claude/shipgate.json` (a project of its own), with all below it. A `.claude` or a
+    `.claude/shipgate.md` that is a link, or that resolves outside ROOT, is not read,
+    with a note. The scan goes at
+    most SCAN_DEPTH levels down, silently (an ordinary source tree is deeper), and
+    examines at most SCAN_DIRS directories; a note says when that bound stops it."""
+    found: List[Path] = []
+    root_real = os.path.realpath(str(root))
+    queue = collections.deque([(root, 0)])
+    examined = 0
+    while queue:
+        directory, depth = queue.popleft()
+        if examined >= SCAN_DIRS:
+            notes.append("the scan for configs below the root stopped after {} directories; "
+                         "a config past them is not checked".format(SCAN_DIRS))
+            break
+        examined += 1
+        if directory != root:
+            if os.path.isfile(str(directory / _config.SETTINGS_RELPATH)):
+                continue
+            config = directory / _config.CONFIG_RELPATH
+            linked = next((path for path in (directory / ".claude", config)
+                           if os.path.lexists(str(path))
+                           and (os.path.islink(str(path)) or not _inside(path, root_real))),
+                          None)
+            if linked is not None:
+                notes.append("{} is a link or leaves the root; the scan does not read "
+                             "it".format(_echo(_header_path(linked, root)[0])))
+            elif os.path.isfile(str(config)):
+                found.append(directory)
+        if depth >= SCAN_DEPTH:
+            continue
+        try:
+            with os.scandir(str(directory)) as entries:
+                names = sorted(entry.name for entry in entries
+                               if entry.is_dir(follow_symlinks=False)
+                               and not entry.name.startswith(".")
+                               and entry.name not in SCAN_SKIP)
+        except OSError:
+            continue
+        queue.extend((directory / name, depth + 1) for name in names)
+    return found
+
+
+def plan_move(root: Path) -> MovePlan:
+    """The move of every legacy line of the project at ROOT, its nested repos and the user
+    config into the settings files, with the parity check (PRD SC-005) done: per key, the
+    value from the root, from each nested repo and from each other directory below the
+    root with a config is the same after the move as before. A key whose value would
+    change from such another directory keeps every line. Nothing is written. MoveError on
+    a refusal."""
+    try:
+        schema = _config.load_schema()
+    except OSError as exc:
+        raise MoveError(str(exc), EXIT_INFRA) from None
+    newest = schema.get("x-version", 2)
+    project_file = root / _config.SETTINGS_RELPATH
+    user_file = _config.user_settings_path()
+    user_config = _config.user_config_path()
+    root_real = os.path.realpath(str(root))
+    for path in (root / ".claude", project_file, root / _config.CONFIG_RELPATH):
+        _refuse_link(path, root_real)
+    for path in (user_file, user_config):
+        if path is not None and _real(path) == _real(project_file):
+            raise MoveError("{} is the user file {}; --move-settings writes nothing through "
+                            "it".format(project_file, path), EXIT_INFRA)
+    if not os.path.lexists(str(project_file)):
+        above = _ancestor_project(root)
+        if above is not None:
+            raise MoveError("{} lies below the project root {}, which holds "
+                            "{}; run it from the project root {}".format(
+                                root, above, _config.SETTINGS_RELPATH, above), EXIT_USAGE)
+    project, project_text = _read_settings(project_file, newest)
+    user, user_text = _read_settings(user_file, newest)
+    can_project = (root / ".claude").is_dir()
+    base_notes: List[str] = []
+    base_kept: List[Kept] = []
+    sources, nested = _sources(root, user_config, base_notes)
+    texts = {_real(s.path): s.text for s in sources}
+    starts = [root] + nested
+    below = [d for d in _config_dirs(root, base_notes) if d not in set(nested)]
+
+    def resolve(start: Path, planned: Dict[str, str], project_data: Any,
+                user_data: Any) -> Dict[str, Any]:
+        def read(path: Path) -> Optional[str]:
+            key = _real(path)
+            return planned[key] if key in planned else _disk_text(path)
+
+        files = _config.read_layers(_candidates(root, start), user_config, read=read)
+        return _config.resolve_settings(project_file, files, user_file, schema,
+                                        project_data=project_data,
+                                        user_data=user_data).settings
+
+    before = {start: resolve(start, texts, project, user) for start in starts + below}
+    root_before = before[root]
+
+    lines: List[Line] = []
+    for source in sources:
+        where = str(source.path)
+        config = _config.ConfigFile(source.path, source.kind, source.text)
+        present = {line.key: line for line in _config.legacy_lines([config], schema)}
+        for key, _node, section, bullet in _config.legacy_keys(schema):
+            if key in _config.HOME_KEYS:
+                # Never moved into a settings file: the hooks would act on it. The project
+                # config's bullets follow SETTINGS_BULLETS below.
+                if source.kind != KIND_PROJECT and key in present:
+                    base_kept.append(Kept(where, section, bullet, present[key].value,
+                                          REASON_HOME_ELSEWHERE))
+                continue
+            entries = [value for name, value in _config.section_bullets(
+                source.text, section.lower(), keep_case=True) if name.lower() == bullet.lower()]
+            if not entries:
+                continue
+            if len(entries) > 1:
+                base_kept.extend(Kept(where, section, bullet, value.strip(), REASON_DUPLICATE)
+                                 for value in entries)
+                continue
+            legacy = present.get(key)
+            value = None if legacy is None else _config.legacy_value(key, legacy.value, schema)
+            if legacy is None or value is None:
+                base_kept.append(Kept(where, section, bullet, entries[0].strip(),
+                                      REASON_NO_PARSE))
+                continue
+            cut = _bullet_cut(source, section, bullet)
+            if cut is None:
+                base_kept.append(Kept(where, section, bullet, legacy.value, REASON_NOT_LOCATED))
+                continue
+            lines.append(Line(source, key, section, bullet, legacy.value, value, cut))
+
+    props = schema["properties"]
+
+    def attempt(held: Dict[str, Tuple[str, str]]
+                ) -> Tuple[MovePlan, List[str], Dict[str, Tuple[Tuple[str, str], str]]]:
+        """One plan that keeps every line of each HELD key (key → (kept reason, where)):
+        (the plan, the changes the parity check refuses, and per key to hold next: (its
+        (kept reason, where), the change)). A key is held when its value would change
+        from a directory below the root, or, for a home or the ledger, from anywhere."""
+        notes = list(base_notes)
+        kept = list(base_kept)
+        moved: List[Moved] = []
+        project_writes: Dict[str, Any] = {}
+        user_writes: Dict[str, Any] = {}
+        cuts: Dict[str, Set[int]] = {}
+        cut_keys: Dict[str, Set[str]] = {}
+        replaced: Dict[str, Dict[int, Tuple[int, str]]] = {}
+        conflicts: Set[str] = set(held)
+
+        def move(line: Line, to: Path) -> None:
+            real = _real(line.source.path)
+            cuts.setdefault(real, set()).update(line.cut)
+            cut_keys.setdefault(real, set()).add(line.key)
+            moved.append(Moved(line.key, str(line.source.path), line.section, line.bullet,
+                               line.raw, str(to)))
+
+        def keep(line: Line, reason: str) -> None:
+            kept.append(Kept(str(line.source.path), line.section, line.bullet, line.raw,
+                             reason))
+
+        def wins(key: str, path: Optional[Path], current: Any, line: Line) -> str:
+            return "{}: {} sets {}, which wins over {} in {} ## {}; the line goes".format(
+                key, path, _shown(current), _echo(line.raw), line.source.path, line.section)
+
+        for key in _leaf_keys(schema):
+            group = [line for line in lines if line.key == key]
+            if not group:
+                continue
+            if key in held:
+                reason, where = held[key]
+                for line in group:
+                    keep(line, reason)
+                notes.append("{}: every line for it stays, because the move would change its "
+                             "value for {}".format(key, where))
+                continue
+            scope = props[key.split(".", 1)[0]].get("x-scope", _config.SCOPE_ANY)
+            project_side = [line for line in group if line.source.kind != KIND_USER]
+            user_line = next((line for line in group if line.source.kind == KIND_USER), None)
+            resolved = root_before[key].value
+            if not _sets(project, key) and any(
+                    not _same(line.value, resolved) for line in project_side
+                    if line.source.kind == KIND_NESTED):
+                conflicts.add(key)
+                for line in group:
+                    keep(line, REASON_CONFLICT)
+                values = ["{} has {}".format(line.source.path, _shown(line.value))
+                          for line in project_side]
+                if not any(line.source.kind == KIND_PROJECT for line in project_side):
+                    values.append("the project root resolves {}".format(_shown(resolved)))
+                notes.append("conflict: {} differs between the project's configs ({}); every "
+                             "line for it stays. Set it once in the project settings file, "
+                             "then run this again".format(key, "; ".join(values)))
+                continue
+            if project_side:
+                if _sets(project, key):
+                    current = _setting(project, key)
+                    for line in project_side:
+                        move(line, project_file)
+                        if not _same(line.value, current):
+                            notes.append(wins(key, project_file, current, line))
+                elif not can_project:
+                    for line in project_side:
+                        keep(line, REASON_NO_PROJECT_DIR)
+                else:
+                    project_writes[key] = next(
+                        (line.value for line in project_side
+                         if line.source.kind == KIND_PROJECT), project_side[0].value)
+                    for line in project_side:
+                        move(line, project_file)
+                        if line.source.kind == KIND_NESTED:
+                            notes.append("{} = {} from {} now applies to every repo of the "
+                                         "project".format(key, _shown(line.value),
+                                                          line.source.path))
+            if user_line is None:
+                continue
+            if scope != _config.SCOPE_PROJECT:
+                if user_file is None or not user_file.parent.is_dir():
+                    keep(user_line, REASON_NO_USER_DIR)
+                elif _sets(user, key):
+                    current = _setting(user, key)
+                    move(user_line, user_file)
+                    if not _same(user_line.value, current):
+                        notes.append(wins(key, user_file, current, user_line))
+                else:
+                    user_writes[key] = user_line.value
+                    move(user_line, user_file)
+                    notes.append("a project whose own ## {} section hid this user line will "
+                                 "take the user's {} ({}) after the move".format(
+                                     user_line.section, key, _shown(user_line.value)))
+                continue
+            decided = root_before[key]
+            if (decided.source == _config.SOURCE_LEGACY and decided.path == str(user_config)
+                    and not _sets(project, key) and key not in project_writes
+                    and can_project):
+                project_writes[key] = user_line.value
+                moved.append(Moved(key, str(user_line.source.path), user_line.section,
+                                   user_line.bullet, user_line.raw, str(project_file)))
+                notes.append("{} = {}: copied from the user config {} into the project "
+                             "settings file; the user config keeps the line, because other "
+                             "projects still read it until the grace date".format(
+                                 key, _shown(user_line.value), user_line.source.path))
+            else:
+                keep(user_line, REASON_PROJECT_KEY)
+
+        project_source = next((s for s in sources if s.kind == KIND_PROJECT), None)
+        if project_source is not None:
+            source = project_source
+            where = str(source.path)
+            # The values the resolver reads from this file's bullets, the worklog beside
+            # the PRD included.
+            given = _config.legacy_values(source.text, schema)
+            for section, bullet, setting in SETTINGS_BULLETS:
+                entries = [value for name, value in _config.section_bullets(
+                    source.text, section.lower(), keep_case=True)
+                    if name.lower() == bullet.lower()]
+                if not any(_config.bullet_value(value) is not None for value in entries):
+                    continue
+                if len(entries) > 1:
+                    kept.extend(Kept(where, section, bullet, value.strip(), REASON_DUPLICATE)
+                                for value in entries)
+                    continue
+                written = entries[0].strip()
+                if setting in held:
+                    kept.append(Kept(where, section, bullet, written, held[setting][0]))
+                    continue
+                change, payload = _settings_bullet_change(source, section, bullet)
+                if change == "locate":
+                    kept.append(Kept(where, section, bullet, written, REASON_NOT_LOCATED))
+                    continue
+                if setting == "db":
+                    if change == "prose":
+                        kept.append(Kept(where, section, bullet, written, REASON_PROSE))
+                        continue
+                    difference = _db_difference(
+                        "{} ## {} — {}: {}".format(where, section, bullet, _echo(written)),
+                        _config.bullet_value(entries[0]) or "", project, schema)
+                    if difference:
+                        notes.append(difference)
+                else:
+                    # A home or the ledger goes only when the key resolves to the same
+                    # value without it: it never goes into a settings file, because the
+                    # hooks would act on it (the user's decision, 2026-11-24).
+                    named = given.get(setting)
+                    if named is None:
+                        kept.append(Kept(where, section, bullet, written,
+                                         REASON_NO_REPO_PATH.format(setting)))
+                        continue
+                    if named is _config.BESIDE_PRD:
+                        named = _config.beside_prd(root_before[_PRD_KEY].value)
+                    if _sets(project, setting):
+                        current = _setting(project, setting)
+                        if not _same(named, current):
+                            kept.append(Kept(where, section, bullet, written,
+                                             REASON_DIFFERS_FILE.format(_shown(current))))
+                            continue
+                    else:
+                        default = (_config.setting_node(setting, schema) or {}).get("default")
+                        if not _same(named, default):
+                            kept.append(Kept(where, section, bullet, written,
+                                             REASON_NOT_SET.format(setting, _echo(named))))
+                            continue
+                    if change == "prose":
+                        payload = _bullet_cut(source, section, bullet)
+                        if payload is None:
+                            kept.append(Kept(where, section, bullet, written,
+                                             REASON_NOT_LOCATED))
+                            continue
+                        change = "cut"
+                        notes.append("{} ## {} — {}: its words go with it; keep them in a "
+                                     "prose line of the section if they matter".format(
+                                         where, section, bullet))
+                if change == "cut":
+                    cuts.setdefault(_real(source.path), set()).update(payload)
+                else:
+                    replaced.setdefault(_real(source.path), {}).update(payload)
+                    notes.append("{} ## {} — {}: the promotion targets it holds stay, as a "
+                                 "`- {}:` bullet".format(where, section, bullet,
+                                                         PROMOTION_KEY))
+                cut_keys.setdefault(_real(source.path), set()).add(setting)
+                moved.append(Moved(setting, where, section, bullet, written,
+                                   str(project_file)))
+
+        planned: Dict[str, str] = {}
+        for source in sources:
+            real = _real(source.path)
+            blocks = set(cuts.get(real, ()))
+            swaps = replaced.get(real, {})
+            if not blocks and not swaps:
+                planned[real] = source.text
+                continue
+            for head, end in _section_spans(source.blocks):
+                content = [x for x in range(head + 1, end) if source.blocks[x].kind != "blank"]
+                if content and all(x in blocks for x in content):
+                    blocks.add(head)
+            removed = {i for x in blocks
+                       for i in range(source.blocks[x].start, source.blocks[x].end + 1)}
+            planned[real] = _without(source.raw, source.lines, source.blocks, removed,
+                                     swaps)[0]
+            config = _config.ConfigFile(source.path, source.kind, source.text)
+            want = [(line.key, line.value) for line in _config.legacy_lines([config], schema)
+                    if line.key not in cut_keys.get(real, ())]
+            got = [(line.key, line.value) for line in _config.legacy_lines(
+                [config._replace(text=planned[real])], schema)]
+            if got != want:
+                raise MoveError("the plan for {} would change lines it does not move; edit "
+                                "it by hand".format(source.path), EXIT_INFRA)
+
+        def settings_files() -> Tuple[Any, Any]:
+            return (_merged(project, project_writes, schema, True) if project_writes
+                    else project,
+                    _merged(user, user_writes, schema, False) if user_writes else user)
+
+        planned_project, planned_user = settings_files()
+        after_root = resolve(root, planned, planned_project, planned_user)
+        pins: List[str] = []
+        for key in root_before:
+            if key == "version" or key in _config.HOME_KEYS:
+                continue
+            old = _value_of(root_before, key, project)
+            if _same(old, _value_of(after_root, key, planned_project)):
+                continue
+            if (key in conflicts or _sets(project, key) or key in project_writes
+                    or not can_project or not _config.valid_setting(key, old, schema)):
+                continue  # the check below names it
+            project_writes[key] = old
+            pins.append(key)
+        if pins:
+            planned_project, planned_user = settings_files()
+            for key in pins:
+                legacy = (_config.setting_node(key, schema) or {}).get("x-legacy") or {}
+                notes.append("pinned {} = {}: the project's {} section hid the user file's "
+                             "line before; delete the pin to take the user value".format(
+                                 key, _shown(project_writes[key]),
+                                 legacy.get("section", "config")))
+
+        changes: List[str] = []
+        below_changes: Dict[str, Tuple[Tuple[str, str], str]] = {}
+        for start in starts + below:
+            after = resolve(start, planned, planned_project, planned_user)
+            for key in dict.fromkeys(list(before[start]) + list(after)):
+                if key == "version":
+                    continue
+                old = _value_of(before[start], key, project)
+                new = _value_of(after, key, planned_project)
+                if _same(old, new):
+                    continue
+                change = "{}: {} would change from {} to {}".format(
+                    start, key, _shown(old), _shown(new))
+                if key in _config.HOME_KEYS:
+                    below_changes.setdefault(
+                        key, ((REASON_HOME_HELD.format(key, start), str(start)), change))
+                    continue
+                if start in below:
+                    config = str(start / _config.CONFIG_RELPATH)
+                    below_changes.setdefault(key, ((REASON_BELOW.format(config), config),
+                                                   change))
+                    continue
+                setting = after.get(key)
+                if (start != root and setting is not None
+                        and setting.source == _config.SOURCE_PROJECT
+                        and _same(new, _value_of(root_before, key, project))):
+                    notes.append("{}: {} becomes {} (was {}): the project settings file sets "
+                                 "it for every repo".format(start, key, _shown(new),
+                                                            _shown(old)))
+                    continue
+                changes.append(change)
+
+        files: List[Dict[str, Any]] = []
+        writes: List[Tuple[str, str, bool, bool]] = []
+        config_writes: List[Tuple[str, str, bool, bool]] = []
+        for source in sources:
+            new_text = planned[_real(source.path)]
+            changed = new_text != source.text
+            files.append({"path": str(source.path), "changed": changed, "created": False,
+                          "diff": _text_diff(_header_path(source.path, root), source.text,
+                                             new_text) if changed else ""})
+            if changed:
+                config_writes.append((str(source.path), new_text, False,
+                                      source.kind == KIND_USER))
+        for path, data, text, new_data, trusted in (
+                (project_file, project, project_text, planned_project, False),
+                (user_file, user, user_text, planned_user, True)):
+            if path is None or new_data is None:
+                continue
+            if new_data is data:
+                files.append({"path": str(path), "changed": False, "created": False,
+                              "diff": ""})
+                continue
+            content = json.dumps(new_data, indent=2, ensure_ascii=False) + "\n"
+            created = data is None
+            changed = created or content != text
+            files.append({"path": str(path), "changed": changed, "created": created,
+                          "diff": _text_diff(_header_path(path, root), text, content)
+                          if changed else ""})
+            if changed:
+                writes.append((str(path), content, created, trusted))
+            if created and not trusted:
+                notes.append('creates {} with "db": null: this project has no journal; the '
+                             'hooks stay inert, as before'.format(_config.SETTINGS_RELPATH))
+        return (MovePlan(files, moved, kept, notes, writes + config_writes), changes,
+                below_changes)
+
+    held: Dict[str, Tuple[str, str]] = {}
+    while True:
+        result, changes, below_changes = attempt(held)
+        fresh = {key: hold for key, (hold, _change) in below_changes.items()
+                 if key not in held}
+        if not fresh:
+            break
+        held.update(fresh)
+    changes += [change for _where, change in below_changes.values()]
+    if changes:
+        raise MoveError(
+            "the move would change a setting, so nothing is written:\n"
+            + "".join("  {}\n".format(change) for change in changes)
+            + "move those lines by hand, or set the value in a settings file, then run this "
+              "again", EXIT_INFRA)
+    return result
+
+
+def create_atomic(path: str, content: str) -> None:
+    """Create PATH with CONTENT through a temporary file in its directory, with the mode a
+    plain create gives (0666 less the umask). A PATH that appears meanwhile is refused,
+    not replaced."""
+    fd, tmp = tempfile.mkstemp(prefix=".lean_config-", dir=os.path.dirname(path) or ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(content)
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(tmp, 0o666 & ~mask)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            raise
+        except OSError:
+            # A file system with no hard links: check, then rename.
+            if os.path.lexists(path):
+                raise FileExistsError(errno.EEXIST, "file exists", path) from None
+            os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def move_summary(result: MovePlan) -> str:
+    return "lean_config: {} line(s) to move, {} kept, {} file(s) to change".format(
+        len(result.moved), len(result.kept), sum(1 for f in result.files if f["changed"]))
+
+
+def move_settings(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    if not root.is_dir():
+        print("error: no such directory: {}".format(args.path), file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        result = plan_move(root)
+    except MoveError as exc:
+        print("error: {}".format(exc), file=sys.stderr)
+        return exc.code
+    if args.apply:
+        for path, content, created, trusted in result.writes:
+            try:
+                if created:
+                    create_atomic(path, content)
+                else:
+                    write_atomic(path, content, follow_links=trusted)
+            except OSError as exc:
+                print("error: {}".format(exc), file=sys.stderr)
+                return EXIT_INFRA
+    if args.json:
+        print(json.dumps({
+            "files": result.files,
+            "moved": [m._asdict() for m in result.moved],
+            "kept": [k._asdict() for k in result.kept],
+            "notes": result.notes,
+            "changed": any(f["changed"] for f in result.files),
+        }, sort_keys=True, indent=2))
+        return EXIT_OK
+    print(move_summary(result))
+    for note in result.notes:
+        print(_printable("note: " + note))
+    for k in result.kept:
+        print(_printable("kept: {} ## {} — {}: {} ({})".format(
+            k.path, k.section, k.bullet, _echo(k.value), k.reason)))
+    if not args.apply:
+        for entry in result.files:
+            sys.stdout.write(entry["diff"])
+    return EXIT_OK
 
 
 # --------------------------------------------------------------------------
@@ -894,11 +2073,24 @@ def build_parser() -> argparse.ArgumentParser:
                     "A block goes only when every sentence in it is catalogued "
                     "boilerplate; a block that also holds project sentences stays and is "
                     "listed as mixed, with a hint. Prints a summary, the mixed blocks and "
-                    "a unified diff; writes only with --apply.",
-        epilog="exit codes: 0 ok (whether or not anything changes), 1 the file cannot be "
-               "read or written, or the install is incomplete, 2 usage error",
+                    "a unified diff; writes only with --apply. With --move-settings, move "
+                    "the settings that the configs of a project, of its nested repos and "
+                    "of the user still hold as legacy lines into the settings files "
+                    "(ADR 0028). Prints a summary, the notes, the lines that stay and a "
+                    "diff per file; writes only with --apply.",
+        epilog="exit codes: 0 ok (whether or not anything changes), 1 a file cannot be "
+               "read or written, a settings file is no JSON object, a project file is a "
+               "symlink, a move would change a setting, or the install is incomplete, "
+               "2 usage error, a root below a project root, or a settings file declares "
+               "a version this shipgate does not write",
     )
-    parser.add_argument("path", help="the config file, e.g. .claude/shipgate.md")
+    parser.add_argument("path", help="the config file, e.g. .claude/shipgate.md; with "
+                                     "--move-settings, the project root (the directory "
+                                     "that holds .claude/)")
+    parser.add_argument("--move-settings", action="store_true",
+                        help="move legacy lines into the settings files: from the project "
+                             "and nested configs into .claude/shipgate.json, from the user "
+                             "config into the user settings file")
     parser.add_argument("--apply", action="store_true", help="write the result to the file")
     parser.add_argument("--user", metavar="PATH",
                         help="the user file; report sections equal to its sections")
@@ -919,11 +2111,14 @@ def _read(path: str) -> str:
         return fh.read()
 
 
-def write_atomic(path: str, content: str) -> None:
+def write_atomic(path: str, content: str, follow_links: bool = True) -> None:
     """Replace PATH's content through a temporary file in its directory. A file without
     write permission is refused, not replaced. The new file keeps the old file's mode, but
-    it belongs to the current user, and a hard link to the old file is split."""
-    target = os.path.realpath(path)
+    it belongs to the current user, and a hard link to the old file is split. With
+    FOLLOW_LINKS false, a PATH that is a symlink is refused, not written through."""
+    if not follow_links and os.path.islink(path):
+        raise OSError(errno.ELOOP, "is a symlink; not written through", path)
+    target = os.path.realpath(path) if follow_links else os.path.abspath(path)
     if not os.access(target, os.W_OK):
         raise PermissionError(errno.EACCES, "file is not writable", target)
     mode = stat.S_IMODE(os.stat(target).st_mode)
@@ -944,6 +2139,11 @@ def write_atomic(path: str, content: str) -> None:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.move_settings:
+        if args.user or args.drop_equal or args.only_equal or args.umbrella:
+            parser.error("--move-settings cannot combine with --user, --drop-equal, "
+                         "--only-equal or --umbrella")
+        return move_settings(args)
     if args.drop_equal and not args.user:
         parser.error("--drop-equal needs --user")
     if args.only_equal and not args.user:

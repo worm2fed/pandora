@@ -4,7 +4,7 @@
   "description": "The settings of .claude/shipgate.json (the project settings file) and $CLAUDE_CONFIG_DIR/shipgate.settings.json (the user settings file). scripts/_config.py reads this file and layers the settings per key (ADR 0028). x-scope project: read from the project settings file only. x-legacy: the shipgate.md section and bullet that still set the key until the grace date. A default of null on a key that is not nullable means the reader's built-in value.",
   "type": "object",
   "x-version": 2,
-  "x-legacy-until": null,
+  "x-legacy-until": "2027-01-23",
   "properties": {
     "version": {
       "description": "The format of this file. A value above x-version is a warning, and the known keys are still read.",
@@ -31,7 +31,11 @@
       "minLength": 1,
       "default": "docs/ledger.md",
       "x-scope": "project",
-      "x-since": "0.22.0"
+      "x-since": "0.22.0",
+      "x-legacy": {
+        "section": "Knowledge base",
+        "key": "Ledger"
+      }
     },
     "artifact_homes": {
       "description": "A glob per artifact kind. A kind this file does not set keeps its default.",
@@ -39,15 +43,27 @@
       "properties": {
         "prd": {
           "type": "string",
-          "default": "docs/prd/*.md"
+          "default": "docs/prd/*.md",
+          "x-legacy": {
+            "section": "Knowledge base",
+            "key": "PRD home"
+          }
         },
         "adr": {
           "type": "string",
-          "default": "docs/adr/*.md"
+          "default": "docs/adr/*.md",
+          "x-legacy": {
+            "section": "Knowledge base",
+            "key": "ADR home"
+          }
         },
         "worklog": {
           "type": "string",
-          "default": "docs/prd/*.worklog.md"
+          "default": "docs/prd/*.worklog.md",
+          "x-legacy": {
+            "section": "Knowledge base",
+            "key": "Worklog home"
+          }
         }
       },
       "additionalProperties": {

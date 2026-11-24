@@ -18,7 +18,7 @@ from .vocab import (
 )
 from .text import _one_line
 from .project import artifact_homes, ledger_summary, Resolution, resolve_db
-from .settings import cmd_config
+from .settings import cmd_config, status_settings
 from .store import apply_migrations, connect, read_events
 from .fold import stream_lifecycle
 from .append import append_event, AppendResult
@@ -658,6 +658,10 @@ def cmd_status(args, resolution: Resolution) -> int:
     finally:
         conn.close()
     status["ledger"] = ledger_summary(resolution.project_dir, resolution.sidecar)
+    # The settings lines (ADR 0028, M2), resolved from the project root. A value in a
+    # settings file never fails this command, because SessionStart runs it; a missing
+    # schema is an incomplete install and fails it, as the ledger line already did.
+    status.update(status_settings(resolution.project_dir))
     if args.json:
         print(json.dumps(status, sort_keys=True))
     else:
@@ -720,7 +724,8 @@ def cmd_nudge(args, resolution: Resolution) -> int:
 def cmd_stats(args, resolution: Resolution) -> int:
     conn = connect(resolution.db_path)
     try:
-        report = build_stats(conn, since=args.since, stream=args.stream)
+        report = build_stats(conn, since=args.since, stream=args.stream,
+                             project_dir=resolution.project_dir)
     finally:
         conn.close()
     if args.json:
@@ -899,7 +904,7 @@ def cmd_doctor(args, resolution: Resolution) -> int:
     if args.json:
         print(json.dumps(report, sort_keys=True))
     else:
-        print(render_doctor(report))
+        print(render_doctor(report, resolution.project_dir))
     if report["integrity_check"] != "ok":
         print("integrity check failed — the database is corrupt", file=sys.stderr)
         return EXIT_INFRA

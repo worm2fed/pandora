@@ -9,10 +9,16 @@ Execution discipline is what separates a plan that ships from a plan that rots. 
 build plan one task at a time. Prove each task is done before you move on. Keep the worklog
 honest about what actually happened.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 > If the config's Style section names a style skill, invoke that skill before writing code,
 > and put the same instruction in every worker brief (see `model-tiers`). Journaled,
 > record the skills you named in the phase entry (see **Record each task**).
@@ -31,9 +37,9 @@ executes it.
 
 ## The loop (per task)
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-the worklog lines and ledger lines this loop writes (ticks, deviations, notes, jots); absent,
-a placeholder, or `plain`, write them as before.
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
+the worklog lines and ledger lines this loop writes (ticks, deviations, notes, jots). When
+it is `plain`, the default, write them as before.
 
 1. **Take the next task** in dependency order from the Build Plan. Respect `[P]` only as a
    signal that tasks are independent. Do not start a task whose prerequisites are unchecked.
@@ -107,8 +113,9 @@ a placeholder, or `plain`, write them as before.
    this task that outlives the feature. Examples: a trap (a default that silently disables a
    feature, a breaking change nothing flagged), a convention you found by grep rather than
    in the docs, a style call you made. Each one is one dated line in the project **ledger**.
-   The ledger is the path the config declares, or `docs/ledger.md` when that file already
-   exists. Append the line in this step; do not recall it from memory at Capture:
+   The ledger is the file the `ledger` setting names (default `docs/ledger.md`). Write to it
+   when a settings file sets `ledger` or when that file already exists. Append the line in
+   this step; do not recall it from memory at Capture:
 
    ```bash
    printf -- '- %s — <gotcha|style|decision>: <one line>\n' "$(date +%F)" >> docs/ledger.md
@@ -142,7 +149,8 @@ vocabulary, not for every task.
 
 ## Record each task (journaled projects)
 
-On a project whose config declares a **Journal**, the phase starts with one event. Before
+On a journaled project (the status brief is present, or `.claude/shipgate.json` exists and
+`journal.py config db` prints a `db` that is not null), the phase starts with one event. Before
 the first task, append the phase entry with `style`: the style skills the config's Style
 section names, or `[]` when it names none. The key tells "none configured" from "never
 recorded", so write it even when the list is empty:

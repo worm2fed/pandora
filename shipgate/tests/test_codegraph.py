@@ -331,11 +331,14 @@ class TestCodeGraphConfig(SignalsCase):
                                             "--graph", "off")
                 self.assertEqual(payload["config"]["code_graph"], "off")
 
-    def test_the_template_bullet_is_a_placeholder(self):
+    def test_the_template_sets_no_code_graph(self):
+        """`code_graph` is a setting since #60 (ADR 0028): the template's Code tooling
+        section holds no `Code graph` bullet, and a project copied from it reads the
+        default."""
         mod = load_signals_module()
         template = (TESTS_DIR.parent / "config-template.md").read_text(encoding="utf-8")
         bullets = dict(mod.section_bullets(template, "code tooling"))
-        self.assertIn("code graph", bullets)
+        self.assertNotIn("code graph", bullets)
         self.assertEqual(mod.parse_code_graph(template), {})
         self.write_config(self.repo.path, template)
         self.assertEqual(self.graph(), ("auto", "default"))

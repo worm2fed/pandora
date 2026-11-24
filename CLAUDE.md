@@ -34,8 +34,8 @@ pattern and its paths; treat a hit as a blocker, not a nit.
   by plain name). Its scripts stay Python 3.9 compatible (no `match`, no runtime `X | Y`).
 - Plugins are independent: read the plugin's own `README.md` / `CHANGELOG.md` before
   editing it; do not assume one plugin's conventions apply to another.
-- shipgate's flow config for this repo is `.claude/shipgate.md`; the journal is
-  `.claude/shipgate.db` (local, gitignored).
+- shipgate's settings for this repo are in `.claude/shipgate.json`, and its config (behaviour
+  in words) is `.claude/shipgate.md`; the journal is `.claude/shipgate.db` (local, gitignored).
 - A behaviour change to a plugin bumps its version in `<plugin>/.claude-plugin/plugin.json`
   and the matching entry in `.claude-plugin/marketplace.json`, in the same change.
 - Every shipgate release gets a git tag `shipgate--v<version>` on the commit that bumps its

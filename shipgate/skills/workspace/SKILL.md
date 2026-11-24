@@ -14,10 +14,16 @@ feature branched off the wrong base does not.
 **Never silently operate on the checked-out branch. Always confirm before switching or
 creating a branch.**
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
 ## Which repo — resolve this FIRST if repos are nested
 
@@ -134,8 +140,10 @@ one-line confirmation. It's a guard, not ceremony.
 
 ## Record the start (journaled projects)
 
-On a project whose config declares a **Journal**, the established branch is where the flow gets
-a name. Append it here, the moment it happens, not later. Use one `--batch` (JSONL on stdin):
+On a journaled project (the status brief is present, or `.claude/shipgate.json` exists and
+`journal.py config db` prints a `db` that is not null), the established branch is where the
+flow gets a name. Append it here, the moment it happens, not later. Use one `--batch` (JSONL on
+stdin):
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append --stream <branch> --batch <<'EOF'

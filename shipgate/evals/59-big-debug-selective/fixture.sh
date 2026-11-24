@@ -802,24 +802,14 @@ def write_config():
     write(".claude/shipgate.md", '''
         # shipgate — project config
 
-        ## Knowledge base
-        - PRD home: `docs/prd/`
-        - ADR home: `docs/adr/`
-        - Ledger: `docs/ledger.md`
-
-        ## Journal
-        - Database: `.claude/shipgate.db`
-
         ## Branching
         - Pattern: `<type>/<issue-id>-<slug>` (e.g. `feat/462-overdue-digest`, `fix/4xx-slug`)
-
-        ## Autonomy
-        - Mode: executive
     ''')
     write(".claude/shipgate.json", json.dumps({
-        "version": 1, "db": ".claude/shipgate.db",
+        "version": 2, "db": ".claude/shipgate.db",
         "artifact_homes": {"prd": "docs/prd/*.md", "adr": "docs/adr/*.md", "worklog": "docs/prd/*.worklog.md"},
         "enforce": {"stop_gate": True, "auto_capture": True},
+        "autonomy": "executive",
     }, indent=2) + "\n")
 
 

@@ -10,10 +10,16 @@ re-derive what's already known. **Capture** after, so the next session inherits 
 judgment is *which store* a piece of knowledge belongs in. The wrong home pollutes a store
 that has a different job.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
 > **Not Claude's built-in session memory.** The harness has its own personal/session memory
 > feature. This skill is different. It takes precedence for anything a *teammate or future
@@ -88,14 +94,14 @@ Fetch a fact that is cheap to fetch (a file, a command); do not abstain on it.
 > command, exit code, count and verdict the report carried stays in it. Code, commands and
 > error text go in fenced blocks, not in prose.
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-ledger lines; absent, a placeholder, or `plain`, write them as before.
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
+ledger lines. When it is `plain`, the default, write them as before.
 
 Learnings evaporate between "noticed mid-implement" and "curated capture at the end of the
 flow". By Capture time the context is deep, and half the small insights are gone. The
-**ledger** is the fix. It is one project-wide, append-cheap staging file. Its path is
-config-declared; the default is `docs/ledger.md` in the repo. Any phase writes to it the moment
-something worth keeping surfaces.
+**ledger** is the fix. It is one project-wide, append-cheap staging file. Its path is the
+`ledger` setting; the default is `docs/ledger.md` in the repo. Any phase writes to it the
+moment something worth keeping surfaces.
 
 - **Appending is free of ceremony.** Write one dated line per entry. A rough type tag is
   optional (`style:`, `gotcha:`, `decision:`, `pref:`), and so is a one-line context. There is
@@ -112,16 +118,16 @@ something worth keeping surfaces.
 
   Outside a phase skill the same rule holds: hit a trap, write the line, keep going. The line
   is the deliverable. It is not a `CLAUDE.md` edit, not an ADR, not built-in memory, and not a
-  pause to explain the ledger. The ledger exists when the config declares it or when
-  `docs/ledger.md` is already there. A project gets one at setup or at its first Capture. It
+  pause to explain the ledger. The ledger exists when a settings file sets `ledger` or when
+  its file is already there. A project gets one at setup or at its first Capture. It
   never gets one as a side effect of a debugging, build or review step. A new file the user did
   not ask for reads as a change applied, not a learning kept.
 - **Promotion (triage) is where curation happens.** Walk the entries. Route each one through
   the type-routing above to its durable home, or **drop it**. The homes include any
-  **promotion targets the config's `Ledger:` line declares**. These may be unconventional
-  stores: a style skill's SKILL.md, specific wiki pages, a repo `CLAUDE.md`, an ADR. A
-  config's `Ledger:` line lists project targets only. Most raw entries don't survive triage,
-  and that's healthy. Apply the capture quality gate to each promotion.
+  **promotion targets the config's Knowledge base section declares**. These may be
+  unconventional stores: a style skill's SKILL.md, specific wiki pages, a repo `CLAUDE.md`,
+  an ADR. A config lists project targets only. Most raw entries don't survive triage, and
+  that's healthy. Apply the capture quality gate to each promotion.
 - **The built-in promotion defaults** cover an entry that neither the type-routing above nor
   a config target gives a home:
   - A personal workflow preference goes to the harness's built-in memory. It is the one
@@ -134,8 +140,8 @@ something worth keeping surfaces.
 
 ## Capture (after work) — pass the quality gate first
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-the pages and lines capture writes; absent, a placeholder, or `plain`, write them as before.
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
+the pages and lines capture writes. When it is `plain`, the default, write them as before.
 
 Storing junk is worse than storing nothing, because it pollutes recall. Before you write
 anything, ALL of these must hold:
@@ -168,7 +174,8 @@ connect related notes per that store's conventions, so the knowledge base stays 
 
 ## Record the capture (journaled projects)
 
-On a project whose config declares a **Journal**, close the Capture phase. Do it once the
+On a journaled project (the status brief is present, or `.claude/shipgate.json` exists and
+`journal.py config db` prints a `db` that is not null), close the Capture phase. Do it once the
 ledger is walked and every entry is promoted or dropped. Append the event then, not at some
 later tidy-up:
 
