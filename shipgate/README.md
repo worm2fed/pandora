@@ -27,9 +27,110 @@ Start or resume work with **`/shipgate [description]`**, or just describe a feat
 ## Configuration
 
 Run **`/shipgate:setup`** in a project and it does this for you: detects the repo's shape,
-asks a handful of questions with recommended defaults, writes `.claude/shipgate.md`, and —
-if you want one — initializes the flow journal. Re-running it enters update mode rather
-than clobbering what's there.
+asks a handful of questions with recommended defaults, writes the settings file
+`.claude/shipgate.json` and the config `.claude/shipgate.md`, and — if you want one —
+initializes the flow journal. Re-running it enters update mode rather than clobbering what's
+there.
+
+shipgate reads two kinds of file (ADR 0028):
+
+- a **settings file** holds the **settings**: values from fixed sets that scripts, hooks and
+  skills read, such as `autonomy` or `artifact_homes`. It is JSON.
+- the **config** holds behaviour in words that the model reads: the knowledge stores, the
+  tracker, branch naming, guardrails, extra escalations. It is markdown.
+
+### Settings
+
+A settings file is one JSON object with `"version": 2`. There are two:
+
+- the **project settings file**, `.claude/shipgate.json` at the project root. It marks the
+  project root. `"db": null` in it declares that the project has no journal.
+- the **user settings file**, `$CLAUDE_CONFIG_DIR/shipgate.settings.json` when that variable
+  is set and not empty, else `~/.claude/shipgate.settings.json`. It holds your personal
+  settings for every project. No walk for `.claude/shipgate.json` finds this name, so it never
+  marks a project as journaled, and no hook script reads it.
+
+`settings.schema.json` in this plugin names every setting. Edit a settings file by hand or
+with `/shipgate:setup`; shipgate checks it on every read.
+
+| Setting | Values | Default | Sets | Scope |
+| --- | --- | --- | --- | --- |
+| `version` | an integer, 1 or more | `2` | the format of the file; a higher version is a warning, and the known keys are still read | project |
+| `db` | a path from the project root, or `null` | `.claude/shipgate.db` | the journal database; `null` declares no journal | project |
+| `ledger` | a path from the project root | `docs/ledger.md` | the ledger file | project |
+| `artifact_homes.prd` | a glob | `docs/prd/*.md` | the PRD home | project |
+| `artifact_homes.adr` | a glob | `docs/adr/*.md` | the ADR home | project |
+| `artifact_homes.worklog` | a glob | `docs/prd/*.worklog.md` | the worklog home | project |
+| `enforce.stop_gate` | `true`, `false` | `true` | the Stop gate | project |
+| `enforce.auto_capture` | `true`, `false` | `true` | the auto-capture of artifact writes | project |
+| `enforce.command_gate` | `true`, `false` | `true` | the command gate; `false` lets a model commit, push and open an MR/PR with no go from you, which an unattended project needs | project |
+| `autonomy` | `ask`, `executive` | `ask` | who answers routine gate questions: you, or the orchestrator, which records each answer and still asks the cases of the executive contract in the `feature` skill | any |
+| `orchestration.review` | `agents`, `workflow` | `agents` | whether the Review fan runs as `Agent` subagents or as the bundled `Workflow` script | any |
+| `orchestration.explore` | `agents`, `workflow` | `agents` | the same for the Explore fan | any |
+| `writing_style` | `plain`, `ste-80` | `plain` | whether the documents shipgate writes into the repo and forge (PRD, ADR, worklog, ledger, MR/PR body, tracker comments) follow the STE-80 "Writing for people" rule; reports to you follow it always | any |
+| `code_graph` | `auto`, `off`, `root` | `auto` | the code graph (see [Code graph](#code-graph)) | any |
+| `code_signals.window_months` | an integer from 1 to 1200 | `12` | the history window of the code signals | project |
+| `code_signals.fix_pattern` | a regex over the commit subject | the built-in pattern | which commits count as fixes | project |
+| `code_signals.exclude` | a list of globs | `[]` | paths added to the built-in excludes | project |
+| `code_signals.ranking_exclude` | a list of globs | the release files | paths the risk ranking leaves out; the list replaces the built-in one, and `[]` turns it off | project |
+| `handoff` | `off`, a token count such as `300000`, or a count with `k` or `m` such as `500k` | `500k` | the context size past which the PostToolUse hook recommends a fresh session after a design commit or a not-ready review verdict | any |
+| `forge` | `github`, `gitlab` | unset: the host of the PR/MR URL or of the git remote | the forge CLI that the close-out, the sweep and the skills use (`gh` or `glab`) | project |
+
+`artifact_homes` also takes a glob for any other kind of artifact. The PRD, ADR and worklog
+homes are the directories of their globs.
+
+**How a setting resolves.** Per key, nearest first:
+
+1. the project settings file;
+2. a legacy line in the project's `.claude/shipgate.md` files (the repo's, then the
+   umbrella's, by the config's per-section rule below);
+3. the user settings file;
+4. a legacy line in the user file `shipgate.md`;
+5. the default in the table.
+
+A layer that does not set a key lets the next layer show through. Objects merge per leaf
+key, so a project can set `orchestration.review` alone. **Scope:** a `project`-scope key in
+the user settings file is ignored, and `journal.py doctor` reports it. Else one line there
+could turn off the command gate or share one journal across every project. `Inherit: none`
+governs the config's layers only.
+
+**`journal.py config [KEY ...] [--json]`** prints each setting with its value and its source:
+the settings file, `legacy` with its file, or `default`. A key is a setting
+(`orchestration.review`) or a group (`orchestration`); with no key it prints all. It needs no
+journal database. It exits 0; 2 for a value outside its set or an unknown key; 1 for a
+settings file that is not a JSON object. The SessionStart status brief carries the values of
+`autonomy`, `orchestration`, `writing_style` and `code_graph` in one `settings:` line, and
+the skills read that line first.
+
+**A bad value.** A value outside its set in a settings file stops each command that reads the
+key with exit 2: `journal.py config`, `signals.py`, `handoff`, `closeout` and `sweep`. The
+message names the file, the key, the value and the allowed values. The hooks, and the journal
+commands that a hook runs (`status`, `nudge`, `append`), use the key's default instead, and
+every `enforce` setting stays on. The status brief names each bad key once, the keys the
+hooks read (`db`, `enforce`, `artifact_homes`) too. An unknown key and a `version` above 2
+are warnings.
+
+**A settings file that cannot be read.** When the project settings file is not a JSON
+object (not valid JSON, not UTF-8, a list), the hooks fail open: the project acts as one with
+no journal, so every gate is off, and a broken file never blocks a session. The SessionStart
+hook then adds one line to the session context. It names the file and `journal.py doctor`,
+and it never repeats the file's content. A project with no settings file pays nothing for
+this check.
+
+**Legacy lines.** A config written by an older shipgate can still hold a setting as a
+`- Key: value` bullet, such as `- Mode: executive` under `## Autonomy`. Such a legacy line is
+still read, at its layer in the list above, until 2027-01-23. The status brief counts the
+legacy lines and names that date. `/shipgate:setup` moves them into the settings files: it
+shows the diff first and writes only on a yes. A legacy line with a value outside its set is
+ignored and named. The first release after the date stops reading legacy lines. The
+Knowledge base section's `PRD home`, `ADR home`, `Worklog home` and `Ledger` bullets are
+legacy lines of `artifact_homes` and `ledger` when they name a repo path: the skills read
+them, through `journal.py config`, while the settings file does not set the key; the hooks
+and `status` read the settings file only. A home outside the repo, such as a wiki, stays
+words in that section. `setup` removes a home bullet only when the settings file already
+gives the same home; for any other, it shows the difference and asks.
+
+### The config
 
 `setup` writes a lean file: a one-line title and `- Key: value` bullets, with no template
 comments and no prose that explains the plugin. On a machine with no user file, it offers
@@ -41,9 +142,9 @@ reports it as `mixed`, for you to split by hand. `setup` shows the diff, and the
 writes only on a yes.
 
 Or do it by hand: copy `config-template.md` from this plugin into your project as
-**`.claude/shipgate.md`** and fill in what applies. Skills read it at the start of a flow and treat it as overriding
-their defaults; subagents get the relevant excerpts pasted into their briefs.
-Every section is optional — with no config at all, shipgate still works on sensible
+**`.claude/shipgate.md`** and fill in what applies. Skills read it at the start of a flow and
+treat it as overriding their defaults; subagents get the relevant excerpts pasted into their
+briefs. Every section is optional — with no config at all, shipgate still works on sensible
 defaults (in-repo `docs/prd|adr/`, forge auto-detected from the git remote). The template's
 comments and this section explain each section, so a project's config does not repeat them.
 
@@ -64,34 +165,29 @@ angle-bracket placeholder. A section with placeholders only, or with no bullets,
 and the next layer shows through.
 
 The user file uses the same section names and keys as a project's config. It holds what is
-personal and the same in every project: usually Writing style, the Library docs line,
-Autonomy, Session, and the ledger's promotion target for preferences. A nested config takes nothing
-from the umbrella's config when the line `Inherit: none` stands under its title, before its
-first section. The user file and the built-in defaults still apply.
+personal and the same in every project: usually the Library docs line, the Autonomy
+section's Extra escalations, and the ledger's promotion target for preferences. A nested
+config takes nothing from the umbrella's config when the line `Inherit: none` stands under
+its title, before its first section. The user file and the built-in defaults still apply.
 
 What the sections configure:
 
 | Section | Configures | Default without it |
 | --- | --- | --- |
-| Knowledge base | where PRDs/ADRs/worklogs and captured knowledge live (in-repo paths or an MCP-backed wiki), page conventions, the ledger and its project promotion targets | `docs/prd/`, `docs/adr/`, capture to repo docs; ledger `docs/ledger.md`; at triage, personal workflow preferences go to the harness's built-in memory and everything else is dropped |
-| Journal | the append-only flow journal's database path (written by `/shipgate:setup`) | no journal — phase inferred from artifact shape |
-| Forge & tracker | GitLab/GitHub, CLI, MR/PR template + fetch command, issue-link form, AC source | auto-detect from `git remote` (`gh`/PR, `glab`/MR) |
+| Knowledge base | where captured knowledge lives (in-repo paths or an MCP-backed wiki), page conventions, and the ledger's project promotion targets | capture to repo docs; at triage, personal workflow preferences go to the harness's built-in memory and everything else is dropped |
+| Forge & tracker | the tracker, MR/PR template + fetch command, issue-link form, AC source, bug provenance | issue context from whatever CLI/MCP is available |
 | Branching | branch naming pattern + examples | `<type>/<issue-id>-<slug>` |
 | Repo layout | umbrella / nested-repo checkouts, where the real repos live | working dir is the repo |
 | Style | a project style skill to invoke before writing/reviewing code | match surrounding code |
-| Writing style | whether the documents shipgate writes into the repo and forge (PRD, ADR, worklog, ledger, MR/PR body, tracker comments) follow the STE-80 "Writing for people" rule (`ste-80`) or keep plain prose; reports to the person driving the flow follow the rule regardless | `plain` |
 | Security-sensitive areas | domains that trigger the full `/security-review` | auth, secrets, payments |
 | Debug evidence sources | prod/QA log-query skill, CI-log integration | local logs, tests, debugger |
 | Epic workflow | epic decomposition command, ordering, delivery rules | issue-by-issue, manual decomposition |
 | MR watcher | a project skill that watches open MRs/PRs + the command to register a blocker/follow-up on its watch list | no watcher — the flow ends at "MR/PR opened" |
 | Close-out | the project's own post-merge steps, `- <Label>: <action>`; each one is an arbitrary command, so each waits for the one close-out question | the close-out's built-in steps only |
 | Code tooling | the library-docs tool/MCP to consult for a dependency's current API (an override), and the LSP tool for symbol navigation | library docs from a context7-style MCP when the session has one, else training knowledge / WebFetch; grep-and-read |
-| Code signals | window, fix-commit pattern, extra excludes and ranking excludes for the bundled risk signals (the one section a script reads, not the model) | 12-month window, built-in fix pattern, excludes and ranking excludes (release files) |
 | Worker guardrails | the repo's own hard rules, pasted verbatim into every worker brief after the built-in worker discipline | only the built-in worker discipline in `model-tiers`: branch check, no staging, the git index, no `--no-verify`, no repo-wide formatter, stop-and-report, comments, evidence |
-| Orchestration | whether Review / Explore fan out via bundled `Workflow` scripts or `Agent` subagents | `agents` for both |
 | Thinking lenses | which lens *skills* to invoke at which phase, overriding the inline bullet (e.g. one from [cc-thinking-skills](https://github.com/tjboudreaux/cc-thinking-skills)); a large lens plugin costs skill-listing space in every session, so map only what you need | no lens skills invoked — the phase skills apply each lens inline |
-| Autonomy | `Mode`: `ask` vs `executive` — whether the orchestrator answers routine gate questions itself (and records them); `Extra escalations`: the cases it must still ask about, on top of the executive contract, which lives in the `feature` skill | `ask` — every gate question goes to the user |
-| Session | `Handoff`: the context size, in tokens, past which the PostToolUse hook recommends a fresh session after a design commit or a not-ready review verdict (`500k`, `1m`, `300000` or `off`) | `500k` |
+| Autonomy | `Extra escalations`: the cases the orchestrator must still ask about in `executive` mode, on top of the executive contract, which lives in the `feature` skill | none beyond the executive contract |
 
 ## What's inside
 
@@ -102,7 +198,7 @@ What the sections configure:
 **Skills**
 
 - `feature` — orchestrator: detects phase from artifacts, routes, owns escape hatches, drives epics issue-by-issue.
-- `setup` — bootstrap: detects the repo's shape, interviews with recommended defaults, writes `.claude/shipgate.md` + its generated `.claude/shipgate.json` sidecar, and initializes the flow journal. Re-run to update.
+- `setup` — bootstrap: detects the repo's shape, interviews with recommended defaults, writes the settings file `.claude/shipgate.json` and the config `.claude/shipgate.md`, and initializes the flow journal. Re-run to update.
 - `workspace` — the first phase: get onto the right branch (`<type>/<issue-id>-<slug>`) off a clean base before any work; never builds on the wrong checkout — and never on an umbrella repo.
 - `route-and-map` — reads CLAUDE.md (root + each touched module) + the knowledge base, emits an impact map. Also answers a standalone "what does this change affect?".
 - `clarify` — the Clarify gate: coverage scan, prioritized questions, writes the PRD (FR-###/SC-###).
@@ -139,13 +235,13 @@ The lens text is condensed from [cc-thinking-skills](https://github.com/tjboudre
 **Scripts** (Python 3 stdlib)
 
 - `scripts/journal.py` — the flow journal CLI, an entry point over the modules of `scripts/_journal/` (ADR 0027); `scripts/signals.py` — per-file risk signals, read by `route-and-map`, `review` and `structured-debug` (see [Code signals](#code-signals)).
-- `scripts/lean_config.py` — strips the boilerplate that explains the plugin from a config; prints a diff, and writes only with `--apply` (run by `setup` in update mode; ADR 0019).
+- `scripts/lean_config.py` — strips the boilerplate that explains the plugin from a config; prints a diff, and writes only with `--apply` (run by `setup` in update mode; ADR 0019). `--move-settings <project root>` moves the legacy lines of the project's, the nested repos' and the user's configs into the settings files, by scope; it shows every file's diff and its notes first, and writes only with `--apply` (ADR 0028).
 
-**Glossary** — [`docs/glossary.md`](docs/glossary.md): one term per shipgate concept, what it means and what it is not to be confused with. Prose in this plugin uses those terms and no synonyms. Every report a person reads follows the **Writing for people** rule (short sentences, one idea each, every fact kept; ADR 0006); the `Writing style` config section extends it to the documents shipgate writes into your repo.
+**Glossary** — [`docs/glossary.md`](docs/glossary.md): one term per shipgate concept, what it means and what it is not to be confused with. Prose in this plugin uses those terms and no synonyms. Every report a person reads follows the **Writing for people** rule (short sentences, one idea each, every fact kept; ADR 0006); the `writing_style` setting extends it to the documents shipgate writes into your repo.
 
 ## Artifacts (3 per feature)
 
-Homes are set by the config's Knowledge base section; defaults shown:
+Homes are set by the `artifact_homes` setting; defaults shown:
 
 - `docs/prd/<name>.md` — PRD: what & why (FR-###, SC-###). No implementation.
 - `docs/adr/NNNN-<title>.md` — one ADR per genuine decision fork. Immutable; supersede.
@@ -173,7 +269,7 @@ Capture, where each line is promoted to its home or dropped.
 
 ## Flow journal
 
-On a journaled project (`/shipgate:setup` writes the config and creates the database) position
+On a journaled project (`/shipgate:setup` writes the settings file and creates the database) position
 is an append-only event stream — **one stream per issue, named for its branch** — rather than
 something re-inferred from artifacts every session. The SessionStart hook injects the status brief
 at every session start (`startup`, `resume`, `/clear`, a compaction, a fork). The brief prints
@@ -184,10 +280,10 @@ branch), then the checked-out branch's. Every other stream goes into one count l
 
 | Command | Does |
 | --- | --- |
-| `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. A bound stream that another session wrote within 30 minutes carries an `ownership` line, and one with an `mr-opened` carries a `close-out` line that names the command. Every other stream goes into one count line: live, dormant and finished, with the commands that list them (`streams --open`) and close the dormant ones (`sweep`); a zero count is left out (ADR 0024). `--all` and `--feature` print every selected stream as before: in full, dormant ones in one line, completed ones with `--all` only. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each open stream also carries `publish`, `go` (the user's go per gate, ADR 0023), `lifecycle`, `current`, `last_writer` (`{session, ts}`), `pull_request` (`{url, ref, ts}` of the newest `mr-opened`) and `other_session` (`{minutes}` or null), and the top level carries `nested_matches` |
+| `status [--session ID] [--branch B] [--nested-branch B …] [--feature SLUG] [--all] [--json]` | the status brief. The stream the session drives comes first. That is the live stream that session last wrote to itself (`--session`); hook-written events do not count. It may have no branch, and parallel sessions each get their own. The checked-out branch's stream comes next, and both are shown in full. A bound stream that another session wrote within 30 minutes carries an `ownership` line, and one with an `mr-opened` carries a `close-out` line that names the command. Every other stream goes into one count line: live, dormant and finished, with the commands that list them (`streams --open`) and close the dormant ones (`sweep`); a zero count is left out (ADR 0024). `--all` and `--feature` print every selected stream as before: in full, dormant ones in one line, completed ones with `--all` only. In an umbrella, the nested repos' branches (`--nested-branch`, repeatable) stand in when `--branch` names no stream. They bind a stream only when they name exactly one live stream (shipgate-hud ADR 0004). With `--json`, each open stream also carries `publish`, `go` (the user's go per gate, ADR 0023), `lifecycle`, `current`, `last_writer` (`{session, ts}`), `pull_request` (`{url, ref, ts}` of the newest `mr-opened`) and `other_session` (`{minutes}` or null), and the top level carries `nested_matches`. The brief ends with the `settings:` lines (ADR 0028): the values of `autonomy`, `orchestration`, `writing_style` and `code_graph` with their sources, one line per key that a settings file sets to a value outside its set, one line per settings file that cannot be read, and, once the schema names the grace date, the count of legacy lines. `--json` carries them as `settings` (`{key: {value, source, path, section?, problem?}}`) and `legacy` (`{count, until, ended}`) |
 | `position --stream S [--json]` | every fact the shipgate HUD draws for one stream (ADR 0009): phase marks (`done`, `skipped`, `current`, `revisited`, `todo`), the artifacts classified with the configured homes, the Build Plan tasks parsed with `check`'s grammar, gate decisions with their `seq`, the last verify, and the last verdict with its `note` and `round` (the verdict's count). `trace` carries the newest review and design `ranking` and every `signals-missing` deviation. `dispositions` carries each review finding's current state (`fixing`, `fixed`, `rejected`, `deferred`), folded from every `review-disposition` and every verdict's map, the latest event winning per key (ADR 0014). Each entry also carries `label`: the newest name a `review-disposition`'s `labels` gave that key, or null. It also carries `go`, as `status --json` does. An unknown stream exits 1 |
-| `handoff --stream S` | the brief a fresh session continues one stream from (ADR 0021): its role, the request, the phase and the next one, where to report (the newest `report_to` an event names, else the user), the artifacts to open in reading order, the next Build Plan task, the open gates (an ADR still `proposed`, a `not-ready` verdict, findings still `fixing`, ticked tasks with no `task-done`, a failed verify, the publish gate), the last five gate decisions, and the config's **Autonomy** and **Security-sensitive areas** sections through the layers. Built from the journal, the files its events name and the config, never from the session; `design` prints it at `design-committed` and `/shipgate` reads it on a resume. After `mr-opened`, on a stream not finished, it names the close-out command. Text for a model, no `--json`. An unknown stream exits 1 |
-| `closeout --stream S [--observed DIR]` | the close-out plan of a merged stream (ADR 0025, ADR 0026). Without `--observed` it prints an observe script: the flow runs it, and it writes the forge's PR/MR state (`gh` or `glab`, from the `mr-opened` URL's host, else the config's **Forge & tracker**), the integration branch git names (`origin/HEAD`), the refs, the refs merged into it, its first-parent line, `git worktree list` and the stream worktree's `git status --porcelain --ignored --untracked-files=normal` into a fresh directory. With it, the forge's state decides, a stream with no PR/MR on a forge that answered is never merged, and with no forge evidence git ancestry is the fallback (a merged tip must sit off the first-parent line, so a branch cut from the integration branch with no commit of its own never reads as merged), and the user's word is never evidence. It acts only on the branch named exactly as the stream, and on the recorded PR/MR or one whose head is the stream; for any other stream it exits 4 and names `journal.py sweep`. A merged stream gets the steps in order, each `[run]`, `[ask]` or `[skip]`: capture, `flow-completed` with `reason`, `evidence` and `url`, the update of the integration branch, the config's **Close-out** steps, the guarded deletion of a squash-merged branch, the report, then the worktree removal and `branch -d` in one Bash call. `[ask]` steps wait for one question that shows each step's command beside its label, recorded as the user's `gate-decision` at gate `close-out`. The worktree removal is an `[ask]` step that lists the paths when the worktree holds an ignored or untracked path, or its files were not observed (git deletes ignored files with the worktree); with none, it runs with no question. No step takes `--force`, `-f` or `-D`. It writes nothing; it exits 4 when the PR/MR did not merge. Text for a model |
+| `handoff --stream S` | the brief a fresh session continues one stream from (ADR 0021): its role, the request, the phase and the next one, where to report (the newest `report_to` an event names, else the user), the artifacts to open in reading order, the next Build Plan task, the open gates (an ADR still `proposed`, a `not-ready` verdict, findings still `fixing`, ticked tasks with no `task-done`, a failed verify, the publish gate), the last five gate decisions, the resolved `autonomy` setting with its source, and the config's **Autonomy** and **Security-sensitive areas** sections through the layers. Built from the journal, the files its events name and the config, never from the session; `design` prints it at `design-committed` and `/shipgate` reads it on a resume. After `mr-opened`, on a stream not finished, it names the close-out command. Text for a model, no `--json`. An unknown stream exits 1 |
+| `closeout --stream S [--observed DIR]` | the close-out plan of a merged stream (ADR 0025, ADR 0026). Without `--observed` it prints an observe script: the flow runs it, and it writes the forge's PR/MR state (`gh` or `glab`, from the `mr-opened` URL's host, else the `forge` setting), the integration branch git names (`origin/HEAD`), the refs, the refs merged into it, its first-parent line, `git worktree list` and the stream worktree's `git status --porcelain --ignored --untracked-files=normal` into a fresh directory. With it, the forge's state decides, a stream with no PR/MR on a forge that answered is never merged, and with no forge evidence git ancestry is the fallback (a merged tip must sit off the first-parent line, so a branch cut from the integration branch with no commit of its own never reads as merged), and the user's word is never evidence. It acts only on the branch named exactly as the stream, and on the recorded PR/MR or one whose head is the stream; for any other stream it exits 4 and names `journal.py sweep`. A merged stream gets the steps in order, each `[run]`, `[ask]` or `[skip]`: capture, `flow-completed` with `reason`, `evidence` and `url`, the update of the integration branch, the config's **Close-out** steps, the guarded deletion of a squash-merged branch, the report, then the worktree removal and `branch -d` in one Bash call. `[ask]` steps wait for one question that shows each step's command beside its label, recorded as the user's `gate-decision` at gate `close-out`. The worktree removal is an `[ask]` step that lists the paths when the worktree holds an ignored or untracked path, or its files were not observed (git deletes ignored files with the worktree); with none, it runs with no question. No step takes `--force`, `-f` or `-D`. It writes nothing; it exits 4 when the PR/MR did not merge. Text for a model |
 | `sweep [--observed DIR] [--apply]` | a disposition for each dormant stream, from one forge list query and git: `flow-completed` (merged), `flow-abandoned` (closed unmerged), `unknown` or keep, each with its source. It guesses nothing: it reads the branch and the PR/MR head of the stream's exact name, and the recorded PR/MR. With none of them the proposal is `unknown`: the user decides, and the line shows what the sweep looked for. `--apply`, after one confirmation, appends the terminal ones with `reason`, `evidence` and `url`, appends nothing for `unknown` or keep, and skips and names a stream that moved after the evidence was observed. It never touches git |
 | `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
@@ -196,7 +292,7 @@ branch), then the checked-out branch's. Every other stream goes into one count l
 | `check --session ID [--json] [--record]` | what the flow still owes (the Stop hook's source): `findings`, the worklogs it `skipped` and why, and the `waivers` that would clear the findings. `--record` stamps the run as the last check: one `meta` value, no event |
 | `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review". `go` counts the go records by marker (`dialog`, `shell`, `question`, `prompt`) |
 | `streams --open \| --dormant [--json]` | one line per open (or dormant) stream: lifecycle, phase, last event, idle days, the PR/MR URL, and the ownership mark when `CLAUDE_CODE_SESSION_ID` names another session than the last writer |
-| `log`, `streams`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, schema, health, portability. `session` is retired: it reads and writes nothing, and a later release removes it. `doctor` also reports the sidecar's `version` and its `stray_keys`, the keys that `settings.schema.json` does not name, and `config`: the config-against-sidecar drift between the config's `Ledger:`, `PRD home:`, `ADR home:` and `Worklog home:` and the sidecar, one line per drift. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
+| `log`, `streams`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, schema, health, portability. `session` is retired: it reads and writes nothing, and a later release removes it. `doctor` also reports the settings file's `version` and its `stray_keys`, the keys that `settings.schema.json` does not name (the JSON key is still `sidecar`), and `settings`: each problem the settings resolver finds, each legacy line (in the project's, the nested repos' and the user's configs), each settings file inside a nested repo, and the grace date. None of them changes the exit code. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
@@ -231,21 +327,38 @@ binds and counts for no session (ADR 0005). `user` and
 recorded the user's decision (ADR 0010). A stream ends with `flow-completed` and leaves the
 status brief.
 
-The sidecar `.claude/shipgate.json` declares its format `version`. This shipgate knows
-version 2, the `x-version` of `settings.schema.json`. A sidecar with a higher integer
-version comes from a newer shipgate. The SessionStart hook then adds one warning line to
-the session context, and `journal.py` prints the same line on stderr once per run. Both keep
-working with the keys they know. `doctor` reports the raw `version` and `stray_keys`: the
-keys that `settings.schema.json` does not name. `setup`'s update mode stops on a newer
-version, and it drops stray keys when it regenerates the sidecar.
+The project settings file `.claude/shipgate.json` declares its format `version`. This
+shipgate knows version 2, the `x-version` of `settings.schema.json`. A settings file with a
+higher integer version comes from a newer shipgate. The SessionStart hook then adds one
+warning line to the session context, and `journal.py` prints the same line on stderr once
+per run. Both keep working with the keys they know. `doctor` reports the raw `version` and
+`stray_keys`: the keys that `settings.schema.json` does not name. `setup`'s update mode
+stops on a newer version, and it drops stray keys when it writes the settings file again.
 
-A sidecar whose `db` is JSON `null` declares that the project has no journal (ADR 0028).
-The sidecar still marks the project root, and every hook acts as in a project with no
-sidecar: no journal run, no gate, no output. A `journal.py` command that needs a journal
-exits 1 and says why. Only `null` counts: a missing `db` keeps the default journal, and so
-does a `db` of another type. So does a file that holds `NaN` or `Infinity`, because
-shipgate-hud cannot read it. `signals.py` reads no sidecar key, so it makes no
-version check.
+A project settings file whose `db` is JSON `null` declares that the project has no journal
+(ADR 0028). The file still marks the project root, and every hook acts as in a project with
+no settings file: no journal run, no gate, no output. A `journal.py` command that needs a
+journal exits 1 and says why. Only `null` counts: a missing `db` keeps the default journal,
+and so does a `db` of another type. So does a file that holds `NaN` or `Infinity`, because
+shipgate-hud cannot read it. `signals.py` prints no warning for a newer version.
+
+**The database is local, disposable state.** Gitignore it (`shipgate.db*`). The artifacts in
+git or your wiki stay the portable record. On a new machine the project reads as
+un-journaled unless you carry the journal over with `journal.py export` and `import`. Never
+mount the database into a container: the journal runs in SQLite's WAL mode, which needs file
+locks that a bind mount does not give, and the damage outlives the container (recover with
+`PRAGMA journal_mode=DELETE` from the host). If a bot runs a shipgate phase, it runs it on
+the host.
+
+**The journal does not replace the ledger.** The ledger holds prose learnings and empties at
+triage. The journal holds operational state and never empties. Triage writes learnings to
+the knowledge stores; the journal records only that it happened, as `capture-done`. Do not
+park a learning in the journal: it is machine-local and gitignored. `status` counts the
+untriaged ledger entries, which is information only.
+
+The three `enforce` settings turn the hooks' enforcement down: `stop_gate`, `auto_capture`
+and `command_gate`, each `true` by default (see [Configuration](#configuration)). Run
+`journal.py doctor` when anything looks stale.
 
 Each phase skill names its stream before it works — the branch the work takes, per the
 config's **Branching** pattern, opened with `flow-started` by whichever skill runs first when
@@ -303,9 +416,9 @@ under the header `Commit` or `Publish`, the gate word as the first option.
   the stream of the branch holds a commit go, and `git push`, `git subtree push`,
   `gh pr create` and `glab mr create` until it holds a publish go. A ready verdict is no
   go. The hook asks `journal.py authorize` for the branch of the command's directory. It
-  does nothing on a project with no sidecar or with a sidecar that declares no journal
-  (`"db": null`), on a branch with no stream or a finished one, or when the sidecar sets
-  `enforce.command_gate` to `false` (an unattended project). A
+  does nothing on a project with no project settings file or with one that declares no
+  journal (`"db": null`), on a branch with no stream or a finished one, or when the
+  `enforce.command_gate` setting is `false` (an unattended project). A
   dry run is held like any commit or push. A failure of git or the journal lets the
   command run.
 - **The forgery net.** The same hook refuses a model's command that appends a go as yours:
@@ -357,8 +470,8 @@ a `review-verdict` that is `not-ready`, the PostToolUse hook reads the session's
 size from the tail of its transcript: input, cache-creation and cache-read tokens of the
 last main-thread assistant record. Past the threshold it prints one line, as a
 `systemMessage` for you and as context for the model, that recommends a fresh session from
-`journal.py handoff`. The threshold is the config's **Session** section, `Handoff:`
-(default `500k`, `off` turns it off). The line is advice: it never blocks. Any other Bash
+`journal.py handoff`. The threshold is the `handoff` setting (default `500k`, `off` turns
+it off). The line is advice: it never blocks. Any other Bash
 call pays two substring checks and does not import the nudge's code.
 
 ## Code signals
@@ -380,10 +493,11 @@ repository (or `--scope`), so `top` means top here; paths and `--diff` only filt
 | `graph ACTION ARGS…` | one codegraph query: `impact`, `callers`, `callees`, `affected`, `query`, `node` or `explore` (see **Code graph**) |
 
 Common flags: `--repo`, `--scope`, `--window`, `--fix-pattern`, `--exclude`, `--json`; they
-override the `## Code signals` config section. `--graph auto|off|root` overrides the
-`Code graph` bullet under `## Code tooling`. Both sections come from the layered config files
-(see [Configuration](#configuration)): `config.source` labels a value from the user file
-`user shipgate.md`, and `config.files` and `config.inherit` say which files were read.
+override the `code_signals` settings. `--graph auto|off|root` overrides the `code_graph`
+setting. Both resolve per key (see [Configuration](#configuration)): `config.source` labels
+each value `shipgate.json`, `user settings`, `shipgate.md` or `user shipgate.md` (a legacy
+line), `flag` or `default`, and `config.files` and `config.inherit` say which config files
+were read.
 Consumers: `route-and-map` (a **Risk signals**
 block in the impact map, essentials in the journal), `review` (a per-file risk table in the
 brief, and `fileRisk` for the workflow's refuter ordering), `structured-debug` (a suspect
@@ -397,10 +511,10 @@ shares, never author names.
 it into `design-committed` and `review` into `review-verdict`, so the journal shows which
 ranking each phase used. The ranking leaves out release files, because every release
 changes them: `**/CHANGELOG.md`, `**/.claude-plugin/plugin.json` and
-`.claude-plugin/marketplace.json`. The table and `files` keep them. A pattern is read as an
-`Exclude` glob is, and a leading `**/` is optional. The `Ranking exclude:` bullet of
-`## Code signals` replaces these patterns with its backticked globs. An empty value
-(` `` `) turns them off. `config.ranking_exclude` names the patterns in force. A JSON call
+`.claude-plugin/marketplace.json`. The table and `files` keep them. A pattern is read as a
+`code_signals.exclude` glob is, and a leading `**/` is optional. The
+`code_signals.ranking_exclude` setting replaces these patterns with its globs. An empty list
+(`[]`) turns them off. `config.ranking_exclude` names the patterns in force. A JSON call
 that wanted the code graph and did not get it carries `graph_note`: one line that says why
 and how to build an index. The table output keeps the advisory-once rule.
 
@@ -489,14 +603,14 @@ loses its work, and the reason is `graph-sync-timeout`: run `codegraph sync` onc
 and the next call syncs quickly. In an umbrella, each child repository owns its own
 index, and every call names the child with `--repo`.
 
-The only configuration is one optional bullet under `## Code tooling`:
-`Code graph: auto | off | root`. `auto` is the default. `off` always uses the regex scanner.
+The only configuration is the `code_graph` setting: `auto`, `off` or `root`. `auto` is the
+default. `off` always uses the regex scanner.
 `root` uses an index at the umbrella root, which you build yourself with your own
 `codegraph.json` and its exclude list for nested clones. shipgate never builds a root index.
 **Root mode needs the codegraph MCP server running.** Without it, every call first syncs the
 root, and that takes 55–66 s. In `root` mode, the
 `graph` passthrough returns codegraph's own output, so its paths are relative to the umbrella
-root, not to the child repository. The `--graph` flag overrides the bullet for one call.
+root, not to the child repository. The `--graph` flag overrides the setting for one call.
 
 What shipgate writes, and only when codegraph is involved:
 
@@ -538,11 +652,11 @@ are Python 3 standard library only, and the signals skip themselves where there 
 | Integration                                                            | Kind                  | Unlocks                                                                                                                                                            | Without it                                         |
 | ---------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
 | a knowledge base MCP (named in config)                                    | MCP                   | team/product knowledge — recall & store in a wiki/vault                                                                                                               | recall falls back to repo docs (`CLAUDE.md`, ADRs) |
-| forge CLI + tracker MCP (`gh` / `glab`, named in config)               | CLI/MCP               | `clarify` seeds the PRD from the issue; `review` opens the MR/PR and checks its acceptance criteria                                                                | capture the issue link manually; push by hand      |
+| forge CLI + tracker MCP (`gh` / `glab`; the `forge` setting, config)   | CLI/MCP               | `clarify` seeds the PRD from the issue; `review` opens the MR/PR and checks its acceptance criteria                                                                | capture the issue link manually; push by hand      |
 | a log-query skill (named in config)                                    | skill                 | prod/QA log evidence in `structured-debug`                                                                                                                         | use `docker logs` / local sources                  |
 | `chrome-devtools-mcp`                                                  | MCP/skill             | frontend/browser evidence in `structured-debug`                                                                                                                    | use other evidence sources                         |
 | `/security-review`, `/simplify`                                        | Claude Code built-ins | deep security audit / standalone cleanup                                                                                                                           | ship with Claude Code already                      |
-| the `Workflow` tool (Claude Code built-in; config `## Orchestration`)  | Claude Code built-in  | Review and Explore fans run as bundled scripts: schema-typed findings, in-script dedupe, evidence-required refuters on review's top findings                       | the `Agent` fan, as before                         |
+| the `Workflow` tool (Claude Code built-in; the `orchestration` setting) | Claude Code built-in  | Review and Explore fans run as bundled scripts: schema-typed findings, in-script dedupe, evidence-required refuters on review's top findings                       | the `Agent` fan, as before                         |
 | an MR/PR-watcher skill (named in config)                               | skill                 | `review` registers blockers/follow-ups on the watch list; watcher events resume the flow at the phase they unlock                                                  | flow ends at "MR/PR opened"; resume manually       |
 | `codegraph`                                                            | CLI on `PATH`         | symbol-level impact, callers, the tests a diff reaches, `explore` (see **Code graph**)                                                                              | the regex import graph; one advisory line, once    |
 

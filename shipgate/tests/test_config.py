@@ -311,10 +311,13 @@ class TestIsPlaceholder(unittest.TestCase):
         self.assertTrue(cfg.is_placeholder(""))  # empty is a placeholder for a bullet
 
     def test_the_template_yields_its_placeholder_lines(self):
+        # The artifact homes and the forge are settings since #60 (ADR 0028): their
+        # placeholder bullets left the template, and its prose bullets remain.
         values = template_placeholder_values()
-        self.assertGreaterEqual(len(values), 30)
-        self.assertIn(TEMPLATE_PRD_HOME, values)
-        self.assertIn("<GitHub | GitLab | …> — CLI: <gh | glab | …>", values)
+        self.assertGreaterEqual(len(values), 20)
+        self.assertNotIn(TEMPLATE_PRD_HOME, values)
+        self.assertIn("<two or three real-shaped but neutral examples>", values)
+        self.assertIn("<conventions the template itself doesn't capture>", values)
 
     def test_a_real_value_with_angle_brackets_makes_a_section_present(self):
         for value in ("`<type>/<issue-id>-<slug>`", "<type>: <summary>"):

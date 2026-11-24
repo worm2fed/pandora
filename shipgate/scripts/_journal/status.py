@@ -12,6 +12,7 @@ from .vocab import (
 )
 from .plugin import closeout_command
 from .text import _clip, _one_line, _short_ts
+from .settings import settings_lines
 from .store import list_streams, read_events
 from .fold import (
     branch_match, fold_stream, is_work_stream, nested_branch_match, nested_live_matches,
@@ -290,6 +291,15 @@ def _render_count_line(counts: Dict[str, int]) -> List[str]:
     return [f"not shown: {shown} — {commands}"]
 
 
+def _with_settings(text: str, status: Dict[str, Any]) -> str:
+    """TEXT, then the settings lines (ADR 0028) right after its last line: the text
+    before them stays what it was without them."""
+    settings = settings_lines(status)
+    if not settings:
+        return text
+    return "\n".join(([text] if text else []) + settings)
+
+
 def render_status(status: Dict[str, Any], full: bool = False) -> str:
     """The status text. ``full`` is the render of ``--all`` and ``--feature``: every
     selected stream, dormant ones as one line. Without it, the brief (ADR 0024): the
@@ -302,12 +312,13 @@ def render_status(status: Dict[str, Any], full: bool = False) -> str:
                 lines.extend(_render_feature(feature))
         lines.extend(_render_count_line(brief_counts(status)))
         lines.extend(_render_ledger(status))
-        return "\n".join(lines).rstrip()
+        return _with_settings("\n".join(lines).rstrip(), status)
     if not features:
         return "\n".join([
             "No work streams recorded.",
             *_render_hidden(status),
             *_render_ledger(status),
+            *settings_lines(status),
         ])
     lines: List[str] = []
     for feature in features:
@@ -319,4 +330,4 @@ def render_status(status: Dict[str, Any], full: bool = False) -> str:
             lines.extend(_render_feature(feature))
     lines.extend(_render_hidden(status))
     lines.extend(_render_ledger(status))
-    return "\n".join(lines).rstrip()
+    return _with_settings("\n".join(lines).rstrip(), status)

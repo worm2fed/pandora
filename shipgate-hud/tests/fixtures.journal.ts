@@ -517,8 +517,40 @@ export const STATUS_GOLDEN = {
       "nudge": false,
       "path": "docs/ledger.md"
     },
+    "legacy": {
+      "count": 0,
+      "ended": false,
+      "until": "2027-01-23"
+    },
     "nested_matches": [],
-    "session_match": null
+    "session_match": null,
+    "settings": {
+      "autonomy": {
+        "path": null,
+        "source": "default",
+        "value": "ask"
+      },
+      "code_graph": {
+        "path": null,
+        "source": "default",
+        "value": "auto"
+      },
+      "orchestration.explore": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "orchestration.review": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "writing_style": {
+        "path": null,
+        "source": "default",
+        "value": "plain"
+      }
+    }
   },
   "branch": {
     "branch_match": "feature/golden-flow",
@@ -986,8 +1018,40 @@ export const STATUS_GOLDEN = {
       "nudge": false,
       "path": "docs/ledger.md"
     },
+    "legacy": {
+      "count": 0,
+      "ended": false,
+      "until": "2027-01-23"
+    },
     "nested_matches": [],
-    "session_match": null
+    "session_match": null,
+    "settings": {
+      "autonomy": {
+        "path": null,
+        "source": "default",
+        "value": "ask"
+      },
+      "code_graph": {
+        "path": null,
+        "source": "default",
+        "value": "auto"
+      },
+      "orchestration.explore": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "orchestration.review": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "writing_style": {
+        "path": null,
+        "source": "default",
+        "value": "plain"
+      }
+    }
   },
   "nested_one": {
     "branch_match": "fix/7-golden-nested",
@@ -1455,10 +1519,42 @@ export const STATUS_GOLDEN = {
       "nudge": false,
       "path": "docs/ledger.md"
     },
+    "legacy": {
+      "count": 0,
+      "ended": false,
+      "until": "2027-01-23"
+    },
     "nested_matches": [
       "fix/7-golden-nested"
     ],
-    "session_match": null
+    "session_match": null,
+    "settings": {
+      "autonomy": {
+        "path": null,
+        "source": "default",
+        "value": "ask"
+      },
+      "code_graph": {
+        "path": null,
+        "source": "default",
+        "value": "auto"
+      },
+      "orchestration.explore": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "orchestration.review": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "writing_style": {
+        "path": null,
+        "source": "default",
+        "value": "plain"
+      }
+    }
   },
   "nested_two": {
     "branch_match": null,
@@ -1926,11 +2022,43 @@ export const STATUS_GOLDEN = {
       "nudge": false,
       "path": "docs/ledger.md"
     },
+    "legacy": {
+      "count": 0,
+      "ended": false,
+      "until": "2027-01-23"
+    },
     "nested_matches": [
       "fix/7-golden-nested",
       "feature/golden-flow"
     ],
-    "session_match": null
+    "session_match": null,
+    "settings": {
+      "autonomy": {
+        "path": null,
+        "source": "default",
+        "value": "ask"
+      },
+      "code_graph": {
+        "path": null,
+        "source": "default",
+        "value": "auto"
+      },
+      "orchestration.explore": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "orchestration.review": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "writing_style": {
+        "path": null,
+        "source": "default",
+        "value": "plain"
+      }
+    }
   },
   "session": {
     "branch_match": null,
@@ -2398,8 +2526,40 @@ export const STATUS_GOLDEN = {
       "nudge": false,
       "path": "docs/ledger.md"
     },
+    "legacy": {
+      "count": 0,
+      "ended": false,
+      "until": "2027-01-23"
+    },
     "nested_matches": [],
-    "session_match": "epic-golden"
+    "session_match": "epic-golden",
+    "settings": {
+      "autonomy": {
+        "path": null,
+        "source": "default",
+        "value": "ask"
+      },
+      "code_graph": {
+        "path": null,
+        "source": "default",
+        "value": "auto"
+      },
+      "orchestration.explore": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "orchestration.review": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "writing_style": {
+        "path": null,
+        "source": "default",
+        "value": "plain"
+      }
+    }
   },
   "session_user": {
     "branch_match": null,
@@ -2869,8 +3029,40 @@ export const STATUS_GOLDEN = {
       "nudge": false,
       "path": "docs/ledger.md"
     },
+    "legacy": {
+      "count": 0,
+      "ended": false,
+      "until": "2027-01-23"
+    },
     "nested_matches": [],
-    "session_match": "feature/golden-user"
+    "session_match": "feature/golden-user",
+    "settings": {
+      "autonomy": {
+        "path": null,
+        "source": "default",
+        "value": "ask"
+      },
+      "code_graph": {
+        "path": null,
+        "source": "default",
+        "value": "auto"
+      },
+      "orchestration.explore": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "orchestration.review": {
+        "path": null,
+        "source": "default",
+        "value": "agents"
+      },
+      "writing_style": {
+        "path": null,
+        "source": "default",
+        "value": "plain"
+      }
+    }
   }
 } as const
 

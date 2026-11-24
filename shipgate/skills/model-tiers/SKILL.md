@@ -11,10 +11,16 @@ tiers. The roles are relative. They are not tied to specific model names, becaus
 rotate with subscriptions. The *orchestrator* directs. *Workers* one tier down implement, but
 never below Opus. The cheapest capable tier does only the mechanical grind.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
 | Role | Who | Does | Never does |
 |------|-----|------|------------|
@@ -112,7 +118,7 @@ config's Worker guardrails section keeps the repo-specific rules only.
 > 8. Report with evidence: real command output, not "tests pass"; deviations from the brief
 >    with reasons; blockers quoted verbatim.
 
-Item 8 pastes this callout into the brief when the config's **Writing style** says `ste-80`:
+Item 8 pastes this callout into the brief when the `writing_style` setting is `ste-80`:
 
 > **Writing for people.** A report a person reads follows the STE-80 principles: sentences of
 > about 20 words with one idea each, common words, one term per concept, the same term every
@@ -150,8 +156,8 @@ A worker starts with zero context, so the worker brief must be self-contained:
    integrations, so workers use them instead of grep-and-memory: the library-docs tool for
    dependency APIs (by default a context7-style MCP when the session has one, see
    `implement`), the LSP tool for symbol navigation. The code graph is available when a
-   signals call in this flow returned `structure.source` `graph`. A `Code graph: off` bullet
-   in the config means it is absent. When it is available, name three graph commands as the
+   signals call in this flow returned `structure.source` `graph`. A `code_graph` setting of
+   `off` means it is absent. When it is available, name three graph commands as the
    worker's first move, before grep:
 
    ```bash
@@ -177,11 +183,12 @@ A worker starts with zero context, so the worker brief must be self-contained:
    guardrails section in the config ⇒ say so in the brief rather than inventing rules. A
    section still holding the template's `<e.g. …>` placeholders counts as absent. Say that
    too. Never paste a placeholder into a brief as though it were this project's rule.
-8. **Writing style excerpt** — when the task writes a PRD, ADR, worklog line, ledger line,
-   MR/PR text or tracker comment, paste the config's **Writing style** section
-   (`Docs: plain | ste-80`). When it says `ste-80`, also paste the Writing for people
-   callout above verbatim, the way item 7 pastes the guardrails: a worker cannot apply a
-   rule it never sees. No such section, or a placeholder ⇒ say `plain`.
+8. **Writing style line** — when the task writes a PRD, ADR, worklog line, ledger line,
+   MR/PR text or tracker comment, give the `writing_style` setting: `plain` (the default)
+   or `ste-80`. Read it from the status brief's `settings:` line, else from
+   `journal.py config writing_style`. When it is `ste-80`, also paste the Writing for
+   people callout above verbatim, the way item 7 pastes the guardrails: a worker cannot
+   apply a rule it never sees.
 9. **The Style line (required).** Every brief carries one line, in one of two forms:
    `Style: invoke <skill>[, <skill>] with the Skill tool before you write or change code.`
    or `Style: none — the config's Style section names no skill.` Take the names from the

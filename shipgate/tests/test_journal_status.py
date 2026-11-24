@@ -251,7 +251,8 @@ class TestTerminalAndDormant(JournalTestCase):
         self.backdate("feature/x", days=9)
         # `--all`: the one-line form lives there; the brief counts it (ADR 0024).
         proc = self.journal("--db", self.db, "status", "--all", rc=OK)
-        body = [line for line in proc.stdout.splitlines() if line.strip()]
+        body = [line for line in proc.stdout.splitlines()
+                if line.strip() and not line.startswith("settings:")]
         self.assertEqual(len(body), 1, proc.stdout)
         self.assertIn("dormant 9d", body[0])
         self.assertIn("feature/x", body[0])
@@ -1220,6 +1221,111 @@ class TestLedgerAndHomesSettings(JournalTestCase):
             self.assertEqual(self.homes(self.sidecar()), self.default_homes)
 
 
+
+class TestSettingsInStatus(JournalTestCase):
+    """T040, T041, T054 (#60): `status` ends with the settings lines and `--json` gains
+    `settings` and `legacy`. The lines resolve from the project root, and a setting
+    never makes `status` exit non-zero."""
+
+    SCHEMA = JOURNAL.parent.parent / "settings.schema.json"
+
+    def setUp(self):
+        super().setUp()
+        self.user_dir = self.root / "user-config"
+        self.user_dir.mkdir()
+        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.user_dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        (self.root / ".git").mkdir()
+        self.db = self.root / ".claude" / "shipgate.db"
+        self.sidecar()
+        self.journal("init", rc=OK)
+        self.append_event("feature/demo", "flow-started", {"request": "demo"})
+
+    def sidecar(self, **keys):
+        config = {"version": 2, "db": ".claude/shipgate.db"}
+        config.update(keys)
+        self.write(".claude/shipgate.json", json.dumps(config))
+
+    def settings_lines(self, *args, cwd=None):
+        proc = self.journal("status", *args, cwd=cwd, rc=OK)
+        return [line for line in proc.stdout.splitlines() if line.startswith("settings:")]
+
+    def test_the_brief_ends_with_the_settings_line(self):
+        self.sidecar(orchestration={"review": "workflow"})
+        self.write(".claude/shipgate.md", "## Autonomy\n\n- Mode: executive\n")
+        proc = self.journal("status", "--branch", "feature/demo", rc=OK)
+        lines = proc.stdout.splitlines()
+        settings = [line for line in lines if line.startswith("settings:")]
+        self.assertEqual(settings[0], (
+            "settings: autonomy=executive (legacy) · orchestration.review=workflow "
+            "(project) · orchestration.explore=agents (default) · writing_style=plain "
+            "(default) · code_graph=auto (default)"))
+        self.assertEqual(lines[-len(settings):], settings)
+        until = json.loads(self.SCHEMA.read_text(encoding="utf-8"))["x-legacy-until"]
+        legacy = [line for line in settings if "legacy line" in line]
+        self.assertEqual(len(legacy), 0 if until is None else 1, settings)
+
+    def test_every_render_carries_the_lines(self):
+        for args in ((), ("--all",), ("--feature", "feature/demo")):
+            with self.subTest(args=args):
+                self.assertTrue(self.settings_lines(*args))
+
+    def test_a_bad_value_never_fails_status(self):
+        self.sidecar(autonomy="exec", enforce={"stop_gate": "no"}, db=".claude/shipgate.db")
+        (self.user_dir / "shipgate.settings.json").write_text("{broken", encoding="utf-8")
+        lines = self.settings_lines()
+        self.assertIn("autonomy=ask (default)", lines[0])
+        self.assertTrue(any(' autonomy = "exec" ' in line for line in lines), lines)
+        self.assertTrue(any(' enforce.stop_gate = "no" ' in line for line in lines), lines)
+        self.assertTrue(any("cannot be read" in line for line in lines), lines)
+
+    def test_the_json_form(self):
+        self.sidecar(writing_style="ste-80")
+        proc = self.journal("status", "--json", rc=OK)
+        doc = json.loads(proc.stdout)
+        self.assertEqual(doc["settings"]["writing_style"],
+                         {"value": "ste-80", "source": "project",
+                          "path": ".claude/shipgate.json"})
+        self.assertEqual(set(doc["legacy"]), {"count", "until", "ended"})
+
+    def test_the_json_stays_strict_json_with_nan_in_a_settings_file(self):
+        """Python's json reads NaN and Infinity; the HUD's JSON.parse refuses them. A bad
+        value that a settings file writes so must not make `status --json` unreadable."""
+        def strict(text):
+            def refuse(name):
+                raise ValueError(name)
+            return json.loads(text, parse_constant=refuse)
+
+        self.write(".claude/shipgate.json",
+                   '{"version": 2, "db": ".claude/shipgate.db", "autonomy": NaN, '
+                   '"enforce": {"stop_gate": -Infinity}}')
+        (self.user_dir / "shipgate.settings.json").write_text(
+            '{"writing_style": Infinity}', encoding="utf-8")
+        doc = strict(self.journal("status", "--json", rc=OK).stdout)
+        self.assertEqual(doc["settings"]["autonomy"]["value"], "ask")
+        self.assertEqual(doc["settings"]["autonomy"]["problem"]["value"], "NaN")
+        strict(self.journal("doctor", "--json", rc=OK).stdout)
+        strict(self.journal("config", "--json", rc=2).stdout)
+
+    def test_the_full_render_adds_no_blank_line(self):
+        """`--all` keeps its old text as a prefix: the settings lines follow the last
+        line with no blank line between, as in the brief."""
+        text = self.journal("status", "--all", rc=OK).stdout
+        lines = text.rstrip("\n").splitlines()
+        first = next(i for i, line in enumerate(lines) if line.startswith("settings:"))
+        self.assertNotEqual(lines[first - 1], "", text)
+
+    def test_a_nested_cwd_still_resolves_from_the_root(self):
+        nested = self.root / "svc"
+        (nested / ".git").mkdir(parents=True)
+        (nested / ".claude").mkdir()
+        (nested / ".claude" / "shipgate.md").write_text(
+            "## Code tooling\n\n- Code graph: `off`\n", encoding="utf-8")
+        lines = self.settings_lines(cwd=nested)
+        self.assertIn("code_graph=auto (default)", lines[0])
+
+
 class TestBriefPins(_PinStream, JournalTestCase):
     """T002: the bound block and the handoff text, byte for byte (SC-003)."""
 
@@ -1435,7 +1541,12 @@ class TestBoundBrief(_StreamRows, JournalTestCase):
         self.assertLessEqual(len(line), 160, line)
 
     def test_no_streams_at_all(self):
-        self.assertEqual(self.render(), "No work streams recorded.")
+        # The settings line follows (#60, T041); here every setting is its default.
+        self.assertEqual(self.render(), (
+            "No work streams recorded.\n"
+            "settings: autonomy=ask (default) · orchestration.review=agents (default) "
+            "· orchestration.explore=agents (default) · writing_style=plain (default) "
+            "· code_graph=auto (default)"))
 
     # -- SC-002 ------------------------------------------------------------------
 

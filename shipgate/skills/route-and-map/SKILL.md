@@ -27,14 +27,20 @@ explore afterwards unless asked. Record nothing, because a blast-radius answer s
 The routing ask for *new* work is the opposite case: "where does this go and what does it
 touch?" That ask is the first phase of a flow, and step 5 records it.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
-> **Journaled project — name the stream before you start.** Three signs mark a journaled
-> project: a status brief headed "shipgate flow journal", a **Journal** section in the config,
-> or a `.claude/shipgate.json` sidecar. Any one of them means this map is owed to a stream.
+> **Journaled project — name the stream before you start.** A project is journaled when
+> the status brief is present, or `.claude/shipgate.json` exists and `journal.py config db`
+> prints a `db` that is not null. On such a project this map is owed to a stream.
 > The stream is the branch the work will take. Use the checked-out branch when it is a work
 > branch. Otherwise use the name the config's **Branching** pattern gives it:
 > `feat/<issue-id>-<slug>`, or `feat/<slug>` with no issue. `workspace` reuses that name when
@@ -98,8 +104,8 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
 
    A repository with no usable graph index gets a top-level `graph_note` on every call. It
    says why there is no index and how to build one. Put it in the map as one line per
-   touched repo, even when the advisory was shown before. A `Code graph: off` config gets
-   no note. `design` and `review` later record the JSON's `ranking` for their own file
+   touched repo, even when the advisory was shown before. A `code_graph` setting of `off`
+   gets no note. `design` and `review` later record the JSON's `ranking` for their own file
    sets.
 
 4. **Classify the change** using the rules that `CLAUDE.md` actually defines. The list below

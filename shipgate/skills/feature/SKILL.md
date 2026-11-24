@@ -10,10 +10,16 @@ You coordinate the lean feature flow. You don't do the deep work yourself. You f
 does it*. Think of yourself as the tech lead who keeps the work moving through the right
 gates, not the engineer heads-down in one file.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
 ## The flow
 
@@ -26,16 +32,16 @@ may stop and go back. Backward transitions are normal and healthy:
 review → implement (code wrong), design → clarify (requirements gap), implement → design
 (approach wrong).
 
-Gates honor the config's **Autonomy** section. In `executive` mode the orchestrator answers
-gate questions itself and records the decisions. It escalates only what **The executive
-contract** below names. The default is `ask`.
+Gates honor the `autonomy` setting: `ask` (the default) or `executive`. In `executive` mode
+the orchestrator answers gate questions itself and records the decisions. It escalates
+only what **The executive contract** below names.
 
 | Phase | Skill | Produces |
 |-------|-------|----------|
 | Workspace | `workspace` | right branch off a clean base (or confirmed worktree) |
 | Route & Map | `route-and-map` | impact map (modules/services touched, write/read path, data obligations) |
 | Explore | dispatch `code-explorer` ×2-3 | grounded context, essential files |
-| Clarify *(gate)* | `clarify` | PRD in the configured PRD home (default `docs/prd/`), FR-###/SC-### |
+| Clarify *(gate)* | `clarify` | PRD in the PRD home (the `artifact_homes.prd` setting; default `docs/prd/`), FR-###/SC-### |
 | Design | `design` | ADR(s) + worklog (Design + Build Plan) |
 | Implement | `implement` | code + ticked Build Plan |
 | Review | `review` | verdict + verified evidence |
@@ -43,7 +49,7 @@ contract** below names. The default is `ask`.
 
 ## The executive contract
 
-This section is the contract for `executive` mode (config **Autonomy**: `Mode: executive`).
+This section is the contract for `executive` mode (the `autonomy` setting is `executive`).
 `clarify`, `design`, `setup` and the glossary cite it. A config does not restate it. A config
 adds to it only through its **Extra escalations** line.
 
@@ -104,7 +110,7 @@ signals are unavailable (see the JSON's `reason`, `trajectory.reason`, `structur
 leave the table out.
 
 The code graph is available when a signals call in this flow returned `structure.source`
-`graph`. A `Code graph: off` bullet in the config means it is absent. When it is available,
+`graph`. A `code_graph` setting of `off` means it is absent. When it is available,
 the brief names three graph commands as the explorer's first move, before grep:
 
 ```bash
@@ -126,8 +132,8 @@ check out themselves.
 Scale it. A one-service change may need one light explorer or none. A cross-cutting feature
 warrants the full 2-3.
 
-When the config's **Orchestration** section says `explore: workflow`, run that fan through
-the `Workflow` tool instead:
+When the `orchestration.explore` setting is `workflow` (the default is `agents`), run that
+fan through the `Workflow` tool instead:
 
 - Read `${CLAUDE_PLUGIN_ROOT}/skills/feature/references/explore-workflow.js` and pass its full
   text as `script`. Bundled files are outside the working directory, so the tool refuses
@@ -159,7 +165,8 @@ fan above and record a `deviation`.
 Don't assume the work is starting fresh. Establish where the work stands before you do
 anything else.
 
-**Journaled projects** (the config declares a **Journal**): read the position, don't guess it.
+**Journaled projects** (the status brief is present, or `.claude/shipgate.json` exists and
+`journal.py config db` prints a `db` that is not null): read the position, don't guess it.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" status [--branch <branch>] [--feature <slug>] [--all]
@@ -194,14 +201,15 @@ Three rules follow because the journal is the position of record:
   journal says and what the artifacts show. Record the resolution as an event (`deviation`,
   or the phase event that was missed) before you move on. Silent reinterpretation is the
   failure mode the journal removes.
-- **Journal unavailable ≠ journal empty.** The config may declare a database that is missing
-  or unreadable. That is an infrastructure problem. Surface it and offer `journal.py doctor`.
+- **Journal unavailable ≠ journal empty.** The `db` setting may name a database that is
+  missing or unreadable. That is an infrastructure problem. Surface it and offer
+  `journal.py doctor`.
   Fall back to artifact inference for the session only with the user's explicit
   acknowledgement.
 
-**Un-journaled projects** (no Journal section): infer the position from what exists, with the
-same semantics. If the project looks like it would benefit, offer `/shipgate:setup` once,
-briefly. Don't nag.
+**Un-journaled projects** (the journaled test above fails): infer the position from what
+exists, with the same semantics. If the project looks like it would benefit, offer
+`/shipgate:setup` once, briefly. Don't nag.
 
 The phase semantics (what each position means and where it goes next) are the same either
 way:
@@ -261,8 +269,9 @@ decide; `--apply` appends nothing for it.
 
 Sometimes you read more than one config file: a repo's file and its umbrella's, or a project
 file and the user file. Then, before the first phase, say which file each section in play came
-from. Write one line per section, for example `Autonomy: user file`. The layering rule in the
-config callout above decides which file supplies a section.
+from. Write one line per section, for example `Worker guardrails: user file`. The layering rule
+in the config callout above decides which file supplies a section. A setting names its own
+source in the status brief's `settings:` line and in `journal.py config`.
 
 ## Scale ceremony to the change
 

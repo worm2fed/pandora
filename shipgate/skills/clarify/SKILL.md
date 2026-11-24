@@ -13,17 +13,23 @@ runs *after* exploration, so your questions come from what the code actually doe
 **The gate always runs, and design never starts with open clarifications.** What varies is
 *who answers it*. In the default `ask` mode, the user answers. If the user is in a hurry, the
 move is to answer fast, not to skip. Surface the questions with recommendations so the user
-can accept each one with one tap. When the config's **Autonomy** section declares
+can accept each one with one tap. When the `autonomy` setting is
 `executive`, you answer your own questions. See the Executive mode section below.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
-> **Journaled project — name the stream before you start.** Three signs mark a journaled
-> project: a status brief headed "shipgate flow journal", a **Journal** section in the config,
-> or a `.claude/shipgate.json` sidecar. Any one of them means this gate is owed to a stream.
+> **Journaled project — name the stream before you start.** A project is journaled when
+> the status brief is present, or `.claude/shipgate.json` exists and `journal.py config db`
+> prints a `db` that is not null. On such a project this gate is owed to a stream.
 > The stream is the branch this feature's work takes. Use the one the status brief lists for
 > the issue. Otherwise use the name the config's **Branching** pattern gives it
 > (`feat/<issue-id>-<slug>`). If the status brief does not list the stream, open it with
@@ -84,7 +90,7 @@ Use `[NEEDS CLARIFICATION]` markers in the PRD draft for anything still open. Ke
 capped list forces real prioritization instead of "flag everything." The gate is passed when
 no `[NEEDS CLARIFICATION]` markers remain.
 
-### Executive mode (config Autonomy: `executive`)
+### Executive mode (the `autonomy` setting is `executive`)
 
 The coverage scan runs in full, unchanged. But you do not ask. Instead, **answer each question
 yourself with your recommended answer**. Record each answer in the PRD under an
@@ -99,12 +105,13 @@ It does not change the bar for the consequential ones.
 
 ## Step 3 — Write the PRD
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-the PRD; absent, a placeholder, or `plain`, write it as before.
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
+the PRD. When it is `plain`, the default, write it as before.
 
-Create or update the PRD at the configured PRD home. The default is
-`docs/prd/<feature-kebab>.md`, plain markdown in the repo. The PRD holds the *what & why*,
-never the *how*. Use the template at
+Create or update the PRD in the PRD home, the directory of the `artifact_homes.prd`
+setting. The default is `docs/prd/<feature-kebab>.md`, plain markdown in the repo. A home
+outside the repo, such as a wiki, is no setting: when the config's Knowledge base section
+names one in words, write the PRD there. The PRD holds the *what & why*, never the *how*. Use the template at
 `${CLAUDE_PLUGIN_ROOT}/skills/clarify/references/prd-template.md`. Follow any page conventions
 that the config's Knowledge base section declares. Number things so later phases can trace
 them:
@@ -117,15 +124,16 @@ A success criterion that can't be measured isn't one. It is a wish. Push back on
 
 **Capture the issue.** Record the tracker issue in the PRD header (`Issue:`). The user may give
 an issue number or URL. If so, pull the issue through the configured tracker integration. The
-default is the forge CLI: `gh issue view <n>` / `glab issue view <n>`. Use the issue's
-description and discussion to seed the PRD and to inform your questions. Don't make the user
-re-type what is already on the issue. If there's no tracker or no issue, mark it
+default is the CLI of the `forge` setting: `gh issue view <n>` / `glab issue view <n>`. Use
+the issue's description and discussion to seed the PRD and to inform your questions. Don't
+make the user re-type what is already on the issue. If there's no tracker or no issue, mark it
 "none / ad-hoc". That's fine. When an issue id exists, it also feeds the branch name
 downstream, so getting it here saves work later.
 
 ## Record the gate (journaled projects)
 
-On a project whose config declares a **Journal**, every resolved ambiguity is a
+On a journaled project (the status brief is present, or `.claude/shipgate.json` exists and
+`journal.py config db` prints a `db` that is not null), every resolved ambiguity is a
 `gate-decision`. Append it as it is decided. This applies in `ask` and `executive` mode alike;
 the mode is just a field:
 

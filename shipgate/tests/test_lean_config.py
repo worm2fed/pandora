@@ -24,6 +24,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # The one placeholder rule's cases, shared with `_config.py`'s tests.
 from test_config import PLACEHOLDER_CASES, REAL_VALUE_CASES
@@ -670,7 +671,8 @@ class TestCatalogue(unittest.TestCase):
                 checked += 1
                 with self.subTest(line=block.start + 1, sentence=sentence[:60]):
                     self.assertTrue(lean.is_catalogued(sentence))
-        self.assertGreater(checked, 100)
+        # The template held 86 prose sentences after the config split (ADR 0028).
+        self.assertGreater(checked, 80)
 
     def test_the_sentence_split(self):
         lean = load_lean_module()
@@ -1215,6 +1217,1078 @@ class TestRecogniser(LeanConfigTestCase):
             "```\n"
         )
         self.assertEqual(self.lean_text(text), text)
+
+
+# --------------------------------------------------------------------------
+# --move-settings (ADR 0028): legacy lines move into the settings files
+# --------------------------------------------------------------------------
+
+JOURNAL = TESTS_DIR.parent / "scripts" / "journal.py"
+CONFIG_MODULE = TESTS_DIR.parent / "scripts" / "_config.py"
+
+
+def load_config_module():
+    spec = importlib.util.spec_from_file_location("shipgate_config_move", CONFIG_MODULE)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+_CFG = load_config_module()
+
+TITLE = "# shipgate — x\n\n"
+USER_TITLE = "# shipgate — user\n\n"
+
+
+def new_file_mode():
+    mask = os.umask(0)
+    os.umask(mask)
+    return 0o666 & ~mask
+
+
+class MoveCase(unittest.TestCase):
+    """A project root with `.claude/` and a user directory that `CLAUDE_CONFIG_DIR`
+    names, both in a temp directory, so no test reads the real user files."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="lean-move-"))
+        self.fresh("project")
+
+    def tearDown(self):
+        for root, dirs, _files in os.walk(str(self.tmp)):
+            for name in dirs:
+                os.chmod(os.path.join(root, name), 0o755)
+        shutil.rmtree(str(self.tmp), ignore_errors=True)
+
+    def fresh(self, name):
+        """A new project root and user directory under the temp directory."""
+        self.root = self.tmp / name
+        (self.root / ".claude").mkdir(parents=True)
+        self.user_dir = self.tmp / (name + "-user")
+        self.user_dir.mkdir()
+        self.env = dict(os.environ, CLAUDE_CONFIG_DIR=str(self.user_dir))
+
+    @property
+    def md(self):
+        return self.root / ".claude" / "shipgate.md"
+
+    @property
+    def settings(self):
+        return self.root / ".claude" / "shipgate.json"
+
+    @property
+    def user_md_path(self):
+        return self.user_dir / "shipgate.md"
+
+    @property
+    def user_settings(self):
+        return self.user_dir / "shipgate.settings.json"
+
+    def write(self, path, text):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def project_md(self, body):
+        return self.write(self.md, TITLE + body)
+
+    def user_md(self, body):
+        return self.write(self.user_md_path, USER_TITLE + body)
+
+    def project_json(self, data):
+        return self.write(self.settings, json.dumps(data, indent=2) + "\n")
+
+    def user_json(self, data):
+        return self.write(self.user_settings, json.dumps(data, indent=2) + "\n")
+
+    def nested(self, name, body, parent=""):
+        repo = (self.root / parent / name) if parent else (self.root / name)
+        (repo / ".git").mkdir(parents=True)
+        self.write(repo / ".claude" / "shipgate.md", "# shipgate — " + name + "\n\n" + body)
+        return repo
+
+    def move(self, *extra, root=None):
+        return subprocess.run(
+            [sys.executable, str(LEAN), "--move-settings", str(root or self.root)]
+            + [str(a) for a in extra],
+            env=self.env, capture_output=True, text=True, timeout=60,
+        )
+
+    def move_json(self, *extra):
+        proc = self.move("--json", *extra)
+        self.assertEqual(proc.returncode, OK, proc.stderr + proc.stdout)
+        return json.loads(proc.stdout)
+
+    def snapshot(self):
+        """Every file under the temp directory: its bytes and its mode."""
+        out = {}
+        for dirpath, _dirs, files in os.walk(str(self.tmp)):
+            for name in files:
+                path = os.path.join(dirpath, name)
+                out[path] = (Path(path).read_bytes(), stat.S_IMODE(os.stat(path).st_mode))
+        return out
+
+    def json_of(self, path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def files_of(self, report):
+        return {entry["path"]: entry for entry in report["files"]}
+
+    def resolve(self, start=None):
+        """Each setting's value by `_config.resolve_settings` from START (the project
+        root by default), with journal.py's layer list: a nested repo's config is the
+        project file, and the configs above it up to the root are umbrella files."""
+        start = start or self.root
+        candidates = [(start / ".claude" / "shipgate.md", _CFG.ROLE_PROJECT)]
+        if start != self.root:
+            for directory in dict.fromkeys((start.parent, self.root)):
+                candidates.append((directory / ".claude" / "shipgate.md", _CFG.ROLE_UMBRELLA))
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.user_dir)}):
+            files = _CFG.read_layers(candidates, _CFG.user_config_path())
+            project = self.settings
+            resolved = _CFG.resolve_settings(project if project.is_file() else None, files,
+                                             _CFG.user_settings_path())
+        return {key: setting.value for key, setting in resolved.settings.items()}
+
+    def resolve_from(self, start):
+        """`resolve` with journal.py's full rule: every config from START up to the repo
+        that holds it is a project file; with no repo below the root, every config up to
+        the root is."""
+        chain = [start]
+        while chain[-1] != self.root:
+            chain.append(chain[-1].parent)
+        repo = next((d for d in chain if (d / ".git").exists()), None)
+        if repo is None or repo == self.root:
+            candidates = [(d / ".claude" / "shipgate.md", _CFG.ROLE_PROJECT) for d in chain]
+        else:
+            candidates = [(d / ".claude" / "shipgate.md", _CFG.ROLE_PROJECT)
+                          for d in chain[:chain.index(repo) + 1]]
+            for directory in dict.fromkeys((repo.parent, self.root)):
+                candidates.append((directory / ".claude" / "shipgate.md", _CFG.ROLE_UMBRELLA))
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.user_dir)}):
+            files = _CFG.read_layers(candidates, _CFG.user_config_path())
+            project = self.settings
+            resolved = _CFG.resolve_settings(project if project.is_file() else None, files,
+                                             _CFG.user_settings_path())
+        return {key: setting.value for key, setting in resolved.settings.items()}
+
+    def config_values(self, start=None):
+        """`journal.py config --json` from START: the real reader, values only."""
+        proc = subprocess.run(
+            [sys.executable, str(JOURNAL), "config", "--json", "--start",
+             str(start or self.root)],
+            env=self.env, cwd=str(self.tmp), capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        doc = json.loads(proc.stdout)
+        return {key: entry["value"] for key, entry in doc["settings"].items()}, doc
+
+    def assertSameSettings(self, before, after, also=()):
+        ignore = {"version"} | set(also)
+        self.assertEqual({k: v for k, v in before.items() if k not in ignore},
+                         {k: v for k, v in after.items() if k not in ignore})
+
+
+class TestMoveSettingsDiff(MoveCase):
+    CONFIG = "## Autonomy\n\n- Mode: executive\n- Extra escalations: publishing\n"
+
+    def test_the_dry_run_prints_both_diffs_and_changes_no_file(self):
+        self.project_md(self.CONFIG)
+        self.project_json({"version": 1, "db": ".claude/shipgate.db"})
+        before = self.snapshot()
+        proc = self.move()
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        first = proc.stdout.splitlines()[0]
+        self.assertTrue(first.startswith("lean_config: 1 line(s) to move"), first)
+        self.assertIn("--- a/.claude/shipgate.md\n+++ b/.claude/shipgate.md\n", proc.stdout)
+        self.assertIn("-- Mode: executive", proc.stdout)
+        self.assertIn("--- a/.claude/shipgate.json\n+++ b/.claude/shipgate.json\n",
+                      proc.stdout)
+        self.assertIn('-  "version": 1,', proc.stdout)
+        self.assertIn('+  "version": 2,', proc.stdout)
+        self.assertIn('+  "autonomy": "executive"', proc.stdout)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_json_names_the_files_the_moved_lines_and_the_notes(self):
+        self.project_md(self.CONFIG)
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        report = self.move_json()
+        self.assertEqual(sorted(report), ["changed", "files", "kept", "moved", "notes"])
+        self.assertTrue(report["changed"])
+        self.assertEqual(report["kept"], [])
+        self.assertEqual(report["moved"], [{
+            "key": "autonomy", "from_path": str(self.md), "section": "Autonomy",
+            "bullet": "Mode", "value": "executive", "to": str(self.settings),
+        }])
+        files = self.files_of(report)
+        self.assertEqual(set(files), {str(self.md), str(self.settings)})
+        for entry in files.values():
+            self.assertEqual(sorted(entry), ["changed", "created", "diff", "path"])
+            self.assertTrue(entry["changed"])
+            self.assertFalse(entry["created"])
+        self.assertIn("-- Mode: executive", files[str(self.md)]["diff"])
+
+    def test_apply_writes_both_files_through_temp_files_and_keeps_their_modes(self):
+        self.project_md(self.CONFIG)
+        self.project_json({"version": 1, "db": ".claude/shipgate.db"})
+        os.chmod(str(self.md), 0o600)
+        os.chmod(str(self.settings), 0o640)
+        proc = self.move("--apply")
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        self.assertNotIn("+++ ", proc.stdout)
+        self.assertEqual(self.md.read_text(encoding="utf-8"),
+                         TITLE + "## Autonomy\n\n- Extra escalations: publishing\n")
+        self.assertEqual(self.settings.read_text(encoding="utf-8"),
+                         '{\n  "version": 2,\n  "db": ".claude/shipgate.db",\n'
+                         '  "autonomy": "executive"\n}\n')
+        self.assertEqual(stat.S_IMODE(os.stat(str(self.md)).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(str(self.settings)).st_mode), 0o640)
+        self.assertEqual(sorted(os.listdir(str(self.root / ".claude"))),
+                         ["shipgate.json", "shipgate.md"])
+        self.assertEqual(os.listdir(str(self.user_dir)), [])
+
+    def test_a_missing_project_settings_file_is_created_with_db_null(self):
+        self.project_md(self.CONFIG)
+        report = self.move_json()
+        entry = self.files_of(report)[str(self.settings)]
+        self.assertTrue(entry["created"])
+        self.assertTrue(entry["diff"].startswith(
+            "--- /dev/null\n+++ b/.claude/shipgate.json\n"), entry["diff"])
+        self.assertFalse(self.settings.exists())
+        self.assertIn('creates .claude/shipgate.json with "db": null: this project has no '
+                      'journal; the hooks stay inert, as before', report["notes"])
+        self.move_json("--apply")
+        self.assertEqual(self.settings.read_text(encoding="utf-8"),
+                         '{\n  "version": 2,\n  "db": null,\n  "autonomy": "executive"\n}\n')
+        self.assertEqual(stat.S_IMODE(os.stat(str(self.settings)).st_mode), new_file_mode())
+        self.assertEqual(sorted(os.listdir(str(self.root / ".claude"))),
+                         ["shipgate.json", "shipgate.md"])
+
+    def test_a_comment_under_a_moved_bullet_and_the_empty_heading_go_with_it(self):
+        self.project_md(
+            "## Code signals\n\n"
+            "- Window: `12`\n"
+            "- Exclude: `vendor/`\n"
+            "  <!-- vendored code churns with every upgrade and is not ours. -->\n\n"
+            "## Branching\n\n"
+            "- Pattern: `feature/x`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.move_json("--apply")
+        self.assertEqual(self.md.read_text(encoding="utf-8"),
+                         TITLE + "## Branching\n\n- Pattern: `feature/x`\n")
+        self.assertEqual(self.json_of(self.settings)["code_signals"],
+                         {"window_months": 12, "exclude": ["vendor/"]})
+
+    def test_an_existing_settings_file_keeps_its_keys_and_order_and_merges_per_leaf(self):
+        self.user_json({"version": 1, "handoff": "off", "orchestration": {"review": "agents"}})
+        self.user_md("## Orchestration\n\n- explore: workflow\n- review: workflow\n")
+        report = self.move_json("--apply")
+        self.assertEqual(self.user_settings.read_text(encoding="utf-8"),
+                         '{\n  "version": 2,\n  "handoff": "off",\n  "orchestration": {\n'
+                         '    "review": "agents",\n    "explore": "workflow"\n  }\n}\n')
+        self.assertEqual(self.user_md_path.read_text(encoding="utf-8"), "# shipgate — user\n")
+        notes = "\n".join(report["notes"])
+        self.assertIn("orchestration.review", notes)
+        self.assertIn("a project whose own ## Orchestration section hid this user line will "
+                      "take the user's orchestration.explore (workflow) after the move", notes)
+
+    def test_a_key_the_settings_file_sets_wins_and_its_line_goes_with_a_note(self):
+        self.project_md(self.CONFIG)
+        self.project_json({"version": 2, "db": ".claude/shipgate.db", "autonomy": "ask"})
+        before = self.resolve()
+        report = self.move_json("--apply")
+        self.assertEqual(self.json_of(self.settings)["autonomy"], "ask")
+        self.assertNotIn("Mode:", self.md.read_text(encoding="utf-8"))
+        self.assertTrue(any("autonomy" in n and "executive" in n and "ask" in n
+                            for n in report["notes"]), report["notes"])
+        self.assertSameSettings(before, self.resolve())
+
+
+class TestMoveSettingsScope(MoveCase):
+    def test_project_nested_and_user_lines_land_in_the_settings_file_of_their_scope(self):
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        repo = self.nested("api", "## Code tooling\n\n- Code graph: `auto`\n", parent="packages")
+        self.user_md("## Writing style\n\n- Docs: `ste-80`\n\n## Session\n\n- Handoff: `300k`\n")
+        before = {start: self.resolve(start) for start in (self.root, repo)}
+        report = self.move_json("--apply")
+        self.assertEqual(self.json_of(self.settings), {
+            "version": 2, "db": ".claude/shipgate.db", "autonomy": "executive",
+            "code_graph": "auto"})
+        self.assertEqual(self.json_of(self.user_settings),
+                         {"version": 2, "writing_style": "ste-80", "handoff": "300k"})
+        self.assertEqual(self.user_md_path.read_text(encoding="utf-8"), "# shipgate — user\n")
+        self.assertEqual((repo / ".claude" / "shipgate.md").read_text(encoding="utf-8"),
+                         "# shipgate — api\n")
+        targets = {m["key"]: m["to"] for m in report["moved"]}
+        self.assertEqual(targets, {
+            "autonomy": str(self.settings), "code_graph": str(self.settings),
+            "writing_style": str(self.user_settings), "handoff": str(self.user_settings)})
+        every_repo = [n for n in report["notes"] if "applies to every repo" in n]
+        self.assertEqual(len(every_repo), 1, report["notes"])
+        self.assertIn("code_graph", every_repo[0])
+        for start, values in before.items():
+            self.assertSameSettings(values, self.resolve(start))
+
+    def test_a_user_file_project_key_is_copied_with_a_note_and_stays(self):
+        self.project_md("## Autonomy\n\n- Extra escalations: publishing\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        user_text = self.user_md("## Code signals\n\n- Window: `18`\n").read_text(encoding="utf-8")
+        before = self.resolve()
+        self.assertEqual(before["code_signals.window_months"], 18)
+        report = self.move_json("--apply")
+        self.assertEqual(self.json_of(self.settings)["code_signals"], {"window_months": 18})
+        self.assertEqual(self.user_md_path.read_text(encoding="utf-8"), user_text)
+        self.assertFalse(self.user_settings.exists())
+        self.assertEqual([(m["key"], m["from_path"], m["to"]) for m in report["moved"]],
+                         [("code_signals.window_months", str(self.user_md_path),
+                           str(self.settings))])
+        self.assertTrue(any("code_signals.window_months" in n and "keeps the line" in n
+                            for n in report["notes"]), report["notes"])
+        self.assertSameSettings(before, self.resolve())
+        again = self.move_json()
+        self.assertFalse(again["changed"])
+        self.assertEqual(again["moved"], [])
+        self.assertEqual([(k["path"], k["section"], k["bullet"], k["value"])
+                          for k in again["kept"]],
+                         [(str(self.user_md_path), "Code signals", "Window", "`18`")])
+        self.assertIn("project setting", again["kept"][0]["reason"])
+        self.assertTrue(all(not f["diff"] for f in again["files"]))
+
+    def test_a_moved_user_line_carries_the_other_projects_note(self):
+        self.user_md("## Autonomy\n\n- Mode: executive\n")
+        report = self.move_json("--apply")
+        self.assertEqual(report["notes"], [
+            "a project whose own ## Autonomy section hid this user line will take the "
+            "user's autonomy (executive) after the move"])
+
+    def test_two_nested_configs_that_disagree_keep_their_lines(self):
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        first = self.nested("a", "## Code tooling\n\n- Code graph: `off`\n")
+        second = self.nested("b", "## Code tooling\n\n- Code graph: `root`\n")
+        before = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertFalse(report["changed"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(sorted((k["path"], k["reason"]) for k in report["kept"]), [
+            (str(first / ".claude" / "shipgate.md"), "conflict"),
+            (str(second / ".claude" / "shipgate.md"), "conflict")])
+        self.assertTrue(any("code_graph" in n for n in report["notes"]), report["notes"])
+
+    def test_a_nested_value_that_differs_from_the_root_value_stays(self):
+        self.project_md("## Code tooling\n\n- Code graph: `root`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        repo = self.nested("a", "## Code tooling\n\n- Code graph: `off`\n")
+        before = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(sorted((k["path"], k["reason"]) for k in report["kept"]), sorted([
+            (str(self.md), "conflict"), (str(repo / ".claude" / "shipgate.md"), "conflict")]))
+
+    def test_a_line_that_does_not_parse_stays_and_is_named(self):
+        self.project_md(
+            "## Autonomy\n\n- Mode: sometimes\n\n"
+            "## Orchestration\n\n- review: <agents | workflow>\n- explore: workflow\n\n"
+            "## Code signals\n\n- Window: 12\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        before = self.resolve()
+        report = self.move_json("--apply")
+        self.assertEqual(
+            sorted((k["section"], k["bullet"], k["value"], k["reason"]) for k in report["kept"]),
+            [("Autonomy", "Mode", "sometimes", "does not parse"),
+             ("Code signals", "Window", "12", "does not parse"),
+             ("Orchestration", "review", "<agents | workflow>", "does not parse")])
+        self.assertEqual(self.md.read_text(encoding="utf-8"), TITLE + (
+            "## Autonomy\n\n- Mode: sometimes\n\n"
+            "## Orchestration\n\n- review: <agents | workflow>\n\n"
+            "## Code signals\n\n- Window: 12\n"))
+        self.assertEqual(self.json_of(self.settings)["orchestration"], {"explore": "workflow"})
+        self.assertSameSettings(before, self.resolve())
+
+    def test_a_nested_repo_with_its_own_settings_file_is_skipped(self):
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        repo = self.nested("svc", "## Autonomy\n\n- Mode: executive\n")
+        self.write(repo / ".claude" / "shipgate.json", '{"version": 2}\n')
+        before = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertFalse(report["changed"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue(any(str(repo) in n and "settings file" in n for n in report["notes"]),
+                        report["notes"])
+
+    def test_no_user_directory_is_created(self):
+        self.env["CLAUDE_CONFIG_DIR"] = str(self.tmp / "absent")
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        self.move_json("--apply")
+        self.assertFalse((self.tmp / "absent").exists())
+        self.assertEqual(self.json_of(self.settings)["autonomy"], "executive")
+
+
+class TestMoveSettingsKnowledgeBase(MoveCase):
+    CONFIG = (
+        "## Knowledge base\n\n"
+        "- PRD home: `docs/specs/`\n"
+        "- ADR home: `docs/adr/`\n"
+        "- Worklog home: `<name>.worklog.md`\n"
+        "- Ledger: `notes/ledger.md`\n"
+        "- Page conventions: frontmatter as the templates define.\n\n"
+        "## Journal\n\n"
+        "- Database: `.claude/journal.db`\n\n"
+        "## Branching\n\n"
+        "- Pattern: `feature/x`\n"
+    )
+
+    def test_a_home_that_differs_from_the_settings_file_stays_and_names_both(self):
+        self.project_md(self.CONFIG)
+        settings = self.project_json({
+            "version": 2, "db": ".claude/shipgate.db", "ledger": "docs/ledger.md",
+            "artifact_homes": {"prd": "docs/prd/*.md", "adr": "docs/adr/*.md",
+                               "worklog": "docs/prd/*.worklog.md"}})
+        settings_text = settings.read_text(encoding="utf-8")
+        before = self.snapshot()
+        report = self.move_json()
+        self.assertEqual(self.snapshot(), before)
+        differs = ("differs from the settings file ({}): the skills read the bullet until the "
+                   "grace date, the hooks read the file; set the one you want and delete the "
+                   "other")
+        # The worklog beside the PRD sits beside the settings file's PRD home, which equals
+        # the file's worklog: it goes (review round 3, R1).
+        self.assertEqual([(k["bullet"], k["reason"]) for k in report["kept"]], [
+            ("Ledger", differs.format("docs/ledger.md")),
+            ("PRD home", differs.format("docs/prd/*.md"))])
+        self.assertEqual(sorted(m["key"] for m in report["moved"]),
+                         ["artifact_homes.adr", "artifact_homes.worklog", "db"])
+        notes = "\n".join(report["notes"])
+        self.assertIn(".claude/journal.db", notes)
+        self.assertNotIn("ADR home", notes)
+        self.move_json("--apply")
+        self.assertEqual(self.md.read_text(encoding="utf-8"), TITLE + (
+            "## Knowledge base\n\n"
+            "- PRD home: `docs/specs/`\n"
+            "- Ledger: `notes/ledger.md`\n"
+            "- Page conventions: frontmatter as the templates define.\n\n"
+            "## Branching\n\n"
+            "- Pattern: `feature/x`\n"))
+        self.assertEqual(settings.read_text(encoding="utf-8"), settings_text)
+        self.assertFalse(self.move_json()["changed"])
+
+    def test_a_ledger_bullet_with_promotion_targets_becomes_a_promotion_targets_bullet(self):
+        self.project_md(
+            "## Knowledge base\n\n"
+            "- Stores: the repo docs.\n"
+            "- Ledger: `docs/ledger.md` (repo root, shared). Promotion targets at triage:\n"
+            "  conventions → the relevant README; decisions → the ADR home.\n"
+            "- Page conventions: the plugin templates.\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        report = self.move_json("--apply")
+        self.assertEqual(self.md.read_text(encoding="utf-8"), TITLE + (
+            "## Knowledge base\n\n"
+            "- Stores: the repo docs.\n"
+            "- Promotion targets:\n"
+            "  conventions → the relevant README; decisions → the ADR home.\n"
+            "- Page conventions: the plugin templates.\n"))
+        self.assertEqual([(m["key"], m["bullet"]) for m in report["moved"]], [("ledger", "Ledger")])
+        self.assertTrue(any("Promotion targets" in n for n in report["notes"]), report["notes"])
+        self.assertFalse(self.move_json()["changed"])
+
+    def test_promotion_targets_on_the_ledger_line_stay_on_one_line(self):
+        self.project_md("## Knowledge base\n\n"
+                        "- Ledger: `docs/ledger.md`. Promotion targets: decisions → ADRs.\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.move_json("--apply")
+        self.assertEqual(self.md.read_text(encoding="utf-8"), TITLE + (
+            "## Knowledge base\n\n- Promotion targets: decisions → ADRs.\n"))
+
+    def test_promotion_targets_with_nested_bullets_keep_them(self):
+        self.project_md(
+            "## Knowledge base\n\n"
+            "- Ledger: `docs/ledger.md`. Promotion targets:\n"
+            "  - conventions → the relevant README\n"
+            "  - decisions → the ADR home\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.move_json("--apply")
+        self.assertEqual(self.md.read_text(encoding="utf-8"), TITLE + (
+            "## Knowledge base\n\n"
+            "- Promotion targets:\n"
+            "  - conventions → the relevant README\n"
+            "  - decisions → the ADR home\n"))
+
+    def test_a_bullet_with_prose_that_resolves_the_same_goes_with_a_note(self):
+        cases = {
+            "prose after the value": "- PRD home: `docs/prd/` — one folder per plugin.\n",
+            "nested bullets": "- ADR home: `docs/adr/`\n  - numbered NNNN-<title>.md\n",
+            "ledger prose": "- Ledger: `docs/ledger.md`; triage it weekly.\n",
+            "beside the PRD": "- PRD home: `docs/prd/`\n"
+                              "- Worklog home: beside the PRD as `<name>.worklog.md`\n",
+            "promotion targets exist": "- Ledger: `docs/ledger.md`. Promotion targets: "
+                                       "decisions → ADRs.\n- Promotion targets: the README.\n",
+        }
+        for name, bullets in cases.items():
+            with self.subTest(case=name):
+                self.fresh(name.replace(" ", "-"))
+                self.project_md("## Knowledge base\n\n- Stores: the repo docs.\n" + bullets)
+                self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+                before = self.resolve()
+                report = self.move_json("--apply")
+                self.assertEqual(report["kept"], [])
+                text = self.md.read_text(encoding="utf-8")
+                self.assertTrue(text.startswith(TITLE + "## Knowledge base\n\n- Stores: the repo "
+                                                "docs.\n"), text)
+                for bullet in ("PRD home", "ADR home", "Worklog home", "Ledger"):
+                    self.assertNotIn("- " + bullet + ":", text)
+                self.assertTrue(any("its words go with it; keep them in a prose line of the "
+                                    "section if they matter" in n for n in report["notes"]),
+                                report["notes"])
+                self.assertSameSettings(before, self.resolve())
+
+    def test_a_database_bullet_with_prose_stays_whole(self):
+        self.project_md("## Journal\n\n- Database: `.claude/shipgate.db` — local only.\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        before = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual([k["reason"] for k in report["kept"]], ["holds prose"])
+
+    def test_a_home_outside_the_project_config_stays_and_is_named(self):
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        repo = self.nested("svc", "## Knowledge base\n\n- PRD home: `docs/prd/`\n")
+        self.user_md("## Knowledge base\n\n- Ledger: `notes/ledger.md`\n")
+        before = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertEqual(self.snapshot(), before)
+        reason = ("a home or the ledger outside the project config stays: set it in "
+                  ".claude/shipgate.json by hand, or delete the line")
+        self.assertEqual(sorted((k["path"], k["bullet"], k["reason"]) for k in report["kept"]),
+                         sorted([(str(repo / ".claude" / "shipgate.md"), "PRD home", reason),
+                                 (str(self.user_md_path), "Ledger", reason)]))
+
+    def test_a_home_whose_removal_would_show_a_farther_line_stays(self):
+        self.project_md("## Knowledge base\n\n- PRD home: `docs/prd/`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.user_md("## Knowledge base\n\n- PRD home: `mine/prd/`\n")
+        before = self.resolve()
+        self.assertEqual(before["artifact_homes.prd"], "docs/prd/*.md")
+        snapshot = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertEqual(self.snapshot(), snapshot)
+        kept = {(k["path"], k["bullet"]): k["reason"] for k in report["kept"]}
+        self.assertIn("removing it would change artifact_homes.prd",
+                      kept[(str(self.md), "PRD home")])
+        self.assertSameSettings(before, self.resolve())
+
+    def test_a_home_the_settings_file_does_not_set_stays_and_names_the_setting(self):
+        self.project_md(
+            "## Knowledge base\n\n"
+            "- PRD home: `docs/specs/`\n"
+            "- ADR home: `./<plugin>/docs/decisions/`\n"
+            "- Worklog home: `docs/specs/`\n"
+            "- Ledger: `notes/ledger.md`\n"
+            "- Stores: the repo docs.\n")
+        before = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.settings.exists())
+        self.assertEqual(report["moved"], [])
+        reason = ("differs from the default and the settings file does not set {0}: set {0} "
+                  "to {1} in .claude/shipgate.json, or delete the line")
+        self.assertEqual([(k["bullet"], k["reason"]) for k in report["kept"]], [
+            ("Ledger", reason.format("ledger", "notes/ledger.md")),
+            ("PRD home", reason.format("artifact_homes.prd", "docs/specs/*.md")),
+            ("ADR home", reason.format("artifact_homes.adr", "*/docs/decisions/*.md")),
+            ("Worklog home", reason.format("artifact_homes.worklog", "docs/specs/*.worklog.md"))])
+        self.assertFalse(self.move_json()["changed"])
+
+    def test_a_home_equal_to_the_default_goes_with_no_write(self):
+        self.project_md("## Knowledge base\n\n- PRD home: `docs/prd/`\n- ADR home: docs/adr/\n"
+                        "- Worklog home: `docs/prd/*.worklog.md`\n- Ledger: `./docs/ledger.md`\n"
+                        "- Stores: the repo docs.\n")
+        settings = self.project_json({"version": 1, "db": ".claude/shipgate.db"})
+        settings_text = settings.read_text(encoding="utf-8")
+        report = self.move_json("--apply")
+        self.assertEqual(report["notes"], [])
+        self.assertEqual(settings.read_text(encoding="utf-8"), settings_text)
+        self.assertEqual(self.md.read_text(encoding="utf-8"),
+                         TITLE + "## Knowledge base\n\n- Stores: the repo docs.\n")
+
+    def test_a_home_that_gives_no_repo_path_stays(self):
+        self.project_md("## Knowledge base\n\n- PRD home: `https://wiki.example.com/specs`\n"
+                        "- ADR home: the team wiki, Decisions space\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        before = self.snapshot()
+        report = self.move_json("--apply")
+        self.assertEqual(self.snapshot(), before)
+        reason = ("gives no repo path that a setting can hold (a wiki, or words): keep it as "
+                  "words, or set {} in .claude/shipgate.json by hand")
+        self.assertEqual(
+            [(k["bullet"], k["reason"]) for k in report["kept"]],
+            [("PRD home", reason.format("artifact_homes.prd")),
+             ("ADR home", reason.format("artifact_homes.adr"))])
+        self.assertEqual(report["moved"], [])
+
+    def test_a_worklog_beside_the_prd_follows_the_resolved_prd_home(self):
+        """Review round 3, R1: the PRD bullet equals the settings file and goes; the
+        worklog beside it now sits beside the settings file's PRD home, which is not the
+        default, so it stays and names that value."""
+        self.project_md("## Knowledge base\n\n- PRD home: `docs/specs/`\n"
+                        "- Worklog home: beside the PRD as `<name>.worklog.md`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db",
+                           "artifact_homes": {"prd": "docs/specs/*.md"}})
+        before = self.resolve()
+        self.assertEqual(before["artifact_homes.worklog"], "docs/specs/*.worklog.md")
+        report = self.move_json("--apply")
+        self.assertEqual(self.md.read_text(encoding="utf-8"), TITLE + (
+            "## Knowledge base\n\n- Worklog home: beside the PRD as `<name>.worklog.md`\n"))
+        self.assertEqual([m["key"] for m in report["moved"]], ["artifact_homes.prd"])
+        self.assertEqual([(k["bullet"], k["reason"]) for k in report["kept"]], [(
+            "Worklog home",
+            "differs from the default and the settings file does not set "
+            "artifact_homes.worklog: set artifact_homes.worklog to docs/specs/*.worklog.md in "
+            ".claude/shipgate.json, or delete the line")])
+        self.assertSameSettings(before, self.resolve())
+        self.assertFalse(self.move_json()["changed"])
+
+    def test_a_worklog_beside_the_default_prd_goes_as_equal(self):
+        self.project_md("## Knowledge base\n\n- Stores: the repo docs.\n"
+                        "- Worklog home: beside the PRD as `<name>.worklog.md`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        before = self.resolve()
+        report = self.move_json("--apply")
+        self.assertEqual(self.md.read_text(encoding="utf-8"),
+                         TITLE + "## Knowledge base\n\n- Stores: the repo docs.\n")
+        self.assertEqual([m["key"] for m in report["moved"]], ["artifact_homes.worklog"])
+        self.assertSameSettings(before, self.resolve())
+
+    def test_the_same_values_need_no_note(self):
+        self.project_md("## Knowledge base\n\n- PRD home: `docs/prd/`\n- Ledger: `docs/ledger.md`\n"
+                        "\n## Journal\n\n- Database: `.claude/shipgate.db`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        report = self.move_json("--apply")
+        self.assertEqual(report["notes"], [])
+        self.assertEqual(self.md.read_text(encoding="utf-8"), "# shipgate — x\n")
+
+
+class TestMoveSettingsRefusals(MoveCase):
+    CONFIG = "## Autonomy\n\n- Mode: executive\n"
+
+    def test_a_project_settings_file_above_version_2_is_refused(self):
+        self.project_md(self.CONFIG)
+        self.project_json({"version": 3, "db": ".claude/shipgate.db"})
+        before = self.snapshot()
+        proc = self.move("--apply")
+        self.assertEqual(proc.returncode, USAGE, proc.stdout)
+        self.assertIn(str(self.settings), proc.stderr)
+        self.assertIn("version 3", proc.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_user_settings_file_above_version_2_is_refused(self):
+        self.user_md("## Writing style\n\n- Docs: `ste-80`\n")
+        self.user_json({"version": 3})
+        before = self.snapshot()
+        proc = self.move("--apply")
+        self.assertEqual(proc.returncode, USAGE, proc.stdout)
+        self.assertIn(str(self.user_settings), proc.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_project_settings_file_that_is_no_json_object_is_refused(self):
+        for raw in (b"[1, 2]\n", b"{\n", b"\xff\n"):
+            with self.subTest(raw=raw):
+                self.project_md(self.CONFIG)
+                self.settings.write_bytes(raw)
+                before = self.snapshot()
+                proc = self.move("--apply")
+                self.assertEqual(proc.returncode, INFRA, proc.stdout)
+                self.assertIn(str(self.settings), proc.stderr)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_usage_errors_exit_2(self):
+        other = self.write(self.tmp / "other.md", "# other\n")
+        for extra in (["--user", other], ["--user", other, "--drop-equal"],
+                      ["--user", other, "--only-equal"], ["--umbrella", other]):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.move(*extra).returncode, USAGE)
+        self.assertEqual(self.move(root=self.tmp / "missing").returncode, USAGE)
+        self.assertEqual(self.move(root=other).returncode, USAGE)
+
+
+class TestMoveSettingsParity(MoveCase):
+    def test_a_line_the_project_section_hid_is_pinned(self):
+        self.project_md("## Orchestration\n\n- review: workflow\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.user_md("## Orchestration\n\n- explore: workflow\n")
+        before = self.resolve()
+        self.assertEqual(before["orchestration.explore"], "agents")
+        report = self.move_json("--apply")
+        self.assertEqual(self.json_of(self.settings)["orchestration"],
+                         {"review": "workflow", "explore": "agents"})
+        self.assertEqual(self.json_of(self.user_settings)["orchestration"],
+                         {"explore": "workflow"})
+        self.assertTrue(any(n.startswith("pinned orchestration.explore = agents")
+                            for n in report["notes"]), report["notes"])
+        self.assertSameSettings(before, self.resolve())
+        self.assertFalse(self.move_json()["changed"])
+
+    def test_a_move_that_cannot_keep_a_value_is_refused(self):
+        self.project_md("## Code signals\n\n- Window: `18`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.user_md("## Code signals\n\n- Fix pattern: `^fix`\n")
+        before = self.snapshot()
+        proc = self.move("--apply")
+        self.assertEqual(proc.returncode, INFRA, proc.stdout)
+        self.assertIn("code_signals.fix_pattern", proc.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def below(self, rel, body, repo=False):
+        directory = self.root / rel
+        if repo:
+            (directory / ".git").mkdir(parents=True)
+        self.write(directory / ".claude" / "shipgate.md", "# shipgate — below\n\n" + body)
+        return directory
+
+    def test_a_config_below_the_root_that_resolves_differently_keeps_the_root_line(self):
+        for name, rel, repo in (("deep-repo", "services/a", True),
+                                ("plain-dir", "web", False)):
+            with self.subTest(case=name):
+                self.fresh(name)
+                (self.root / ".git").mkdir()
+                self.project_md("## Autonomy\n\n- Mode: executive\n")
+                self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+                directory = self.below(rel, "## Autonomy\n\n- Mode: ask\n", repo=repo)
+                before = {start: self.resolve_from(start) for start in (self.root, directory)}
+                self.assertEqual(before[directory]["autonomy"], "ask")
+                snapshot = self.snapshot()
+                report = self.move_json("--apply")
+                self.assertEqual(self.snapshot(), snapshot)
+                self.assertEqual(
+                    [(k["path"], k["bullet"], k["reason"]) for k in report["kept"]],
+                    [(str(self.md), "Mode", "a config below the root at {} sets it "
+                      "differently".format(directory / ".claude" / "shipgate.md"))])
+                for start, values in before.items():
+                    self.assertSameSettings(values, self.resolve_from(start))
+
+    def test_a_linked_config_below_the_root_is_not_read(self):
+        """Review round 3, R4: a `.claude` or a `shipgate.md` below the root that is a link
+        is not read, with a note."""
+        for name, link_dir in (("linked-file", False), ("linked-dir", True)):
+            with self.subTest(case=name):
+                self.fresh(name)
+                (self.root / ".git").mkdir()
+                self.project_md("## Autonomy\n\n- Mode: executive\n")
+                self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+                elsewhere = self.write(self.tmp / (name + "-elsewhere") / "shipgate.md",
+                                       "# x\n\n## Autonomy\n\n- Mode: ask\n")
+                web = self.root / "web"
+                if link_dir:
+                    web.mkdir()
+                    os.symlink(str(elsewhere.parent), str(web / ".claude"))
+                    shown = "web/.claude"
+                else:
+                    (web / ".claude").mkdir(parents=True)
+                    os.symlink(str(elsewhere), str(web / ".claude" / "shipgate.md"))
+                    shown = "web/.claude/shipgate.md"
+                report = self.move_json("--apply")
+                self.assertTrue(any(shown in n and "is a link or leaves the root" in n
+                                    for n in report["notes"]), report["notes"])
+                self.assertEqual(self.json_of(self.settings)["autonomy"], "executive")
+                self.assertEqual(elsewhere.read_text(encoding="utf-8"),
+                                 "# x\n\n## Autonomy\n\n- Mode: ask\n")
+
+    def test_a_config_below_the_root_that_agrees_lets_the_line_move(self):
+        (self.root / ".git").mkdir()
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        directory = self.below("web", "## Branching\n\n- Pattern: `feature/x`\n")
+        before = self.resolve_from(directory)
+        self.move_json("--apply")
+        self.assertEqual(self.json_of(self.settings)["autonomy"], "executive")
+        self.assertSameSettings(before, self.resolve_from(directory))
+
+    def test_a_deep_source_tree_adds_no_note(self):
+        """Review round 2: an ordinary deep tree (`src/main/java/...`) is no reason for a
+        note the user cannot act on. The depth bound stays silent; only the bound on the
+        number of directories says that it stopped."""
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        (self.root / "a" / "b" / "c" / "d" / "e" / "f" / "g" / "h").mkdir(parents=True)
+        report = self.move_json()
+        self.assertFalse(any("scan" in n for n in report["notes"]), report["notes"])
+
+    def test_the_directory_bound_says_when_it_stops(self):
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        for index in range(load_lean_module().SCAN_DIRS + 5):
+            (self.root / "d{:04d}".format(index)).mkdir()
+        report = self.move_json()
+        self.assertTrue(any("stopped after" in n for n in report["notes"]), report["notes"])
+
+    def test_build_and_vendor_directories_are_not_scanned(self):
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        for name in ("build", "dist", "target", "vendor", "venv"):
+            self.write(self.root / name / "x" / ".claude" / "shipgate.md",
+                       "# copy\n\n## Autonomy\n\n- Mode: ask\n")
+        report = self.move_json("--apply")
+        self.assertEqual(report["kept"], [])
+        self.assertEqual(self.json_of(self.settings)["autonomy"], "executive")
+
+    def test_a_linked_claude_dir_below_the_root_is_not_read(self):
+        """Review round 2: the scan follows no link, a `.claude` included, so a file
+        outside the root never decides what the move keeps."""
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        outside = self.tmp / "outside"
+        self.write(outside / ".claude" / "shipgate.md", "# x\n\n## Autonomy\n\n- Mode: ask\n")
+        (self.root / "web").mkdir()
+        os.symlink(str(outside / ".claude"), str(self.root / "web" / ".claude"))
+        report = self.move_json("--apply")
+        self.assertEqual(report["kept"], [])
+        self.assertTrue(any("web" in n and "link" in n for n in report["notes"]),
+                        report["notes"])
+
+    def test_a_second_run_finds_nothing(self):
+        self.project_md(
+            "## Knowledge base\n\n- Ledger: `docs/ledger.md`\n- Stores: the repo docs.\n\n"
+            "## Journal\n\n- Database: `.claude/shipgate.db`\n\n"
+            "## Orchestration\n\n- review: workflow\n\n"
+            "## Code signals\n\n- Window: `12`\n- Ranking exclude: ``\n\n"
+            "## Autonomy\n\n- Mode: executive\n- Extra escalations: publishing\n")
+        self.project_json({"version": 1, "db": ".claude/shipgate.db"})
+        repo = self.nested("web", "## Orchestration\n\n- review: workflow\n", parent="source")
+        self.user_md("## Orchestration\n\n- explore: workflow\n\n## Code signals\n\n"
+                     "- Exclude: `gen/`\n\n## Writing style\n\n- Docs: ste-80\n")
+        before = {start: self.resolve(start) for start in (self.root, repo)}
+        first = self.move_json("--apply")
+        self.assertTrue(first["changed"])
+        for start, values in before.items():
+            self.assertSameSettings(values, self.resolve(start))
+        snapshot = self.snapshot()
+        again = self.move_json("--apply")
+        self.assertFalse(again["changed"])
+        self.assertEqual(again["moved"], [])
+        self.assertTrue(all(not f["diff"] and not f["changed"] for f in again["files"]))
+        self.assertEqual(self.snapshot(), snapshot)
+
+
+class TestMoveSettingsSectionForms(MoveCase):
+    """PRD SC-005: each old section form resolves to the same values before and after the
+    move, by the real reader (`journal.py config`)."""
+
+    FORMS = {
+        "autonomy": "## Autonomy\n\n- Mode: **executive** — the orchestrator answers "
+                    "routine gate questions.\n- Extra escalations: publishing.\n",
+        "orchestration": "## Orchestration\n\n- review: workflow\n- explore: agents\n",
+        "writing-style": "## Writing style\n\n- Docs: `ste-80`\n",
+        "code-tooling": "## Code tooling\n\n- Library docs: the docs MCP.\n- Code graph: `off`\n",
+        "code-signals": "## Code signals\n\n- Window: `18`\n- Fix pattern: `^(fix|hotfix)\\b`\n"
+                        "- Exclude: `vendor/`, `gen/`\n- Ranking exclude: ``\n",
+        "session": "## Session\n\n- Handoff: `300k`\n",
+        "forge": "## Forge & tracker\n\n- Forge: GitHub — CLI: gh\n"
+                 "- Issue tracker: issues on this repo.\n",
+    }
+
+    def test_each_project_section_form_resolves_the_same(self):
+        for name, body in self.FORMS.items():
+            with self.subTest(form=name):
+                self.fresh(name)
+                self.project_md(body)
+                self.project_json({"version": 1, "db": ".claude/shipgate.db"})
+                before, doc = self.config_values()
+                self.assertGreater(doc["legacy"]["count"], 0)
+                self.move_json("--apply")
+                after, doc = self.config_values()
+                self.assertSameSettings(before, after)
+                self.assertEqual(after["version"], 2)
+                self.assertEqual(doc["legacy"]["count"], 0)
+
+    def test_each_user_section_form_resolves_the_same(self):
+        for name, body in self.FORMS.items():
+            with self.subTest(form=name):
+                self.fresh("user-" + name)
+                self.project_md("## Branching\n\n- Pattern: `feature/x`\n")
+                self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+                self.user_md(body)
+                before, _doc = self.config_values()
+                self.move_json("--apply")
+                after, _doc = self.config_values()
+                self.assertSameSettings(before, after)
+
+    def test_a_user_file_with_ste_80_and_executive_moves_to_the_user_settings_file(self):
+        self.project_md("## Branching\n\n- Pattern: `feature/x`\n")
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.user_md("## Writing style\n\n- Docs: ste-80\n\n## Autonomy\n\n- Mode: executive\n")
+        before, doc = self.config_values()
+        for key, value in (("writing_style", "ste-80"), ("autonomy", "executive")):
+            self.assertEqual(before[key], value)
+            self.assertEqual((doc["settings"][key]["source"], doc["settings"][key]["path"]),
+                             ("legacy", str(self.user_md_path)))
+        project_text = self.settings.read_text(encoding="utf-8")
+        self.move_json("--apply")
+        after, doc = self.config_values()
+        self.assertSameSettings(before, after)
+        for key in ("writing_style", "autonomy"):
+            self.assertEqual((doc["settings"][key]["source"], doc["settings"][key]["path"]),
+                             ("user", str(self.user_settings)))
+        self.assertEqual(self.json_of(self.user_settings),
+                         {"version": 2, "writing_style": "ste-80", "autonomy": "executive"})
+        self.assertEqual(self.user_md_path.read_text(encoding="utf-8"), "# shipgate — user\n")
+        self.assertEqual(doc["legacy"]["count"], 0)
+        self.assertEqual(self.settings.read_text(encoding="utf-8"), project_text)
+        snapshot = self.snapshot()
+        again = self.move_json("--apply")
+        self.assertFalse(again["changed"])
+        self.assertEqual(self.snapshot(), snapshot)
+
+
+class TestMoveSettingsSafety(MoveCase):
+    CONFIG = "## Autonomy\n\n- Mode: executive\n"
+
+    def assertRefused(self, code, *names):
+        before = self.snapshot()
+        proc = self.move("--apply")
+        self.assertEqual(proc.returncode, code, proc.stdout + proc.stderr)
+        for name in names:
+            self.assertIn(str(name), proc.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_settings_file_that_links_to_the_user_settings_file_is_refused(self):
+        self.project_md(self.CONFIG)
+        self.user_json({"version": 2})
+        os.symlink(str(self.user_settings), str(self.settings))
+        self.assertRefused(INFRA, self.settings)
+
+    def test_a_settings_file_that_links_elsewhere_is_refused(self):
+        self.project_md(self.CONFIG)
+        other = self.write(self.tmp / "sibling" / ".claude" / "shipgate.json", '{"version": 2}\n')
+        os.symlink(str(other), str(self.settings))
+        self.assertRefused(INFRA, self.settings)
+
+    def test_a_linked_claude_directory_is_refused(self):
+        elsewhere = self.tmp / "elsewhere"
+        self.write(elsewhere / "shipgate.md", TITLE + self.CONFIG)
+        shutil.rmtree(str(self.root / ".claude"))
+        os.symlink(str(elsewhere), str(self.root / ".claude"))
+        self.assertRefused(INFRA, self.root / ".claude")
+
+    def test_a_linked_config_is_refused(self):
+        real = self.write(self.tmp / "dotfiles" / "shipgate.md", TITLE + self.CONFIG)
+        os.symlink(str(real), str(self.md))
+        self.assertRefused(INFRA, self.md)
+
+    def test_a_nested_repo_with_a_linked_config_is_refused(self):
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        repo = self.root / "svc"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".claude").mkdir()
+        real = self.write(self.tmp / "dotfiles" / "shipgate.md", TITLE + self.CONFIG)
+        os.symlink(str(real), str(repo / ".claude" / "shipgate.md"))
+        self.assertRefused(INFRA, repo / ".claude" / "shipgate.md")
+
+    def test_a_project_side_write_refuses_a_link(self):
+        lean = load_lean_module()
+        target = self.write(self.tmp / "target.json", "{}\n")
+        link = self.root / ".claude" / "shipgate.json"
+        os.symlink(str(target), str(link))
+        with self.assertRaises(OSError):
+            lean.write_atomic(str(link), "{}\n", follow_links=False)
+        self.assertEqual(target.read_text(encoding="utf-8"), "{}\n")
+        self.assertTrue(os.path.islink(str(link)))
+
+    def test_a_root_below_a_project_root_is_refused(self):
+        umbrella = self.tmp / "umbrella"
+        self.write(umbrella / ".claude" / "shipgate.json", '{"version": 2}\n')
+        self.root = umbrella / "svc"
+        (self.root / ".claude").mkdir(parents=True)
+        self.project_md(self.CONFIG)
+        self.assertRefused(USAGE, umbrella)
+
+    def test_diff_headers_are_relative_and_a_user_file_shows_the_home_directory(self):
+        self.env["HOME"] = str(self.tmp)
+        self.project_md(self.CONFIG)
+        self.project_json({"version": 2, "db": ".claude/shipgate.db"})
+        self.user_md("## Writing style\n\n- Docs: ste-80\n")
+        proc = self.move()
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        headers = [line for line in proc.stdout.splitlines() if line.startswith(("--- ", "+++ "))]
+        self.assertEqual(headers, [
+            "--- a/.claude/shipgate.md", "+++ b/.claude/shipgate.md",
+            "--- ~/project-user/shipgate.md", "+++ ~/project-user/shipgate.md",
+            "--- a/.claude/shipgate.json", "+++ b/.claude/shipgate.json",
+            "--- /dev/null", "+++ ~/project-user/shipgate.settings.json"])
+
+    def test_an_echoed_value_is_one_clipped_printable_line(self):
+        value = "some" + chr(7) + "times " + "and more words " * 20
+        self.project_md("## Autonomy\n\n- Mode: " + value + "\n")
+        proc = self.move()
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        kept = [line for line in proc.stdout.splitlines() if line.startswith("kept: ")]
+        self.assertEqual(len(kept), 1, proc.stdout)
+        self.assertNotIn(chr(7), proc.stdout)
+        self.assertIn("some?times and more words", kept[0])
+        shown = kept[0].split("— Mode: ", 1)[1].rsplit(" (", 1)[0]
+        self.assertEqual(len(shown), 120)
+        self.assertTrue(shown.endswith("…"))
+
+
+class TestLegacyHome(unittest.TestCase):
+    CASES = [
+        ("prd", "`docs/specs/`", "docs/specs/*.md"),
+        ("prd", "docs/specs", "docs/specs/*.md"),
+        ("prd", "`./docs/specs/` — one per plugin", "docs/specs/*.md"),
+        ("prd", "`<plugin>/docs/prd/`", "*/docs/prd/*.md"),
+        ("adr", "`docs/adr/*.md`", "docs/adr/*.md"),
+        ("adr", "`docs/**/adr/*.md`", "docs/**/adr/*.md"),
+        ("worklog", "`docs/prd/`", "docs/prd/*.worklog.md"),
+        ("worklog", "`docs/prd/*.worklog.md`", "docs/prd/*.worklog.md"),
+        ("worklog", "beside the PRD as `<name>.worklog.md`", None),
+        ("prd", "`https://wiki.example.com/specs`", None),
+        ("prd", "the team wiki", None),
+        ("prd", "`specs`", None),
+        ("prd", "`docs/specs/index.txt`", None),
+        ("prd", "`/abs/docs/`", None),
+        ("prd", "`../docs/`", None),
+        ("prd", "<path, e.g. `docs/prd/` or a wiki path>", None),
+        ("ledger", "`docs/ledger.md`", "docs/ledger.md"),
+        ("ledger", "`./LEDGER.md` (repo root)", "LEDGER.md"),
+        ("ledger", "`notes/`", None),
+        ("ledger", "`<plugin>/ledger.md`", None),
+        ("prd", "`docs/specs/<name>.md`", "docs/specs/*.md"),
+        ("worklog", "`design/<name>.worklog.md`", "design/*.worklog.md"),
+        ("prd", "docs/specs/ (repo root)", "docs/specs/*.md"),
+        ("ledger", "docs/ledger.md.", "docs/ledger.md"),
+        ("prd", "`docs/$HOME/`", None),
+        ("prd", "`docs/{a,b}/`", None),
+    ]
+
+    def test_cases(self):
+        for kind, raw, expected in self.CASES:
+            with self.subTest(kind=kind, raw=raw):
+                self.assertEqual(_CFG.legacy_home(kind, raw), expected)
+
+
+class TestNestedRepoDirs(unittest.TestCase):
+    def test_the_three_places_sorted_and_the_skips(self):
+        tmp = Path(tempfile.mkdtemp(prefix="lean-nested-"))
+        self.addCleanup(shutil.rmtree, str(tmp), True)
+        for rel in ("b", "a", "source/s", "packages/p", ".hidden", "node_modules/n",
+                    "plain/deeper"):
+            (tmp / rel).mkdir(parents=True)
+        for rel in ("b", "a", "source/s", "packages/p", ".hidden", "node_modules"):
+            (tmp / rel / ".git").mkdir(exist_ok=True)
+        (tmp / "plain" / "deeper" / ".git").mkdir()
+        (tmp / "gitfile").mkdir()
+        (tmp / "gitfile" / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+        os.symlink(str(tmp / "a"), str(tmp / "linked"))
+        (tmp / "gitlink").mkdir()
+        os.symlink(str(tmp / "a" / ".git"), str(tmp / "gitlink" / ".git"))
+        self.assertEqual(_CFG.nested_repo_dirs(tmp), [
+            tmp / "a", tmp / "b", tmp / "gitfile", tmp / "source" / "s", tmp / "packages" / "p"])
+
+    def test_the_count_is_bounded(self):
+        tmp = Path(tempfile.mkdtemp(prefix="lean-nested-"))
+        self.addCleanup(shutil.rmtree, str(tmp), True)
+        for index in range(70):
+            (tmp / "r{:02d}".format(index) / ".git").mkdir(parents=True)
+        found = _CFG.nested_repo_dirs(tmp)
+        self.assertEqual(len(found), 64)
+        self.assertEqual(found[0], tmp / "r00")
 
 
 if __name__ == "__main__":

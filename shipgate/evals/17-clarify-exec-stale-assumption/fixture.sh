@@ -266,14 +266,12 @@ c 2026-09-01 "feat: billing service — customers, invoices, terms, receipts"
 mkdir -p .claude
 cat > .claude/shipgate.md <<'MD'
 # shipgate — project config
-
-## Knowledge base
-
-- PRD home: `docs/prd/`
-- ADR home: `docs/adr/`
-
-## Autonomy
-
-- Mode: executive
 MD
+cat > .claude/shipgate.json <<'JSON'
+{
+  "version": 2,
+  "db": null,
+  "autonomy": "executive"
+}
+JSON
 c 2026-09-02 "chore: shipgate config (executive autonomy)"

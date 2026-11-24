@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, get_args
 
 from .vocab import DecisionSource, UsageError
@@ -12,6 +13,7 @@ from .sessions import _actor_role, event_session
 from .approval import _go_gate
 from .fold import fold_stream, is_work_stream
 from .artifacts import artifact_authors
+from .settings import status_settings
 from .status import build_status, render_status
 
 
@@ -213,8 +215,10 @@ def build_stats(
     since: Optional[str] = None,
     stream: Optional[str] = None,
     now: Optional[datetime] = None,
+    project_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Per-stream counts for the numbers the process is tuned on (FR-014)."""
+    """Per-stream counts for the numbers the process is tuned on (FR-014). PROJECT_DIR,
+    when given, adds the settings lines to the brief that `brief_bytes` measures."""
     cutoff = None
     if since:
         cutoff = _parse_ts(since)
@@ -256,10 +260,13 @@ def build_stats(
     # itself. With no stream named, it measures the brief of a session that drives
     # nothing on the integration branch: the count line alone. `--since` narrows the
     # counts, never this.
-    totals["brief_bytes"] = len(
-        render_status(build_status(conn, feature=stream, now=now),
-                      full=bool(stream)).encode()
-    )
+    brief = build_status(conn, feature=stream, now=now)
+    if project_dir is not None:
+        try:
+            brief.update(status_settings(project_dir))
+        except OSError:
+            pass  # no readable schema (an incomplete install): count the brief without them
+    totals["brief_bytes"] = len(render_status(brief, full=bool(stream)).encode())
     return {"since": since, "streams": rows, "totals": totals}
 
 

@@ -3,28 +3,26 @@
 pandora is a **plugin marketplace**: one git repo holding several independent plugins
 (`shipgate/`, `shipgate-hud/`, `astrolabe/`), each its own deliverable with its own version.
 
+Code signals leave out `shipgate/evals/` (`code_signals.exclude` in `.claude/shipgate.json`):
+the eval fixture scripts churn with every calibration and would read as the hottest files in
+the repo, but they are synthetic, not product code.
+
 ## Knowledge base
 
-- PRD home: `<plugin>/docs/prd/` — artifacts live with the plugin they describe, not in a
-  shared top-level folder, because each plugin ships and versions separately.
-- ADR home: `<plugin>/docs/adr/` — sequential `NNNN-<title>.md`. Single-writer repo, so
-  sequential numbering is safe here.
-- Worklog home: beside the PRD as `<name>.worklog.md`.
+- Layout: PRDs, ADRs and worklogs live with the plugin they describe (`<plugin>/docs/prd/`,
+  `<plugin>/docs/adr/`, a worklog beside its PRD as `<name>.worklog.md`), not in a shared
+  top-level folder, because each plugin ships and versions separately. ADRs are numbered
+  `NNNN-<title>.md` in sequence; a single-writer repo makes that safe.
 - Page conventions: the plugin's own templates —
   `shipgate/skills/clarify/references/prd-template.md`,
   `shipgate/skills/design/references/adr-template.md`,
   `shipgate/skills/design/references/worklog-template.md`. Frontmatter as those define.
-- Ledger: `docs/ledger.md` (repo root, shared across plugins). Promotion targets at triage:
+- Promotion targets:
   plugin behaviour and conventions → the relevant `<plugin>/README.md` or its skill files;
   decisions → that plugin's ADR home.
 
-## Journal
-
-- Database: `.claude/shipgate.db`
-
 ## Forge & tracker
 
-- Forge: GitHub — CLI: `gh`, pull requests.
 - Issue tracker: GitHub issues on this same repo (`worm2fed/pandora`). Much of the work
   here is ad-hoc with no issue; that is fine — the branch and PR carry the context.
 - Integration branch: `main`.
@@ -46,18 +44,6 @@ pandora is a **plugin marketplace**: one git repo holding several independent pl
   usually absent — include it as `<type>/<issue-id>-<slug>` when an issue does exist.
 - Examples: `feat/sqlite-journal`, `fix/hook-fast-path`, `chore/bump-astrolabe`.
 
-## Orchestration
-
-- review: workflow
-- explore: workflow
-
-## Code signals
-
-- Window: `12`
-- Exclude: `shipgate/evals/`
-  <!-- eval fixture scripts churn with every calibration and would read as the hottest
-       files in the repo; they are synthetic, not product code. -->
-
 ## Security-sensitive areas
 
 - **Anything under a plugin's `hooks/`.** Plugin hooks execute on the user's machine in
@@ -73,7 +59,6 @@ pandora is a **plugin marketplace**: one git repo holding several independent pl
 
 ## Autonomy
 
-- Mode: executive
 - Extra escalations: publishing — a version bump released to the marketplace, or anything
   that changes what an already-installed plugin does on someone else's machine. Also any
   change to the hook contract itself (which events fire, what can block a session).

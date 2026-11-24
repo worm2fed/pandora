@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from test_journal import SESSION_ENV, run_journal
+from test_journal import _EMPTY_CONFIG_DIR, SESSION_ENV, run_journal
 
 TESTS_DIR = Path(__file__).resolve().parent
 HUD = TESTS_DIR.parent.parent / "shipgate-hud"
@@ -260,6 +260,8 @@ def _journal(root: Path, *args: str, session: Optional[str] = None) -> str:
     if session is not None:
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         env[SESSION_ENV] = session
+        # The status brief reads the user settings (#60): never the real ones.
+        env["CLAUDE_CONFIG_DIR"] = _EMPTY_CONFIG_DIR
     proc = run_journal(["--db", root / "shipgate.db", *args], cwd=root, env=env)
     if proc.returncode != 0:
         raise AssertionError(

@@ -25,7 +25,7 @@ from _common import (  # noqa: E402
     emit,
     likely_journaled,
     read_hook_input,
-    resolve_project,
+    resolve_project_or_unreadable,
     run_journal,
     safe_main,
     sidecar_version_note,
@@ -47,6 +47,8 @@ SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # The brief's line limit: BRIEF_LINE_CHARS in scripts/_journal/vocab.py (a test holds
 # the two equal).
 DETAIL_CHARS = 160
+# The most of a settings file's path the unreadable-file line shows: its end.
+PATH_CHARS = 96
 
 
 def _read_first_line(path):
@@ -205,13 +207,35 @@ def _clip(text):
     return flat if len(flat) <= DETAIL_CHARS else flat[:DETAIL_CHARS - 1] + "…"
 
 
+def _clip_path(path):
+    """`path` on one line, each character that does not print as `?`, and at most
+    PATH_CHARS long, its end kept (the file name). A checkout names its directories."""
+    flat = "".join(c if c.isprintable() else "?" for c in " ".join(path.split()))
+    return flat if len(flat) <= PATH_CHARS else "…" + flat[-(PATH_CHARS - 1):]
+
+
+def unreadable_notice(path):
+    """The one line for a settings file the hooks cannot read (#60, T053). The hooks
+    fail open, so the file never blocks a session; the line says what that costs. It
+    names the file and never echoes its content."""
+    return (
+        f"shipgate: the settings file {_clip_path(path)} cannot be read, so the shipgate "
+        "gates are off in this project. Run `journal.py doctor` to see why."
+    )
+
+
 def main() -> None:
     if likely_journaled() is None:
         sys.exit(0)
 
     payload = read_hook_input()
-    project = resolve_project(payload)
+    project, unreadable = resolve_project_or_unreadable(payload)
     if project is None:
+        if unreadable is not None:
+            emit({"hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": unreadable_notice(unreadable),
+            }})
         sys.exit(0)
 
     session_id = payload.get("session_id") or "unknown"

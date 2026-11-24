@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "db": ".claude/shipgate.db",
   "ledger": "docs/ledger.md",
   "artifact_homes": {
@@ -10,5 +10,17 @@
   "enforce": {
     "stop_gate": true,
     "auto_capture": true
-  }
+  },
+  "autonomy": "executive",
+  "orchestration": {
+    "review": "workflow",
+    "explore": "workflow"
+  },
+  "code_signals": {
+    "window_months": 12,
+    "exclude": [
+      "shipgate/evals/"
+    ]
+  },
+  "forge": "github"
 }

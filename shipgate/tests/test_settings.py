@@ -71,6 +71,10 @@ TABLE_LEGACY = {
     "code_signals.ranking_exclude": ("Code signals", "Ranking exclude"),
     "handoff": ("Session", "Handoff"),
     "forge": ("Forge & tracker", "Forge"),
+    "ledger": ("Knowledge base", "Ledger"),
+    "artifact_homes.prd": ("Knowledge base", "PRD home"),
+    "artifact_homes.adr": ("Knowledge base", "ADR home"),
+    "artifact_homes.worklog": ("Knowledge base", "Worklog home"),
 }
 
 PROJECT_SCOPE = ("version", "db", "ledger", "artifact_homes", "enforce", "code_signals",
@@ -86,9 +90,14 @@ class TestSchema(unittest.TestCase):
         cls.schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
 
     def test_version_and_grace(self):
+        """The migration release (0.33.0) set the grace date: release day plus 60 days
+        (ADR 0028, item 8). The README names the same date."""
         self.assertEqual(self.schema["x-version"], 2)
-        self.assertIn("x-legacy-until", self.schema)
-        self.assertIsNone(self.schema["x-legacy-until"])
+        until = self.schema["x-legacy-until"]
+        self.assertIsInstance(until, str)
+        self.assertGreaterEqual(date.fromisoformat(until), date(2027, 1, 23))
+        readme = (PLUGIN / "README.md").read_text(encoding="utf-8")
+        self.assertIn(until, readme)
 
     def test_every_table_key_and_no_other(self):
         self.assertEqual(sorted(flat_defaults(self.schema)), sorted(TABLE_KEYS))
@@ -433,6 +442,132 @@ class TestLegacyOwner(SettingsCase):
         self.assertEqual(resolved.problems, [])
 
 
+class TestKnowledgeBaseLegacy(SettingsCase):
+    """T055 (the user's Q1, option B): the homes and the ledger have a legacy read for
+    repo paths until the grace date, by the section owner of `## Knowledge base`."""
+
+    def test_the_section_owner_gives_the_homes_and_the_ledger(self):
+        self.project_md("## Knowledge base\n\n- PRD home: `docs/specs/`\n"
+                        "- Ledger: `notes/ledger.md`\n- Stores: the repo docs.\n")
+        self.user_md("## Knowledge base\n\n- ADR home: `mine/adr/`\n")
+        resolved = self.resolve()
+        self.assertEqual(resolved.problems, [])
+        prd = resolved.get("artifact_homes.prd")
+        self.assertEqual((prd.value, prd.source, prd.path, prd.section),
+                         ("docs/specs/*.md", "legacy", str(self.root / ".claude" / "shipgate.md"),
+                          "Knowledge base"))
+        self.assertEqual(resolved.value("ledger"), "notes/ledger.md")
+        # The project's section owns Knowledge base whole: the user's ADR home is hidden.
+        adr = resolved.get("artifact_homes.adr")
+        self.assertEqual((adr.value, adr.source), ("docs/adr/*.md", "default"))
+        # Every file's lines count, owners aside (`legacy_lines`).
+        project, user = str(self.root / ".claude" / "shipgate.md"), str(self.user / "shipgate.md")
+        self.assertEqual(sorted((line.path, line.key) for line in resolved.legacy), sorted([
+            (project, "artifact_homes.prd"), (project, "ledger"), (user, "artifact_homes.adr")]))
+
+    def test_the_settings_file_wins_over_the_bullet(self):
+        self.project_json({"artifact_homes": {"prd": "docs/prd/*.md"}})
+        self.project_md("## Knowledge base\n\n- PRD home: `docs/specs/`\n")
+        setting = self.resolve().get("artifact_homes.prd")
+        self.assertEqual((setting.value, setting.source), ("docs/prd/*.md", "project"))
+
+    def test_beside_the_prd_derives_the_worklog_from_the_prd_home(self):
+        self.project_md("## Knowledge base\n\n- PRD home: `<plugin>/docs/prd/`\n"
+                        "- Worklog home: beside the PRD as `<name>.worklog.md`.\n")
+        resolved = self.resolve()
+        worklog = resolved.get("artifact_homes.worklog")
+        self.assertEqual((worklog.value, worklog.source), ("*/docs/prd/*.worklog.md", "legacy"))
+        self.assertEqual(sorted(line.key for line in resolved.legacy),
+                         ["artifact_homes.prd", "artifact_homes.worklog"])
+
+    def test_beside_the_prd_with_no_prd_home_takes_the_default_prd(self):
+        self.project_md("## Knowledge base\n\n"
+                        "- Worklog home: beside the PRD as `<name>.worklog.md`\n")
+        resolved = self.resolve()
+        worklog = resolved.get("artifact_homes.worklog")
+        self.assertEqual((worklog.value, worklog.source), ("docs/prd/*.worklog.md", "legacy"))
+        self.assertEqual(resolved.problems, [])
+        self.assertEqual([line.key for line in resolved.legacy], ["artifact_homes.worklog"])
+
+    def test_beside_the_prd_follows_the_resolved_prd_home(self):
+        """Review round 3, R1: the worklog sits beside the PRD that applies, whatever layer
+        gives it, not beside the PRD bullet of its own file."""
+        self.project_json({"artifact_homes": {"prd": "x/*.md"}})
+        self.project_md("## Knowledge base\n\n- PRD home: `docs/specs/`\n"
+                        "- Worklog home: beside the PRD as `<name>.worklog.md`\n")
+        worklog = self.resolve().get("artifact_homes.worklog")
+        self.assertEqual((worklog.value, worklog.source), ("x/*.worklog.md", "legacy"))
+
+    def test_legacy_home_reads_the_common_forms(self):
+        """Review round 3, R2: a `<name>` inside a segment, and a bare value with words after
+        it."""
+        for kind, raw, expected in (
+                ("prd", "`docs/specs/<name>.md`", "docs/specs/*.md"),
+                ("worklog", "`design/<name>.worklog.md`", "design/*.worklog.md"),
+                ("prd", "docs/specs/ (repo root)", "docs/specs/*.md"),
+                ("prd", "docs/prd/ — artifacts live with the plugin they describe",
+                 "docs/prd/*.md"),
+                ("adr", "docs/adr/)", "docs/adr/*.md"),
+                ("ledger", "docs/ledger.md.", "docs/ledger.md"),
+                ("ledger", "notes/ledger.md, shared across plugins", "notes/ledger.md"),
+                ("prd", "`docs/sp" + chr(0xE9) + "c/`", "docs/sp" + chr(0xE9) + "c/*.md"),
+                ("prd", "the team wiki", None),
+                ("ledger", "the ledger page of the wiki", None)):
+            with self.subTest(kind=kind, raw=raw):
+                self.assertEqual(self.cfg.legacy_home(kind, raw), expected)
+
+    def test_legacy_home_takes_only_path_characters(self):
+        """Review round 3, R6: after the `<...>` mapping, only `[\\w.*/-]` passes."""
+        for raw in ("`docs/$HOME/`", "`docs/{a,b}/`", "`docs/(x)/`", "`docs/a;b/`",
+                    "`docs/a|b/`", "`docs/a&b/`", "`docs/a,b/`", "docs/a,b/",
+                    "`docs" + chr(0xFF0F) + "prd/`", "`docs/a<b/`", "`docs/a'b/`"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(self.cfg.legacy_home("prd", raw))
+
+    def test_a_wiki_home_gives_no_value_and_no_legacy_line(self):
+        self.project_md("## Knowledge base\n\n- PRD home: `https://wiki.example.com/specs`\n"
+                        "- ADR home: the team wiki, Decisions space\n"
+                        "- Ledger: the ledger page of the wiki\n")
+        self.user_md("## Knowledge base\n\n- PRD home: `mine/prd/`\n")
+        resolved = self.resolve()
+        self.assertEqual(resolved.problems, [])
+        # The project's section owns Knowledge base, so the user's home stays hidden; it
+        # is still a legacy line of the user file, and the wiki homes are none.
+        self.assertEqual([(line.path, line.key) for line in resolved.legacy],
+                         [(str(self.user / "shipgate.md"), "artifact_homes.prd")])
+        for key, default in (("artifact_homes.prd", "docs/prd/*.md"),
+                             ("artifact_homes.adr", "docs/adr/*.md"),
+                             ("ledger", "docs/ledger.md")):
+            setting = resolved.get(key)
+            self.assertEqual((setting.value, setting.source), (default, "default"))
+
+    def test_a_hostile_value_stays_none(self):
+        for raw in ("`../outside/`", "`docs/../../outside/`", "`/etc/`", "`~/notes/`",
+                    "`C:/docs/`", "`docs\\..\\x/`", "`docs/a b/`",
+                    "`docs/pr" + chr(27) + "d/`", "`docs/pr" + chr(0) + "d/`",
+                    "`docs/pr" + chr(10) + "d/`", "`.//etc/`", "`./~/notes/`"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(self.cfg.legacy_home("prd", raw))
+        for raw in ("`.//etc/notes.md`", "`./../ledger.md`", "`~/ledger.md`"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(self.cfg.legacy_home("ledger", raw))
+
+    def test_the_parse_is_bounded(self):
+        import time
+
+        for raw in ("`" + "a/" * 200000 + "`", "`" + "<" * 200000 + "`",
+                    "beside the PRD " * 50000, "`" + "a" * 400000):
+            started = time.monotonic()
+            self.cfg.legacy_home("worklog", raw)
+            self.assertLess(time.monotonic() - started, 1.0)
+        text = ("## Knowledge base\n\n- PRD home: `" + "d/" * 100000 + "`\n"
+                "- Worklog home: beside the PRD as `<name>.worklog.md`\n")
+        self.project_md(text)
+        started = time.monotonic()
+        self.resolve()
+        self.assertLess(time.monotonic() - started, 2.0)
+
+
 class TestBadValues(SettingsCase):
     """S1: a bad value in a settings file is the default plus a `bad-value` problem, and
     `require` raises; a bad legacy value is ignored and the next layer applies."""
@@ -694,6 +829,12 @@ SAMPLE_LEGACY = {
     "code_signals.ranking_exclude": ("Code signals", "- Ranking exclude: ``", []),
     "handoff": ("Session", "- Handoff: `1m`", "1m"),
     "forge": ("Forge & tracker", "- Forge: GitLab", "gitlab"),
+    "ledger": ("Knowledge base", "- Ledger: `notes/ledger.md`", "notes/ledger.md"),
+    "artifact_homes.prd": ("Knowledge base", "- PRD home: `docs/specs/`", "docs/specs/*.md"),
+    "artifact_homes.adr": ("Knowledge base", "- ADR home: `docs/decisions/`",
+                           "docs/decisions/*.md"),
+    "artifact_homes.worklog": ("Knowledge base", "- Worklog home: `docs/specs/`",
+                               "docs/specs/*.worklog.md"),
 }
 
 
@@ -766,10 +907,14 @@ class TestEveryKeyFromEveryLayer(SettingsCase):
 class TestLegacyGrace(SettingsCase):
     """`legacy_until` comes from the schema; `ended` follows the clock."""
 
-    def test_until_is_null_today(self):
-        resolved = self.resolve()
-        self.assertIsNone(resolved.legacy_until)
+    def test_until_comes_from_the_schema(self):
+        until = json.loads(SCHEMA.read_text(encoding="utf-8"))["x-legacy-until"]
+        last = date.fromisoformat(until)
+        resolved = self.resolve(today=last)
+        self.assertEqual(resolved.legacy_until, until)
         self.assertFalse(resolved.legacy_ended)
+        self.assertTrue(self.resolve(today=date.fromordinal(last.toordinal() + 1))
+                        .legacy_ended)
 
     def test_ended_by_the_clock(self):
         schema = self.cfg.load_schema()
@@ -783,6 +928,207 @@ class TestLegacyGrace(SettingsCase):
         self.assertFalse(before.legacy_ended)
         self.assertTrue(after.legacy_ended)
 
+
+
+
+class StatusSettingsCase(SettingsCase):
+    """The status brief's settings lines (T040, T041, T054): `status_settings` builds
+    the `settings` and `legacy` keys of `status --json` from the project root, and
+    `settings_lines` renders them."""
+
+    UNTIL = "2027-01-23"
+
+    def setUp(self):
+        super().setUp()
+        from test_journal import load_journal_module
+
+        self.jm = load_journal_module()
+        self.schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+
+    def doc(self, until=None, today=None):
+        schema = dict(self.schema, **{"x-legacy-until": until})
+        return self.jm.status_settings(self.root, today=today, schema=schema)
+
+    def lines(self, until=None, today=None):
+        return self.jm.settings_lines(self.doc(until, today))
+
+
+class TestStatusSettingsLine(StatusSettingsCase):
+    def test_the_line_names_each_key_with_its_source(self):
+        self.project_json({"version": 2, "orchestration": {"review": "workflow"}})
+        self.user_json({"autonomy": "executive"})
+        self.project_md("## Writing style\n\n- Docs: `ste-80`\n")
+        self.assertEqual(self.lines(), [
+            "settings: autonomy=executive (user) · orchestration.review=workflow (project) "
+            "· orchestration.explore=agents (default) · writing_style=ste-80 (legacy) "
+            "· code_graph=auto (default)",
+        ])
+
+    def test_no_settings_file_gives_the_defaults(self):
+        self.assertEqual(self.lines(), [
+            "settings: autonomy=ask (default) · orchestration.review=agents (default) "
+            "· orchestration.explore=agents (default) · writing_style=plain (default) "
+            "· code_graph=auto (default)",
+        ])
+
+    def test_the_json_keys(self):
+        self.project_json({"code_graph": "off"})
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        doc = self.doc()
+        self.assertEqual(set(doc), {"settings", "legacy"})
+        self.assertEqual(list(doc["settings"]), [
+            "autonomy", "orchestration.review", "orchestration.explore", "writing_style",
+            "code_graph"])
+        self.assertEqual(doc["settings"]["code_graph"],
+                         {"value": "off", "source": "project",
+                          "path": ".claude/shipgate.json"})
+        self.assertEqual(doc["settings"]["autonomy"],
+                         {"value": "executive", "source": "legacy",
+                          "path": ".claude/shipgate.md", "section": "Autonomy"})
+        self.assertEqual(doc["legacy"], {"count": 1, "until": None, "ended": False})
+
+    def test_a_bad_value_shows_the_default_and_one_line_names_it(self):
+        self.project_json({"autonomy": "exec"})
+        lines = self.lines()
+        self.assertIn("autonomy=ask (default)", lines[0])
+        self.assertEqual(lines[1:], [
+            'settings: bad value, so the default applies: autonomy = "exec" '
+            "(.claude/shipgate.json)",
+        ])
+        entry = self.doc()["settings"]["autonomy"]
+        self.assertEqual(entry["problem"], {"kind": "bad-value", "key": "autonomy",
+                                            "path": ".claude/shipgate.json",
+                                            "value": "exec"})
+
+
+class TestStatusEveryBadKey(StatusSettingsCase):
+    """T054, FR-006: every key with a value outside its set in a settings file is named
+    once, the keys the hooks read too. The value used is the default."""
+
+    def test_the_hook_keys_are_named_once_each(self):
+        self.project_json({"db": 5, "autonomy": "exec",
+                           "enforce": {"stop_gate": "no", "command_gate": 0},
+                           "artifact_homes": {"prd": 3}})
+        lines = self.lines()
+        bad = [line for line in lines if line.startswith("settings: bad value")]
+        for key, shown in (("autonomy", '"exec"'), ("db", "5"),
+                           ("enforce.stop_gate", '"no"'), ("enforce.command_gate", "0"),
+                           ("artifact_homes.prd", "3")):
+            with self.subTest(key=key):
+                named = [line for line in lines if f" {key} = " in line]
+                self.assertEqual(len(named), 1, lines)
+                self.assertIn(f"{key} = {shown} (.claude/shipgate.json)", named[0])
+        self.assertEqual(len(bad), 5)
+        settings = self.doc()["settings"]
+        self.assertEqual(settings["db"]["value"], ".claude/shipgate.db")
+        self.assertIs(settings["enforce.stop_gate"]["value"], True)
+        self.assertIs(settings["enforce.command_gate"]["value"], True)
+        self.assertEqual(settings["artifact_homes.prd"]["value"], "docs/prd/*.md")
+
+    def test_a_bad_group_and_a_bad_user_value(self):
+        self.project_json({"enforce": "off", "artifact_homes": "docs"})
+        self.user_json({"writing_style": "fancy"})
+        lines = self.lines()
+        self.assertIn('settings: bad value, so the default applies: enforce = "off" '
+                      "(.claude/shipgate.json)", lines)
+        self.assertIn('settings: bad value, so the default applies: artifact_homes = '
+                      '"docs" (.claude/shipgate.json)', lines)
+        user = [line for line in lines if "writing_style = " in line]
+        self.assertEqual(len(user), 1)
+        self.assertIn('"fancy"', user[0])
+        self.assertIn("shipgate.settings.json", user[0])
+
+    def test_the_count_of_lines_is_bounded(self):
+        kinds = {f"kind{n:02d}": n for n in range(30)}
+        self.project_json({"artifact_homes": kinds})
+        lines = self.lines()
+        bad = [line for line in lines if line.startswith("settings: bad value")]
+        self.assertEqual(len(bad), self.jm.MAX_BAD_SETTING_LINES)
+        more = 30 - self.jm.MAX_BAD_SETTING_LINES
+        self.assertEqual(lines[-1], f"settings: {more} more bad values — "
+                                    "journal.py config names them")
+
+    def test_hostile_keys_and_values_stay_on_one_clipped_line(self):
+        escape = chr(27)
+        breakers = "\n\r" + chr(0x0b) + chr(0x0c) + chr(0x85) + chr(0x2028) + chr(0x2029)
+        self.project_json({"artifact_homes": {
+            f"evil{breakers}FORGED line{escape}[31m": 1,
+            "x" * 5000: 2,
+        }, "autonomy": "y" * 5000 + "\nFORGED"})
+        lines = self.lines()
+        text = "\n".join(lines)
+        self.assertFalse(any(line.startswith("FORGED") for line in text.splitlines()))
+        # The settings line holds only values from the schema's sets and source words,
+        # so its length is bounded by construction; every other line is clipped.
+        self.assertIn("autonomy=ask (default)", lines[0])
+        for line in lines:
+            with self.subTest(line=line[:40]):
+                if line is not lines[0]:
+                    self.assertLessEqual(len(line), self.jm.BRIEF_LINE_CHARS)
+                self.assertTrue(line.isprintable(), repr(line))
+                self.assertNotIn(escape, line)
+        self.assertEqual(len([line for line in lines if "bad value" in line]), 3)
+
+    def test_an_unreadable_user_settings_file_is_one_line(self):
+        self.user_json(None, raw="{not json")
+        self.user_md("## Autonomy\n\n- Mode: executive\n")
+        lines = self.lines()
+        self.assertIn("autonomy=executive (legacy)", lines[0])
+        named = [line for line in lines if "shipgate.settings.json" in line]
+        self.assertEqual(len(named), 1, lines)
+        self.assertIn("cannot be read, so its settings are skipped", named[0])
+        self.assertNotIn("not json", "\n".join(lines))
+
+
+class TestStatusLegacyGrace(StatusSettingsCase):
+    """FR-011, SC-008: the legacy line names the count and the date; after the date it
+    says the grace has ended; no value changes on a calendar day."""
+
+    def setUp(self):
+        super().setUp()
+        self.project_md("## Autonomy\n\n- Mode: executive\n\n"
+                        "## Orchestration\n\n- review: workflow\n")
+        self.user_md("## Writing style\n\n- Docs: ste-80\n")
+
+    def test_no_legacy_line_while_the_date_is_null(self):
+        self.assertEqual(len(self.lines(until=None)), 1)
+        self.assertEqual(self.doc(until=None)["legacy"],
+                         {"count": 3, "until": None, "ended": False})
+
+    def test_the_line_before_and_on_the_date(self):
+        for today in (date(2026, 12, 1), date(2027, 1, 23)):
+            with self.subTest(today=today):
+                self.assertEqual(self.lines(self.UNTIL, today)[-1], (
+                    "settings: 3 legacy lines in shipgate.md are still read until "
+                    "2027-01-23 — /shipgate:setup moves them"))
+
+    def test_the_line_after_the_date(self):
+        self.assertEqual(self.lines(self.UNTIL, date(2027, 1, 24))[-1], (
+            "settings: 3 legacy lines in shipgate.md: the grace ended 2027-01-23, and "
+            "the next shipgate release stops reading them — /shipgate:setup moves them"))
+        self.assertEqual(self.doc(self.UNTIL, date(2027, 1, 24))["legacy"],
+                         {"count": 3, "until": "2027-01-23", "ended": True})
+
+    def test_one_line_is_singular(self):
+        self.project_md("## Autonomy\n\n- Mode: executive\n")
+        (self.user / "shipgate.md").unlink()
+        self.assertEqual(self.lines(self.UNTIL, date(2027, 1, 1))[-1], (
+            "settings: 1 legacy line in shipgate.md is still read until 2027-01-23 "
+            "— /shipgate:setup moves it"))
+
+    def test_the_values_are_the_same_on_both_sides_of_the_date(self):
+        before = self.doc(self.UNTIL, date(2027, 1, 23))["settings"]
+        after = self.doc(self.UNTIL, date(2027, 1, 24))["settings"]
+        self.assertEqual(before, after)
+        self.assertEqual(after["autonomy"]["value"], "executive")
+        self.assertEqual(after["orchestration.review"]["value"], "workflow")
+        self.assertEqual(after["writing_style"]["value"], "ste-80")
+
+    def test_the_lines_resolve_from_the_project_root(self):
+        nested = self.root / "svc"
+        (nested / ".git").mkdir(parents=True)
+        self.project_md("## Code tooling\n\n- Code graph: `off`\n", directory=nested)
+        self.assertEqual(self.doc()["settings"]["code_graph"]["value"], "auto")
 
 
 class TestConfigCommand(unittest.TestCase):
@@ -867,7 +1213,10 @@ class TestConfigCommand(unittest.TestCase):
         self.assertEqual(doc["settings"]["handoff"],
                          {"value": "500k", "source": "default", "path": None})
         self.assertEqual(doc["problems"], [])
-        self.assertEqual(doc["legacy"], {"count": 1, "until": None, "ended": False})
+        until = json.loads(SCHEMA.read_text(encoding="utf-8"))["x-legacy-until"]
+        self.assertEqual(doc["legacy"], {
+            "count": 1, "until": until,
+            "ended": date.today() > date.fromisoformat(until)})
         one = json.loads(self.config("code_graph", "--json").stdout)
         self.assertEqual(list(one["settings"]), ["code_graph"])
 

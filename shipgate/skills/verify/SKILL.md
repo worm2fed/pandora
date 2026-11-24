@@ -90,10 +90,11 @@ If you can't make it fail before the fix, you don't yet know the test is testing
 
 ## Record the evidence (journaled projects)
 
-Fresh evidence is worth nothing tomorrow if only your conclusion survives. On a project
-whose config declares a **Journal**, append a passing gate as a `verify-run` event against
-its stream. The event carries the command, its exit code, and a trimmed head/tail of the
-output:
+Fresh evidence is worth nothing tomorrow if only your conclusion survives. On a journaled
+project (the status brief is present, or `.claude/shipgate.json` exists and
+`journal.py config db` prints a `db` that is not null), append a passing gate as a
+`verify-run` event against its stream. The event carries the command, its exit code, and a
+trimmed head/tail of the output:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \

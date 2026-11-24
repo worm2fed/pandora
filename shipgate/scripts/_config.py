@@ -2,7 +2,8 @@
 
 Private to the scripts: ``signals.py``, ``journal.py`` and ``lean_config.py`` load it by
 path, because ``scripts/`` is not a package. ``lean_config.py`` keeps its own block
-parser and uses only the placeholder test (``is_placeholder_value``). Python 3 standard
+parser. It uses the placeholder test (``is_placeholder_value``), and its
+``--move-settings`` mode uses the legacy reader and the resolver. Python 3 standard
 library only. See ADR 0018.
 
 A config is a stack of files, nearest first: the repo's `.claude/shipgate.md` files
@@ -352,7 +353,9 @@ def _resolved(path: Path) -> Path:
 
 
 def read_layers(candidates: Sequence[Tuple[Path, str]],
-                user_path: Optional[Path]) -> List[ConfigFile]:
+                user_path: Optional[Path],
+                read: Optional[Callable[[Path], Optional[str]]] = None
+                ) -> List[ConfigFile]:
     """The config files that exist, in precedence order (nearest first, the user file
     last), each read once.
 
@@ -360,7 +363,9 @@ def read_layers(candidates: Sequence[Tuple[Path, str]],
     `umbrella`. Duplicates by resolved path keep the first occurrence, so a user file
     that is also an umbrella candidate reads as an umbrella file. Then `Inherit: none`
     in the nearest project-side file (a `project` file, else the nearest `umbrella`
-    one) drops every other `umbrella` file.
+    one) drops every other `umbrella` file. READ, given a path, returns its text or
+    None for a file that does not exist; the default reads the disk. A caller that
+    resolves a planned state (`lean_config.py --move-settings`) passes its own.
     """
     pairs = list(candidates)
     if user_path is not None:
@@ -371,7 +376,7 @@ def read_layers(candidates: Sequence[Tuple[Path, str]],
         key = _resolved(path)
         if key in seen:
             continue
-        text = _read(path)
+        text = (read or _read)(path)
         if text is None:
             continue
         seen.add(key)
@@ -389,6 +394,56 @@ def nearest_project_side(files: Sequence[ConfigFile]) -> Optional[ConfigFile]:
             if config.role == role:
                 return config
     return None
+
+
+# Where an umbrella checkout holds its nested repos: `hooks/session_start.py`
+# (NESTED_REPO_PARENTS, NESTED_ENTRY_LIMIT, NESTED_REPO_LIMIT) scans the same places
+# with the same bounds.
+NESTED_REPO_PARENTS = ("", "source", "packages")
+NESTED_ENTRY_LIMIT = 512
+NESTED_REPO_LIMIT = 64
+
+
+def _child_repo_dirs(base: Path) -> List[Path]:
+    """The real child directories of BASE that hold a `.git` entry of their own (a
+    directory or a `gitdir:` file, never a symlink), sorted. Dot-names, `node_modules`
+    and symlinks are left out, and at most NESTED_ENTRY_LIMIT entries are examined. []
+    when BASE is a symlink or cannot be read."""
+    if os.path.islink(str(base)):
+        return []
+    try:
+        with os.scandir(str(base)) as entries:
+            names = []
+            for index, entry in enumerate(entries):
+                if index >= NESTED_ENTRY_LIMIT:
+                    break
+                if entry.name.startswith(".") or entry.name == "node_modules":
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    names.append(entry.name)
+    except OSError:
+        return []
+    out = []
+    for name in sorted(names):
+        git = os.path.join(str(base), name, ".git")
+        if os.path.lexists(git) and not os.path.islink(git):
+            out.append(base / name)
+    return out
+
+
+def nested_repo_dirs(root: Path) -> List[Path]:
+    """The nested repos of the project at ROOT: each child directory of ROOT,
+    `ROOT/source` and `ROOT/packages` with a `.git` entry of its own, in that order and
+    sorted within each place, at most NESTED_REPO_LIMIT in all. Dot-directories,
+    `node_modules` and symlinks are left out. It never raises."""
+    found: List[Path] = []
+    for parent in NESTED_REPO_PARENTS:
+        for repo in _child_repo_dirs(root / parent if parent else root):
+            if repo not in found:
+                found.append(repo)
+            if len(found) >= NESTED_REPO_LIMIT:
+                return found
+    return found
 
 
 def section_owner(files: Sequence[ConfigFile], section: str,
@@ -890,7 +945,72 @@ _LEGACY_PARSERS: Dict[str, Callable[[str], Optional[Any]]] = {
     "code_graph": legacy_code_graph,
     "handoff": legacy_handoff,
     "forge": _legacy_forge,
+    # The Knowledge base bullets (the user's decision, 2026-11-24): a repo path only; a
+    # wiki home is words, so it gives no value and no `bad-legacy` problem.
+    "ledger": lambda raw: legacy_home("ledger", raw),
+    "artifact_homes.prd": lambda raw: legacy_home("prd", raw),
+    "artifact_homes.adr": lambda raw: legacy_home("adr", raw),
+    "artifact_homes.worklog": lambda raw: legacy_home("worklog", raw),
 }
+
+# The settings a `## Knowledge base` bullet sets: a legacy line only when it gives a value.
+HOME_KEYS = ("ledger", "artifact_homes.prd", "artifact_homes.adr", "artifact_homes.worklog")
+_PRD_KEY = "artifact_homes.prd"
+_WORKLOG_KEY = "artifact_homes.worklog"
+_BESIDE_RE = re.compile(r"beside the prd", re.IGNORECASE)
+
+
+def _beside_the_prd(raw: str) -> bool:
+    """True for a `Worklog home` with no directory of its own, the form `setup` wrote:
+    "beside the PRD as `<name>.worklog.md`"."""
+    found = bullet_value(raw)
+    if found is not None and "/" not in found and found.lower().endswith(".worklog.md"):
+        return True
+    return _BESIDE_RE.search(raw) is not None
+
+
+class _BesidePrd(object):
+    """The legacy value of a `Worklog home` beside the PRD: `resolve_settings` puts the
+    worklog glob beside the resolved PRD home in its place (`beside_prd`)."""
+
+    def __repr__(self) -> str:
+        return "BESIDE_PRD"
+
+
+BESIDE_PRD: Any = _BesidePrd()
+
+
+def beside_prd(prd: Any) -> str:
+    """The worklog glob beside the PRD glob PRD: its part before the last `/`, then
+    `/*.worklog.md`."""
+    if isinstance(prd, str) and "/" in prd:
+        return prd.rsplit("/", 1)[0] + "/*.worklog.md"
+    return "*.worklog.md"
+
+
+def _gives(value: Any, node: Dict[str, Any]) -> bool:
+    """True when a legacy VALUE is one: valid by NODE, or the worklog beside the PRD."""
+    return value is BESIDE_PRD or (value is not None and _valid(value, node))
+
+
+def _section_values(text: str, section: str,
+                    keys: Sequence[Tuple[str, Dict[str, Any], str]]
+                    ) -> List[Tuple[str, Dict[str, Any], str, str, Optional[Any]]]:
+    """`(key, node, bullet, raw, value)` for each of KEYS (`(key, node, bullet)`) whose
+    bullet the section SECTION of TEXT holds: its first bullet, read by the key's legacy
+    rule. VALUE is None when the bullet gives none, and BESIDE_PRD for a `Worklog home`
+    beside the PRD: the resolver places it beside the PRD home that applies."""
+    bullets = section_bullets(text, section.lower(), keep_case=True)
+    out: List[Tuple[str, Dict[str, Any], str, str, Optional[Any]]] = []
+    for key, node, bullet in keys:
+        raw = next((v for k, v in bullets if k.lower() == bullet.lower()), None)
+        if raw is None:
+            continue
+        value = _LEGACY_PARSERS[key](raw)
+        if value is None and key == _WORKLOG_KEY and _beside_the_prd(raw):
+            value = BESIDE_PRD
+        out.append((key, node, bullet, raw, value))
+    return out
 
 
 def _legacy_keys(schema: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any], str, str]]:
@@ -904,13 +1024,153 @@ def _legacy_keys(schema: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any], str,
     return out
 
 
+def legacy_keys(schema: Optional[Dict[str, Any]] = None
+                ) -> List[Tuple[str, Dict[str, Any], str, str]]:
+    """`(key, schema node, section, bullet)` for each setting with a legacy line, in
+    schema order. The plugin's schema unless SCHEMA is given."""
+    return _legacy_keys(schema if schema is not None else load_schema())
+
+
+def setting_node(key: str, schema: Optional[Dict[str, Any]] = None
+                 ) -> Optional[Dict[str, Any]]:
+    """The schema node of a leaf key (`autonomy`, `orchestration.review`, an extra kind
+    such as `artifact_homes.design`), or None for a key the schema does not know."""
+    props = (schema if schema is not None else load_schema())["properties"]
+    group, _, leaf = key.partition(".")
+    node = props.get(group)
+    if node is None or not leaf:
+        return node
+    if node.get("type") != "object" or "properties" not in node:
+        return None
+    sub = node["properties"].get(leaf)
+    extra = node.get("additionalProperties")
+    return sub if sub is not None else (extra if isinstance(extra, dict) else None)
+
+
+def valid_setting(key: str, value: Any, schema: Optional[Dict[str, Any]] = None) -> bool:
+    """True when a settings file can hold VALUE for the leaf KEY: the check the resolver
+    makes (`_valid`)."""
+    node = setting_node(key, schema)
+    return node is not None and _valid(value, node)
+
+
+def legacy_value(key: str, raw: str, schema: Optional[Dict[str, Any]] = None
+                 ) -> Optional[Any]:
+    """The value a legacy bullet gives for KEY, by the resolver's own parse of its
+    section, or None when it gives none: a placeholder, a value the parse ignores (a
+    bare Code signals value), or a value outside its set (a `bad-legacy` problem). RAW
+    is the bullet's value as `section_bullets` reads it. KeyError for a key with no
+    legacy line."""
+    schema = schema if schema is not None else load_schema()
+    for name, node, section, bullet in _legacy_keys(schema):
+        if name != key:
+            continue
+        if section.lower() == "code signals":
+            window = schema["properties"]["code_signals"]["properties"]["window_months"]
+            values, _bad = code_signals_lines(f"## {section}\n- {bullet}: {raw}\n",
+                                              window.get("maximum", 1200))
+            value = values.get(key.split(".", 1)[1])
+        else:
+            value = _LEGACY_PARSERS[key](raw)
+        if value is None or not _valid(value, node):
+            return None
+        return value
+    raise KeyError(key)
+
+
+_HOME_GLOBS = {"prd": "*.md", "adr": "*.md", "worklog": "*.worklog.md"}
+
+
+_HOME_PART_RE = re.compile(r"<[^/<>]+>")
+_HOME_CHARS_RE = re.compile(r"[\w.*/-]+")
+_TRAILING = (",", ";", ".", ")")
+
+
+def legacy_home(kind: str, raw: str) -> Optional[str]:
+    """The setting value that a Knowledge base bullet names: a glob for KIND `prd`,
+    `adr` or `worklog` (`artifact_homes`), a path for `ledger`. None when the bullet
+    names no path in the repo that a setting can hold: a placeholder, a wiki path or
+    URL, words, an absolute path, or one that leaves the repo.
+
+    The value is the first backticked span; with no span, the first word of the bare
+    value, less one trailing `,` `;` `.` or `)`. A leading `./` goes, and each `<...>`
+    inside a segment reads as `*`. Then only `[\\w.*/-]` may remain. A home that names a
+    directory (a `/`, and no `.` in its last segment) becomes `<dir>/*.md`, or
+    `<dir>/*.worklog.md` for a worklog; a home that ends in `.md` and holds a `/` stays
+    as written. A ledger is a path that ends in `.md`, with no `*`. Each step is linear
+    in the length of RAW."""
+    value = bullet_value(raw)
+    if value is None:
+        return None
+    if not BACKTICK_RE.search(raw):
+        words = value.split()
+        if not words:
+            return None
+        value = words[0]
+        if value.endswith(_TRAILING):
+            value = value[:-1]
+    while value.startswith("./"):
+        value = value[2:]
+    value = _HOME_PART_RE.sub("*", value)
+    if (not _HOME_CHARS_RE.fullmatch(value) or value.startswith("/")
+            or ".." in value.split("/")):
+        return None
+    if kind == "ledger":
+        return value if value.endswith(".md") and "*" not in value else None
+    if kind not in _HOME_GLOBS or "/" not in value:
+        return None
+    if value.endswith(".md"):
+        return value
+    directory = value.rstrip("/")
+    if not directory or "." in directory.split("/")[-1]:
+        return None
+    return directory + "/" + _HOME_GLOBS[kind]
+
+
+def legacy_values(text: str, schema: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Per legacy key, the value TEXT gives when it owns each section: the resolver's
+    own parse. A `Worklog home` beside the PRD gives BESIDE_PRD (`beside_prd` of the PRD
+    home that applies is its value). A key whose bullet gives no value, or a value
+    outside its set, is left out."""
+    schema = schema if schema is not None else load_schema()
+    by_section: Dict[str, List[Tuple[str, Dict[str, Any], str]]] = {}
+    for key, node, section, bullet in _legacy_keys(schema):
+        by_section.setdefault(section, []).append((key, node, bullet))
+    out: Dict[str, Any] = {}
+    for section, keys in by_section.items():
+        if section.lower() == "code signals":
+            window = schema["properties"]["code_signals"]["properties"]["window_months"]
+            values, _bad = code_signals_lines(text, window.get("maximum", 1200))
+            out.update({f"code_signals.{leaf}": value for leaf, value in values.items()})
+            continue
+        for key, node, _bullet, _raw, value in _section_values(text, section, keys):
+            if _gives(value, node):
+                out[key] = value
+    return out
+
+
 def legacy_lines(files: Sequence[ConfigFile], schema: Dict[str, Any]
                  ) -> List[LegacyLine]:
     """Every legacy line FILES hold: each bullet with a value (not a placeholder) that
-    a schema key names as its `x-legacy` source. Read whole, owners aside."""
+    a schema key names as its `x-legacy` source. Read whole, owners aside. A home or
+    ledger bullet (HOME_KEYS) counts only when it gives a value: a wiki home is words."""
     found: List[LegacyLine] = []
+    homes: Dict[str, List[Tuple[str, Dict[str, Any], str]]] = {}
+    for key, node, section, bullet in _legacy_keys(schema):
+        if key in HOME_KEYS:
+            homes.setdefault(section, []).append((key, node, bullet))
     for config in files:
+        given = {key: (section, bullet, raw)
+                 for section, keys in homes.items()
+                 for key, node, bullet, raw, value in _section_values(config.text, section,
+                                                                      keys)
+                 if _gives(value, node)}
         for key, _node, section, bullet in _legacy_keys(schema):
+            if key in HOME_KEYS:
+                if key in given:
+                    found.append(LegacyLine(str(config.path), section, bullet, key,
+                                            given[key][2].strip()))
+                continue
             for name, value in section_bullets(config.text, section.lower(),
                                                keep_case=True):
                 if name.lower() == bullet.lower() and _value_present(value):
@@ -949,15 +1209,10 @@ def _legacy_layer(files: Sequence[ConfigFile], schema: Dict[str, Any],
         owner = section_owner(files, name)
         if owner is None:
             continue
-        bullets = section_bullets(owner.text, name, keep_case=True)
-        for key, node, bullet in keys:
-            raw = next((v for k, v in bullets if k.lower() == bullet.lower()), None)
-            if raw is None:
-                continue
-            value = _LEGACY_PARSERS[key](raw)
+        for key, node, bullet, raw, value in _section_values(owner.text, section, keys):
             if value is None:
                 continue
-            if _valid(value, node):
+            if _gives(value, node):
                 out[key] = (owner.role, value, owner)
             else:
                 problems.append(_bad_value(str(owner.path), key, raw.strip(), node,
@@ -976,9 +1231,14 @@ def _grace(schema: Dict[str, Any], today: Optional[date]) -> Tuple[Optional[str]
     return until, (today or date.today()) > last
 
 
+# The default of `resolve_settings`' PROJECT_DATA and USER_DATA: read the file.
+READ_FILE: Any = object()
+
+
 def resolve_settings(project_file: Optional[Path], md_files: Sequence[ConfigFile],
                      user_file: Optional[Path], schema: Optional[Dict[str, Any]] = None,
-                     today: Optional[date] = None) -> Resolved:
+                     today: Optional[date] = None, project_data: Any = READ_FILE,
+                     user_data: Any = READ_FILE) -> Resolved:
     """Each setting's value, source and problems (ADR 0028, L1). Per key, nearest
     first: the project settings file, a project-side legacy line, the user settings
     file, a user legacy line, the default. MD_FILES are `read_layers`' files.
@@ -989,13 +1249,18 @@ def resolve_settings(project_file: Optional[Path], md_files: Sequence[ConfigFile
     `bad-legacy` problem and the walk goes on. A settings file that cannot be read is
     skipped; the keys whose walk reached it carry that `not-json` problem. It never
     raises on a value and never exits: `Resolved.require` lets a strict caller refuse.
-    The schema is read from the plugin unless SCHEMA is given."""
+    The schema is read from the plugin unless SCHEMA is given. PROJECT_DATA and
+    USER_DATA, when given, stand for a settings file's content (its JSON object, or
+    None for no file) at PROJECT_FILE and USER_FILE, which are then not read: a caller
+    resolves a planned state that way (`lean_config.py --move-settings`)."""
     schema = schema if schema is not None else load_schema()
     problems: List[Problem] = []
-    project = _file_layer(_read_settings_file(project_file, problems), project_file,
-                          SOURCE_PROJECT, schema, problems)
-    user = _file_layer(_read_settings_file(user_file, problems), user_file,
-                       SOURCE_USER, schema, problems)
+    if project_data is READ_FILE:
+        project_data = _read_settings_file(project_file, problems)
+    if user_data is READ_FILE:
+        user_data = _read_settings_file(user_file, problems)
+    project = _file_layer(project_data, project_file, SOURCE_PROJECT, schema, problems)
+    user = _file_layer(user_data, user_file, SOURCE_USER, schema, problems)
     legacy = _legacy_layer(md_files, schema, problems)
 
     def file_state(path: Optional[Path]) -> Tuple[Optional[Problem], Dict[str, Problem]]:
@@ -1055,6 +1320,9 @@ def resolve_settings(project_file: Optional[Path], md_files: Sequence[ConfigFile
                 found = Setting(values[name], source, str(path))
                 break
         found = found or default
+        if found.value is BESIDE_PRD:
+            prd = settings.get(_PRD_KEY)
+            found = found._replace(value=beside_prd(prd.value if prd is not None else None))
         if reached is not None and found.problem is None:
             found = found._replace(problem=reached)
         settings[name] = found

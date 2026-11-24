@@ -24,21 +24,27 @@ candidate files and one line of evidence each: fix history, proximity to the rep
 symptom, what the code there does. Skip the ledger jot and the fix plan, and edit nothing.
 The suspect ranking is where to look first, not a verdict. Say so.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
-> **Journaled project — name the stream before you start.** Any one of three signs means this
-> bug's events are owed to a stream: a status brief headed "shipgate flow journal", a
-> **Journal** section in the config, or a `.claude/shipgate.json` sidecar. The stream is this
-> work's branch. That is the checked-out branch when it is a work branch. Otherwise it is the
-> name the config's **Branching** pattern gives the fix: `fix/<issue-id>-<slug>`, or
+> **Journaled project — name the stream before you start.** A project is journaled when the
+> status brief is present, or `.claude/shipgate.json` exists and `journal.py config db` prints
+> a `db` that is not null. On such a project this bug's events are owed to a stream. The stream
+> is this work's branch. That is the checked-out branch when it is a work branch. Otherwise it
+> is the name the config's **Branching** pattern gives the fix: `fix/<issue-id>-<slug>`, or
 > `fix/<slug>` with no issue. `workspace` reuses the name when it creates the branch. The
 > integration branch (`main`, `master`, `develop`) is never a stream. Is there no stream of
-> that name in the status brief? Then open it with `flow-started {request, branch}` in the
-> same append as the first event. A bug reported on `main` before any branch exists is the
-> normal case, not a reason to skip. Two events are owed here: `bug-reproduced` at step 2 and
+> that name in the status brief? Then open it with `flow-started {request, branch}` in the same
+> append as the first event. A bug reported on `main` before any branch exists is the normal
+> case, not a reason to skip. Two events are owed here: `bug-reproduced` at step 2 and
 > `debug-root-cause` at step 4. Append each one in the step that establishes it (the form is
 > under **Record the diagnosis**). The Stop hook checks neither, so the step is the only thing
 > that writes them. A standalone "which file?" ask establishes neither and records nothing.
@@ -52,11 +58,11 @@ The suspect ranking is where to look first, not a verdict. Say so.
 > command, exit code, count and verdict the report carried stays in it. Code, commands and
 > error text go in fenced blocks, not in prose.
 
-1. **Clarify.** State observed vs expected behavior as one concise diff. Confirm scope and
-   what "fixed" means. Recall prior context (`knowledge-base`). Past root causes and gotchas
-   live in the repo's `CLAUDE.md` / the configured ADR home. Domain context (what the
-   behavior *should* be, business-rule-wise) lives in the configured knowledge base. This bug
-   may already have a known cause.
+1. **Clarify.** State observed vs expected behavior as one concise diff. Confirm scope and what
+   "fixed" means. Recall prior context (`knowledge-base`). Past root causes and gotchas live in
+   the repo's `CLAUDE.md` / the ADR home (the `artifact_homes.adr` setting). Domain context
+   (what the behavior *should* be, business-rule-wise) lives in the configured knowledge base.
+   This bug may already have a known cause.
 
 2. **Reproduce.** Capture the minimal steps that trigger it. Capture the environment
    fingerprint: runtime, versions, config, data sample, platform. If you can't reproduce a
@@ -170,9 +176,10 @@ The suspect ranking is where to look first, not a verdict. Say so.
    learning has been compressed to "fixed", and Capture finds an empty ledger. The cause may
    be a *reusable trap*: a default that silently disables a feature, a command or log line
    that lies, a test that passes vacuously, a tool or library quirk, a contract that
-   drifted. If so, append one dated line to the project **ledger**. The ledger is the path
-   the config declares, or `docs/ledger.md` when that file already exists. It is one tool
-   call with no quality gate, because Capture triages it. If you ask "is it worth a line?",
+   drifted. If so, append one dated line to the project **ledger**. The ledger is the file
+   the `ledger` setting names (default `docs/ledger.md`). Write to it when a settings file
+   sets `ledger` or when that file already exists. It is one tool call with no quality gate,
+   because Capture triages it. If you ask "is it worth a line?",
    the answer is yes:
 
    ```bash
@@ -181,13 +188,13 @@ The suspect ranking is where to look first, not a verdict. Say so.
 
    The line goes in the ledger. It does not go in `CLAUDE.md` (operating instructions, not a
    gotcha landfill). It does not go in an ADR (a Capture-time promotion, if at all). It does
-   not go in Claude's built-in memory. A project with no ledger (nothing declared, no file)
-   gets none from a debugging step. Skip the line and let the "why it slipped through"
-   sentence carry the trap. A typo or a one-off data glitch is not a trap either; skip the
-   line. Anything smaller you hit on the way (a misleading log line, a debugging trick, a
+   not go in Claude's built-in memory. A project with no ledger (no `ledger` in a settings
+   file, no file) gets none from a debugging step. Skip the line and let the "why it slipped
+   through" sentence carry the trap. A typo or a one-off data glitch is not a trap either; skip
+   the line. Anything smaller you hit on the way (a misleading log line, a debugging trick, a
    fixture quirk) gets the same one-liner the moment it surfaces. This step is one command
-   between the diagnosis and the plan. It never replaces or delays the root-cause report,
-   and it is not the fix.
+   between the diagnosis and the plan. It never replaces or delays the root-cause report, and
+   it is not the fix.
 
 6. **Plan the fix.** Present the candidate fix(es) with their risk and the verification
    steps. Recommend one. Ask for approval and stop. The edit happens in the turn after the
@@ -200,15 +207,15 @@ The suspect ranking is where to look first, not a verdict. Say so.
   the test fails on the unfixed code and passes on the fixed code.
 - Summarize residual risk and any follow-ups.
 
-**Report the provenance on the tracker issue.** When the bug has a tracker issue and the
-config declares a forge, post a root-cause comment. Like any outward-facing post, it needs
+**Report the provenance on the tracker issue.** When the bug has a tracker issue on the
+forge of the `forge` setting, post a root-cause comment. Like any outward-facing post, it needs
 the user's go-ahead. The comment carries the root cause in a sentence, the introducing
 commit (hash + one line on what it changed), and why it slipped through. This is how the
 team maps *where and why* bugs enter the codebase. A fix without the provenance comment
 loses that signal.
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-the ledger line and the provenance comment; absent, a placeholder, or `plain`, write them as
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
+the ledger line and the provenance comment. When it is `plain`, the default, write them as
 before.
 
 When you land the root cause, capture it via `knowledge-base`. A root cause + fix is

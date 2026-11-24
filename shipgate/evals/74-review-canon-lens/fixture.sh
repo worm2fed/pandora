@@ -80,27 +80,18 @@ write(".claude/skills/typed-canon/SKILL.md", """
 write(".claude/shipgate.md", """
     # shipgate — project config
 
-    ## Knowledge base
-    - PRD home: `docs/prd/`
-    - ADR home: `docs/adr/`
-
-    ## Journal
-    - Database: `.claude/shipgate.db`
-
     ## Branching
     - Pattern: `<type>/<issue-id>-<slug>`
 
     ## Style
     - Style skill(s): `typed-canon` — invoke it before writing, refactoring or reviewing any
       code in `src/`, and put that instruction in every worker brief.
-
-    ## Autonomy
-    - Mode: executive
 """)
 write(".claude/shipgate.json", json.dumps({
-    "version": 1, "db": ".claude/shipgate.db",
+    "version": 2, "db": ".claude/shipgate.db",
     "artifact_homes": {"prd": "docs/prd/*.md", "adr": "docs/adr/*.md", "worklog": "docs/prd/*.worklog.md"},
     "enforce": {"stop_gate": True, "auto_capture": True},
+    "autonomy": "executive",
 }, indent=2) + "\n")
 write("package.json", json.dumps({"name": "orders", "private": True, "type": "module",
                                   "scripts": {"test": "node --import tsx --test src/**/*.test.ts"}},

@@ -349,6 +349,74 @@ class TestHermeticUserConfig(unittest.TestCase):
         self.assertEqual(hermetic_env({"PATH": ""})["CLAUDE_CONFIG_DIR"], str(directory))
 
 
+# The Code tooling and Code signals sections of the 0.32.0 template, word for word. Since
+# #60 (ADR 0028) both are settings and the template no longer holds them, but a project
+# config copied from that template still does: its legacy lines are read until the
+# grace date.
+LEGACY_TEMPLATE_CODE_TOOLING = (
+    '## Code tooling\n'
+    '\n'
+    '<!-- Usually personal: belongs in the user file. -->\n'
+    '\n'
+    '<!-- Default when absent: library docs from a context7-style MCP (reso'
+    'lve a library id,\n'
+    '     then query its docs) when the session has one, else training know'
+    'ledge / WebFetch; no\n'
+    '     LSP preference (grep/read); code graph `auto`. The Library docs l'
+    'ine is the personal\n'
+    '     one. A project file that declares this section replaces the user '
+    "file's section whole,\n"
+    '     so repeat the Library docs line there when you add a project line. -->\n'
+    '\n'
+    "- Library docs: <the docs tool/MCP to consult for a dependency's curre"
+    'nt API before\n'
+    '  hand-rolling around it or answering from memory. Leave it out to use'
+    ' a context7-style\n'
+    '  MCP when the session has one; this line overrides that default. Used'
+    " by implement's\n"
+    '  reuse step and structured-debug.>\n'
+    '- Code navigation: <the LSP tool, if one is configured for the languag'
+    'e — prefer\n'
+    '  goToDefinition / findReferences / hover over grep-and-read for symbo'
+    'l work in typed\n'
+    '  code; note any workspace quirks (root, server version) here>\n'
+    '- Code graph: <auto, off or root. Leave it out for auto: scripts/signa'
+    'ls.py uses\n'
+    '  codegraph when it is installed and builds the index once. off always'
+    ' uses the regex\n'
+    '  scanner. root uses the index at the umbrella root and never builds it.>\n'
+    '\n'
+)
+LEGACY_TEMPLATE_CODE_SIGNALS = (
+    '## Code signals\n'
+    '\n'
+    '<!-- Default when absent: 12-month window, the built-in fix pattern (c'
+    'onventional-commit fix\n'
+    '     types + fix/bug/hotfix/revert/regression words), the built-in exc'
+    'ludes (vendor,\n'
+    '     node_modules, dist, build, lockfiles, generated), and the built-i'
+    'n ranking excludes\n'
+    '     (**/CHANGELOG.md, **/.claude-plugin/plugin.json, .claude-plugin/m'
+    'arketplace.json).\n'
+    '     Values must be in backticks; a <placeholder> counts as absent. A '
+    'Ranking exclude\n'
+    '     value replaces the built-in ranking excludes. An empty value (``)'
+    ' turns them off. -->\n'
+    '\n'
+    'The one section a script reads rather than the model: `scripts/signals'
+    '.py` takes these four\n'
+    "bullets' backticked values (command-line flags still win), so the term"
+    'inal and the flow\n'
+    'compute the same numbers.\n'
+    '\n'
+    '- Window: `<months, e.g. 18>`\n'
+    '- Fix pattern: `<regex over the commit subject>`\n'
+    '- Exclude: `<extra globs, comma-separated, e.g. generated/, *.snap>`\n'
+    '- Ranking exclude: `<globs the ranking leaves out, comma-separated, e.'
+    'g. **/CHANGELOG.md>`\n'
+    '\n'
+)
+
 class TestConfig(SignalsCase):
     """FR-002 / FR-008: `## Code signals` in .claude/shipgate.md, flags win. ADR 0018:
     the layers resolve per section, nearest first, the user file last."""
@@ -535,9 +603,7 @@ class TestConfig(SignalsCase):
         self.assertEqual((cfg["window_months"], cfg["fix_pattern"]), (9, "^umbrella"))
 
     def test_a_repo_code_tooling_section_copied_from_the_template_keeps_the_umbrellas(self):
-        template = (TESTS_DIR.parent / "config-template.md").read_text(encoding="utf-8")
-        section = template[template.index("## Code tooling"):]
-        section = section[:section.index("\n## ", 3) + 1]
+        section = LEGACY_TEMPLATE_CODE_TOOLING
         self.assertIn("- Code graph: <", section)
         self.write_config(self.umbrella, "## Code tooling\n- Code graph: `off`\n")
         self.write_config(self.repo.path, "# Repo\n\n" + section)
@@ -692,16 +758,14 @@ class TestConfig(SignalsCase):
     def test_the_config_template_section_is_all_placeholders(self):
         mod = load_signals_module()
         template = (TESTS_DIR.parent / "config-template.md").read_text(encoding="utf-8")
-        self.assertIn("## Code signals", template)
+        self.assertNotIn("## Code signals", template)  # a setting since #60
         self.assertEqual(mod.parse_code_signals(template), {})
+        self.assertEqual(mod.parse_code_signals(LEGACY_TEMPLATE_CODE_SIGNALS), {})
 
     def test_a_filled_in_template_section_round_trips_through_load_config(self):
         """T013: the template's three bullets, values filled in, reach load_config."""
         mod = load_signals_module()
-        template = (TESTS_DIR.parent / "config-template.md").read_text(encoding="utf-8")
-        section = template[template.index("## Code signals"):]
-        nxt = re.search(r"^## ", section[3:], re.MULTILINE)
-        section = section[: nxt.start() + 3] if nxt else section
+        section = LEGACY_TEMPLATE_CODE_SIGNALS
         values = {"Window": "`18`", "Fix pattern": "`^(fix|bug)`",
                   "Exclude": "`generated/`, `*.snap`"}
         lines = []

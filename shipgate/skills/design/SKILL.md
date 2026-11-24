@@ -9,14 +9,20 @@ Design is where you decide *how*, with real alternatives, before you commit the 
 to building. The output is two things. One is a **design** the implementer can follow. The
 other is a **build plan** they can execute task by task. Both live in one worklog.
 
-> **Config:** `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
-> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`) override the defaults
-> below. They layer per section by the rule in `config-template.md`'s header and the
-> README's Configuration section; read them first if present.
+> **Config:** Read each setting from the `settings:` line of the status brief. For a key that
+> line does not show, or with no brief, run
+> `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" config <key>`. Exit 2 from it means a
+> settings file holds a bad value: show its message and stop. With no `python3`, read
+> `.claude/shipgate.json`, then `$CLAUDE_CONFIG_DIR/shipgate.settings.json` (else
+> `~/.claude/shipgate.settings.json`); the first file that sets a key wins. Behaviour in words
+> comes from `.claude/shipgate.md` (the repo's, then the umbrella's) and the user file
+> `$CLAUDE_CONFIG_DIR/shipgate.md` (else `~/.claude/shipgate.md`). They layer per section by
+> the rule in `config-template.md`'s header and the README's Configuration section; read them
+> first if present.
 
-> **Journaled project — name the stream before you start.** Three signs mark a journaled
-> project: a status brief headed "shipgate flow journal", a **Journal** section in the config,
-> or a `.claude/shipgate.json` sidecar. Any one of them means the design is owed to a stream.
+> **Journaled project — name the stream before you start.** A project is journaled when
+> the status brief is present, or `.claude/shipgate.json` exists and `journal.py config db`
+> prints a `db` that is not null. On such a project the design is owed to a stream.
 > The stream is the branch this PRD's work takes. Use the stream the status brief lists for
 > the PRD's `Issue:`. In the normal flow it exists from clarify. Otherwise use the name the
 > config's **Branching** pattern gives the issue, whether or not that branch is checked out
@@ -28,12 +34,12 @@ other is a **build plan** they can execute task by task. Both live in one worklo
 
 ## Step 1 — Explore design options in parallel
 
-First, **recall prior decisions** (`knowledge-base`). Skim the configured ADR home for forks
-already settled in this area. The default is the repo's `docs/adr/`. That way you extend past
-decisions rather than re-litigate them. Give the architects any relevant ADR as context.
-Subagents don't read the project config themselves. So each architect brief must include the
-relevant config excerpts: the knowledge base's recall pointers, and any store/page
-conventions the architects would otherwise miss.
+First, **recall prior decisions** (`knowledge-base`). Skim the ADR home, the directory of the
+`artifact_homes.adr` setting, for forks already settled in this area. The default is the repo's
+`docs/adr/`. That way you extend past decisions rather than re-litigate them. Give the
+architects any relevant ADR as context. Subagents don't read the project config themselves. So
+each architect brief must include the relevant config excerpts: the knowledge base's recall
+pointers, and any store/page conventions the architects would otherwise miss.
 
 Then dispatch **`code-architect` subagents scaled to how open the solution space is**. When
 the design has a genuine fork, run the full fan of three at once, one per philosophy:
@@ -74,8 +80,9 @@ honest. Present to the user:
 - Then ask which approach the user wants. Make a real recommendation. "Here are three
   options, you decide" wastes the analysis you just did.
 
-**Executive mode** (config Autonomy: `executive`): don't ask. **Commit to your recommendation
-and record it.** The ADR in Step 3 is the record; note that it was an executive decision.
+**Executive mode** (the `autonomy` setting is `executive`): don't ask. **Commit to your
+recommendation and record it.** The ADR in Step 3 is the record; note that it was an
+executive decision.
 Escalate to the user only in the cases `feature`'s executive contract names. The reversibility
 lens below finds one of them, and an approach you genuinely can't rank is another. Present the
 committed choice and its rationale in the phase summary, so the user can veto it.
@@ -112,14 +119,16 @@ condition holds:
 
 ## Step 3 — Record decision forks as ADRs
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-each ADR; absent, a placeholder, or `plain`, write it as before.
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
+each ADR. When it is `plain`, the default, write it as before.
 
 Write an ADR for each genuine either/or where the team will want to remember *why* it went one
 way. Do not write one for every detail. Real forks are things like a data model, a sync vs
-async boundary, or a build-vs-reuse call. Write each ADR at the configured ADR home. The
-default is `docs/adr/NNNN-<title>.md`. Follow any page conventions the project config
-declares. Use `${CLAUDE_PLUGIN_ROOT}/skills/design/references/adr-template.md`. Number the ADRs
+async boundary, or a build-vs-reuse call. Write each ADR in the ADR home, the directory of the
+`artifact_homes.adr` setting. The default is `docs/adr/NNNN-<title>.md`. A home outside the
+repo, such as a wiki, is no setting: when the config's Knowledge base section names one in
+words, write the ADR there. Follow any page conventions the project config declares. Use
+`${CLAUDE_PLUGIN_ROOT}/skills/design/references/adr-template.md`. Number the ADRs
 sequentially.
 ADRs are immutable once accepted. To change a decision, write a new ADR that supersedes the
 old one. The ADR *is* the record. Only if the decision carries product-significant weight,
@@ -131,10 +140,11 @@ hopping.
 
 ## Step 4 — Write the worklog
 
-The config's **Writing style** section (`Docs: ste-80`) applies the Writing for people rule to
-the worklog; absent, a placeholder, or `plain`, write it as before.
+When the `writing_style` setting is `ste-80`, the Writing for people rule applies to
+the worklog. When it is `plain`, the default, write it as before.
 
-Create the worklog at the configured worklog home from
+Create the worklog in the worklog home, the directory of the `artifact_homes.worklog`
+setting, from
 `${CLAUDE_PLUGIN_ROOT}/skills/design/references/worklog-template.md`. The default home is
 `docs/prd/<feature-kebab>.worklog.md`, next to its PRD. Follow any page conventions the
 project config declares. The worklog has two sections with different lifecycles:

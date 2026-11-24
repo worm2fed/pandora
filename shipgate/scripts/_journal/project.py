@@ -55,6 +55,8 @@ def _load_sidecar(path: Path, project_dir: Path) -> Sidecar:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise InfraError(f"cannot read sidecar {path}: {exc}") from exc
+    except ValueError as exc:  # UnicodeDecodeError; SessionStart points here (#60, T053)
+        raise InfraError(f"sidecar {path} is not valid UTF-8: {exc}") from exc
     try:
         config, strict = _hooks_common.parse_sidecar(raw)
     except ValueError as exc:
@@ -192,10 +194,11 @@ def artifact_homes(sidecar: Optional[Sidecar]) -> Dict[str, str]:
 
 
 def _sidecar_settings(sidecar: Optional[Sidecar]) -> Any:
-    """The settings of the sidecar alone (ADR 0028). `ledger` and `artifact_homes` are
-    project settings with no legacy line, so the sidecar or the schema default gives
-    them. No markdown or user file is read: `status` runs from SessionStart. Read with
-    `.value`: a bad value gives the default and never raises."""
+    """The settings of the sidecar alone (ADR 0028). `status` and the hooks read
+    `ledger` and `artifact_homes` from the settings file alone on purpose: the hook path
+    reads no markdown and no user file, and `status` runs from SessionStart. The legacy
+    home and ledger lines of `shipgate.md` are for the skills, through `journal.py
+    config`. Read with `.value`: a bad value gives the default and never raises."""
     return _config.resolve_settings(sidecar.path if sidecar is not None else None,
                                     [], None)
 
@@ -246,16 +249,20 @@ def _config_files(project_dir: Path, start: Optional[Path]) -> List[Any]:
                                _config.user_config_path())
 
 
-def project_settings(project_dir: Path, start: Optional[Path] = None) -> Any:
+def project_settings(project_dir: Path, start: Optional[Path] = None,
+                     schema: Optional[Dict[str, Any]] = None,
+                     today: Optional[Any] = None) -> Any:
     """Every setting of the project at ``project_dir`` (ADR 0028): its settings file
     (``.claude/shipgate.json``), the config layers of ``config_candidates`` and the user
     files. ``_config.Resolved``; it never raises on a value, so a hook-path command
-    reads ``.value`` and a strict one calls ``require_setting``."""
+    reads ``.value`` and a strict one calls ``require_setting``. SCHEMA and TODAY are
+    for tests: the plugin's schema and the clock by default."""
     project_file = project_dir / SIDECAR_RELPATH
     return _config.resolve_settings(
         project_file if project_file.is_file() else None,
         _config_files(project_dir, start),
         _config.user_settings_path(),
+        schema=schema, today=today,
     )
 
 
