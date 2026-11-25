@@ -38,7 +38,9 @@ An item reads, tags separated by spaces:
   is a broken end tag; followed only by `.`, `,`, `;`, `:`, `!` or spaces it is `text
   after the end tag`. Other trailing brackets (`[Kept items list]`) are plain text.
 
-A bad item raises `AssumptionError` with its line. `risky_batch` keeps the items with no
+A bad item raises `SectionError` (alias `AssumptionError`) with its line. `scan_section`
+holds the line rules with the section's words as parameters, so the digest's "What
+changed" section (#25) has the same rules. `risky_batch` keeps the items with no
 end tag that are either unsourced `domain`, `data` or `behaviour` items or candidates (kind
 `blindspot` or `reference`, whatever their class and source: a candidate exists to be put
 to the user), in file order, capped at `cap` (default `BATCH_CAP`). #25 reuses
@@ -48,7 +50,7 @@ to the user), in file order, capped at `cap` (default `BATCH_CAP`). #25 reuses
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Pattern, Tuple
 
 ASSUMPTION_CLASSES = ("domain", "data", "behaviour", "technical")
 ASSUMPTION_KINDS = ("blindspot", "reference")
@@ -66,8 +68,8 @@ _END_WORDS = ("kept by", "changed by", "unconfirmed")
 _EXACT_CHANGED = re.compile(r"^changed by the user, was: (.*\S.*)$", re.S | re.I)
 
 
-class AssumptionError(ValueError):
-    """A malformed assumption item; `line` is the file line it starts on."""
+class SectionError(ValueError):
+    """A malformed line of a scanned section; `line` is the file line it starts on."""
 
     def __init__(self, line: int, reason: str):
         super().__init__(f"{line}: {reason}")
@@ -75,14 +77,24 @@ class AssumptionError(ValueError):
         self.reason = reason
 
 
-def _scan(text: str) -> Tuple[bool, List[Tuple[int, str]]]:
-    """(whether the section is there, (line, joined text after the bullet) per item)."""
+# The name #24's callers and tests use.
+AssumptionError = SectionError
+
+
+def scan_section(text: str, heading: Pattern[str], title: str, noun: str,
+                 items_word: str) -> Tuple[Optional[int], List[Tuple[int, str]]]:
+    """(the heading's line or None, (line, joined text after the bullet) per item).
+
+    The line rules of the module docstring, for the section that ``heading`` opens. The
+    words go into the refusals: ``a second "<title>" heading``, ``code block in the
+    <noun> section``, ``only <items_word> belong in this section``.
+    """
     lines = text.splitlines()
-    headings = [n for n, line in enumerate(lines, start=1) if _SECTION_HEADING.match(line)]
+    headings = [n for n, line in enumerate(lines, start=1) if heading.match(line)]
     if len(headings) > 1:
-        raise AssumptionError(headings[1], 'a second "## Assumptions (executive)" heading')
+        raise SectionError(headings[1], f'a second "{title}" heading')
     if not headings:
-        return False, []
+        return None, []
     items: List[List[Any]] = []
     current: Optional[List[Any]] = None
     for number in range(headings[0] + 1, len(lines) + 1):
@@ -94,17 +106,24 @@ def _scan(text: str) -> Tuple[bool, List[Tuple[int, str]]]:
             current = None
             continue
         if stripped.startswith(("```", "~~~")):
-            raise AssumptionError(number, "code block in the assumptions section")
+            raise SectionError(number, f"code block in the {noun} section")
         if _ITEM_START.match(line):
             current = [number, line[2:].strip()]
             items.append(current)
             continue
         if line[:1] in (" ", "\t") and _INDENTED_ITEM.match(stripped):
-            raise AssumptionError(number, "indented list item")
+            raise SectionError(number, "indented list item")
         if current is None or not line.startswith(("  ", "\t")):
-            raise AssumptionError(number, "only assumption lines belong in this section")
+            raise SectionError(number, f"only {items_word} belong in this section")
         current[1] = f"{current[1]} {stripped}".strip()
-    return True, [(number, body) for number, body in items]
+    return headings[0], [(number, body) for number, body in items]
+
+
+def _scan(text: str) -> Tuple[bool, List[Tuple[int, str]]]:
+    """(whether the assumptions section is there, its items as ``scan_section`` gives)."""
+    heading, items = scan_section(text, _SECTION_HEADING, "## Assumptions (executive)",
+                                  "assumptions", "assumption lines")
+    return heading is not None, items
 
 
 def _leading_tag(body: str, line: int,
@@ -267,6 +286,13 @@ def parse_assumptions(text: str) -> List[Dict[str, Any]]:
     return [_parse_item(line, body) for line, body in _scan(text)[1]]
 
 
+def is_risky(item: Dict[str, Any]) -> bool:
+    """A risky item: class `domain`, `data` or `behaviour` with no source, or a
+    candidate (kind `blindspot` or `reference`). The end tag does not count here."""
+    return ((item["class"] in RISKY_CLASSES and item["source"] is None)
+            or item["kind"] in ASSUMPTION_KINDS)
+
+
 def risky_batch(items: List[Dict[str, Any]],
                 cap: int = BATCH_CAP) -> Tuple[List[Dict[str, Any]], int]:
     """(the first `cap` batch items in file order, how many more were dropped).
@@ -274,9 +300,7 @@ def risky_batch(items: List[Dict[str, Any]],
     In the batch: no end tag, and either class `domain`, `data` or `behaviour` with no
     source, or kind `blindspot` or `reference` whatever the class and source.
     """
-    risky = [i for i in items if i["end"] is None
-             and ((i["class"] in RISKY_CLASSES and i["source"] is None)
-                  or i["kind"] in ASSUMPTION_KINDS)]
+    risky = [i for i in items if i["end"] is None and is_risky(i)]
     return risky[:cap], max(len(risky) - cap, 0)
 
 

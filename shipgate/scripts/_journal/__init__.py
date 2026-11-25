@@ -6,13 +6,13 @@
 from . import (
     vocab, plugin, text, project, settings, store, sessions, approval, fold, artifacts,
     shapes, gates, append, status, reply, check, position, handoff, closeout, stats,
-    doctor, transfer, assumptions, cli,
+    doctor, transfer, assumptions, digest, cli,
 )
 
 _LAYERS = (
     vocab, plugin, text, project, settings, store, sessions, approval, fold, artifacts,
     shapes, gates, append, status, reply, check, position, handoff, closeout, stats,
-    doctor, transfer, assumptions, cli,
+    doctor, transfer, assumptions, digest, cli,
 )
 
 

@@ -256,6 +256,17 @@ class TestInit(JournalTestCase):
         self.assertIn("gate violation", proc.stdout.lower())
         self.assertIn("version conflict", proc.stdout.lower())
 
+    def test_help_lists_the_subcommands(self):
+        """#25 T002: the subcommands of 0.34.1 stay listed in the top-level help."""
+        proc = run_journal(["--help"])
+        self.assertEqual(proc.returncode, OK)
+        for command in ("init", "append", "vocab", "config", "assumptions", "session",
+                        "status", "position", "handoff", "nudge", "stats", "check",
+                        "reply", "authorize", "log", "streams", "closeout", "sweep",
+                        "doctor", "export", "import"):
+            with self.subTest(command=command):
+                self.assertRegex(proc.stdout, r"(?m)^    " + command + r"\b")
+
 
 # ---------------------------------------------------------------------------
 # append

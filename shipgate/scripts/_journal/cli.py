@@ -36,6 +36,7 @@ from .transfer import export_events, import_events
 from .assumptions import (
     BATCH_CAP, AssumptionError, assumptions_report, render_assumptions,
 )
+from .digest import build_digest, render_digest
 
 
 # --------------------------------------------------------------------------
@@ -46,7 +47,7 @@ EPILOG = """\
 exit codes:
   0  ok
   1  infrastructure failure (database missing or unreadable, IO error,
-     `position` on a stream with no events)
+     `position`, `handoff` or `digest` on a stream with no events)
   2  usage error
   3  version conflict — a conditional append (--expect) found a different
      current version; nothing was written
@@ -244,6 +245,29 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db_flag(p_handoff)
     p_handoff.add_argument("--stream", required=True,
                            help="the exact stream name; one with no events exits 1")
+
+    p_digest = subparsers.add_parser(
+        "digest",
+        help="the block the user reads at the publish question: what changed, what "
+             "was decided alone, the deviations and the files to look at first "
+             "(ADR 0030); writes nothing",
+        description="Print the digest of one stream (ADR 0030): what changed (the "
+                    "worklog's '## What changed' section), decided alone (the PRD's "
+                    "open assumption items and the executive gate decisions after the "
+                    "last clarify-passed), deviations (after the last design-committed) "
+                    "and look here first (the newest risk ranking). Each part has a "
+                    "fixed slot; a section it cannot read prints its file, line and "
+                    "reason. It exits 0 with or without such a line, exits 1 for a "
+                    "stream with no events or an unreadable database, and exits 2 for "
+                    "a usage error.",
+    )
+    _add_db_flag(p_digest)
+    p_digest.add_argument("--stream", required=True,
+                          help="the exact stream name; one with no events exits 1")
+    p_digest.add_argument("--all", action="store_true", dest="show_all",
+                          help="print every item of every part, each line still clipped")
+    p_digest.add_argument("--json", action="store_true",
+                          help="the digest's data for a program, sorted keys")
 
     p_nudge = subparsers.add_parser(
         "nudge",
@@ -767,6 +791,23 @@ def cmd_handoff(args, resolution: Resolution) -> int:
     return EXIT_OK
 
 
+def cmd_digest(args, resolution: Resolution) -> int:
+    """``digest --stream <s> [--all] [--json]``: ``build_digest`` for one stream (ADR
+    0030). ``--json`` is the contract; the text is for people. A stream with no events
+    exits 1, as ``position``."""
+    conn = connect(resolution.db_path)
+    try:
+        doc = build_digest(conn, args.stream, resolution.project_dir,
+                           artifact_homes(resolution.sidecar))
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(doc, sort_keys=True))
+    else:
+        print(render_digest(doc, show_all=args.show_all))
+    return EXIT_OK
+
+
 def cmd_nudge(args, resolution: Resolution) -> int:
     """``nudge``: print ``nudge_line`` or nothing; exit 0 either way."""
     conn = connect(resolution.db_path)
@@ -1011,6 +1052,7 @@ COMMANDS = {
     "status": cmd_status,
     "position": cmd_position,
     "handoff": cmd_handoff,
+    "digest": cmd_digest,
     "nudge": cmd_nudge,
     "stats": cmd_stats,
     "check": cmd_check,
