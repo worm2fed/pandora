@@ -32,6 +32,10 @@ pattern and its paths; treat a hit as a blocker, not a nit.
 - shipgate's tests run with `python3 -m unittest discover -s shipgate/tests` from the repo
   root (never `-t .`: `shipgate/tests` has no `__init__.py`; test modules import each other
   by plain name). Its scripts stay Python 3.9 compatible (no `match`, no runtime `X | Y`).
+- A test that runs `journal.py` in a subprocess gives it a temporary `CLAUDE_CONFIG_DIR`
+  (as `run_journal` in `shipgate/tests/test_journal.py` does): a terminal append and
+  `journal.py screens` prune the evidence root under the Claude config directory (ADR 0031),
+  so an inherited environment reaches the developer's real files.
 - Plugins are independent: read the plugin's own `README.md` / `CHANGELOG.md` before
   editing it; do not assume one plugin's conventions apply to another.
 - shipgate's settings for this repo are in `.claude/shipgate.json`, and its config (behaviour

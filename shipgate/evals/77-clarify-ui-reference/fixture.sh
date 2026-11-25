@@ -353,7 +353,8 @@ cat > .claude/shipgate.json <<'JSON'
 {
   "version": 2,
   "db": null,
-  "autonomy": "executive"
+  "autonomy": "executive",
+  "ui": {"globs": ["web/templates/*", "web/static/*"]}
 }
 JSON
 c 2026-09-03 "chore: shipgate config (executive autonomy)"

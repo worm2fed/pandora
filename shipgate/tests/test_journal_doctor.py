@@ -6,17 +6,42 @@ Split out of ``test_journal.py`` (#61), which holds the helpers and fixtures.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import io
 import json
 import os
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
-from test_journal import JournalTestCase, OK, USAGE
+from test_journal import (
+    insert_legacy_row, JournalTestCase, load_journal_module, OK, run_journal, SESSION_ENV,
+    USAGE,
+)
+from test_journal_screens import _ambient_root, _tree
+
+
+# #26 T015 plants evidence files in temporary roots only: the real evidence root of the
+# environment must not change.
+_REAL = {}
+
+
+def setUpModule():
+    _REAL["root"] = _ambient_root()
+    _REAL["tree"] = _tree(_REAL["root"])
+
+
+def tearDownModule():
+    if _tree(_REAL["root"]) != _REAL["tree"]:
+        raise AssertionError(f"the real evidence root {_REAL['root']} changed in the tests")
 
 
 # ---------------------------------------------------------------------------
@@ -598,6 +623,393 @@ class TestStats(JournalTestCase):
     def test_an_empty_journal_says_so(self):
         proc = self.journal("--db", self.db, "stats", rc=OK)
         self.assertIn("no work streams", proc.stdout)
+
+
+
+# The labels of the doctor report of 0.35.0, in order, for a project with a sidecar and
+# no Stop gate record (#26 T002). A later block comes after them.
+DOCTOR_LABELS_0_35 = [
+    "database", "integrity_check", "journal_mode", "schema_version", "pending migr.",
+    "events", "sidecar", "sidecar version", "stray keys", "settings", "stop gate", "",
+]
+
+
+class TestPinDoctorReport(JournalTestCase):
+    """#26 T002: the report's lines of 0.35.0 stay first and in order."""
+
+    def test_the_lines_of_today_come_first(self):
+        self.init_db()
+        claude = self.root / ".claude"
+        claude.mkdir()
+        (claude / "shipgate.json").write_text(
+            json.dumps({"version": 1, "db": str(self.db)}), encoding="utf-8")
+        proc = self.journal("--db", self.db, "doctor", rc=OK)
+        lines = proc.stdout.splitlines()
+        labels = [line.split(" : ", 1)[0].strip() if " : " in line else line.strip()
+                  for line in lines]
+        self.assertEqual(labels[:len(DOCTOR_LABELS_0_35)][:-1], DOCTOR_LABELS_0_35[:-1])
+        self.assertTrue(lines[len(DOCTOR_LABELS_0_35) - 1].startswith(
+            "                  last block: "))
+
+
+# ---------------------------------------------------------------------------
+# #26 T015: the evidence block (FR-016, SC-005)
+# ---------------------------------------------------------------------------
+
+J = load_journal_module()
+OLD = time.time() - 40 * 86400
+OTHER_KEY = "0123456789ab"
+NOTE = ("  note          : another Claude config directory or another machine keeps its "
+        "own evidence root, which this report does not read")
+
+
+def _snapshot(root):
+    """Every entry under ROOT with its mode, size and mtime, and the bytes of a file or
+    the target of a link. A link is listed, never followed."""
+    out = []
+    for directory, dirs, files in os.walk(root):
+        for name in dirs + files:
+            path = os.path.join(directory, name)
+            st = os.lstat(path)
+            if stat.S_ISLNK(st.st_mode):
+                body = os.readlink(path)
+            elif stat.S_ISREG(st.st_mode):
+                body = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            else:
+                body = None
+            out.append((path, st.st_mode, st.st_size, st.st_mtime_ns, body))
+    return sorted(out)
+
+
+class TestDoctorEvidence(JournalTestCase):
+    """#26 T015: after its other lines, `doctor` reports the evidence root of this Claude
+    config directory: this project and the whole root, what the next prune would remove
+    and refuse, and that another root goes unread. It deletes nothing."""
+
+    LIVE = "feature/live"
+    DONE = "feature/done"
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.root / "config"
+        self.config.mkdir()
+        self.evidence = self.config / "shipgate" / "evidence"
+        self.key = hashlib.sha256(
+            os.path.realpath(self.db).encode("utf-8")).hexdigest()[:12]
+        self.run_j("init")
+        for stream, etype, data in ((self.LIVE, "flow-started", {"request": "r"}),
+                                    (self.DONE, "flow-started", {"request": "r"}),
+                                    (self.DONE, "flow-completed", {"reason": "merged"})):
+            self.run_j("append", "--stream=" + stream, "--type", etype,
+                       "--data", json.dumps(data))
+
+    # -- helpers ---------------------------------------------------------
+
+    def env(self):
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        return env
+
+    def run_j(self, *args, env=None):
+        proc = run_journal(["--db", self.db, *args], cwd=self.root,
+                           env=env or self.env())
+        self.assertEqual(proc.returncode, OK, proc.stdout + proc.stderr)
+        return proc.stdout
+
+    def doctor(self, env=None):
+        return self.run_j("doctor", env=env).splitlines()
+
+    def doctor_json(self, env=None):
+        return json.loads(self.run_j("doctor", "--json", env=env))["evidence"]
+
+    def plant(self, *parts, size=100, old=False):
+        path = self.evidence.joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * size)
+        if old:
+            os.utime(path, (OLD, OLD))
+        return path
+
+    def real(self, *parts):
+        return os.path.join(os.path.realpath(self.evidence), *parts)
+
+    def plant_tree(self):
+        """This project: a live stream with a new and an old file, the finished stream
+        and an unknown stream; another project with an old file; a note in the root."""
+        self.plant(self.key, "feature%2Flive", "T001-390.png", size=1000)
+        self.plant(self.key, "feature%2Flive", "T001-1280.png", size=2000, old=True)
+        self.plant(self.key, "feature%2Fdone", "T002-390.png", size=500)
+        self.plant(self.key, "feature%2Fgone", "T003-390.png", size=548)
+        self.plant(OTHER_KEY, "feat%2Fx", "T001-390.png", size=2000, old=True)
+        self.plant("notes.txt", size=1)
+
+    # -- the text ----------------------------------------------------------
+
+    def test_a_root_with_files(self):
+        self.plant_tree()
+        lines = self.doctor()
+        self.assertEqual(lines[-6:], [
+            f"evidence root   : {self.real()} (this Claude config directory)",
+            f"  this project  : {self.key} · 3 streams · 4 files · 4.0 KB · oldest 40 days",
+            "  whole root    : 2 projects · 5 files · 5.9 KB · oldest 40 days",
+            "  next prune    : 2 directories of finished or unknown streams · 2 files "
+            "over 30 days",
+            f"  refused       : 1 entry outside the layout (first: {self.real('notes.txt')})",
+            NOTE,
+        ])
+        self.assertTrue(lines[-7].startswith("                  last block: "), lines)
+
+    def test_the_block_follows_the_off_vocabulary_lines(self):
+        insert_legacy_row(self.db, self.LIVE, "no-such-event", {}, "orchestrator")
+        self.plant(self.key, "feature%2Flive", "T001-390.png")
+        lines = self.doctor()
+        at = next(i for i, line in enumerate(lines) if line.startswith("evidence root"))
+        self.assertTrue(lines[at - 2].startswith("off-vocabulary  : no-such-event x1"))
+        self.assertTrue(lines[at - 1].startswith("                  these events are inert"))
+        self.assertEqual(lines[at + 1:], [
+            f"  this project  : {self.key} · 1 stream · 1 file · 100 B · oldest 0 days",
+            "  whole root    : 1 project · 1 file · 100 B · oldest 0 days",
+            "  next prune    : 0 directories of finished or unknown streams · 0 files "
+            "over 30 days",
+            NOTE,
+        ])
+
+    def test_an_empty_root(self):
+        self.evidence.mkdir(parents=True)
+        self.assertEqual(self.doctor()[-5:], [
+            f"evidence root   : {self.real()} (this Claude config directory)",
+            f"  this project  : {self.key} · 0 streams · no files",
+            "  whole root    : 0 projects · no files",
+            "  next prune    : 0 directories of finished or unknown streams · 0 files "
+            "over 30 days",
+            NOTE,
+        ])
+
+    def test_a_missing_root(self):
+        lines = self.doctor()
+        self.assertEqual(lines[-2:], [f"evidence root   : {self.real()} (none yet)", NOTE])
+        self.assertTrue(lines[-3].startswith("                  last block: "), lines)
+        self.assertFalse(os.path.lexists(self.config / "shipgate"))
+
+    def test_no_config_directory_and_no_home(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in (SESSION_ENV, "CLAUDE_CONFIG_DIR", "HOME")}
+        lines = self.doctor(env=env)
+        self.assertEqual(lines[-1], "evidence root   : none (no CLAUDE_CONFIG_DIR, no HOME)")
+        self.assertTrue(lines[-2].startswith("                  last block: "), lines)
+        self.assertEqual(self.doctor_json(env=env), {
+            "root": None, "exists": False, "project": None, "whole": None,
+            "next_prune": None, "refused": None})
+
+    def test_the_sizes(self):
+        for size, text in ((0, "0 B"), (1023, "1023 B"), (1024, "1.0 KB"),
+                           (12595, "12.3 KB"), (4 * 1024 * 1024, "4.0 MB"),
+                           (1024 * 1024 - 1, "1.0 MB"), (3 * 1024 ** 3, "3.0 GB")):
+            with self.subTest(size=size):
+                self.assertEqual(J._evidence_size(size), text)
+
+    def test_refused_entries_and_links(self):
+        """Every entry the prune would refuse is counted once: a link at each level,
+        a file of another name, a directory of another name, and a directory where a
+        file belongs; the first in sorted order is named."""
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "T001-390.png").write_bytes(b"x")
+        live = self.plant(self.key, "feature%2Flive", "T001-390.png").parent
+        os.symlink(outside / "T001-390.png", live / "T001-1280.png")
+        os.symlink(outside, self.evidence / "fedcba987654")
+        os.symlink(outside, self.evidence / self.key / "feature%2Flinked")
+        (live / "T002-390.png").mkdir()
+        self.plant(self.key, "stray.png")
+        self.plant("random", "T001-390.png")
+        refused = sorted([
+            self.real(self.key, "feature%2Flive", "T001-1280.png"),
+            self.real("fedcba987654"), self.real(self.key, "feature%2Flinked"),
+            self.real(self.key, "feature%2Flive", "T002-390.png"),
+            self.real(self.key, "stray.png"), self.real("random")])
+        self.assertEqual(self.doctor()[-2], f"  refused       : 6 entries outside the "
+                                            f"layout (first: {refused[0]})")
+        self.assertEqual(self.doctor_json()["refused"], {"count": 6, "first": refused[0]})
+        self.assertEqual(os.listdir(outside), ["T001-390.png"])
+
+    # -- the JSON -------------------------------------------------------------
+
+    def test_the_json_of_a_root_with_files(self):
+        self.plant_tree()
+        self.assertEqual(self.doctor_json(), {
+            "root": self.real(), "exists": True,
+            "project": {"key": self.key, "streams": 3, "files": 4, "bytes": 4048,
+                        "oldest_days": 40},
+            "whole": {"projects": 2, "files": 5, "bytes": 6048, "oldest_days": 40},
+            "next_prune": {"directories": 2, "files": 2},
+            "refused": {"count": 1, "first": self.real("notes.txt")},
+        })
+
+    def test_the_json_of_an_empty_and_a_missing_root(self):
+        self.assertEqual(self.doctor_json(), {
+            "root": self.real(), "exists": False, "project": None, "whole": None,
+            "next_prune": None, "refused": None})
+        self.evidence.mkdir(parents=True)
+        self.assertEqual(self.doctor_json(), {
+            "root": self.real(), "exists": True,
+            "project": {"key": self.key, "streams": 0, "files": 0, "bytes": 0,
+                        "oldest_days": None},
+            "whole": {"projects": 0, "files": 0, "bytes": 0, "oldest_days": None},
+            "next_prune": {"directories": 0, "files": 0},
+            "refused": {"count": 0, "first": None}})
+
+    # -- read-only ------------------------------------------------------------
+
+    def test_the_doctor_changes_nothing_on_disk(self):
+        """A root with old files, a finished stream's directory and links: every entry
+        keeps its bytes, size and mtime, and so does the target of each link."""
+        self.plant_tree()
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "T009-390.png").write_bytes(b"y")
+        os.utime(outside / "T009-390.png", (OLD, OLD))
+        os.symlink(outside / "T009-390.png",
+                   self.evidence / self.key / "feature%2Fdone" / "T009-390.png")
+        os.symlink(outside, self.evidence / "fedcba987654")
+        before = (_snapshot(str(self.config)), _snapshot(str(outside)))
+        self.doctor()
+        self.doctor_json()
+        self.assertEqual((_snapshot(str(self.config)), _snapshot(str(outside))), before)
+
+    def test_the_doctor_calls_no_write(self):
+        """In process, with every call that removes, makes, renames or touches an entry
+        patched to fail the test."""
+        self.plant_tree()
+        os.symlink(self.root, self.evidence / "fedcba987654")
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError(f"the doctor wrote to the disk: {args!r}")
+
+        out = io.StringIO()
+        cwd = os.getcwd()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(
+                os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}))
+            stack.callback(os.chdir, cwd)
+            os.chdir(str(self.root))
+            for name in ("unlink", "remove", "rmdir", "removedirs", "mkdir", "makedirs",
+                         "replace", "rename", "utime"):
+                stack.enter_context(mock.patch.object(os, name, side_effect=forbidden))
+            stack.enter_context(contextlib.redirect_stdout(out))
+            rc = J.main(["--db", str(self.db), "doctor"])
+        self.assertEqual(rc, OK)
+        self.assertIn(f"evidence root   : {self.real()} (this Claude config directory)",
+                      out.getvalue().splitlines())
+
+    def test_the_survey_and_the_prune_agree(self):
+        """What the doctor says the next prune removes and refuses is what it removes
+        and refuses. A finished stream's directory that holds a link stays with its new
+        file, and only its old file goes, as in a live directory."""
+        self.plant_tree()
+        self.plant(self.key, "feature%2Flive", "T005-390.png", old=True)
+        self.plant(OTHER_KEY, "feat%2Fx", "T002-390.png")
+        done = self.evidence / self.key / "feature%2Fdone"
+        os.symlink(self.root, done / "T002-1280.png")
+        self.plant(self.key, "feature%2Fdone", "T004-390.png", old=True)
+        conn = J.connect(self.db)
+        try:
+            survey = J.survey_evidence(str(self.evidence), self.key, conn)
+            self.assertEqual(survey["next_prune"], {"directories": 1, "files": 4})
+            report = J.prune_evidence(str(self.evidence), self.key, conn)
+            self.assertEqual(report["warnings"], [])
+            self.assertEqual(len(report["removed_dirs"]),
+                             survey["next_prune"]["directories"])
+            self.assertEqual(len(report["removed_files"]), survey["next_prune"]["files"])
+            refused = sorted(path for path, _ in report["refused"])
+            self.assertEqual(survey["refused"],
+                             {"count": len(refused), "first": refused[0]})
+            after = J.survey_evidence(str(self.evidence), self.key, conn)
+        finally:
+            conn.close()
+        self.assertEqual(after["next_prune"], {"directories": 0, "files": 0})
+        self.assertEqual(after["refused"], survey["refused"])
+        self.assertEqual(sorted(os.listdir(done)), ["T002-1280.png", "T002-390.png"])
+
+    def test_the_survey_and_the_prune_agree_on_a_directory_they_keep(self):
+        """A finished stream's directory with a `Thumbs.db` beside a new file: the
+        survey predicts no removal, and the prune removes nothing from it."""
+        gone = self.plant(self.key, "feature%2Fgone", "T003-390.png").parent
+        self.plant(self.key, "feature%2Fgone", "Thumbs.db")
+        conn = J.connect(self.db)
+        try:
+            survey = J.survey_evidence(str(self.evidence), self.key, conn)
+            self.assertEqual(survey["next_prune"], {"directories": 0, "files": 0})
+            self.assertEqual(survey["refused"],
+                             {"count": 1, "first": self.real(self.key, "feature%2Fgone",
+                                                             "Thumbs.db")})
+            report = J.prune_evidence(str(self.evidence), self.key, conn)
+        finally:
+            conn.close()
+        self.assertEqual(report, {
+            "removed_dirs": [], "removed_files": [], "warnings": [],
+            "refused": [(self.real(self.key, "feature%2Fgone", "Thumbs.db"),
+                         "not in the evidence layout")]})
+        self.assertEqual(sorted(os.listdir(gone)), ["T003-390.png", "Thumbs.db"])
+
+    # -- the Finder file (T023) ---------------------------------------------------
+
+    def plant_finder_files(self):
+        """A `.DS_Store` in this project's directory, in each of its stream directories,
+        in the other project's directory and in its stream directory."""
+        for parts in ((self.key,), (self.key, "feature%2Flive"),
+                      (self.key, "feature%2Fdone"), (self.key, "feature%2Fgone"),
+                      (OTHER_KEY,), (OTHER_KEY, "feat%2Fx")):
+            self.plant(*parts, ".DS_Store", size=6148)
+
+    def test_a_finder_file_is_no_refusal_no_stream_and_no_evidence(self):
+        """A `.DS_Store` in a project or a stream directory changes no count: it is no
+        refused entry, no stream, no evidence file and no byte of evidence. One in the
+        root is refused."""
+        self.plant_tree()
+        self.plant_finder_files()
+        lines = self.doctor()
+        self.assertEqual(lines[-6:], [
+            f"evidence root   : {self.real()} (this Claude config directory)",
+            f"  this project  : {self.key} · 3 streams · 4 files · 4.0 KB · oldest 40 days",
+            "  whole root    : 2 projects · 5 files · 5.9 KB · oldest 40 days",
+            "  next prune    : 2 directories of finished or unknown streams · 2 files "
+            "over 30 days",
+            f"  refused       : 1 entry outside the layout (first: {self.real('notes.txt')})",
+            NOTE,
+        ])
+        self.plant(".DS_Store", size=6148)
+        self.assertEqual(self.doctor_json()["refused"],
+                         {"count": 2, "first": self.real(".DS_Store")})
+
+    def test_the_survey_and_the_prune_agree_with_finder_files(self):
+        """A `.DS_Store` beside the files of a finished and of an unknown stream does
+        not keep their directories; the survey predicts what the prune removes, and the
+        live stream's directory keeps its own."""
+        self.plant_tree()
+        self.plant(OTHER_KEY, "feat%2Fx", "T002-390.png")
+        self.plant_finder_files()
+        conn = J.connect(self.db)
+        try:
+            survey = J.survey_evidence(str(self.evidence), self.key, conn)
+            self.assertEqual(survey["next_prune"], {"directories": 2, "files": 2})
+            report = J.prune_evidence(str(self.evidence), self.key, conn)
+            self.assertEqual(report["warnings"], [])
+            self.assertEqual(sorted(path for path, _ in report["removed_dirs"]), [
+                self.real(self.key, "feature%2Fdone"),
+                self.real(self.key, "feature%2Fgone")])
+            self.assertEqual(len(report["removed_files"]), survey["next_prune"]["files"])
+            self.assertEqual(report["refused"],
+                             [(self.real("notes.txt"), "not in the evidence layout")])
+            self.assertEqual(survey["refused"],
+                             {"count": 1, "first": self.real("notes.txt")})
+            after = J.survey_evidence(str(self.evidence), self.key, conn)
+        finally:
+            conn.close()
+        self.assertEqual(after["next_prune"], {"directories": 0, "files": 0})
+        self.assertEqual(sorted(os.listdir(self.evidence / self.key)),
+                         [".DS_Store", "feature%2Flive"])
+        self.assertEqual(sorted(os.listdir(self.evidence / self.key / "feature%2Flive")),
+                         [".DS_Store", "T001-390.png"])
 
 
 if __name__ == "__main__":

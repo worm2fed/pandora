@@ -715,5 +715,209 @@ class TestPublishDigestText(unittest.TestCase):
                       "the why.", mr)
 
 
+def between(text: str, start: str, end: str) -> str:
+    """The flat text from START up to END, both matched on the flat text."""
+    body = flat(text)
+    body = body[body.index(start):]
+    return body[:body.index(end)]
+
+
+UI_EVIDENCE_SURFACES = (
+    "skills/verify/SKILL.md", "skills/implement/SKILL.md", "skills/design/SKILL.md",
+    "skills/design/references/worklog-template.md", "skills/model-tiers/SKILL.md",
+    "skills/route-and-map/SKILL.md", "skills/clarify/SKILL.md", "skills/setup/SKILL.md",
+)
+
+
+class TestUiEvidencePins(unittest.TestCase):
+    """#26 T019: the sentences around the UI task edits, pinned before and after them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.read = {rel: (SHIPGATE / rel).read_text() for rel in UI_EVIDENCE_SURFACES}
+
+    def test_verify_keeps_its_table_and_its_record_section(self):
+        text = self.read["skills/verify/SKILL.md"]
+        table = section(text, "## Claim → evidence")
+        self.assertIn("| Claim | What proves it |\n|-------|----------------|\n", table)
+        self.assertIn('| Feature works | An end-to-end run or a concrete manual walkthrough, '
+                      'not "the code looks right" |\n', table)
+        self.assertRegex(table, r"\n\| No regressions in shared code \| ")
+        record = flat(section(text, "## Record the evidence (journaled projects)"))
+        self.assertIn("The two land together, so send them as one `append --batch` (JSONL on "
+                      "stdin) rather than two calls:", record)
+        self.assertIn('Record failures too, with `"outcome":"fail"`.', record)
+
+    def test_implement_keeps_step_6_and_step_7(self):
+        text = self.read["skills/implement/SKILL.md"]
+        step6 = flat(paragraph(text, "6. **Verify before you check the box.**"))
+        self.assertTrue(step6.startswith(
+            '6. **Verify before you check the box.** Invoke the `verify` skill. Run the actual '
+            'command (test, build, lint) for this task. Read the output. Confirm that it '
+            'proves the task\'s "done when" criterion. No "should work."'), step6)
+        self.assertIn("7. **Update the worklog — and the ledger.** Tick the task.", flat(text))
+
+    def test_design_keeps_its_build_plan_rule(self):
+        rule = between(self.read["skills/design/SKILL.md"], "- **Build Plan** —",
+                       "Order the build plan")
+        self.assertIn('Each task names the file(s) it touches and what "done" means. Write each '
+                      "task line as the worklog template's Build Plan rule says: a bullet, a "
+                      "box, then the id `T` and digits, bare or bold (`- [ ] T001 — title`, "
+                      "`- [ ] **T001**: title`). The journal skips a line in any other form.",
+                      rule)
+        self.assertIn("This section is *living*: implementation ticks the boxes and logs "
+                      "deviations here.", rule)
+
+    def test_the_worklog_template_keeps_its_build_plan_paragraph(self):
+        body = section(self.read["skills/design/references/worklog-template.md"], "# Build Plan")
+        text = flat(body)
+        self.assertIn("A task line is a `-` or `*` bullet, a box, then the id: `T` and digits, "
+                      "bare (`T001`) or bold (`**T001**` or `**T001:**`).", text)
+        self.assertIn("A line in any other form is not a task, so the HUD's Plan tab and the "
+                      "Stop gate both skip it.", text)
+        self.assertIn("- [ ] T001 — <task> — file(s): `...` — done when: <...>\n", body)
+
+    def test_model_tiers_keeps_item_4(self):
+        item = between(self.read["skills/model-tiers/SKILL.md"], "4. **Validation commands**",
+                       "5. **No commit, no staging**")
+        self.assertTrue(item.startswith(
+            "4. **Validation commands** — the exact lint/test/build commands that prove the "
+            "task done, and the instruction to run them and read the output."), item)
+        self.assertIn("When the code graph is absent, say nothing about codegraph.", item)
+
+    def test_route_and_map_keeps_its_map_and_its_record(self):
+        text = self.read["skills/route-and-map/SKILL.md"]
+        self.assertIn("### Modules/services touched\n- <module> — read | write | schema", text)
+        self.assertIn('"touched":["api","web"],"schema":false,"flag":"export-filters"', text)
+        self.assertIn("**`signals` is owed on every map, and its `source` is always set.**", text)
+
+    def test_clarify_keeps_the_other_sentences_of_its_ui_paragraph(self):
+        ui = between(self.read["skills/clarify/SKILL.md"], "**UI.**", "## Step 2")
+        self.assertIn("and the request or the issue names no reference, add one candidate: the "
+                      "reference implementation or screenshot the work should follow, with the "
+                      "nearest existing screen as the recommended answer.", ui)
+        self.assertIn("Without it, the reference tends to arrive after a defect.", ui)
+        self.assertIn("When the request or the issue names the reference, write no candidate: "
+                      "the reference is an answer with `[source: the request]` or "
+                      "`[source: issue #<n>]`, and nothing about it needs asking.", ui)
+
+    def test_setup_keeps_its_interview_list(self):
+        text = self.read["skills/setup/SKILL.md"]
+        interview = section(text, "## Step 2 — Interview")
+        leads = re.findall(r"^- \*\*([^*]+)\*\*", interview, re.M)
+        kept = ["Artifact homes", "Journal", "Autonomy", "Worker guardrails", "Orchestration",
+                "Writing style", "Anything detection flagged as ambiguous"]
+        self.assertEqual([lead for lead in leads if lead in kept], kept)
+        self.assertIn("The user settings file never sets a `project`-scope key (`db`, `ledger`, "
+                      "`artifact_homes`, `enforce`, `code_signals`, `forge`", flat(text))
+
+
+class TestUiEvidenceText(unittest.TestCase):
+    """#26, ADR 0031 (FR-011, FR-017, SC-009): the skills carry the UI task rule, its reason
+    and its commands. The journal computes which task is UI and checks the screenshots; the
+    text tells the model to take, register and read them."""
+
+    SCREENS = 'journal.py" screens'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.read = {rel: (SHIPGATE / rel).read_text() for rel in UI_EVIDENCE_SURFACES}
+
+    def test_verify_has_the_ui_row(self):
+        table = section(self.read["skills/verify/SKILL.md"], "## Claim → evidence")
+        self.assertIn("\n| UI task done (the project sets `ui.globs`) | A registered screenshot "
+                      "for every width in `ui.widths` (`journal.py screens --list`), read by the "
+                      "one who took it, or a `screens-waived` deviation with the reason |\n",
+                      table)
+
+    def test_verify_records_the_screenshots_of_a_ui_task(self):
+        record = flat(section(self.read["skills/verify/SKILL.md"],
+                              "## Record the evidence (journaled projects)"))
+        lead = "**A UI task also needs its screenshots.**"
+        self.assertIn(lead, record)
+        ui = record[record.index(lead):]
+        for phrase in ("`[UI]`", "--list",
+                       "A UI task's command can pass while its screen is wrong.",
+                       "each width of `ui.widths`", self.SCREENS,
+                       "--stream <branch> --task T010 --file <png>", "evidence root",
+                       "compare it with the reference that the PRD names",
+                       "`verify-run` and `task-done` batch",
+                       "--url <url>` prints one capture command per width",
+                       "the `task-done` refusal prints the waiver command",
+                       "because the user reads it at the publish gate"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, ui)
+        # Read before the batch: the one who took them looks first (FR-011).
+        self.assertLess(ui.index("Read each screenshot"), ui.index("`verify-run` and `task-done`"))
+
+    def test_implement_step_6_sends_a_ui_task_to_verify(self):
+        step6 = flat(paragraph(self.read["skills/implement/SKILL.md"],
+                               "6. **Verify before you check the box.**"))
+        self.assertIn("For a task that the handoff marks `[UI]`, the gate also includes its "
+                      "screenshots", step6)
+        self.assertIn("a UI task's tests can pass while its screen is wrong", step6)
+        self.assertIn("`verify` gives the steps", step6)
+
+    def test_design_asks_for_the_paths_of_each_task(self):
+        rule = between(self.read["skills/design/SKILL.md"], "- **Build Plan** —",
+                       "Order the build plan")
+        for phrase in ("When the project sets `ui.globs`", "in backticks after `file(s):`",
+                       "`file(s): none`", "The journal marks a UI task from those paths",
+                       "`design-committed` refuses a task line with neither form"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, rule)
+
+    def test_the_worklog_template_states_the_same_rule(self):
+        text = flat(section(self.read["skills/design/references/worklog-template.md"],
+                            "# Build Plan"))
+        self.assertIn("With `ui.globs` set, a task line names its files in backticks after "
+                      "`file(s):`, or says `file(s): none`, because the journal marks a UI task "
+                      "from those paths.", text)
+
+    def test_model_tiers_briefs_a_ui_task(self):
+        item = between(self.read["skills/model-tiers/SKILL.md"], "4. **Validation commands**",
+                       "5. **No commit, no staging**")
+        for phrase in ("For a UI task (the handoff marks it `[UI]`)", "`ui.widths`",
+                       "the register command with the stream and the task filled in",
+                       "read each screenshot and compare it with the PRD's reference before "
+                       "the report", "Its report lists the registered files"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, item)
+
+    def test_route_and_map_records_the_computed_ui_flag(self):
+        text = self.read["skills/route-and-map/SKILL.md"]
+        self.assertIn("\n- <module> — read | write | schema — what changes\n", text)
+        self.assertNotIn("| UI —", text)
+        self.assertIn("\n- UI: <n> touched files match `ui.globs`", text)
+        self.assertIn('"flag":"export-filters","ui":true,', text)
+        body = flat(text)
+        self.assertIn("The JSON's top-level `ui` is null when the project sets no `ui.globs`.",
+                      body)
+        self.assertIn("`ui` is `true` when the JSON's `ui.files` is above 0, and `false` when "
+                      "it is 0.", body)
+        self.assertIn("Leave the key out when the JSON's `ui` is null or absent", body)
+
+    def test_clarify_reads_the_computed_flag(self):
+        body = flat(self.read["skills/clarify/SKILL.md"])
+        self.assertIn("**UI.** When the impact map's `ui` is true (computed from the `ui.globs` "
+                      "setting) and the request or the issue names no reference", body)
+        self.assertNotIn("When the map tags a touched module `UI`", body)
+
+    def test_setup_offers_the_globs_for_a_web_frontend(self):
+        text = self.read["skills/setup/SKILL.md"]
+        interview = section(text, "## Step 2 — Interview")
+        lead = "- **UI files** (`ui.globs`)"
+        self.assertIn(lead, interview)
+        bullet = flat(paragraph(interview, lead))
+        for phrase in ("only when the project has a web frontend", "HTML templates",
+                       "style sheets", "component framework", "Recommend globs for the "
+                       "directories that hold those files",
+                       "its tests can pass while its screen is wrong",
+                       "A project with no web frontend gets no question"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, bullet)
+        self.assertIn("`code_signals`, `forge`, `ui`)", flat(text))
+
+
 if __name__ == "__main__":
     unittest.main()

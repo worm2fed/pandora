@@ -86,6 +86,11 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
    `no-adapter` usually arrives there. Then keep whichever half is available. There is no
    error, and nothing to install.
 
+   The JSON's top-level `ui` is null when the project sets no `ui.globs`. Otherwise
+   `ui.files` counts the touched files that match those globs, and `ui.sample` names up to 3
+   of them. Keep it for the map and its record: clarify reads it to decide whether to ask for
+   a UI reference.
+
    The JSON names its source in `structure.source`. It is `graph` when the code graph
    answered, and `regex` when the regex scanner ran. Under `graph`, `blast.tests` lists the
    tests the diff reaches. Keep that list. When `structure.source` is `graph`, name each exported
@@ -137,7 +142,8 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
 <module/service> — because <rule from CLAUDE.md, quoted/paraphrased>
 
 ### Modules/services touched
-- <module> — read | write | schema | UI — what changes
+- <module> — read | write | schema — what changes
+- UI: <n> touched files match `ui.globs`          (when the JSON's `ui` is not null)
 
 ### Write path → read path
 <where state is written, where it's read>
@@ -177,10 +183,13 @@ a later session to route from:
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" append \
   --stream <branch> --type phase-entered \
   --data '{"phase":"route-and-map","primary_home":"api",
-           "touched":["api","web"],"schema":false,"flag":"export-filters",
+           "touched":["api","web"],"schema":false,"flag":"export-filters","ui":true,
            "signals":{"source":"graph","modules":{"api":{"churn":"top","fix":"high","fan_in":"mid"}},"blast":37},
            "skipped":["workspace"]}'
 ```
+
+`ui` is `true` when the JSON's `ui.files` is above 0, and `false` when it is 0. Leave the key
+out when the JSON's `ui` is null or absent, because then no UI flag was computed.
 
 **`signals` is owed on every map, and its `source` is always set.** `source` is `graph`,
 `regex` or `none`: the JSON's `structure.source`, or `none` when the signals were

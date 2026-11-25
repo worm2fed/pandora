@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, TypedDict
 
 from .vocab import BRIEF_DECISION_LIMIT, PHASE_ORDER
-from .plugin import _config, closeout_command
+from .plugin import _config, closeout_command, NO_COMMAND
 from .text import _clip, _one_line, _short_ts, _string_list, _string_or_none
 from .project import (
     _config_files, _config_label, project_settings, require_setting, setting_source,
@@ -19,6 +19,7 @@ from .project import (
 from .store import Event, read_events
 from .fold import _newest_string, pull_request
 from .artifacts import _safe_ref
+from .screens import task_screen_state
 from .status import _render_decision
 from .position import build_position, PositionDoc, PositionTask
 
@@ -73,6 +74,10 @@ class HandoffDoc(TypedDict):
     report_to: Optional[str]
     next_phase: Optional[str]
     next_task: Optional[PositionTask]
+    # ADR 0031: the task-done gate takes the next task for UI, so it needs screenshots at
+    # `ui_widths` (the `ui.widths` setting, each width once).
+    next_ui: bool
+    ui_widths: List[int]
     open_gates: List[str]
     decisions: List[str]
     decisions_earlier: int
@@ -229,6 +234,11 @@ def build_handoff(
     autonomy = require_setting(resolved, "autonomy")
     events = read_events(conn, stream=stream)
     tasks = position["tasks"] or []
+    next_task = next((t for t in tasks if not t["done"]), None)
+    globs = resolved.value("ui.globs")
+    widths = list(dict.fromkeys(resolved.value("ui.widths")))
+    next_ui = bool(globs) and next_task is not None and task_screen_state(
+        conn, stream, next_task["id"], project_dir, globs, widths) is not None
     decisions = [
         _render_decision(e.data) for e in events if e.type == "gate-decision"
     ]
@@ -239,7 +249,9 @@ def build_handoff(
         "request": _string_or_none(started[0].data.get("request")) if started else None,
         "report_to": _newest_string(events, "report_to"),
         "next_phase": _next_phase(position),
-        "next_task": next((t for t in tasks if not t["done"]), None),
+        "next_task": next_task,
+        "next_ui": next_ui,
+        "ui_widths": widths,
         "open_gates": _open_gates(events, position, project_dir),
         "decisions": shown,
         "decisions_earlier": len(decisions) - len(shown),
@@ -256,6 +268,21 @@ def _indented(line: str, base: int) -> str:
     """``line`` clipped to one line, at ``base`` spaces plus its own indent (at most 4)."""
     indent = min(len(line) - len(line.lstrip(" ")), 4)
     return " " * (base + indent) + _clip(line)
+
+
+def _ui_rule(stream: str, task_id: str, widths: Sequence[int]) -> List[str]:
+    """The rule of a UI next task: one rule over three lines, so a stream name of up to
+    about 100 characters keeps each line within ``BRIEF_LINE_CHARS``; the command is
+    never clipped. A name that does not print on one line gets no command
+    (``closeout_command``'s rule)."""
+    command = (f"journal.py screens --stream={shlex.quote(stream)} "
+               f"--task {shlex.quote(task_id)} --file <png>")
+    return [
+        "  - UI task: register a screenshot at each width "
+        f"({', '.join(str(width) for width in widths)}) before task-done:",
+        "    " + (command if command.isprintable() else NO_COMMAND),
+        "    — or record a screens-waived deviation with the reason",
+    ]
 
 
 def render_handoff(doc: HandoffDoc) -> str:
@@ -300,7 +327,8 @@ def render_handoff(doc: HandoffDoc) -> str:
         task = doc["next_task"]
         lines.append(
             f"tasks        : {done}/{len(tasks)} done · next: "
-            + (_clip(f"{task['id']} — {task['title'] or ''}".rstrip(" —"))
+            + (_clip(f"{task['id']}{' [UI]' if doc['next_ui'] else ''} — "
+                     f"{task['title'] or ''}".rstrip(" —"))
                if task else "none, the Build Plan is done")
         )
     verify = position["last_verify"]
@@ -323,6 +351,9 @@ def render_handoff(doc: HandoffDoc) -> str:
         "  - Commit only when the user asks, and stage only the files you changed "
         "(implement: Committing)."
     )
+    if doc["next_ui"] and doc["next_task"] is not None:
+        lines.extend(_ui_rule(position["stream"], doc["next_task"]["id"],
+                              doc["ui_widths"]))
     for rule in doc["rules"]:
         if rule["section"] == "Autonomy":
             autonomy = doc["autonomy"]

@@ -5,14 +5,17 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from .vocab import EVENT_VOCABULARY
+from .vocab import EVENT_VOCABULARY, EVIDENCE_KEEP_DAYS
 from .plugin import _config
 from .text import _one_line
 from .project import Resolution, sidecar_db_path
 from .settings import _part, render_settings_report, settings_report
 from .store import pending_migrations, read_schema_version
+from .screens import (
+    _as_line, evidence_root, EvidenceSurvey, project_key, survey_evidence,
+)
 from .check import stop_gate_trace
 
 
@@ -72,7 +75,18 @@ def run_doctor(conn: sqlite3.Connection, resolution: Resolution) -> Dict[str, An
         "events": counts,
         "sidecar": sidecar_report,
         "settings": settings_report(resolution.project_dir),
+        "evidence": doctor_evidence(conn),
     }
+
+
+def doctor_evidence(conn: sqlite3.Connection) -> EvidenceSurvey:
+    """The evidence root of this Claude config directory (ADR 0031), surveyed without a
+    write; every part null when there is no root."""
+    root = evidence_root()
+    if root is None:
+        return {"root": None, "exists": False, "project": None, "whole": None,
+                "next_prune": None, "refused": None}
+    return survey_evidence(root, project_key(conn), conn)
 
 
 def render_doctor(report: Dict[str, Any],
@@ -143,4 +157,66 @@ def render_doctor(report: Dict[str, Any],
             "still matters under the right one (the log is append-only, so annotate "
             "rather than rewrite)."
         )
+    if "evidence" in report:
+        lines.extend(_render_evidence(report["evidence"]))
     return "\n".join(lines)
+
+
+EVIDENCE_NOTE = ("  note          : another Claude config directory or another machine keeps "
+                 "its own evidence root, which this report does not read")
+
+
+def _counted(number: int, one: str, many: str) -> str:
+    return f"{number} {one if number == 1 else many}"
+
+
+def _evidence_size(size: int) -> str:
+    """SIZE in bytes as people read it: base 1024, one decimal from KB on."""
+    if size < 1024:
+        return f"{size} B"
+    value = size / 1024
+    units = ["KB", "MB", "GB", "TB"]
+    while round(value, 1) >= 1024 and len(units) > 1:
+        value /= 1024
+        units.pop(0)
+    return f"{value:.1f} {units[0]}"
+
+
+def _evidence_files(part: Dict[str, Any]) -> str:
+    if not part["files"]:
+        return "no files"
+    return (f"{_counted(part['files'], 'file', 'files')} · {_evidence_size(part['bytes'])}"
+            f" · oldest {_counted(part['oldest_days'], 'day', 'days')}")
+
+
+def _render_evidence(evidence: EvidenceSurvey) -> List[str]:
+    """The evidence block (FR-016): the root, this project, the whole root, the next
+    prune, the refused entries, and the root this report does not read."""
+    root = evidence["root"]
+    if root is None:
+        return ["evidence root   : none (no CLAUDE_CONFIG_DIR, no HOME)"]
+    if not evidence["exists"]:
+        return [f"evidence root   : {_as_line(root)} (none yet)", EVIDENCE_NOTE]
+    lines = [f"evidence root   : {_as_line(root)} (this Claude config directory)"]
+    project = evidence["project"]
+    if project is not None:
+        lines.append(f"  this project  : {project['key']} · "
+                     f"{_counted(project['streams'], 'stream', 'streams')} · "
+                     + _evidence_files(project))
+    whole = evidence["whole"]
+    if whole is not None:
+        lines.append(f"  whole root    : "
+                     f"{_counted(whole['projects'], 'project', 'projects')} · "
+                     + _evidence_files(whole))
+    prune = evidence["next_prune"]
+    if prune is not None:
+        lines.append(
+            f"  next prune    : {_counted(prune['directories'], 'directory', 'directories')}"
+            f" of finished or unknown streams · {_counted(prune['files'], 'file', 'files')}"
+            f" over {EVIDENCE_KEEP_DAYS} days")
+    refused = evidence["refused"]
+    if refused is not None and refused["count"]:
+        lines.append(f"  refused       : {_counted(refused['count'], 'entry', 'entries')} "
+                     f"outside the layout (first: {_as_line(refused['first'] or '')})")
+    lines.append(EVIDENCE_NOTE)
+    return lines

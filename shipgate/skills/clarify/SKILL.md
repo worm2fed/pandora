@@ -100,7 +100,8 @@ A point that a document the request or the issue links answers is no blindspot c
 even when the area's files also state it: it is a sourced line. A blindspot stays what
 nobody has decided yet.
 
-**UI.** When the map tags a touched module `UI` and the request or the issue names no
+**UI.** When the impact map's `ui` is true (computed from the `ui.globs` setting) and the
+request or the issue names no
 reference, add one
 candidate: the reference implementation or screenshot the work should follow, with the
 nearest existing screen as the recommended answer. Without it, the reference tends to

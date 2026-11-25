@@ -21,6 +21,9 @@ from .project import artifact_homes, ledger_summary, Resolution, resolve_db
 from .settings import cmd_config, status_settings
 from .store import apply_migrations, connect, read_events
 from .fold import stream_lifecycle
+from .screens import (
+    list_screens, print_capture_commands, prune_command, register_files,
+)
 from .append import append_event, AppendResult
 from .status import build_status, render_status
 from .reply import authorize, parse_reply_input, plan_reply
@@ -249,13 +252,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_digest = subparsers.add_parser(
         "digest",
         help="the table the user reads before the publish question: what changed, "
-             "what was decided alone, the deviations and the files to look at first "
-             "(ADR 0030); writes nothing",
+             "what was decided alone, the deviations, the screenshots of UI tasks and "
+             "the files to look at first (ADR 0030); writes nothing",
         description="Print the digest of one stream as one markdown table (ADR 0030): "
                     "what changed (the worklog's '## What changed' section), decided "
                     "alone (the PRD's open assumption items and the executive gate "
                     "decisions after the last clarify-passed), deviations (after the "
-                    "last design-committed) and look first (the newest risk ranking). "
+                    "last design-committed), screens (the stream's evidence directory "
+                    "and each UI task's widths, waiver or missing widths; ADR 0031; "
+                    "absent with no UI task) and look first (the newest risk ranking). "
                     "Each part has a fixed slot; a section it cannot read prints its "
                     "file, line and reason. Every value is escaped for markdown. It "
                     "exits 0 with or without such a line, exits 1 for a "
@@ -270,6 +275,48 @@ def build_parser() -> argparse.ArgumentParser:
                                "row still clipped")
     p_digest.add_argument("--json", action="store_true",
                           help="the digest's data for a program, sorted keys")
+
+    p_screens = subparsers.add_parser(
+        "screens",
+        help="the screenshots of UI tasks (ADR 0031): register PNG files, print the "
+             "ui.capture commands, list each UI task's widths, or prune the store; it "
+             "never runs a command",
+        description="The evidence store of UI tasks (ADR 0031). Its root is "
+                    "$CLAUDE_CONFIG_DIR/shipgate/evidence, else "
+                    "$HOME/.claude/shipgate/evidence, outside every repository; a "
+                    "task's files are <root>/<project key>/<encoded stream>/"
+                    "T<n>-<width>[-<k>].png. Four forms: "
+                    "--stream S --task T --file F [--file F ...] [--width W] copies each "
+                    "PNG under the set width its pixel width is at 1x, 2x or 3x "
+                    "(--width settles a file that matches two); "
+                    "--stream S --task T --url U prints the ui.capture command for each "
+                    "set width, with {out} the next free file name; "
+                    "--stream S --list [--json] prints each UI task's widths, its "
+                    "screens-waived reason or the widths it misses; "
+                    "--prune removes this project's directories of finished or unknown "
+                    "streams and every file older than 30 days in the root. --file and "
+                    "--url prune the same way before they write. It never runs a "
+                    "command. Exit 2 for a usage error or a refused input, 1 for a link "
+                    "or a file in the place of a directory it needs.",
+    )
+    _add_db_flag(p_screens)
+    p_screens.add_argument("--stream", default=None,
+                           help="the exact stream name; refused with --prune")
+    p_screens.add_argument("--task", default=None, metavar="T",
+                           help="the task id, T and digits; with --file and --url only")
+    form = p_screens.add_mutually_exclusive_group(required=True)
+    form.add_argument("--file", action="append", default=None, dest="files",
+                      metavar="F", help="a PNG screenshot to register (repeatable)")
+    form.add_argument("--url", default=None, metavar="U",
+                      help="print the ui.capture command for each set width")
+    form.add_argument("--list", action="store_true", dest="list_state",
+                      help="each UI task's state; writes nothing")
+    form.add_argument("--prune", action="store_true",
+                      help="remove what no live stream of this project needs")
+    p_screens.add_argument("--width", type=int, default=None, metavar="W",
+                           help="with --file: the set width a file is stored under")
+    p_screens.add_argument("--json", action="store_true",
+                           help="with --list: the state for a program, sorted keys")
 
     p_nudge = subparsers.add_parser(
         "nudge",
@@ -810,6 +857,42 @@ def cmd_digest(args, resolution: Resolution) -> int:
     return EXIT_OK
 
 
+def cmd_screens(args, resolution: Resolution) -> int:
+    """``screens``: one of its four forms (ADR 0031). Each flag that does not belong to
+    the form is refused with one line (exit 2)."""
+    form = ("file" if args.files is not None else "url" if args.url is not None
+            else "list" if args.list_state else "prune")
+    if form == "prune":
+        if args.stream is not None:
+            raise UsageError("screens: --prune takes no --stream")
+    elif args.stream is None:
+        raise UsageError(f"screens: --{form} needs --stream")
+    if form in ("file", "url"):
+        if args.task is None:
+            raise UsageError(f"screens: --{form} needs --task")
+    elif args.task is not None:
+        raise UsageError("screens: --task goes with --file or --url only")
+    if args.width is not None and form != "file":
+        raise UsageError("screens: --width goes with --file only")
+    if args.json and form != "list":
+        raise UsageError("screens: --json goes with --list only")
+    conn = connect(resolution.db_path)
+    try:
+        if form == "file":
+            register_files(conn, resolution.project_dir, args.stream, args.task,
+                           args.files, args.width)
+        elif form == "url":
+            print_capture_commands(conn, resolution.project_dir, args.stream, args.task,
+                                   args.url)
+        elif form == "list":
+            list_screens(conn, resolution.project_dir, args.stream, args.json)
+        else:
+            prune_command(conn)
+    finally:
+        conn.close()
+    return EXIT_OK
+
+
 def cmd_nudge(args, resolution: Resolution) -> int:
     """``nudge``: print ``nudge_line`` or nothing; exit 0 either way."""
     conn = connect(resolution.db_path)
@@ -1055,6 +1138,7 @@ COMMANDS = {
     "position": cmd_position,
     "handoff": cmd_handoff,
     "digest": cmd_digest,
+    "screens": cmd_screens,
     "nudge": cmd_nudge,
     "stats": cmd_stats,
     "check": cmd_check,

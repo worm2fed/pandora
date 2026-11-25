@@ -8,6 +8,7 @@ The parser rules of the "What changed" section run in process through
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -16,11 +17,28 @@ import sys
 import unittest
 
 from test_journal import (
-    INFRA, JOURNAL, JournalTestCase, load_journal_module, OK, insert_legacy_row,
+    INFRA, JOURNAL, JournalTestCase, journal_env, load_journal_module, OK,
+    insert_legacy_row,
     run_journal, SESSION_ENV,
 )
+from test_journal_screens import _ambient_root, _tree
+from test_ui import png_bytes
 
 J = load_journal_module()
+
+# The Screens part's tests register PNG files in temporary roots only: the real
+# evidence root of the environment must not change.
+_REAL = {}
+
+
+def setUpModule():
+    _REAL["root"] = _ambient_root()
+    _REAL["tree"] = _tree(_REAL["root"])
+
+
+def tearDownModule():
+    if _tree(_REAL["root"]) != _REAL["tree"]:
+        raise AssertionError(f"the real evidence root {_REAL['root']} changed in the tests")
 
 S = "feature/demo"
 PRD = "docs/prd/demo.md"
@@ -87,7 +105,7 @@ class DigestCase(JournalTestCase):
 
     def batch(self, rows, stream=S):
         """Append ``rows`` ((type, data) pairs) in one ``append --batch``."""
-        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env = journal_env()
         lines = "".join(json.dumps({"type": t, "data": d}) + "\n" for t, d in rows)
         proc = subprocess.run(
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
@@ -143,7 +161,7 @@ class DigestCase(JournalTestCase):
 # Every character the digest escapes in a cell, and the forms a cell may take.
 SPECIAL = "\\`*_[]<>|~&$"
 FIRST_CELL = re.compile(
-    r"^(|\*\*(What changed|Decided alone|Deviations|Look first)\*\*( \(\d+\))?)$")
+    r"^(|\*\*(What changed|Decided alone|Deviations|Screens|Look first)\*\*( \(\d+\))?)$")
 CODE_CELL = re.compile(r"^`[^`|\\]+`( · `[^`|\\]+`)*$")
 
 
@@ -186,7 +204,7 @@ class TestDigestCommand(DigestCase):
         own = run_journal(["digest", "--help"]).stdout
         flat = " ".join(own.split())
         for words in ("markdown table", "what changed", "decided alone", "deviations",
-                      "look first", "--all", "--json", "exits 1"):
+                      "screens", "look first", "--all", "--json", "exits 1"):
             with self.subTest(words=words):
                 self.assertIn(words, flat)
 
@@ -194,8 +212,8 @@ class TestDigestCommand(DigestCase):
         self.designed()
         doc = self.doc()
         self.assertEqual(sorted(doc), [
-            "decided", "deviations", "look_here", "prd", "publish", "stream", "verdict",
-            "what_changed", "worklog",
+            "decided", "deviations", "look_here", "prd", "publish", "screens", "stream",
+            "verdict", "what_changed", "worklog",
         ])
         self.assertEqual(doc["stream"], S)
         self.assertEqual(doc["worklog"], WORKLOG)
@@ -211,8 +229,10 @@ class TestDigestCommand(DigestCase):
         self.assertEqual(J.PARTS, (("what_changed", "What changed", 3),
                                    ("decided", "Decided alone", 2),
                                    ("deviations", "Deviations", 2)))
-        # The header row, the separator, the slots, the Look first row.
-        self.assertEqual(J.max_lines(), 10)
+        self.assertEqual(J.SCREENS_SLOT, 2)
+        # The header row, the separator, the slots, the Screens part's directory row and
+        # its slot, the Look first row.
+        self.assertEqual(J.max_lines(), 13)
         self.assertEqual(J.MARKDOWN_SPECIAL, SPECIAL)
 
     def test_the_digest_writes_nothing(self):
@@ -680,7 +700,8 @@ class TestSlots(DigestCase):
                    + [("deviation", {"note": f"note {n}"}) for n in range(7)])
         lines = self.lines()
         self.assertEqual(len(lines), 10, "\n".join(lines))
-        self.assertEqual(len(lines), J.max_lines())
+        # No UI task: the Screens part is absent, and so are its rows.
+        self.assertEqual(len(lines), J.max_lines() - 1 - J.SCREENS_SLOT)
         firsts = [row[0] for row in self.table()[1] if row[0]]
         self.assertEqual(firsts, ["**What changed** (5)", "**Decided alone** (10)",
                                   "**Deviations** (7)", "**Look first**"])
@@ -811,6 +832,276 @@ class TestMarkdownCell(unittest.TestCase):
         self.assertEqual(J._markdown_code("a`b", 100), "a\\`b")
         self.assertEqual(J._markdown_code("a|b", 100), "a\\|b")
         self.assertEqual(J._markdown_code("a\\b", 100), "a\\\\b")
+
+
+
+class TestPinNoUiDigest(DigestCase):
+    """#26 T002: the table of a stream with no UI task, as 0.35.0 prints it. The Screens
+    part is absent there, so the table stays word for word."""
+
+    def test_the_table_word_for_word(self):
+        self.designed()
+        self.batch([("deviation", {"note": "a note"})])
+        self.assertEqual(self.lines(), [
+            "| `feature/demo` | verdict — · publish held |",
+            "|---|---|",
+            "| **What changed** | The digest prints. |",
+            "|  | It fits. |",
+            "| **Decided alone** (4) | \\[domain\\] Risky one? → answer one |",
+            "|  | \\[data\\] Second risky? → answer three |",
+            "| **Deviations** | a note |",
+            "| **Look first** | — no risk ranking recorded |",
+        ])
+
+
+# --------------------------------------------------------------------------
+# #26 T018: the Screens part (FR-012, SC-006)
+# --------------------------------------------------------------------------
+
+
+def ui_worklog(*tasks, changed=WHAT_CHANGED):
+    """A worklog whose Build Plan names each task's paths: a core task, then TASKS
+    ((id, path) pairs)."""
+    lines = ["- [ ] T001 — the core — file(s): `lib/core.py`"]
+    lines += [f"- [ ] {task} — a screen — file(s): `{path}`" for task, path in tasks]
+    return ("# Worklog: demo\n\n## Build Plan\n\n" + "\n".join(lines) + "\n\n" + changed
+            + "## Deviations & notes\n")
+
+
+THREE_UI = (("T003", "web/page.html"), ("T004", "web/form.html"), ("T005", "web/list.html"))
+WAIVER = "no browser tool in the worker session"
+
+
+class TestScreensPart(DigestCase):
+    """The screenshots of each UI task, under the stream's evidence directory, after the
+    deviations: what misses a width first, then what was waived, then what is complete.
+    Every subprocess has a temporary Claude config directory; the PNGs are built here."""
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.root / "config"
+        self.config.mkdir()
+        (self.root / "shots").mkdir()
+        sidecar = self.root / ".claude" / "shipgate.json"
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["ui"] = {"globs": ["web/*"]}
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.write(WORKLOG, ui_worklog(*THREE_UI))
+
+    # -- helpers ---------------------------------------------------------
+
+    def env(self, **extra):
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        env.update(extra)
+        return env
+
+    def run_j(self, args, env=None, stdin=None):
+        proc = subprocess.run([sys.executable, str(JOURNAL), "--db", str(self.db), *args],
+                              cwd=str(self.root), env=env or self.env(), input=stdin,
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, OK, msg=proc.stdout + proc.stderr)
+        return proc
+
+    def batch(self, rows, stream=S):
+        lines = "".join(json.dumps({"type": t, "data": d}) + "\n" for t, d in rows)
+        self.run_j(["append", "--stream", stream, "--batch"], stdin=lines)
+
+    def run_digest(self, *flags, stream=S, rc=OK, env=None):
+        proc = run_journal(["digest", "--stream", stream, *flags], cwd=self.root,
+                           env=env or self.env())
+        self.assertEqual(proc.returncode, rc, msg=proc.stdout + proc.stderr)
+        return proc
+
+    def register(self, task, *widths, stream=S):
+        files = []
+        for width in widths:
+            path = self.root / "shots" / f"{task}-{width}.png"
+            path.write_bytes(png_bytes(width))
+            files += ["--file", str(path)]
+        self.run_j(["screens", "--stream=" + stream, "--task", task, *files])
+
+    def waive(self, task, note=WAIVER, stream=S):
+        self.batch([("deviation", {"kind": "screens-waived", "task_ids": [task],
+                                   "note": note})], stream=stream)
+
+    def three_tasks(self):
+        """T003 complete (390 at 2x and 1280), T004 waived, T005 missing 1280."""
+        self.designed()
+        self.register("T003", 780, 1280)
+        self.waive("T004")
+        self.register("T005", 390)
+
+    def directory(self, stream=S):
+        key = hashlib.sha256(os.path.realpath(self.db).encode("utf-8")).hexdigest()[:12]
+        return os.path.join(os.path.realpath(self.config / "shipgate" / "evidence"), key,
+                            J.stream_dir_name(stream))
+
+    def code(self, path, first):
+        """PATH as the directory row shows it: inline code when it fits the row."""
+        room = J.BRIEF_LINE_CHARS - len(f"| {first} |  |")
+        return f"`{path}`" if len(path) + 2 <= room else J._markdown_cell(path, room)
+
+    # -- the place, the rows, the order -------------------------------------
+
+    def test_the_part_sits_after_the_deviations_and_before_look_first(self):
+        self.three_tasks()
+        for flags in ((), ("--all",)):
+            with self.subTest(flags=flags):
+                firsts = [row[0].split(" (")[0] for row in self.table(*flags)[1] if row[0]]
+                self.assertEqual(firsts, ["**What changed**", "**Decided alone**",
+                                          "**Deviations**", "**Screens**",
+                                          "**Look first**"])
+
+    def test_missing_first_then_waived_then_complete(self):
+        self.three_tasks()
+        directory = self.code(self.directory(), "**Screens** (3)")
+        self.assertEqual(self.part("Screens"), ("**Screens** (3)", [
+            directory, "T005 — missing 1280 (has 390)", f"T004 — waived: {WAIVER}"]))
+        self.assertEqual(self.part("Screens", "--all"), ("**Screens**", [
+            self.code(self.directory(), "**Screens**"),
+            "T005 — missing 1280 (has 390)", f"T004 — waived: {WAIVER}",
+            "T003 — 390, 1280"]))
+
+    def test_plan_order_inside_each_group_and_no_count_within_the_slot(self):
+        self.write(WORKLOG, ui_worklog(("T007", "web/b.html"), ("T006", "web/a.html")))
+        self.designed()
+        self.assertEqual(self.part("Screens"), ("**Screens**", [
+            self.code(self.directory(), "**Screens**"),
+            "T007 — missing 390, 1280", "T006 — missing 390, 1280"]))
+
+    def test_a_task_with_every_width_is_complete_though_waived(self):
+        self.designed()
+        self.register("T003", 390, 1280)
+        self.waive("T003")
+        _, values = self.part("Screens", "--all")
+        self.assertIn("T003 — 390, 1280", values)
+
+    def test_absent_with_no_ui_task(self):
+        self.write(WORKLOG, ui_worklog(("T002", "lib/other.py")))
+        self.designed()
+        lines = self.lines()
+        self.assertFalse(any("Screens" in line for line in lines), lines)
+        self.assertEqual(len(lines), 2 + 2 + 2 + 1 + 1)
+        self.assertEqual(self.doc()["screens"]["tasks"], [])
+
+    def test_no_evidence_root(self):
+        self.designed()
+        env = {k: v for k, v in os.environ.items()
+               if k not in (SESSION_ENV, "CLAUDE_CONFIG_DIR", "HOME")}
+        lines = self.run_digest(env=env).stdout.splitlines()
+        row = next(split_row(line) for line in lines if line.startswith("| **Screens**"))
+        self.assertEqual(row[0], "**Screens** (3)")
+        self.assertEqual(unescape(row[1]),
+                         "— no evidence root (set CLAUDE_CONFIG_DIR or HOME)")
+
+    def test_a_stream_name_that_names_no_directory(self):
+        stream = "feature/" + "é" * 100
+        self.designed(stream=stream)
+        self.assertIsNone(J.stream_dir_name(stream))
+        first, values = self.part("Screens", stream=stream)
+        self.assertEqual(unescape(values[0]),
+                         "— no evidence directory (the stream name cannot name one)")
+
+    # -- the deviations ---------------------------------------------------------
+
+    def test_a_waiver_shows_in_screens_not_in_deviations(self):
+        self.three_tasks()
+        self.batch([("deviation", {"note": "a note"})])
+        self.assertEqual(self.part("Deviations"), ("**Deviations**", ["a note"]))
+        self.assertEqual([i["text"] for i in self.doc()["deviations"]["items"]],
+                         ["a note"])
+        self.assertIn(f"T004 — waived: {WAIVER}", self.part("Screens")[1])
+
+    def test_a_waiver_with_no_screens_row_stays_in_deviations(self):
+        """A stream with no UI task has no Screens part, so its screens-waived reason
+        shows under Deviations."""
+        self.write(WORKLOG, ui_worklog(("T002", "lib/other.py")))
+        self.designed()
+        self.waive("T002", note="the page renders on the server")
+        self.assertEqual(self.part("Deviations"),
+                         ("**Deviations**", ["the page renders on the server"]))
+        self.assertEqual(self.doc()["screens"]["tasks"], [])
+
+    def test_a_waiver_that_names_a_task_with_no_row_stays_in_deviations(self):
+        """A waiver goes from Deviations only when every task it names has a Screens
+        row; one that also names a task that is not UI stays."""
+        self.three_tasks()
+        self.batch([("deviation", {"kind": "screens-waived", "task_ids": ["T004", "T009"],
+                                   "note": "two screens, no browser"})])
+        self.assertEqual(self.part("Deviations"),
+                         ("**Deviations**", ["two screens, no browser"]))
+        self.assertIn("T004 — waived: two screens, no browser",
+                      self.part("Screens", "--all")[1])
+
+    # -- untrusted text and the cap ------------------------------------------
+
+    def test_a_hostile_waiver_reason_is_inert(self):
+        esc = chr(27)
+        self.write(WORKLOG, ui_worklog(("T004", "web/form.html")))
+        self.designed()
+        self.waive("T004", note=f"a|b *c* `d` <e>\nf {esc}[31m | x")
+        for flags in ((), ("--all",)):
+            with self.subTest(flags=flags):
+                lines = self.lines(*flags)
+                for line in lines:
+                    self.assertLessEqual(len(line), J.BRIEF_LINE_CHARS)
+                    self.assertTrue(line.isprintable(), repr(line))
+                    if line == "|---|---|":
+                        continue
+                    first, value = split_row(line)
+                    if line is not lines[0]:
+                        self.assertRegex(first, FIRST_CELL)
+                    assert_inert(self, value)
+                row = next(value for _, value in self.table(*flags)[1]
+                           if value.startswith("T004"))
+                self.assertEqual(unescape(row).replace(chr(0xFFFD), "?"),
+                                 "T004 — waived: a|b *c* `d` <e> f ?[31m | x")
+
+    def test_a_full_stream_prints_13_lines(self):
+        self.write(WORKLOG, ui_worklog(*THREE_UI, changed=(
+            "## What changed\n" + "".join(f"- item {n}\n" for n in range(1, 6)) + "\n")))
+        self.batch([("flow-started", {"request": "#1234"}),
+                    ("clarify-passed", {"prd": PRD})]
+                   + [("gate-decision", {"gate": "design", "question": f"q{n}?",
+                                         "decision": "yes", "mode": "executive"})
+                      for n in range(6)]
+                   + [("design-committed", {"worklog": WORKLOG,
+                                            "ranking": ranking("a.py", "b.py", "c.py")})]
+                   + [("deviation", {"note": f"note {n}"}) for n in range(7)])
+        self.register("T003", 780, 1280)
+        self.waive("T004")
+        lines = self.lines()
+        self.assertEqual(len(lines), 13, "\n".join(lines))
+        self.assertEqual(len(lines), J.max_lines())
+        for line in lines + self.lines("--all"):
+            self.assertLessEqual(len(line), J.BRIEF_LINE_CHARS)
+        self.assertEqual(len(self.lines("--all")), 2 + 5 + 10 + 7 + 1 + 3 + 1)
+
+    # -- the JSON --------------------------------------------------------------
+
+    def test_the_json_is_the_screen_state(self):
+        self.three_tasks()
+        directory = self.directory()
+        self.assertEqual(self.doc()["screens"], {
+            "stream": S, "dir": directory, "widths": [390, 1280], "note": None,
+            "tasks": [
+                {"task_id": "T003", "present": [390, 1280], "missing": [], "waived": None,
+                 "files": [os.path.join(directory, "T003-1280.png"),
+                           os.path.join(directory, "T003-390.png")]},
+                {"task_id": "T004", "present": [], "missing": [390, 1280],
+                 "waived": WAIVER, "files": []},
+                {"task_id": "T005", "present": [390], "missing": [1280], "waived": None,
+                 "files": [os.path.join(directory, "T005-390.png")]},
+            ]})
+
+    def test_the_digest_writes_nothing_in_the_evidence_root(self):
+        self.three_tasks()
+        before = _tree(str(self.config))
+        self.digest()
+        self.digest("--all")
+        self.doc()
+        self.assertEqual(_tree(str(self.config)), before)
 
 
 if __name__ == "__main__":

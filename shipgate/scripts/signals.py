@@ -14,6 +14,9 @@ advisory marker. ``--graph off`` writes nothing.
 The ``graph`` subcommand runs one codegraph query (impact, callers, callees,
 affected, query, node or explore) on the same index.
 
+``hotspots --json`` reports ``ui``: how many of the files it ranks are UI files by the
+project's ``ui.globs`` setting, with the rule of ``_ui.py`` (ADR 0031).
+
 Exit codes (also printed by ``--help``):
 
     0  ok — including "signals unavailable" (no git, shallow clone, empty history)
@@ -115,6 +118,26 @@ def _load_config_module():
 
 _config = _load_config_module()
 CONFIG_RELPATH = _config.CONFIG_RELPATH
+
+
+def _load_ui_module():
+    """`_ui.py`, the private module that decides which paths are UI files (ADR 0031),
+    loaded by path beside this script. It ships with the plugin; without it the install
+    is incomplete (exit 1), as with `_config.py`."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "_ui.py"
+    try:
+        spec = importlib.util.spec_from_file_location("shipgate_ui", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    except (OSError, ImportError) as exc:
+        sys.exit(f"error: cannot load {path} (shipgate install incomplete): {exc}")
+    return module
+
+
+_ui = _load_ui_module()
 
 DEFAULT_WINDOW_MONTHS = 12
 MAX_WINDOW_MONTHS = 1200  # 100 years; beyond it date arithmetic overflows
@@ -295,6 +318,7 @@ class LoadedConfig(NamedTuple):
     source: Dict[str, str]
     files: List[Dict[str, str]]  # the config files read, precedence order: {path, role}
     inherit: str  # umbrella | none
+    ui_globs: Tuple[str, ...] = ()  # `ui.globs` (ADR 0031); empty when unset or unread
 
 
 def _settings_file(repo: Path, start: Optional[Path]) -> Optional[Path]:
@@ -316,7 +340,8 @@ def load_config_layers(repo: Path, start: Optional[Path] = None) -> LoadedConfig
     file that holds it with a real value. A value outside its set in a settings file is
     a UsageError. A `Code graph` line outside GRAPH_MODES is named on stderr and the
     next layer applies. A settings file that is no JSON object is named on stderr, and
-    the other layers apply."""
+    the other layers apply. `ui.globs` comes from the same resolver: a value outside its
+    set, or a file that cannot be read, gives its default, no globs, and no message."""
     files = _config.read_layers(_config_candidates(Path(repo), start),
                                 _config.user_config_path())
     try:
@@ -367,7 +392,8 @@ def load_config_layers(repo: Path, start: Optional[Path] = None) -> LoadedConfig
     inherit = (_config.inherit_mode(decider.text) if decider is not None
                else _config.INHERIT_UMBRELLA)
     return LoadedConfig(cfg, source,
-                        [{"path": str(f.path), "role": f.role} for f in files], inherit)
+                        [{"path": str(f.path), "role": f.role} for f in files], inherit,
+                        tuple(resolved.value("ui.globs")))
 
 
 def load_config(repo: Path, start: Optional[Path] = None
@@ -388,6 +414,8 @@ class Config(NamedTuple):
     source: Dict[str, str]
     files: Sequence[Dict[str, str]] = ()  # the config files read: {path, role}
     inherit: str = "umbrella"  # umbrella | none
+    # Not in `to_json`: `hotspots --json` reports what they match as `ui`.
+    ui_globs: Tuple[str, ...] = ()
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -404,7 +432,7 @@ class Config(NamedTuple):
 
 def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
                      args: argparse.Namespace, files: Sequence[Dict[str, str]] = (),
-                     inherit: str = "umbrella") -> Config:
+                     inherit: str = "umbrella", ui_globs: Sequence[str] = ()) -> Config:
     """Flags override the file, the file overrides the defaults. Excludes are
     additive: defaults + file + flags. The ranking excludes are not: the file's list
     replaces the built-in one, and no flag sets them."""
@@ -451,7 +479,7 @@ def effective_config(file_cfg: Dict[str, Any], file_source: Dict[str, str],
     if getattr(args, "graph", None) is not None:
         code_graph, source["code_graph"] = args.graph, "flag"
     return Config(window, pattern, regex, exclude, ranking_exclude, code_graph, source,
-                  [dict(f) for f in files], inherit)
+                  [dict(f) for f in files], inherit, tuple(ui_globs))
 
 
 def _matches_glob(path: str, pattern: str) -> bool:
@@ -1883,7 +1911,7 @@ def _configure(args: argparse.Namespace, repo: Path, start: Optional[Path] = Non
                ) -> Config:
     loaded = load_config_layers(repo, start)
     return effective_config(loaded.values, loaded.source, args, loaded.files,
-                            loaded.inherit)
+                            loaded.inherit, loaded.ui_globs)
 
 
 def analyse(args: argparse.Namespace, want_traj: bool, want_struct: bool,
@@ -1980,6 +2008,21 @@ def ranking(rows: Sequence[Dict[str, Any]], structure: Dict[str, Any],
     return {"source": source or "none", "files": files}
 
 
+# How many UI paths `ui.sample` names (ADR 0031).
+UI_SAMPLE = 3
+
+
+def ui_flag(rows: Sequence[Dict[str, Any]], globs: Sequence[str]
+            ) -> Optional[Dict[str, Any]]:
+    """`hotspots --json`'s `ui`: null with no GLOBS; else `{files, sample}`, how many of
+    ROWS are UI files by `_ui.is_ui` and the first UI_SAMPLE of them in ROWS' order.
+    ROWS must already be sorted."""
+    if not globs:
+        return None
+    paths = [row["path"] for row in rows if _ui.is_ui(row["path"], globs)]
+    return {"files": len(paths), "sample": paths[:UI_SAMPLE]}
+
+
 def _unavailable_trajectory(reason: str) -> Dict[str, Any]:
     return {"available": False, "reason": reason, "commits_scanned": 0}
 
@@ -2051,6 +2094,8 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
     if reason is not None:
         payload["files"] = []
         payload["ranking"] = ranking([], payload["structure"], reason)
+        # No files were ranked, so whether the change is UI is unknown, not false.
+        payload["ui"] = None
         emit(payload, args.json)
         return EXIT_OK
     assert a.repo is not None
@@ -2070,6 +2115,7 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
     ranked = [r for r in selected
               if not ranking_excluded(r["path"], a.cfg.ranking_exclude)]
     payload["ranking"] = ranking(sort_rows(ranked), payload["structure"])
+    payload["ui"] = ui_flag(sort_rows(selected), a.cfg.ui_globs)
     lines = _graph_notes(payload) + _half_notes(a.traj_info, payload["structure"])
     if args.by_dir is not None:
         wanted = {dir_of(r["path"], args.by_dir) for r in selected}

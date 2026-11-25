@@ -1699,6 +1699,59 @@ class TestSweep(CloseoutCase):
         self.assertEqual(len(self.proposals(text)), 20)
 
 
+class TestTerminalPruneInTheCloseOut(CloseoutCase):
+    """#26 T011 (ADR 0031, moment 1): the close-out's printed `flow-completed` and
+    `sweep --apply` pass through `append`, which removes the stream's evidence
+    directory under the session's config directory and says so on stderr."""
+
+    dormant = TestSweep.dormant
+    load = TestSweep.load
+    evidence = TestSweep.evidence
+    pr = TestSweep.pr
+
+    def setUp(self):
+        super().setUp()
+        self.rows = []
+
+    def evidence_dir(self, stream):
+        import hashlib
+        from urllib.parse import quote
+        key = hashlib.sha256(str(self.db).encode("utf-8")).hexdigest()[:12]
+        directory = self.user / "shipgate" / "evidence" / key / quote(stream, safe="-_.")
+        directory.mkdir(parents=True)
+        (directory / "T001-390.png").write_bytes(b"png")
+        return directory
+
+    def test_the_printed_flow_completed_prunes(self):
+        self.opened()
+        d = self.evidence_dir(self.S)
+        step = self.steps(self.closeout("--observed", self.observed()))[1]
+        proc = subprocess.run(step.split("] ", 1)[1], shell=True, cwd=str(self.root),
+                              env=self.env(), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr.splitlines(), [
+            f"evidence: removed {d} (1 file)", f"evidence: removed {d.parent} (0 files)"])
+        self.assertFalse(d.exists())
+
+    def test_sweep_apply_prunes_each_stream_it_ends(self):
+        self.dormant("feat/1-a")
+        self.dormant("feat/2-b")
+        self.dormant("feat/3-c")
+        self.load()
+        dirs = {s: self.evidence_dir(s) for s in ("feat/1-a", "feat/2-b", "feat/3-c")}
+        observed = self.evidence([self.pr("feat/1-a", "MERGED", 1),
+                                  self.pr("feat/2-b", "CLOSED", 2),
+                                  self.pr("feat/3-c", "OPEN", 3)])
+        proc = self.run_j("sweep", "--observed", observed, "--apply", rc=0)
+        self.assertEqual(proc.stderr.splitlines(), [
+            f"evidence: removed {dirs['feat/1-a']} (1 file)",
+            f"evidence: removed {dirs['feat/2-b']} (1 file)",
+        ])
+        self.assertFalse(dirs["feat/1-a"].exists())
+        self.assertFalse(dirs["feat/2-b"].exists())
+        self.assertTrue(dirs["feat/3-c"].is_dir())
+
+
 class TestCloseoutAndTheApprovalPath(CloseoutCase):
     """T019: the close-out question and record never pass for #22's go (ADR 0023), and
     a finished stream holds no command gate."""

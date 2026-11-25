@@ -1029,6 +1029,113 @@ class TestRankingExclude(SignalsCase):
         self.assertEqual(parse("## Code signals\n- Exclude: ``\n"), {})
 
 
+class TestUiFlag(SignalsCase):
+    """ADR 0031, FR-004: `hotspots --json` reports the UI files among the files it
+    ranks, by the project's `ui.globs` setting and the one rule of `_ui.py`."""
+
+    GLOBS = ["web/*.tsx", "*.css"]
+    # Commits per file. They set the ranking order, which is not the path order.
+    # `web/notes.md` sits beside the UI files but no glob names it.
+    COMMITS = {"server/api.py": 6, "styles/main.css": 5, "web/d.tsx": 4,
+               "web/c.tsx": 3, "web/b.tsx": 2, "web/a.tsx": 1, "web/notes.md": 1,
+               "server/db.py": 1}
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name).resolve()
+        self.repo = self.build(self.tmp / "repo")
+
+    def build(self, path: Path) -> FixtureRepo:
+        repo = FixtureRepo(path)
+        for month in range(1, 7):
+            repo.commit(f"feat: step {month}", ts(2020, month, 1), writes={
+                p: f"{month}\n" for p, n in self.COMMITS.items() if n >= month})
+        return repo
+
+    def write_settings(self, where: Path, data):
+        target = where / ".claude" / "shipgate.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(data if isinstance(data, str) else json.dumps(data),
+                          encoding="utf-8")
+
+    def hotspots(self, *args, repo=None):
+        return self.signals_json("hotspots", "--repo", repo or self.repo.path,
+                                 "--graph", "off", *args)
+
+    def test_ui_is_null_without_globs(self):
+        self.assertIsNone(self.hotspots()["ui"])
+        self.write_settings(self.repo.path, {"ui": {"globs": [], "widths": [390]}})
+        self.assertIsNone(self.hotspots()["ui"])
+
+    def test_ui_counts_the_ui_files_and_samples_three_in_the_ranking_order(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+        payload = self.hotspots()
+        self.assertEqual(payload["ui"], {
+            "files": 5, "sample": ["styles/main.css", "web/d.tsx", "web/c.tsx"]})
+        shown = [f["path"] for f in payload["files"]]
+        self.assertEqual([p for p in shown if p in payload["ui"]["sample"]],
+                         payload["ui"]["sample"])
+
+    def test_a_path_outside_the_globs_is_not_counted(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": ["web/*.tsx"]}})
+        ui = self.hotspots()["ui"]
+        self.assertEqual(ui, {"files": 4,
+                              "sample": ["web/d.tsx", "web/c.tsx", "web/b.tsx"]})
+        self.assertEqual(self.hotspots("server")["ui"], {"files": 0, "sample": []})
+
+    def test_ui_counts_the_whole_population_not_the_rows_shown(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+        payload = self.hotspots("--top", "1")
+        self.assertEqual([f["path"] for f in payload["files"]], ["server/api.py"])
+        self.assertEqual(payload["ui"]["files"], 5)
+
+    def test_ui_counts_the_touched_files_of_a_diff(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+        self.repo.write("web/a.tsx", "edited\n")
+        self.repo.write("server/db.py", "edited\n")
+        self.assertEqual(self.hotspots("--diff", "HEAD")["ui"],
+                         {"files": 1, "sample": ["web/a.tsx"]})
+
+    def test_the_text_form_does_not_change(self):
+        argv = ("hotspots", "--repo", self.repo.path, "--graph", "off")
+        plain = self.signals(*argv).stdout
+        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+        self.assertEqual(self.signals(*argv).stdout, plain)
+
+    def test_a_ui_setting_that_cannot_be_read_leaves_ui_null_and_nothing_else(self):
+        plain = self.hotspots()
+        for value in ("web/*.tsx", [""], [3]):
+            with self.subTest(globs=value):
+                self.write_settings(self.repo.path, {"ui": {"globs": value}})
+                self.assertEqual(self.hotspots(), plain)
+        self.write_settings(self.repo.path, "{not json")
+        proc = self.signals("hotspots", "--repo", self.repo.path, "--graph", "off",
+                            "--json")
+        self.assertIsNone(json.loads(proc.stdout)["ui"])
+
+    def test_unavailable_signals_leave_ui_null(self):
+        plain = self.tmp / "plain"
+        (plain / "web").mkdir(parents=True)
+        (plain / "web" / "a.tsx").write_text("x\n", encoding="utf-8")
+        self.write_settings(plain, {"ui": {"globs": self.GLOBS}})
+        payload = self.hotspots(repo=plain)
+        self.assertIs(payload["available"], False)
+        self.assertIsNone(payload["ui"])
+
+    def test_an_umbrella_reads_the_settings_file_that_sets_code_signals(self):
+        umbrella = self.tmp / "umbrella"
+        FixtureRepo(umbrella)
+        nested = self.build(umbrella / "repo")
+        self.write_settings(umbrella, {"code_signals": {"window_months": 6},
+                                       "ui": {"globs": ["web/*.tsx"]}})
+        payload = self.hotspots(repo=nested.path)
+        self.assertEqual((payload["config"]["window_months"],
+                          payload["config"]["source"]["window_months"]),
+                         (6, "shipgate.json"))
+        self.assertEqual(payload["ui"]["files"], 4)
+
+
 # ---------------------------------------------------------------------------
 # T005 — trajectory + labels
 # ---------------------------------------------------------------------------

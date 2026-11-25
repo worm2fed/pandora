@@ -13,7 +13,7 @@ from typing import Any, Dict, NamedTuple, Optional, Tuple
 from .vocab import (
     ARTIFACT_CLAIM_DEDUPE_SECONDS, ARTIFACT_DEDUPE_SECONDS, EVENT_VOCABULARY, InfraError,
     PHASE_OF_EVENT, PHASE_ORDER, RECORDED_BY_KEY, SIGNALS_MISSING_KIND,
-    SIGNALS_MISSING_NOTE, VersionConflict,
+    SIGNALS_MISSING_NOTE, TERMINAL_TYPES, VersionConflict,
 )
 from .plugin import _hooks_common
 from .store import _row_to_event, _seconds_since, current_version, Event, utc_now
@@ -21,6 +21,7 @@ from .sessions import _actor_session, parse_actor, recorded_by_for
 from .fold import folded_phase
 from .artifacts import _artifact_key, _claim_rank, claim_of
 from .shapes import check_payload_size, normalize_payload, validate_event_type
+from .screens import prune_ended_stream, prune_old_evidence
 from .gates import (
     _refuse_closeout_placeholders, _refuse_read_go, _require_closure_reason,
     _validate_go_request, _validate_mr_opened, _validate_own_session, _validate_waiver,
@@ -239,6 +240,10 @@ def append_event(
             conn.execute("COMMIT")
             if event_type == "go-requested":
                 _touch_request_marker(conn, canonical_actor)
+            if event_type in TERMINAL_TYPES:
+                prune_ended_stream(conn, stream)
+            elif event_type == "flow-started":
+                prune_old_evidence(conn)
             return AppendResult(
                 seq, version, implied_phase, version_before=existing,
                 deviation_seq=deviation_seq,

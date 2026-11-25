@@ -622,5 +622,161 @@ class TestHandoffCloseOut(_PinStream, JournalTestCase):
         self.assertNotIn("close-out", self.handoff())
 
 
+
+class TestPinTasksLine(TestHandoff):
+    """#26 T002: the `tasks` line as 0.35.0 prints it, for a task that is not UI."""
+
+    def test_the_tasks_line_word_for_word(self):
+        self.designed()
+        self.assertEqual(self.line(self.handoff(), "tasks"),
+                         "tasks        : 0/8 done · next: T001 — the types")
+
+
+UI_WORKLOG = """# Worklog: demo
+
+# Build Plan
+
+- [ ] T001 — the core — file(s): `lib/core.py`
+- [ ] T002 — the page — file(s): `lib/view.py`, `web/page.html`
+- [ ] T003 — the docs — file(s): none
+"""
+
+COMMIT_RULE = ("  - Commit only when the user asks, and stage only the files you changed "
+               "(implement: Committing).")
+
+
+class TestHandoffUiTask(JournalTestCase):
+    """#26 T016 (FR-018): with `ui.globs` set, a next task that the task-done gate takes
+    for UI shows `[UI]` on the tasks line, and one rule under "rules that bind" names the
+    widths, the register command and the waiver."""
+
+    S = "feature/demo"
+    WORKLOG = "docs/prd/demo.worklog.md"
+    HOMES = {"prd": "docs/prd/*.md", "adr": "docs/adr/*.md",
+             "worklog": "docs/prd/*.worklog.md"}
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.root / "config"
+        self.config.mkdir()
+        self.settings({"globs": ["web/*"]})
+        path = self.root / self.WORKLOG
+        path.parent.mkdir(parents=True)
+        path.write_text(UI_WORKLOG, encoding="utf-8")
+        self.run_j("--db", self.db, "init")
+
+    def settings(self, ui):
+        data = {"version": 1, "db": str(self.db), "artifact_homes": self.HOMES}
+        if ui is not None:
+            data["ui"] = ui
+        (self.root / ".claude").mkdir(exist_ok=True)
+        (self.root / ".claude" / "shipgate.json").write_text(json.dumps(data),
+                                                             encoding="utf-8")
+
+    def run_j(self, *args):
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        proc = run_journal(list(args), cwd=self.root, env=env)
+        self.assertEqual(proc.returncode, OK, msg=proc.stdout + proc.stderr)
+        return proc.stdout
+
+    def add(self, etype, data, stream=S):
+        self.run_j("append", "--stream=" + stream, "--type", etype,
+                   "--data", json.dumps(data))
+
+    def designed(self, stream=S):
+        self.add("flow-started", {"request": "#1234 build the demo"}, stream)
+        self.add("design-committed", {"worklog": self.WORKLOG}, stream)
+
+    def done(self, task, stream=S):
+        self.add("verify-run", {"outcome": "pass", "task_ids": [task]}, stream)
+        self.add("task-done", {"task_id": task}, stream)
+
+    def brief(self, stream=S):
+        return self.run_j("handoff", "--stream", stream).splitlines()
+
+    def tasks(self, lines):
+        return next(line for line in lines if line.startswith("tasks"))
+
+    def rule(self, lines):
+        """The lines after the commit rule, up to the config sections."""
+        at = lines.index(COMMIT_RULE)
+        return [line for line in lines[at + 1:at + 4] if line.startswith(("  - ", "    "))]
+
+    def test_a_next_task_that_is_not_ui_changes_nothing(self):
+        self.designed()
+        lines = self.brief()
+        self.assertEqual(self.tasks(lines), "tasks        : 0/3 done · next: T001 — the core")
+        self.assertEqual(self.rule(lines), [])
+        self.assertFalse(any("UI" in line for line in lines), lines)
+
+    def test_a_ui_next_task_is_marked_and_its_rule_binds(self):
+        self.designed()
+        self.done("T001")
+        lines = self.brief()
+        self.assertEqual(self.tasks(lines),
+                         "tasks        : 1/3 done · next: T002 [UI] — the page")
+        self.assertEqual(self.rule(lines), [
+            "  - UI task: register a screenshot at each width (390, 1280) before "
+            "task-done:",
+            "    journal.py screens --stream=feature/demo --task T002 --file <png>",
+            "    — or record a screens-waived deviation with the reason",
+        ])
+        self.assertEqual(sum("UI task" in line for line in lines), 1)
+        for line in lines:
+            self.assertLessEqual(len(line), 160, line)
+
+    def test_the_widths_come_from_the_setting(self):
+        self.settings({"globs": ["web/*"], "widths": [360, 768, 1440, 768]})
+        self.designed()
+        self.done("T001")
+        self.assertEqual(self.rule(self.brief())[0],
+                         "  - UI task: register a screenshot at each width "
+                         "(360, 768, 1440) before task-done:")
+
+    def test_no_globs_changes_nothing(self):
+        self.settings(None)
+        self.designed()
+        self.done("T001")
+        lines = self.brief()
+        self.assertEqual(self.tasks(lines), "tasks        : 1/3 done · next: T002 — the page")
+        self.assertEqual(self.rule(lines), [])
+
+    def test_no_mark_where_the_gate_asks_for_no_screenshot(self):
+        """With no design-committed the gate takes no task for UI, so the brief marks
+        none, though it finds the worklog by the stream's name."""
+        self.add("flow-started", {"request": "#1234 build the demo"})
+        self.done("T001")
+        lines = self.brief()
+        self.assertEqual(self.tasks(lines), "tasks        : 1/3 done · next: T002 — the page")
+        self.assertEqual(self.rule(lines), [])
+
+    def test_the_command_quotes_the_stream(self):
+        stream = "feature/a b"
+        self.designed(stream)
+        self.done("T001", stream)
+        self.assertEqual(self.rule(self.brief(stream))[1],
+                         "    journal.py screens --stream='feature/a b' --task T002 "
+                         "--file <png>")
+
+    def test_the_doc_says_next_ui(self):
+        journal = load_journal_module()
+        self.designed()
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}):
+            conn = journal.connect(self.db)
+            try:
+                before = journal.build_handoff(conn, self.S, self.root, self.HOMES)
+                conn.close()
+                self.done("T001")
+                conn = journal.connect(self.db)
+                after = journal.build_handoff(conn, self.S, self.root, self.HOMES)
+            finally:
+                conn.close()
+        self.assertIs(before["next_ui"], False)
+        self.assertIs(after["next_ui"], True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

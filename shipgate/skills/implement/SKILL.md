@@ -106,6 +106,8 @@ it is `plain`, the default, write them as before.
 6. **Verify before you check the box.** Invoke the `verify` skill. Run the actual command
    (test, build, lint) for this task. Read the output. Confirm that it proves the task's
    "done when" criterion. No "should work."
+   For a task that the handoff marks `[UI]`, the gate also includes its screenshots, because
+   a UI task's tests can pass while its screen is wrong. `verify` gives the steps.
 
 7. **Update the worklog — and the ledger.** Tick the task. If you diverged from the design,
    log it in *Deviations & notes* with the reason and impact. A silent divergence is how the

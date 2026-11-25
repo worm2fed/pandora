@@ -91,6 +91,13 @@ fills, or the config section for an answer in words:
   lines, MR/PR body and tracker comments keep the prose style the project has today. `ste-80`: they follow the same
   "Writing for people" rule the reports already do (short sentences, common words, one term
   per concept, every fact kept). Offer it. Never recommend it over a team's own style.
+- **UI files** (`ui.globs`) — ask only when the project has a web frontend: HTML templates,
+  style sheets, or a component framework (React, Vue, Svelte, Angular) in its dependencies.
+  Recommend globs for the directories that hold those files, such as `web/templates/*`. A
+  bare extension glob also matches files that draw no screen, so prefer directories. With
+  globs set, a task that touches a UI file needs a screenshot at each width of `ui.widths`
+  before `task-done`, because its tests can pass while its screen is wrong. A project with
+  no web frontend gets no question, and the default `[]` keeps the check off.
 - **Anything detection flagged as ambiguous** — umbrella layout confirmation, a tracker living
   in a different project than the code, an unrecognized forge.
 
@@ -115,7 +122,7 @@ The user accepts or declines. On a yes, write those answers to the user files, a
 out of the project files. Never copy a user value into a project file. A setting resolves per
 key, nearest first: the project settings file, then the user settings file, then the default.
 The user settings file never sets a `project`-scope key (`db`, `ledger`, `artifact_homes`,
-`enforce`, `code_signals`, `forge`); `journal.py config` reports one that it holds and
+`enforce`, `code_signals`, `forge`, `ui`); `journal.py config` reports one that it holds and
 ignores it. Never create the user config directory: write a user file only where that
 directory exists.
 

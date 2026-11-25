@@ -6,25 +6,29 @@ import json
 import os
 import shlex
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, get_args
 
 from .vocab import (
     CLOSEOUT_CHOSEN_PLACEHOLDER, CLOSEOUT_QUESTION_PLACEHOLDER, Disposition, GATE_WAIVED,
     GateViolation, GoGate, InfraError, NEEDS_CLARIFICATION, PHASE_ORDER, ReviewVerdict,
-    SESSION_ENV, UsageError,
+    SCREENS_WAIVED, SESSION_ENV, TASK_ID_RE, UsageError,
 )
 from .plugin import (
-    _db_file, _request_command, CONFIRMING_QUESTION_PLACEHOLDER, GATE_QUESTION_PLACEHOLDER,
+    _db_file, _journal_command, _request_command, _suggest,
+    CONFIRMING_QUESTION_PLACEHOLDER, GATE_QUESTION_PLACEHOLDER, NO_COMMAND,
 )
-from .text import _in_backticks, _vocabulary_map
+from .text import _in_backticks, _vocabulary_map, _waiver_reason
 from .store import Event, read_events
 from .sessions import _actor_session, RETIRED_READ_MARKER
 from .approval import publish_authorization
 from .fold import (
     _finding_key, _last_phase_spelling, _position_dispositions, fold_stream, folded_phase,
 )
-from .artifacts import _resolve_artifact
+from .artifacts import _resolve_artifact, plan_paths
+from .project import project_settings, require_setting
+from .screens import evidence_root, project_key, stream_dir_name, task_screen_state
 
 
 def _validate_clarify_passed(
@@ -59,19 +63,123 @@ def _passing_verify_runs(conn: sqlite3.Connection, stream: str) -> List[Event]:
 
 
 def _validate_task_done(
-    conn: sqlite3.Connection, stream: str, data: Dict[str, Any]
+    conn: sqlite3.Connection, stream: str, data: Dict[str, Any], project_dir: Path
 ) -> None:
     task_id = data.get("task_id")
     if not isinstance(task_id, str) or not task_id:
         raise GateViolation("task-done requires data.task_id")
-    for event in _passing_verify_runs(conn, stream):
-        task_ids = event.data.get("task_ids")
-        if isinstance(task_ids, list) and task_id in task_ids:
-            return
-    raise GateViolation(
-        f"task-done {task_id}: no prior verify-run with outcome=pass in stream "
-        f"{stream!r} names it in data.task_ids"
-    )
+    if not any(
+        isinstance(event.data.get("task_ids"), list) and task_id in event.data["task_ids"]
+        for event in _passing_verify_runs(conn, stream)
+    ):
+        raise GateViolation(
+            f"task-done {task_id}: no prior verify-run with outcome=pass in stream "
+            f"{stream!r} names it in data.task_ids"
+        )
+    _validate_screens(conn, stream, task_id, project_dir)
+
+
+SCREENS_NOTE_PLACEHOLDER = "<why no screenshot can be taken>"
+
+
+def _validate_screens(
+    conn: sqlite3.Connection, stream: str, task_id: str, project_dir: Path
+) -> None:
+    """ADR 0031: with ``ui.globs`` set, a UI task is done with a registered screenshot
+    newer than the stream's ``design-committed`` at every set width, or with a
+    ``screens-waived`` deviation that names it. A task that is not UI passes. A ``ui``
+    value outside its set refuses the append (exit 2), whatever the task."""
+    resolved = project_settings(project_dir)
+    globs = require_setting(resolved, "ui.globs")
+    if not globs:
+        return
+    widths = require_setting(resolved, "ui.widths")
+    capture = require_setting(resolved, "ui.capture")
+    entry = task_screen_state(conn, stream, task_id, project_dir, globs, widths)
+    if entry is None or entry["waived"] is not None or not entry["missing"]:
+        return
+    raise GateViolation(_screens_refusal(conn, stream, task_id, entry["missing"],
+                                         capture is not None))
+
+
+def _screens_refusal(conn: sqlite3.Connection, stream: str, task_id: str,
+                     missing: List[int], capture: bool) -> str:
+    db = _db_file(conn)
+
+    def command(*args: str) -> str:
+        line = _journal_command(db, *args) if db is not None else None
+        return line or NO_COMMAND
+
+    head = (f"task-done {task_id}: {task_id} is a UI task (a path on its Build Plan "
+            "line matches ui.globs) and ")
+    if evidence_root() is None:
+        lines = [head + "there is no evidence root (set CLAUDE_CONFIG_DIR or HOME)."]
+    elif stream_dir_name(stream) is None:
+        lines = [head + "no evidence directory can exist for this stream (the stream "
+                 "name cannot name one)."]
+    elif project_key(conn) is None:
+        lines = [head + "no evidence directory can exist for this stream (the journal "
+                 "has no file)."]
+    else:
+        lines = [
+            head + "misses a screenshot newer than its design-committed at "
+            + ", ".join(str(width) for width in missing) + ".",
+            "Take each missing width with the browser tool you have, read the files and "
+            "compare them with the PRD's reference, then register them:",
+            "  " + command("screens", "--stream=" + stream, "--task", task_id,
+                           "--file", "<png>"),
+        ]
+        if capture:
+            lines.append("  " + command("screens", "--stream=" + stream, "--task",
+                                        task_id, "--url", "<url>"))
+    waiver = _suggest(db, stream, "deviation", {
+        "kind": SCREENS_WAIVED, "task_ids": [task_id], "note": SCREENS_NOTE_PLACEHOLDER,
+    }) if db is not None else None
+    lines += ["If no screenshot can be taken, record why (the user reads the reason in "
+              "the publish digest):", "  " + (waiver or NO_COMMAND)]
+    return "\n".join(lines)
+
+
+# How many Build Plan lines a design-committed refusal lists.
+_PLAN_ERRORS_SHOWN = 10
+
+
+def _validate_design_committed(
+    conn: sqlite3.Connection, stream: str, data: Dict[str, Any], project_dir: Path
+) -> None:
+    """ADR 0031: with ``ui.globs`` set, each Build Plan task line names its paths in
+    backticks after ``file(s):``, or says ``file(s): none``, because the task-done gate
+    computes a UI task from them, and each task id is ``T`` and ASCII digits, the ids
+    ``screens --task`` takes. A worklog that cannot be read passes with a warning: no
+    task of it is UI. A ``ui.globs`` outside its set refuses the append (exit 2)."""
+    if not require_setting(project_settings(project_dir), "ui.globs"):
+        return
+    ref = data.get("worklog")
+    if not isinstance(ref, str) or not ref:
+        return
+    path = _resolve_artifact(project_dir, ref)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):  # a NUL byte in the ref is a ValueError
+        shown = str(path) if str(path).isprintable() else repr(str(path))
+        print(f"warning: design-committed: {shown} cannot be read, so no task is UI",
+              file=sys.stderr)
+        return
+    bad: List[str] = []
+    for item in plan_paths(text):
+        where = f"{ref}:{item['line']}: {item['id']}"
+        if TASK_ID_RE.fullmatch(item["id"]) is None:
+            bad.append(f"{where} is not T and ASCII digits")
+        if item["error"]:
+            bad.append(f"{where} {item['error']}")
+    if not bad:
+        return
+    lines = ["design-committed: the Build Plan names each task's paths when ui.globs "
+             "is set:"]
+    lines += bad[:_PLAN_ERRORS_SHOWN]
+    if len(bad) > _PLAN_ERRORS_SHOWN:
+        lines.append(f"and {len(bad) - _PLAN_ERRORS_SHOWN} more")
+    raise GateViolation("\n".join(lines))
 
 
 def _validate_phase_entered(
@@ -251,33 +359,25 @@ def _validate_mr_opened(
     ))
 
 
-def _waiver_reason(data: Dict[str, Any]) -> Optional[str]:
-    """The reason a waiver gives, or None when it gives none: an empty note, or one that
-    is still a ``<...>`` placeholder, the shape the printed command carries."""
-    note = data.get("note")
-    note = note.strip() if isinstance(note, str) else ""
-    if not note or (note.startswith("<") and note.endswith(">")):
-        return None
-    return note
-
-
 def _validate_waiver(data: Dict[str, Any]) -> None:
-    """A `deviation` of kind ``gate-waived`` clears Stop gate findings (ADR 0020), so it
-    names the tasks it clears and gives a reason. Any other deviation passes. `--force`
-    does not skip this: a waiver with no reason is not a waiver, and `check` reads it
-    as none."""
-    if data.get("kind") != GATE_WAIVED:
+    """A `deviation` of kind ``gate-waived`` clears Stop gate findings (ADR 0020), and
+    one of kind ``screens-waived`` stands in for a UI task's screenshots (ADR 0031), so
+    each names the tasks it waives and gives a reason. Any other deviation passes.
+    `--force` does not skip this: a waiver with no reason is not a waiver, and its
+    readers take it as none."""
+    kind = data.get("kind")
+    if kind not in (GATE_WAIVED, SCREENS_WAIVED):
         return
     task_ids = data.get("task_ids")
     if (not isinstance(task_ids, list) or not task_ids
             or not all(isinstance(t, str) and t for t in task_ids)):
         raise GateViolation(
-            "a gate-waived deviation names the tasks it waives: data.task_ids is a "
+            f"a {kind} deviation names the tasks it waives: data.task_ids is a "
             "non-empty list of task ids"
         )
     if _waiver_reason(data) is None:
         raise GateViolation(
-            "a gate-waived deviation says why: write the reason in data.note, in place "
+            f"a {kind} deviation says why: write the reason in data.note, in place "
             "of an empty note or a <...> placeholder"
         )
 
@@ -398,7 +498,9 @@ def validate_gate(
     if event_type == "clarify-passed":
         _validate_clarify_passed(conn, stream, data, project_dir)
     elif event_type == "task-done":
-        _validate_task_done(conn, stream, data)
+        _validate_task_done(conn, stream, data, project_dir)
+    elif event_type == "design-committed":
+        _validate_design_committed(conn, stream, data, project_dir)
     elif event_type == "phase-entered":
         _validate_phase_entered(conn, stream, data)
     elif event_type == "review-verdict":

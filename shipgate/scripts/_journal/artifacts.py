@@ -15,6 +15,7 @@ from .vocab import (
     _BUILD_PLAN_RE, _PLAN_HEADING_RE, _PLAN_TASK_RE, DEFAULT_ARTIFACT_HOMES,
     FEATURE_STREAM_PREFIX,
 )
+from .plugin import _ui
 from .text import _normalized_ref
 from .store import Event, list_streams, read_events
 from .fold import fold_stream, is_work_stream
@@ -51,16 +52,22 @@ def parse_ticked_tasks(text: str) -> List[str]:
     return seen
 
 
-def _build_plan_region(text: str) -> str:
-    """The text after the Build Plan heading, up to the next heading of its level or a
-    higher one; the whole text when there is no such heading."""
+def _build_plan_span(text: str) -> Tuple[int, int]:
+    """Where ``_build_plan_region`` lies in TEXT: its start and end offsets."""
     match = _BUILD_PLAN_RE.search(text)
     if not match:
-        return text
+        return 0, len(text)
     level = len(match.group(1))
     rest = text[match.end():]
     closing = re.search(r"^#{1,%d}\s+\S" % level, rest, re.MULTILINE)
-    return rest[: closing.start()] if closing else rest
+    return match.end(), (match.end() + closing.start() if closing else len(text))
+
+
+def _build_plan_region(text: str) -> str:
+    """The text after the Build Plan heading, up to the next heading of its level or a
+    higher one; the whole text when there is no such heading."""
+    start, end = _build_plan_span(text)
+    return text[start:end]
 
 
 def _plan_task_title(rest: str) -> Optional[str]:
@@ -124,6 +131,67 @@ def parse_build_plan(text: str) -> List[PlanTask]:
             "ticked": match.group(1) in ("x", "X"),
         })
     return tasks
+
+
+class PlanPaths(TypedDict):
+    """The paths one Build Plan task line names after ``file(s):`` (ADR 0031)."""
+
+    id: str
+    line: int  # 1-based, in the whole file
+    paths: Optional[List[str]]  # [] for `file(s): none`; None with an error
+    error: Optional[str]
+
+
+_FILES_PART = "file(s):"
+_PART_END_RE = re.compile(r"\s+[—–](?:\s+|$)")
+_BACKTICKED_RE = re.compile(r"`([^`]+)`")
+_NONE_RE = re.compile(r"none\b")
+
+
+def plan_paths(text: str) -> List[PlanPaths]:
+    """The ``file(s):`` part of every task line of the Build Plan, in document order.
+
+    The region and the task lines are ``parse_build_plan``'s, so a repeated id gives one
+    entry per line. The part starts at the literal ``file(s):`` and runs to the next
+    spaced em or en dash or the end of the line. ``paths`` is every backticked token in
+    it, in order; with none, a part whose text starts with the word ``none`` gives
+    ``[]``. A line with no part, or with a part that names no backticked path and is not
+    ``none``, gives ``paths`` None and the reason in ``error``.
+    """
+    start, end = _build_plan_span(text)
+    out: List[PlanPaths] = []
+    for match in _PLAN_TASK_RE.finditer(text[start:end]):
+        # `^\s*` in the task regex can begin on a blank line above: count to the box.
+        line = text.count("\n", 0, start + match.start(1)) + 1
+        item: PlanPaths = {"id": match.group(2) or match.group(3), "line": line,
+                           "paths": None, "error": None}
+        rest = match.group(4)
+        at = rest.find(_FILES_PART)
+        if at < 0:
+            item["error"] = "no file(s): part"
+        else:
+            part = rest[at + len(_FILES_PART):]
+            stop = _PART_END_RE.search(part)
+            if stop is not None:
+                part = part[: stop.start()]
+            paths = _BACKTICKED_RE.findall(part)
+            if paths or _NONE_RE.match(part.strip()):
+                item["paths"] = paths
+            else:
+                item["error"] = "file(s): names no path in backticks and is not none"
+        out.append(item)
+    return out
+
+
+def ui_tasks(text: str, globs: Sequence[str]) -> Dict[str, bool]:
+    """Per task id of the Build Plan, whether a path of its first line is UI by
+    ``_ui.is_ui`` (a repeated id keeps its first line, as ``build_position`` does). A line
+    with an error names no path, so it is not UI."""
+    out: Dict[str, bool] = {}
+    for item in plan_paths(text):
+        if item["id"] not in out:
+            out[item["id"]] = any(_ui.is_ui(path, globs) for path in item["paths"] or [])
+    return out
 
 
 ClaimSource = Literal["tool", "bash", "disk"]
