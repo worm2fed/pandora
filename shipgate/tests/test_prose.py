@@ -662,7 +662,7 @@ class TestReviewGoPins(unittest.TestCase):
 
 class TestPublishDigestText(unittest.TestCase):
     """#25, ADR 0030 (SC-004): the review writes the What changed section, prints the
-    digest with a ready verdict and puts it in the publish question."""
+    digest with a ready verdict and as a message right before the publish question."""
 
     COMMAND = 'journal.py" digest --stream'
 
@@ -686,12 +686,20 @@ class TestPublishDigestText(unittest.TestCase):
         self.assertIn(self.COMMAND + " <branch>", body)
         self.assertIn("under the verdict", body)
         self.assertIn("`<file>:<line>`", body)
+        self.assertIn("Print the output as its own message, not inside a code block, so its "
+                      "table renders.", body)
 
-    def test_c_the_digest_is_the_preview_of_the_publish_option(self):
-        self.assertIn("run the digest again just before you ask", self.go)
-        self.assertIn("in the `preview` of the `Publish` option", self.go)
-        self.assertIn("A multi-select question has no preview: print each stream's digest "
-                      "above it.", self.go)
+    def test_c_the_digest_is_a_message_right_before_the_publish_question(self):
+        """The user's decision after the first dialog (ADR 0030, amendment): a chat
+        message reads better than an option preview, so the preview is gone."""
+        self.assertIn("run the digest of each stream you ask about just before you ask, and "
+                      "print its output, as printed, as a message right before the question.",
+                      self.go)
+        self.assertIn("When the ready verdict comes right before the question, the digest "
+                      "under it is that message.", self.go)
+        self.assertIn("the option carries no preview", self.go)
+        self.assertNotIn("`preview`", self.go)
+        self.assertNotIn("multi-select question has no preview", self.go)
 
     def test_d_a_teammate_sends_its_stream_and_worktree(self):
         body = flat(paragraph(self.text, "A session that asks the user about another "
@@ -699,6 +707,7 @@ class TestPublishDigestText(unittest.TestCase):
         self.assertIn("cd <worktree> && python3", body)
         self.assertIn(self.COMMAND + " <stream>", body)
         self.assertIn("its stream name and its worktree path, not the digest text", body)
+        self.assertIn("It prints that output as its own message, then asks.", body)
 
     def test_e_the_summary_starts_from_what_changed(self):
         mr = flat(section(self.text, "## Opening the MR/PR (on the user's publish go)"))

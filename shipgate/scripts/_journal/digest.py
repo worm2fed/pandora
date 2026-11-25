@@ -1,12 +1,14 @@
-"""`digest`: the block the user reads at the publish question (ADR 0030, #25).
+"""`digest`: the table the user reads before the publish question (ADR 0030, #25).
 
 Four parts in a fixed order, each with a fixed slot: what changed (the worklog's
 `## What changed` section), what the orchestrator decided alone (the PRD's open assumption
 items and the executive gate decisions after the last `clarify-passed`), the deviations
 after the last `design-committed`, and the first files of the newest risk ranking.
 `build_digest` reads the journal, the worklog and the PRD; it runs no git and writes
-nothing. `render_digest` caps each part at its slot and passes every value through
-`_line`, so a payload can add no line and no control character.
+nothing. `render_digest` prints one markdown table, the only text form. It caps each part
+at its slot, and every cell value passes `_markdown_cell` or `_markdown_code`: one line,
+printable, every markdown character of a fixed set escaped, clipped. So a payload can add
+no line, no row, no column, no link that hides its target and no emphasis.
 """
 
 from __future__ import annotations
@@ -25,11 +27,17 @@ from .position import build_position, PositionDoc
 from .assumptions import is_risky, parse_assumptions, scan_section, SectionError
 
 
-# The list parts in print order: (DigestDoc key, heading, slot). A new part (#26) is one
-# entry here plus its items in `build_digest`; `max_lines` grows by 1 + its slot.
-LIST_PARTS = (("decided", "decided alone", 4), ("deviations", "deviations", 3))
-WHAT_CHANGED_SLOT = 5
+# The parts in print order: (DigestDoc key, name, slot). A new part (#26's Screens) is one
+# entry here plus its items in `build_digest`; `max_lines` grows by its slot.
+PARTS = (("what_changed", "What changed", 3), ("decided", "Decided alone", 2),
+         ("deviations", "Deviations", 2))
+# The "## What changed" section's own cap; the table shows the first slot of them.
+WHAT_CHANGED_ITEMS = 5
 LOOK_HERE_FILES = 3
+# The characters a markdown renderer gives meaning to in a table cell: the cell and row
+# delimiter, escapes and hard breaks, code, emphasis and strikethrough, links and images,
+# HTML and autolinks, entities, math. Each one gets a backslash, in every cell value.
+MARKDOWN_SPECIAL = "\\`*_[]<>|~&$"
 # Deviations that record bookkeeping, not a divergence from the design.
 BOOKKEEPING_KINDS = (SIGNALS_MISSING_KIND, "style-missing", GATE_WAIVED)
 
@@ -95,9 +103,9 @@ class DigestDoc(TypedDict):
 
 
 def max_lines() -> int:
-    """The most lines the text prints without ``--all``: the first line, the what
-    changed slot, a heading and a slot per list part, and the look-here line."""
-    return 1 + WHAT_CHANGED_SLOT + sum(1 + slot for _, _, slot in LIST_PARTS) + 1
+    """The most lines the table prints without ``--all``: the header row, the separator,
+    the slot of each part, and the Look first row."""
+    return 2 + sum(slot for _, _, slot in PARTS) + 1
 
 
 def parse_what_changed(text: str) -> Optional[List[str]]:
@@ -121,8 +129,8 @@ def parse_what_changed(text: str) -> Optional[List[str]]:
     for index, (line, body) in enumerate(items):
         if not lines[line - 1][2:].strip():
             raise SectionError(line, "empty item")
-        if index == WHAT_CHANGED_SLOT:
-            raise SectionError(line, f"more than {WHAT_CHANGED_SLOT} items")
+        if index == WHAT_CHANGED_ITEMS:
+            raise SectionError(line, f"more than {WHAT_CHANGED_ITEMS} items")
     return [body for _, body in items]
 
 
@@ -283,59 +291,98 @@ def build_digest(conn: sqlite3.Connection, stream: str, project_dir: Path,
     }
 
 
-def _line(text: Any, prefix: str = "") -> str:
-    """``prefix`` and ``text`` as one printable line of at most ``BRIEF_LINE_CHARS``.
+def _flat(text: Any) -> str:
+    """``text`` on one line with only printable characters: ``_one_line`` collapses
+    whitespace, and every character that is still not printable is replaced, so a
+    planted escape sequence cannot move the cursor or reorder the line."""
+    return "".join(c if c.isprintable() else _REPLACEMENT for c in _one_line(text))
 
-    ``_one_line`` collapses whitespace; every character that is still not printable is
-    replaced, so a planted escape sequence cannot move the cursor or reorder the line.
+
+def _markdown_cell(text: Any, room: int) -> str:
+    """``text`` as table-cell text of at most ``room`` characters.
+
+    Each character of ``MARKDOWN_SPECIAL`` gets a backslash. A clipped value ends with
+    "…" and never splits a backslash from its character, so no escape is left open.
     """
-    flat = "".join(c if c.isprintable() else _REPLACEMENT for c in _one_line(text))
-    room = BRIEF_LINE_CHARS - len(prefix)
-    if len(flat) > room:
-        flat = flat[: room - 1] + "…"
-    return prefix + flat
+    tokens = ["\\" + c if c in MARKDOWN_SPECIAL else c for c in _flat(text)]
+    if sum(len(token) for token in tokens) <= room:
+        return "".join(tokens)
+    kept: List[str] = []
+    used = 0
+    for token in tokens:
+        if used + len(token) > room - 1:
+            break
+        kept.append(token)
+        used += len(token)
+    return "".join(kept) + "…"
 
 
-def _list_part(heading: str, texts: List[str], show_all: bool, slot: int,
-               note: str = "", error: Optional[str] = None) -> List[str]:
-    """A heading line and the item lines; an error is the first item and takes a slot."""
+def _markdown_code(text: Any, room: int) -> str:
+    """``text`` as inline code when it holds no backtick, pipe or backslash and fits in
+    ``room``; else as ``_markdown_cell`` text. Nothing inside a code span is markdown."""
+    flat = _flat(text)
+    if any(c in flat for c in "`|\\") or len(flat) + 2 > room:
+        return _markdown_cell(flat, room)
+    return f"`{flat}`"
+
+
+def _row(first: str, value: str) -> str:
+    """One table row. ``first`` is fixed text; ``value`` is already a safe cell."""
+    return f"| {first} | {value} |"
+
+
+def _room(first: str) -> int:
+    """The characters left for the value cell of a row whose first cell is ``first``."""
+    return BRIEF_LINE_CHARS - len(_row(first, ""))
+
+
+def _part_rows(name: str, texts: List[str], show_all: bool, slot: int,
+               error: Optional[str] = None) -> List[str]:
+    """The rows of one part. The first cell names the part on its first row, with the
+    full count when the slot cuts it; an error is one fixed line and takes a slot."""
     entries = ([error] if error else []) + texts
     if not entries:
-        return [_line(f"{heading}: none")]
+        entries = ["none"]
     shown = entries if show_all else entries[:slot]
-    count = len(texts)
-    if len(shown) < len(entries):
-        kept = len(shown) - (1 if error else 0)
-        head = f"{heading} ({count}, {kept} shown; --all prints every one{note}):"
+    first = f"**{name}**" + (f" ({len(texts)})" if len(shown) < len(entries) else "")
+    rows = []
+    for index, entry in enumerate(shown):
+        cell = first if index == 0 else ""
+        rows.append(_row(cell, _markdown_cell(entry, _room(cell))))
+    return rows
+
+
+def _look_first_row(look: DigestLookHere) -> str:
+    first = "**Look first**"
+    room = _room(first)
+    files = look["files"]
+    if files:
+        codes = [_markdown_code(path, room) for path in files]
+        value = " · ".join(codes)
+        if len(value) > room or not all(c.startswith("`") for c in codes):
+            value = _markdown_cell(" · ".join(files), room)
+    elif look["unavailable"] is not None:
+        value = _markdown_cell(
+            f"— risk signals unavailable ({look['unavailable']})", room)
     else:
-        head = f"{heading} ({count}{note}):"
-    return [_line(head)] + [_line(entry, "  - ") for entry in shown]
+        value = "— no risk ranking recorded"
+    return _row(first, value)
 
 
 def render_digest(doc: DigestDoc, show_all: bool = False) -> str:
-    """The digest as text: at most ``max_lines()`` lines, or every item with
-    ``show_all``. Every line is printable and at most ``BRIEF_LINE_CHARS`` long."""
+    """The digest as one markdown table: at most ``max_lines()`` lines, or every item
+    with ``show_all``. Every line is printable, at most ``BRIEF_LINE_CHARS`` long, and
+    every value from a journal row or a file is an inert cell."""
     verdict = doc["verdict"]
-    what = doc["what_changed"]
-    first = (f"{doc['stream']} — verdict "
+    state = ("verdict "
              + (f"{verdict['verdict']} (round {verdict['round']})" if verdict else "—")
-             + f" · publish {doc['publish']}. What changed:"
-             + (f" — {what['error']}" if what["error"] else ""))
-    lines = [_line(first)]
-    lines += [_line(item, "  - ") for item in what["items"][:WHAT_CHANGED_SLOT]]
-    note = f"; notes in {doc['worklog']}" if doc["worklog"] else ""
-    for key, heading, slot in LIST_PARTS:
+             + f" · publish {doc['publish']}")
+    stream = _markdown_code(doc["stream"], BRIEF_LINE_CHARS - len(_row("", state)))
+    lines = [_row(stream, _markdown_cell(state, BRIEF_LINE_CHARS)), "|---|---|"]
+    for key, name, slot in PARTS:
         part = doc[key]
-        lines += _list_part(
-            heading, [item["text"] for item in part["items"]], show_all, slot,
-            note=note if key == "deviations" else "", error=part.get("error"),
-        )
-    look = doc["look_here"]
-    if look["files"]:
-        lines.append(_line("look here first: " + " · ".join(look["files"])))
-    elif look["unavailable"] is not None:
-        lines.append(_line(
-            f"look here first: — risk signals unavailable ({look['unavailable']})"))
-    else:
-        lines.append(_line("look here first: — no risk ranking recorded"))
+        texts = [item if isinstance(item, str) else item["text"]
+                 for item in part["items"]]
+        lines += _part_rows(name, texts, show_all, slot, error=part.get("error"))
+    lines.append(_look_first_row(doc["look_here"]))
     return "\n".join(lines)

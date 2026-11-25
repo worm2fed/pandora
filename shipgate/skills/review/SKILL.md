@@ -417,7 +417,8 @@ verdict delivered without the event leaves the stream saying the review never ha
 output under the verdict. The script computes what changed, what you decided alone, the
 deviations and the files to read first from the journal and the artifacts, so you do not
 retell them. A line that names `<file>:<line>` is a section the script could not read:
-fix that section and run it again.
+fix that section and run it again. Print the output as its own message, not inside a code
+block, so its table renders.
 
 **Journaled: the fix round records its dispositions too, and closes every one.** Append
 `review-disposition` with `fixing` when you dispatch a fix for a finding. Append the closed
@@ -664,11 +665,10 @@ a publish go. A ready verdict is no go. Get the go in one form, every time:
 2. **Ask with `AskUserQuestion`.** The header is the gate: `Commit` or `Publish`. The first
    option is the gate word: `Commit` or `Publish`. For several streams, ask one multi-select
    question whose option labels are the stream names, and record one go request per stream
-   first. For the `publish` gate, run the digest again just before you ask, and put its
-   output, as printed, in the `preview` of the `Publish` option. The user may see only the
-   dialog while it is open, and the preview shows what they approve. The recorder reads the
-   answer, not the preview. A multi-select question has no preview: print each stream's
-   digest above it.
+   first. For the `publish` gate, run the digest of each stream you ask about just before
+   you ask, and print its output, as printed, as a message right before the question. When
+   the ready verdict comes right before the question, the digest under it is that message.
+   The user reads it in the chat before the dialog opens, and the option carries no preview.
 3. **The recorder records the answer.** An answer that is the gate word, a selected stream
    name, or a typed `commit`, `publish`, `push`, `yes`, `y`, `ok`, `go`, `approve` or `all` is an
    exact go. You record nothing.
@@ -683,8 +683,8 @@ a publish go. A ready verdict is no go. Get the go in one form, every time:
 A session that asks the user about another session's stream records the go request itself,
 on that stream. It runs the digest for that stream with the other session's worktree as its
 working directory (`cd <worktree> && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py"
-digest --stream <stream>`), because the PRD and the worklog are uncommitted there. A
-session that reports to a lead sends, with its ready verdict, its stream name and its
+digest --stream <stream>`), because the PRD and the worklog are uncommitted there. It prints
+that output as its own message, then asks. A session that reports to a lead sends, with its ready verdict, its stream name and its
 worktree path, not the digest text.
 The go then authorizes the session that works on the stream; it does not
 bind the asking session. A worker never asks the user: when the command gate holds its

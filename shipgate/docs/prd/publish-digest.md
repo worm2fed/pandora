@@ -96,11 +96,12 @@ normal flow, because a ready verdict lets the push through it.
 - **FR-001** — A `journal.py` command prints the digest of one stream. It reads the journal
   and the artifact files that the stream's events name. It writes nothing and runs no git. A
   stream with no events exits 1, as `position` does.
-- **FR-002** — The first line names the stream, the newest review verdict with its round, and
-  the publish state (held or authorized).
+- **FR-002** — The digest is one markdown table, its only text form. Its header row names the
+  stream, the newest review verdict with its round, and the state of the user's publish go
+  (held or authorized).
 - **FR-003** — "What changed" comes from a `## What changed` section of the stream's worklog:
   1 to 5 list items of one line each. The review writes the section before its verdict (F2).
-  The digest accepts only that form. With no section, the digest says so and names the
+  The digest accepts only that form, and the table shows the first 3 items. With no section, the digest says so and names the
   worklog. With a malformed section, it prints the worklog's path, the line number and the
   reason.
 - **FR-004** — "Decided alone" lists two kinds of item (F3):
@@ -114,32 +115,35 @@ normal flow, because a ready verdict lets the push through it.
 - **FR-005** — "Deviations" lists the `deviation` events recorded after the stream's last
   `design-committed`, or every one when the stream has none (F5). Bookkeeping rows are left
   out: those of kind `signals-missing`, `style-missing` or `gate-waived`, and every row that
-  carries `report_to`. The part names the worklog, where the notes stand in full. The digest
-  does not parse the worklog's "Deviations & notes" section.
-- **FR-006** — "Look here first" names the first 3 files of the newest risk ranking that the
+  carries `report_to`. The digest does not parse the worklog's "Deviations & notes" section.
+- **FR-006** — "Look first" names the first 3 files of the newest risk ranking that the
   stream carries (ADR 0013): the ranking of the newest review verdict that has one, else the
   ranking of the newest `design-committed` that has one. With no ranking, or with a ranking
   whose source is `none`, one line says so.
-- **FR-007** — Each part has a fixed slot (F6): what changed 5, decided alone 4, deviations
-  3, look here first 1 line. With the first line and one heading line for each list part,
-  the digest prints at most 16 lines. A part over its slot names its full count and how
-  many items it shows, and names the flag that prints them all. An unused slot is not given
-  to another part.
+- **FR-007** — Each part has a fixed slot of rows (F6, as amended): what changed 3, decided
+  alone 2, deviations 2, look first 1. With the header row and the separator, the digest
+  prints at most 10 lines. The first cell of a part names it on its first row only, and a
+  part over its slot names its full count there. An unused slot is not given to another
+  part.
 - **FR-008** — Every value is collapsed to one line and clipped at 160 characters, as the
-  status brief and the handoff brief do (#39). A ref that is absolute or holds a `..` segment
+  status brief and the handoff brief do (#39). A character that is not printable is
+  replaced. Each character of a fixed set that markdown gives meaning to in a table cell
+  gets a backslash, so a value cannot add a row, a column, a link that hides its target, an image, HTML or
+  emphasis. A ref that is absolute or holds a `..` segment
   is dropped, as `position` drops it. The digest prints no rationale, no source tag and no
   event field other than those this PRD names.
 - **FR-009** — A malformed section prints its file, its line and the reason in place of its
   part. The command still exits 0, because the digest is a view and never a gate.
-- **FR-010** — `--all` prints every item of every part, each line still clipped. `--json`
+- **FR-010** — `--all` prints every item of every part in the same table, each row still
+  clipped. `--json`
   prints the digest's data for a program and for the tests.
 - **FR-011** — The review prints the digest with a ready verdict (F1).
-- **FR-012** — The publish question carries the digest as the `preview` of its `Publish`
-  option (F1). A question about several streams is a multi-select, which has no preview: the
-  session prints each stream's digest before it asks.
+- **FR-012** — The session prints the digest of each stream it asks about as a chat message
+  right before the publish question (F1, as amended). The `Publish` option carries no
+  preview.
 - **FR-013** — A teammate whose review is ready sends its lead the stream name and the path
   of its worktree, not the digest text (F7). The lead runs the digest with that worktree as
-  its working directory and puts the output into the publish question.
+  its working directory and prints the output as its own message, then asks.
 - **FR-014** — The publish authorization is unchanged: the command gate, the recorder, the
   hold dialog's rule and `mr-opened` read the same events as before. A missing or a malformed
   digest part never holds a publish.
@@ -148,7 +152,7 @@ normal flow, because a ready verdict lets the push through it.
 ## Success criteria
 
 - **SC-001** — On a fixture stream with more items than each slot, the digest prints at most
-  the slot's number of item lines per part and at most 16 lines in all. Each part over its
+  the slot's number of rows per part and at most 10 lines in all. Each part over its
   slot prints its full count. A unit test pins both numbers.
 - **SC-002** — On a fixture PRD in the form before #24, the digest prints one line with
   `<prd>:<line>` and the parser's reason, and exits 0.
@@ -161,7 +165,8 @@ normal flow, because a ready verdict lets the push through it.
 - **SC-006** — On the largest stream of this repo's journal, the command finishes in under
   1 second.
 - **SC-007** — Every line the digest prints is at most 160 characters and holds no newline,
-  for any payload. A unit test feeds payloads with newlines and long text.
+  for any payload, and every value cell is inert markdown. Unit tests feed payloads with
+  newlines, long text and markdown in every part.
 
 ## Constraints & assumptions
 
@@ -169,13 +174,9 @@ normal flow, because a ready verdict lets the push through it.
   `criteria`, `dispositions` and `ranking`, and the review skill tells the model what to drop
   when it does not fit (`review/SKILL.md:553-562`). So "what changed" cannot ride the verdict.
   [source: `review/SKILL.md`]
-- The question dialog renders an option's `preview` as markdown in a monospace box, for
-  single-select questions only. [source: the `AskUserQuestion` tool description]
-- The recorder reads the answer's label under a `Publish` header; a preview does not change
-  the label. [source: `shipgate/hooks/reply.py`, `scripts/_journal/reply.py` `plan_reply`]
 - The eval harness has no question dialog, so no eval case can see the publish question.
   [source: #49]
-- The digest reaches the user in a dialog and a terminal. It writes nothing into the repo.
+- The digest reaches the user as a chat message. It writes nothing into the repo.
 
 ## Assumptions (executive)
 
@@ -193,7 +194,9 @@ session's recommendation on each.
 
 - **F1** — option A: the review prints the digest with the ready verdict, and the publish
   question carries it as the `preview` of its `Publish` option. No shipgate-hud change
-  (FR-011, FR-012).
+  (FR-011, FR-012). Amended the same day, after the first real dialog: the user found the
+  preview hard to read, so the digest is a chat message right before the question, and the
+  option carries no preview (ADR 0030, amendment).
 - **F2** — option A: the review writes a strict `## What changed` worklog section, 1 to 5
   one-line items, before the verdict (FR-003, FR-015).
 - **F3** — option B: the unconfirmed PRD items plus the executive gate decisions after
@@ -202,7 +205,9 @@ session's recommendation on each.
 - **F5** — option A: `deviation` events only; the worklog section is named, not parsed
   (FR-005).
 - **F6** — option A: fixed slots, at most 16 lines of at most 160 characters (FR-007,
-  FR-008).
+  FR-008). Amended after the second dialog: the user found 16 lines too long and the
+  line form hard to read, so the digest is one markdown table with slots 3, 2 and 2 and a
+  Look first row (ADR 0030, second amendment).
 - **F7** — option A: the teammate sends its stream name and worktree path; the lead runs the
   digest (FR-013).
 - **F8** — option A: no new eval case; unit tests and prose tests cover the change.

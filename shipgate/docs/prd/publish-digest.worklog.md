@@ -355,6 +355,9 @@ form is not a task, so the HUD's Plan tab and the Stop gate both skip it.
 
 - [x] T030 — Final checks — file(s): none — the full suite (`python3 -m unittest discover -s shipgate/tests` from the repo root); `git diff --stat -- shipgate/hooks shipgate-hud` prints nothing (SC-003); a grep of the diff for private project names, tracker id patterns and private paths finds none; the new prose reads as STE-80 — done when: all four hold, each with its output in the verify-run.
 - [x] T031 — Review round 2: an unusable worklog ref says so — file(s): `shipgate/scripts/_journal/digest.py`, `shipgate/tests/test_journal_digest.py`, `shipgate/CHANGELOG.md` — a worklog ref that `_plain_ref` refuses prints a fixed line, never the ref; a test with a space in a real worklog path; a test of `publish held` after a `task-done` that follows the user's go; one CHANGELOG sentence on the limit — done when: the digest tests pass on both Pythons and the full suite passes.
+- [x] T032 — The digest is a chat message, not a preview (the user's decision after the first dialog) — file(s): `shipgate/skills/review/SKILL.md`, `shipgate/tests/test_prose.py`, the PRD, ADR 0030, `shipgate/CHANGELOG.md`, this worklog — the session prints the digest as a message right before the Publish question; the option carries no preview; the preview sentences and the multi-select special case go — done when: the prose tests pass and the full suite passes.
+- [x] T033 — The digest is one markdown table with slots 3, 2 and 2 (the user's decisions after the second dialog) — file(s): `shipgate/scripts/_journal/digest.py`, `shipgate/scripts/_journal/cli.py`, `shipgate/tests/test_journal_digest.py`, `shipgate/skills/review/SKILL.md`, `shipgate/tests/test_prose.py`, the PRD, ADR 0030, `shipgate/README.md`, `shipgate/CHANGELOG.md`, this worklog — one renderer (the old line form goes), a fixed set of markdown characters escaped in every cell, hostile values tested in every part, one skill sentence with its pin — done when: the digest and prose tests pass on both Pythons and the full suite passes.
+- [x] T034 — Say "no link that hides its target" — file(s): the PRD (FR-008), `shipgate/CHANGELOG.md`, the module docstring of `shipgate/scripts/_journal/digest.py` — a bare URL or an email can still autolink, and its text is the URL itself; three wording lines, no code — done when: the digest and prose tests pass.
 
 ## Traceability
 
@@ -383,11 +386,9 @@ form is not a task, so the HUD's Plan tab and the Stop gate both skip it.
 
 ## What changed
 
-- Before you approve a publish, the review shows a digest: what changed, what was decided alone, the deviations and the files to read first.
-- The digest is the preview of the `Publish` option, so you read it in the dialog where you approve.
-- `journal.py digest --stream S` computes it from the journal and the artifacts: at most 16 lines; `--all` prints every item, `--json` the data.
-- The review writes a `## What changed` worklog section of 1 to 5 one-line items; the digest refuses any other form and names the line.
-- No hook and no shipgate-hud file changes: the publish approval reads the same events as before.
+- Before a publish, you read one short table: what changed, what was decided alone, the deviations and the files to read first.
+- `journal.py digest --stream S` computes it from the journal and the artifacts; `--all` prints every item, `--json` the data.
+- The review writes a `## What changed` section of 1 to 5 one-line items and prints the table as a message before the Publish question.
 
 ## Deviations & notes (filled during implementation)
 
@@ -424,6 +425,18 @@ form is not a task, so the HUD's Plan tab and the Stop gate both skip it.
   (`_plain_ref`). That applies to the ranking paths, the worklog and the PRD. A
   `clarify-passed` whose PRD ref is not usable gives one error line in "decided alone", so
   the PRD half is never empty without a word.
+- 2026-11-25 — deviation (T032, the user's decision after the first real dialog): the digest
+  is a chat message right before the Publish question, not the option's preview (ADR 0030,
+  amendment). Sentence (c) and FR-012 changed; the multi-select case went. The Exact text,
+  the data flow and pre-mortem 2 above still show the first form, as the design was written.
+- 2026-11-25 — deviation (T033, the user's decisions after the second dialog): the digest
+  is one markdown table with slots 3, 2 and 2 and a Look first row, at most 10 lines (ADR
+  0030, second amendment). The old line form is gone. Each cell value is escaped from a
+  fixed set of markdown characters. The Deviations part no longer names the worklog.
+- 2026-11-25 — note for #26: its Screens part is one more entry in `PARTS` with its own
+  slot, and its items in `build_digest` and `DigestDoc`. The cap grows by that slot only,
+  since a part has no heading row: a slot of 2 makes it 12. Change the pinned number in
+  `test_the_row_cap_is_computed_from_the_slots`.
 - 2026-11-25 — judged by reading (no eval, F8 A): sentences (a) to (e) name the command, its
   arguments and the place of the output, and each gives the reason it exists. An Opus or a
   Fable session reads them as steps it can follow; no step depends on a judgment call the
@@ -493,4 +506,37 @@ two LOW, both deferred to #32 with the other wording:
 
 - `_journal/digest.py:155` (LOW 70): the fixed line and the CHANGELOG sentence name "whitespace or a control character", but `_plain_ref` also refuses format, private-use and unassigned characters (U+200B, U+E000). The refusal is right; the stated cause is too narrow.
 - `_journal/digest.py:182` (LOW 55): the PRD line gives no cause and the worklog line does. Not false.
+
+## Review round 3
+
+T032, the chat-message follow-up. One fresh reviewer read the diff; the skill text gives one
+form for every question, and no preview instruction is left. The lead ruled on the findings
+and read the fix himself, so no second reviewer ran.
+
+- F10 MEDIUM `docs/adr/0030-the-publish-digest-is-computed-and-rides-the-publish-question.md:163` — the amendment left the first Consequence and the F2 line false ("in the dialog") and did not name option D; two sentences in the amendment now do both.
+- F11 LOW `tests/test_prose.py:664` — the class docstring still said "puts it in the publish question"; fixed.
+- F12 LOW `shipgate/CHANGELOG.md:22` — the entry read as if the digest prints twice; fixed.
+
+### Deferred
+
+- `prd/publish-digest.md:180` (LOW 70): two executive assumption lines say "in the dialog". They stay as the record of what was assumed.
+- `review/SKILL.md:668` (LOW 35): a chat message renders as markdown, so "as printed" is not exact. Step 6 (b) had the same gap before. Deferred to #32.
+
+## Review round 4
+
+T033, the markdown table. One fresh reviewer with all lenses and the security criteria
+could forge no row, column, code span, image, HTML, entity, emphasis, strikethrough, math
+or heading with any input. It found no BLOCKER, HIGH or MEDIUM. The eight LOW findings
+are deferred, as the lead's rule says:
+
+### Deferred
+
+- `prd/publish-digest.md:131` (LOW 75): FR-008, the CHANGELOG and the module docstring said no link can appear, but a bare URL or email still becomes a link in a GFM renderer. Fixed by the lead's decision in T034: the three now say "no link that hides its target".
+- `_journal/digest.py:40` (LOW 30): `\[` and `\]` are display-math delimiters in some renderers. No surface in use renders LaTeX.
+- `tests/test_journal_digest.py:602` (LOW 60): no hostile test of the Look first `unavailable` reason or of an error row whose ref holds markdown characters. The code escapes both today.
+- `_journal/digest.py:323` (LOW 25): an empty stream name gives two bare backticks.
+- `_journal/digest.py:380` (LOW 30): the header's stream room is measured on the state before escaping; the state is a fixed vocabulary today.
+- `tests/test_journal_digest.py:727` (LOW 40): `assert_safe` finds the header row by object identity.
+- `prd/publish-digest.md:128` (LOW 35): FR-008 says each value is clipped at 160; each line is.
+- `review/SKILL.md:419` (LOW 30): an error row shows its path markdown-escaped; `--json` has the raw path.
 

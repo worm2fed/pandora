@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Tests of ``scripts/journal.py digest``: the block the user reads at the publish
-question (#25, ADR 0030).
+"""Tests of ``scripts/journal.py digest``: the markdown table the user reads before the
+publish question (#25, ADR 0030 and its amendments).
 
 The parser rules of the "What changed" section run in process through
 ``load_journal_module``; the command runs as a subprocess, as the other journal tests do.
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -119,18 +120,53 @@ class DigestCase(JournalTestCase):
     def lines(self, *flags, stream=S):
         return self.digest(*flags, stream=stream).splitlines()
 
-    def part(self, out, heading):
-        """The heading line that starts with ``heading`` and the item lines under it."""
-        lines = out.splitlines()
-        for index, line in enumerate(lines):
-            if line.startswith(heading):
-                items = []
-                for item in lines[index + 1:]:
-                    if not item.startswith("  - "):
+    def table(self, *flags, stream=S):
+        """(the header cells, the body rows) of the digest's one markdown table."""
+        lines = self.lines(*flags, stream=stream)
+        self.assertEqual(lines[1], "|---|---|", "\n".join(lines))
+        return split_row(lines[0]), [split_row(line) for line in lines[2:]]
+
+    def part(self, name, *flags, stream=S):
+        """The first cell of the part's first row, and the value cells of its rows."""
+        _, rows = self.table(*flags, stream=stream)
+        for index, (first, value) in enumerate(rows):
+            if first.startswith(f"**{name}**"):
+                values = [value]
+                for later_first, later in rows[index + 1:]:
+                    if later_first:
                         break
-                    items.append(item[4:])
-                return line, items
-        self.fail(f"no line starts with {heading!r} in:\n{out}")
+                    values.append(later)
+                return first, values
+        self.fail(f"no row of part {name!r} in {rows}")
+
+
+# Every character the digest escapes in a cell, and the forms a cell may take.
+SPECIAL = "\\`*_[]<>|~&$"
+FIRST_CELL = re.compile(
+    r"^(|\*\*(What changed|Decided alone|Deviations|Look first)\*\*( \(\d+\))?)$")
+CODE_CELL = re.compile(r"^`[^`|\\]+`( · `[^`|\\]+`)*$")
+
+
+def split_row(line):
+    """The two cells of one table row: split at the pipes no backslash escapes."""
+    assert line.startswith("| ") and line.endswith(" |"), line
+    cells = re.split(r"(?<!\\)\|", line)[1:-1]
+    assert len(cells) == 2, (line, cells)
+    return [cell.strip() for cell in cells]
+
+
+def unescape(cell):
+    return re.sub(r"\\(.)", r"\1", cell)
+
+
+def assert_inert(case, cell):
+    """``cell`` is inline code with no backtick, pipe or backslash inside, or text in
+    which every markdown character carries its backslash."""
+    if CODE_CELL.match(cell):
+        return
+    bare = re.sub(r"\\.", "", cell)
+    for char in SPECIAL:
+        case.assertNotIn(char, bare, cell)
 
 
 # --------------------------------------------------------------------------
@@ -149,8 +185,8 @@ class TestDigestCommand(DigestCase):
         self.assertRegex(top, r"(?m)^    digest\b")
         own = run_journal(["digest", "--help"]).stdout
         flat = " ".join(own.split())
-        for words in ("what changed", "decided alone", "deviations", "look here first",
-                      "--all", "--json", "exits 1"):
+        for words in ("markdown table", "what changed", "decided alone", "deviations",
+                      "look first", "--all", "--json", "exits 1"):
             with self.subTest(words=words):
                 self.assertIn(words, flat)
 
@@ -171,10 +207,13 @@ class TestDigestCommand(DigestCase):
         self.assertEqual(sorted(doc["decided"]["items"][0]),
                          ["line", "risky", "seq", "source", "text"])
 
-    def test_max_lines_is_16(self):
-        self.assertEqual(J.max_lines(), 16)
-        self.assertEqual(J.LIST_PARTS,
-                         (("decided", "decided alone", 4), ("deviations", "deviations", 3)))
+    def test_the_row_cap_is_computed_from_the_slots(self):
+        self.assertEqual(J.PARTS, (("what_changed", "What changed", 3),
+                                   ("decided", "Decided alone", 2),
+                                   ("deviations", "Deviations", 2)))
+        # The header row, the separator, the slots, the Look first row.
+        self.assertEqual(J.max_lines(), 10)
+        self.assertEqual(J.MARKDOWN_SPECIAL, SPECIAL)
 
     def test_the_digest_writes_nothing(self):
         self.designed()
@@ -186,17 +225,16 @@ class TestDigestCommand(DigestCase):
 
 
 # --------------------------------------------------------------------------
-# FR-002: the first line
+# FR-002: the header row
 # --------------------------------------------------------------------------
 
 
-class TestFirstLine(DigestCase):
+class TestHeader(DigestCase):
 
     def test_no_verdict_and_publish_held(self):
         self.designed()
-        first = self.lines()[0]
-        self.assertEqual(
-            first, f"{S} — verdict — · publish held. What changed:")
+        header, _ = self.table()
+        self.assertEqual(header, [f"`{S}`", "verdict — · publish held"])
 
     def test_a_ready_verdict_is_no_publish_go(self):
         """The digest is shown at the publish question, after a ready verdict: the state
@@ -205,9 +243,8 @@ class TestFirstLine(DigestCase):
         self.batch([("review-verdict", {"verdict": "not-ready"}),
                     ("verify-run", {"outcome": "pass", "task_ids": ["T001"]}),
                     ("review-verdict", {"verdict": "ready"})])
-        first = self.lines()[0]
-        self.assertEqual(
-            first, f"{S} — verdict ready (round 2) · publish held. What changed:")
+        header, _ = self.table()
+        self.assertEqual(header[1], "verdict ready (round 2) · publish held")
         doc = self.doc()
         self.assertEqual(doc["verdict"], {"verdict": "ready", "round": 2})
         self.assertEqual(doc["publish"], "held")
@@ -217,18 +254,18 @@ class TestFirstLine(DigestCase):
         insert_legacy_row(self.db, S, "gate-decision", {
             "gate": "publish", "question": "Open the PR?", "decision": "publish",
             "mode": "ask", "raised_by": "user", "source": "shell"}, "user")
-        self.assertIn("· publish authorized. What changed:", self.lines()[0])
+        self.assertEqual(self.table()[0][1], "verdict — · publish authorized")
         self.assertEqual(self.doc()["publish"], "authorized")
         # A go lasts until the stream's next task-done.
         self.batch([("verify-run", {"outcome": "pass", "task_ids": ["T001"]}),
                     ("task-done", {"task_id": "T001"})])
-        self.assertIn("· publish held. What changed:", self.lines()[0])
+        self.assertEqual(self.table()[0][1], "verdict — · publish held")
         self.assertEqual(self.doc()["publish"], "held")
 
     def test_a_not_ready_verdict_holds_publish(self):
         self.designed()
         self.batch([("review-verdict", {"verdict": "not-ready"})])
-        self.assertIn("verdict not-ready (round 1) · publish held.", self.lines()[0])
+        self.assertEqual(self.table()[0][1], "verdict not-ready (round 1) · publish held")
 
 
 # --------------------------------------------------------------------------
@@ -292,25 +329,29 @@ class TestWhatChangedParser(unittest.TestCase):
 
 class TestWhatChanged(DigestCase):
 
-    def test_the_items_print_under_the_first_line(self):
+    def test_the_items_are_the_first_rows(self):
         self.designed()
-        lines = self.lines()
-        self.assertEqual(lines[1:3], ["  - The digest prints.", "  - It fits."])
+        _, rows = self.table()
+        self.assertEqual(rows[:2], [["**What changed**", "The digest prints."],
+                                    ["", "It fits."]])
         self.assertEqual(self.doc()["what_changed"],
                          {"items": ["The digest prints.", "It fits."], "error": None})
 
-    def test_five_items_print(self):
+    def test_five_items_show_three_and_the_count(self):
         self.write(WORKLOG, worklog_text(
             "## What changed\n" + "".join(f"- item {n}\n" for n in range(1, 6)) + "\n"))
         self.designed()
-        self.assertEqual(self.lines()[1:6], [f"  - item {n}" for n in range(1, 6)])
+        self.assertEqual(self.part("What changed"),
+                         ("**What changed** (5)", ["item 1", "item 2", "item 3"]))
+        self.assertEqual(self.part("What changed", "--all"),
+                         ("**What changed**", [f"item {n}" for n in range(1, 6)]))
 
     def assert_error(self, error, designed=True):
         if designed:
             self.designed()
-        lines = self.lines()
-        self.assertTrue(lines[0].endswith(f"What changed: — {error}"), lines[0])
-        self.assertFalse(lines[1].startswith("  - "), lines[1])
+        first, values = self.part("What changed")
+        self.assertEqual(first, "**What changed**")
+        self.assertEqual([unescape(v) for v in values], [error])
         self.assertEqual(self.doc()["what_changed"], {"items": [], "error": error})
 
     def test_a_sixth_item(self):
@@ -391,32 +432,28 @@ class TestDecidedAlone(DigestCase):
         self.assertIsInstance(items[3]["seq"], int)
         self.assertIsNone(self.doc()["decided"]["error"])
 
-    def test_the_heading_over_the_slot_names_the_count_and_the_flag(self):
+    def test_over_the_slot_the_first_cell_names_the_full_count(self):
         self.batch([("flow-started", {"request": "#1234"}),
                     ("clarify-passed", {"prd": PRD}),
                     self.decision("one?"), self.decision("two?"),
                     ("design-committed", {"worklog": WORKLOG})])
-        heading, items = self.part(self.digest(), "decided alone")
-        self.assertEqual(heading, "decided alone (6, 4 shown; --all prints every one):")
-        self.assertEqual(items, [
-            "[domain] Risky one? → answer one",
-            "[data] Second risky? → answer three",
-            "[technical] Blind one? → answer four",
-            "[design] one? -> yes (executive)",
-        ])
-        heading, items = self.part(self.digest("--all"), "decided alone")
-        self.assertEqual(heading, "decided alone (6):")
-        self.assertEqual(len(items), 6)
+        first, values = self.part("Decided alone")
+        self.assertEqual(first, "**Decided alone** (6)")
+        self.assertEqual(values, ["\\[domain\\] Risky one? → answer one",
+                                  "\\[data\\] Second risky? → answer three"])
+        first, values = self.part("Decided alone", "--all")
+        self.assertEqual(first, "**Decided alone**")
+        self.assertEqual(len(values), 6)
 
-    def test_within_the_slot_the_heading_names_the_count(self):
+    def test_within_the_slot_the_first_cell_has_no_count(self):
         self.write(PRD, "# PRD\n")
         self.batch([("flow-started", {"request": "#1234"}),
                     ("clarify-passed", {"prd": PRD}),
                     self.decision("one?"),
                     ("design-committed", {"worklog": WORKLOG})])
-        heading, items = self.part(self.digest(), "decided alone")
-        self.assertEqual(heading, "decided alone (1):")
-        self.assertEqual(items, ["[design] one? -> yes (executive)"])
+        first, values = self.part("Decided alone")
+        self.assertEqual(first, "**Decided alone**")
+        self.assertEqual([unescape(v) for v in values], ["[design] one? -> yes (executive)"])
 
     def test_the_window_starts_after_the_last_clarify_passed(self):
         self.write(PRD, "# PRD\n")
@@ -440,9 +477,9 @@ class TestDecidedAlone(DigestCase):
     def test_none(self):
         self.write(PRD, "# PRD\n")
         self.designed()
-        self.assertIn("decided alone: none", self.lines())
+        self.assertEqual(self.part("Decided alone"), ("**Decided alone**", ["none"]))
 
-    def test_a_prd_in_the_form_before_24_gives_one_error_line_and_exit_0(self):
+    def test_a_prd_in_the_form_before_24_gives_one_error_row_and_exit_0(self):
         self.write(PRD, OLD_PRD_TEXT)
         self.batch([("flow-started", {"request": "#1234"}),
                     ("clarify-passed", {"prd": PRD}),
@@ -450,9 +487,10 @@ class TestDecidedAlone(DigestCase):
                     ("design-committed", {"worklog": WORKLOG})])
         error = f"{PRD}:5: no class tag — the PRD's assumptions were not read"
         self.assertEqual(self.doc()["decided"]["error"], error)
-        heading, items = self.part(self.digest(), "decided alone")
-        self.assertEqual(heading, "decided alone (1):")
-        self.assertEqual(items, [error, "[design] one? -> yes (executive)"])
+        first, values = self.part("Decided alone")
+        self.assertEqual(first, "**Decided alone**")
+        self.assertEqual([unescape(v) for v in values],
+                         [error, "[design] one? -> yes (executive)"])
 
     def test_a_clarify_passed_with_no_usable_prd_ref_says_so(self):
         self.batch([("flow-started", {"request": "#1234"})])
@@ -474,10 +512,11 @@ class TestDecidedAlone(DigestCase):
         self.batch([("flow-started", {"request": "#1234"}),
                     ("clarify-passed", {"prd": PRD})]
                    + [self.decision(f"q{n}?") for n in range(4)])
-        heading, items = self.part(self.digest(), "decided alone")
-        self.assertEqual(heading, "decided alone (4, 3 shown; --all prints every one):")
-        self.assertEqual(len(items), 4)
-        self.assertTrue(items[0].startswith(f"{PRD}:5: "))
+        first, values = self.part("Decided alone")
+        self.assertEqual(first, "**Decided alone** (4)")
+        self.assertEqual(len(values), 2)
+        self.assertTrue(unescape(values[0]).startswith(f"{PRD}:5: "))
+        self.assertEqual(unescape(values[1]), "[design] q0? -> yes (executive)")
 
 
 # --------------------------------------------------------------------------
@@ -510,30 +549,25 @@ class TestDeviations(DigestCase):
         ])
         self.assertTrue(all(isinstance(i["seq"], int) for i in items))
         self.assertEqual([i["seq"] for i in items], sorted(i["seq"] for i in items))
-        heading, shown = self.part(self.digest(), "deviations")
-        self.assertEqual(
-            heading,
-            f"deviations (6, 3 shown; --all prints every one; notes in {WORKLOG}):")
-        self.assertEqual(shown, ["after the design", "a kind of its own", "an old row"])
-        heading, shown = self.part(self.digest("--all"), "deviations")
-        self.assertEqual(heading, f"deviations (6; notes in {WORKLOG}):")
-        self.assertEqual(len(shown), 6)
+        self.assertEqual(self.part("Deviations"),
+                         ("**Deviations** (6)", ["after the design", "a kind of its own"]))
+        first, values = self.part("Deviations", "--all")
+        self.assertEqual(first, "**Deviations**")
+        self.assertEqual(len(values), 6)
 
     def test_no_design_committed_counts_every_deviation(self):
         (self.root / WORKLOG).unlink()
         self.batch([("flow-started", {"request": "#1234"}),
                     ("deviation", {"note": "one"})])
-        heading, shown = self.part(self.digest(), "deviations")
-        self.assertEqual(heading, "deviations (1):")
-        self.assertEqual(shown, ["one"])
+        self.assertEqual(self.part("Deviations"), ("**Deviations**", ["one"]))
 
     def test_none(self):
         self.designed()
-        self.assertIn("deviations: none", self.lines())
+        self.assertEqual(self.part("Deviations"), ("**Deviations**", ["none"]))
 
 
 # --------------------------------------------------------------------------
-# FR-006: look here first
+# FR-006: look first
 # --------------------------------------------------------------------------
 
 
@@ -541,7 +575,7 @@ def ranking(*paths):
     return {"source": "graph", "files": [{"path": p, "fix": "top"} for p in paths]}
 
 
-class TestLookHere(DigestCase):
+class TestLookFirst(DigestCase):
 
     def test_the_verdict_ranking_wins(self):
         self.batch([("flow-started", {"request": "#1234"}),
@@ -551,7 +585,7 @@ class TestLookHere(DigestCase):
                     ("review-verdict", {"verdict": "not-ready",
                                         "ranking": ranking("a.py", "b.py", "c.py",
                                                            "e.py")})])
-        self.assertEqual(self.lines()[-1], "look here first: a.py · b.py · c.py")
+        self.assertEqual(self.lines()[-1], "| **Look first** | `a.py` · `b.py` · `c.py` |")
         self.assertEqual(self.doc()["look_here"],
                          {"files": ["a.py", "b.py", "c.py"], "from": "review-verdict",
                           "unavailable": None})
@@ -562,23 +596,24 @@ class TestLookHere(DigestCase):
                     ("design-committed", {"worklog": WORKLOG,
                                           "ranking": ranking("d.py")}),
                     ("review-verdict", {"verdict": "not-ready"})])
-        self.assertEqual(self.lines()[-1], "look here first: d.py")
+        self.assertEqual(self.part("Look first"), ("**Look first**", ["`d.py`"]))
         self.assertEqual(self.doc()["look_here"]["from"], "design-committed")
 
     def test_source_none(self):
         self.batch([("flow-started", {"request": "#1234"}),
                     ("design-committed", {"worklog": WORKLOG, "ranking": {
                         "source": "none", "unavailable": "not a git repository"}})])
-        self.assertEqual(self.lines()[-1],
-                         "look here first: — risk signals unavailable "
-                         "(not a git repository)")
+        self.assertEqual(self.part("Look first"),
+                         ("**Look first**",
+                          ["— risk signals unavailable (not a git repository)"]))
         self.assertEqual(self.doc()["look_here"],
                          {"files": [], "from": "design-committed",
                           "unavailable": "not a git repository"})
 
     def test_no_ranking(self):
         self.designed()
-        self.assertEqual(self.lines()[-1], "look here first: — no risk ranking recorded")
+        self.assertEqual(self.part("Look first"),
+                         ("**Look first**", ["— no risk ranking recorded"]))
         self.assertEqual(self.doc()["look_here"],
                          {"files": [], "from": None, "unavailable": None})
 
@@ -590,7 +625,7 @@ class TestLookHere(DigestCase):
                 {"path": "C:/x.py"}, {"path": 7}, "bare", {"path": " /home/alice/x.py"},
                 {"path": "\t/etc/hosts"}, {"path": "a.py · /home/alice/s.py"},
                 {"path": "bad" + chr(27) + ".py"}, {"path": "ok.py"}]}})
-        self.assertEqual(self.lines()[-1], "look here first: ok.py")
+        self.assertEqual(self.part("Look first"), ("**Look first**", ["`ok.py`"]))
 
     UNUSABLE = ("the worklog ref is not usable (whitespace or a control character) — its "
                 "sections were not read")
@@ -614,23 +649,25 @@ class TestLookHere(DigestCase):
         doc = self.doc()
         self.assertIsNone(doc["worklog"])
         self.assertEqual(doc["what_changed"], {"items": [], "error": self.UNUSABLE})
-        self.assertTrue(self.lines()[0].endswith("What changed: — " + self.UNUSABLE))
+        first, values = self.part("What changed")
+        self.assertEqual([unescape(v) for v in values], [self.UNUSABLE])
         self.assertNotIn("my notes", self.digest())
 
     def test_a_ranking_that_is_no_object(self):
         self.designed()
         self.legacy("review-verdict", {"verdict": "not-ready", "ranking": ["a.py"]})
-        self.assertEqual(self.lines()[-1], "look here first: — no risk ranking recorded")
+        self.assertEqual(self.part("Look first"),
+                         ("**Look first**", ["— no risk ranking recorded"]))
 
 
 # --------------------------------------------------------------------------
-# FR-007, SC-001: the slots and the line cap
+# FR-007, SC-001: the slots and the row cap
 # --------------------------------------------------------------------------
 
 
 class TestSlots(DigestCase):
 
-    def test_a_full_stream_prints_16_lines(self):
+    def test_a_full_stream_prints_10_lines(self):
         self.write(WORKLOG, worklog_text(
             "## What changed\n" + "".join(f"- item {n}\n" for n in range(1, 6)) + "\n"))
         self.batch([("flow-started", {"request": "#1234"}),
@@ -642,40 +679,93 @@ class TestSlots(DigestCase):
                                             "ranking": ranking("a.py", "b.py", "c.py")})]
                    + [("deviation", {"note": f"note {n}"}) for n in range(7)])
         lines = self.lines()
-        self.assertEqual(len(lines), 16, "\n".join(lines))
+        self.assertEqual(len(lines), 10, "\n".join(lines))
         self.assertEqual(len(lines), J.max_lines())
-        self.assertIn("decided alone (10, 4 shown; --all prints every one):", lines)
-        self.assertIn(
-            f"deviations (7, 3 shown; --all prints every one; notes in {WORKLOG}):", lines)
-        self.assertEqual(len(self.lines("--all")), 1 + 5 + 1 + 10 + 1 + 7 + 1)
+        firsts = [row[0] for row in self.table()[1] if row[0]]
+        self.assertEqual(firsts, ["**What changed** (5)", "**Decided alone** (10)",
+                                  "**Deviations** (7)", "**Look first**"])
+        self.assertEqual(len(self.lines("--all")), 2 + 5 + 10 + 7 + 1)
 
-    def test_the_layout_of_an_empty_stream(self):
+    def test_the_layout_of_a_short_stream(self):
         self.write(PRD, "# PRD\n")
         self.designed()
         self.assertEqual(self.lines(), [
-            f"{S} — verdict — · publish held. What changed:",
-            "  - The digest prints.",
-            "  - It fits.",
-            "decided alone: none",
-            "deviations: none",
-            "look here first: — no risk ranking recorded",
+            f"| `{S}` | verdict — · publish held |",
+            "|---|---|",
+            "| **What changed** | The digest prints. |",
+            "|  | It fits. |",
+            "| **Decided alone** | none |",
+            "| **Deviations** | none |",
+            "| **Look first** | — no risk ranking recorded |",
         ])
 
 
 # --------------------------------------------------------------------------
-# FR-008, SC-007: hostile payloads
+# FR-008, SC-007: untrusted text in a terminal and in markdown
 # --------------------------------------------------------------------------
+
+
+# One value that tries every markdown form a cell must not take: a new column, a new row,
+# code, a link, an image, an autolink, HTML, a line break, emphasis, strikethrough, an
+# entity, math, and a backslash that would escape the cell's closing pipe.
+HOSTILE = ("a | b `code` [link](https://x.example) ![img](y.png) <https://z.example> "
+           "<br> <b>x</b> *em* _em_ **strong** ~~del~~ &#124; $x$ end\\")
 
 
 class TestHostilePayloads(DigestCase):
 
-    def test_every_line_is_one_line_of_at_most_160_characters(self):
+    def assert_safe(self, out, rows):
+        lines = out.splitlines()
+        self.assertEqual(len(lines), rows, out)
+        for line in lines:
+            with self.subTest(line=line):
+                self.assertLessEqual(len(line), 160)
+                self.assertTrue(line.isprintable(), repr(line))
+                if line == "|---|---|":
+                    continue
+                first, value = split_row(line)
+                if line is lines[0]:
+                    assert_inert(self, first)
+                else:
+                    self.assertRegex(first, FIRST_CELL)
+                assert_inert(self, value)
+
+    def test_markdown_in_every_part_is_escaped(self):
+        self.write(WORKLOG, worklog_text(f"## What changed\n- {HOSTILE}\n\n"))
+        self.write(PRD, "# PRD\n\n## Assumptions (executive)\n\n"
+                        "- [domain] [no source found in x] Q | `x` <br>? → [a](b) *c*\n")
+        self.batch([("flow-started", {"request": "#1234"}),
+                    ("clarify-passed", {"prd": PRD}),
+                    ("gate-decision", {"gate": "design", "question": HOSTILE + "\nrow",
+                                       "decision": "_y_", "mode": "executive"}),
+                    ("design-committed", {"worklog": WORKLOG, "ranking": {
+                        "source": "graph", "files": [{"path": "a|b`c*.py"},
+                                                     {"path": "ok.py"}]}}),
+                    ("deviation", {"note": HOSTILE})])
+        for flags in ((), ("--all",)):
+            with self.subTest(flags=flags):
+                out = self.digest(*flags)
+                self.assert_safe(out, 2 + 1 + 2 + 1 + 1)
+        _, values = self.part("What changed")
+        shown = unescape(values[0]).rstrip("…")
+        self.assertGreater(len(shown), 50)
+        self.assertTrue(HOSTILE.startswith(shown), shown)
+        # One path that cannot be inline code makes the whole cell escaped text.
+        self.assertEqual(self.part("Look first")[1], ["a\\|b\\`c\\*.py · ok.py"])
+
+    def test_a_long_value_is_clipped_between_escapes(self):
+        self.write(WORKLOG, worklog_text("## What changed\n- " + "|" * 300 + "\n\n"))
+        self.designed()
+        out = self.digest()
+        self.assert_safe(out, 7)
+        _, values = self.part("What changed")
+        self.assertTrue(values[0].endswith("\\|…"), values[0])
+
+    def test_terminal_sequences_and_line_breaks_stay_out(self):
         esc = chr(27)
-        long_text = "x" * 1000
-        planted = f"line one\nfake heading:\r\n  - forged item {esc}[2K{esc}[1A"
+        planted = f"line one\nfake row |\r\n| **Look first** | `x` | {esc}[2K{esc}[1A"
         self.write(WORKLOG, worklog_text(
-            f"## What changed\n- {long_text}\n- {planted.splitlines()[0]} "
-            f"{esc}[31mred{chr(0x202E)}\n\n"))
+            f"## What changed\n- {'x' * 1000}\n- red {esc}[31m{chr(0x202E)} end\n\n"))
         self.write(PRD, "# PRD\n")
         self.batch([("flow-started", {"request": "#1234"}),
                     ("clarify-passed", {"prd": PRD}),
@@ -683,24 +773,44 @@ class TestHostilePayloads(DigestCase):
                                        "decision": "y" * 600, "mode": "executive"}),
                     ("design-committed", {"worklog": WORKLOG,
                                           "ranking": ranking("a" * 300 + ".py")})])
-        self.legacy("deviation", {"note": planted + long_text})
+        self.legacy("deviation", {"note": planted + "x" * 1000})
         for flags in ((), ("--all",)):
             with self.subTest(flags=flags):
                 out = self.digest(*flags)
-                lines = out.splitlines()
-                self.assertEqual(len(lines), 1 + 2 + 2 + 2 + 1, out)
-                for line in lines:
-                    self.assertLessEqual(len(line), 160, line)
-                    self.assertTrue(line.isprintable(), repr(line))
+                self.assert_safe(out, 2 + 2 + 1 + 1 + 1)
                 self.assertNotIn(esc, out)
-                self.assertFalse(any(l.startswith("fake heading") for l in lines))
+                self.assertEqual(sum(l.startswith("| **Look first**")
+                                     for l in out.splitlines()), 1)
 
-    def test_a_hostile_stream_name_stays_on_the_first_line(self):
-        stream = "feature/" + "s" * 300
-        self.batch([("flow-started", {"request": "#1234"})], stream=stream)
-        lines = self.lines(stream=stream)
-        self.assertLessEqual(len(lines[0]), 160)
-        self.assertTrue(lines[0].endswith("…"))
+    def test_a_hostile_stream_name_stays_in_the_header(self):
+        for stream in ("feature/" + "s" * 300, "feature/a|b`c`_d_*e*"):
+            with self.subTest(stream=stream):
+                self.legacy("flow-started", {"request": "#1234"}, stream=stream)
+                out = self.digest(stream=stream)
+                self.assert_safe(out, 6)
+        header = split_row(self.lines(stream="feature/a|b`c`_d_*e*")[0])
+        self.assertEqual(unescape(header[0]), "feature/a|b`c`_d_*e*")
+
+
+class TestMarkdownCell(unittest.TestCase):
+    """The escape itself: a fixed set, each character with its backslash."""
+
+    def test_each_special_character_gets_a_backslash(self):
+        self.assertEqual(J._markdown_cell(SPECIAL, 100),
+                         "".join("\\" + c for c in SPECIAL))
+        self.assertEqual(J._markdown_cell("plain text, (parens) #1234 a.py", 100),
+                         "plain text, (parens) #1234 a.py")
+
+    def test_the_clip_never_splits_an_escape(self):
+        self.assertEqual(J._markdown_cell("|" * 10, 6), "\\|\\|…")
+        self.assertEqual(J._markdown_cell("ab|", 4), "ab\\|")
+        self.assertEqual(J._markdown_cell("abc|", 4), "abc…")
+
+    def test_inline_code_only_for_a_value_with_no_backtick_pipe_or_backslash(self):
+        self.assertEqual(J._markdown_code("shipgate/README.md", 100), "`shipgate/README.md`")
+        self.assertEqual(J._markdown_code("a`b", 100), "a\\`b")
+        self.assertEqual(J._markdown_code("a|b", 100), "a\\|b")
+        self.assertEqual(J._markdown_code("a\\b", 100), "a\\\\b")
 
 
 if __name__ == "__main__":

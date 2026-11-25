@@ -170,3 +170,56 @@ the lead). The design session took six smaller calls alone; the PRD's "Assumptio
 - A new part, such as the screenshot evidence of #26, is one entry in the ordered list of
   parts; the line cap grows by that part's heading and slot.
 - No hook file and no shipgate-hud file changes, so the approval path keeps its review.
+
+## Amendment (2026-11-25, #25): the digest is a chat message, not a preview
+
+The user approved the first publish of this change in a dialog whose `Publish` option
+carried the digest as its preview. The user's verdict on that dialog: the preview is not
+convenient to read, and the digest reads better as a message in the chat before the dialog.
+The lead recorded it as the user's gate-decision.
+
+So F1 changes. The session prints the digest of each stream it asks about as a chat message
+right before the publish question. When the ready verdict comes right before the question,
+the digest under the verdict is that message. A lead prints a teammate's digest, run in the
+teammate's worktree, as its own message, then asks. The `Publish` option carries no preview.
+This is the placement of option D, rejected above because the text can scroll away while
+the dialog is open; the user chose it and accepts that cost. The first Consequence and the
+F2 option A line ("says so in the dialog") now read "in the chat message before the dialog".
+
+What served only the preview goes: the preview sentences of the review skill, and the
+special case for a multi-select question, which has no preview. With a message there is one
+form for every question, one stream or several. The digest command, its parts, its slots
+and its line cap do not change. The approval path does not change either: the recorder reads
+the answer, and nothing reads the digest.
+
+## Amendment (2026-11-25, #25): one markdown table, shorter
+
+The user declined the publish of the first amendment ("Not yet"), then said why: the digest
+was too long, and its line form was hard to read. The lead showed three samples in the
+chat, and the user chose one. The lead recorded the three answers as the user's
+gate-decisions.
+
+- **The form.** `journal.py digest` prints one markdown table, and that is its only text
+  form. A terminal shows the table as plain text; `--json` stays. The header row holds the
+  stream as inline code and "verdict <v> (round <n>) · publish <state>". Then one row per
+  item. The first cell names the part in bold on the part's first row only, with the full
+  count in parentheses when the slot cuts the part. The last row is **Look first**, with
+  the files as inline code joined by " · ". A missing or malformed part keeps its one fixed
+  line in its row. No ANSI colour. The old line form is gone, so there is one renderer.
+- **The length (F6).** The slots are 3, 2 and 2 rows for What changed, Decided alone and
+  Deviations, plus the Look first row: at most 10 lines. `--all` prints every item in the
+  same table. The worklog section still takes 1 to 5 items; the table shows the first 3.
+  The Deviations part no longer names the worklog: the table has no place for it.
+- **Untrusted text in markdown.** The chat renders the output as markdown. So each value
+  from a journal row or a file is one printable line, and each character of a fixed set
+  (the backslash, the backtick, `*`, `_`, brackets, angle brackets, the pipe, `~`, `&` and
+  `$`) gets a backslash. A clip never splits a backslash from its character. A value is
+  inline code only when it holds no backtick, pipe or backslash. A fixed escape is easier
+  to check than a detector of dangerous forms. A bare URL can still become a link in a
+  renderer that links it; its text is then the URL itself, so it hides nothing.
+- **The skill.** The session prints the output as its own message, not in a code block, so
+  the table renders.
+
+A new part, such as the screen evidence of #26, is one entry in the ordered parts tuple; the
+cap grows by that part's slot.
+

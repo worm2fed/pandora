@@ -248,16 +248,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_digest = subparsers.add_parser(
         "digest",
-        help="the block the user reads at the publish question: what changed, what "
-             "was decided alone, the deviations and the files to look at first "
+        help="the table the user reads before the publish question: what changed, "
+             "what was decided alone, the deviations and the files to look at first "
              "(ADR 0030); writes nothing",
-        description="Print the digest of one stream (ADR 0030): what changed (the "
-                    "worklog's '## What changed' section), decided alone (the PRD's "
-                    "open assumption items and the executive gate decisions after the "
-                    "last clarify-passed), deviations (after the last design-committed) "
-                    "and look here first (the newest risk ranking). Each part has a "
-                    "fixed slot; a section it cannot read prints its file, line and "
-                    "reason. It exits 0 with or without such a line, exits 1 for a "
+        description="Print the digest of one stream as one markdown table (ADR 0030): "
+                    "what changed (the worklog's '## What changed' section), decided "
+                    "alone (the PRD's open assumption items and the executive gate "
+                    "decisions after the last clarify-passed), deviations (after the "
+                    "last design-committed) and look first (the newest risk ranking). "
+                    "Each part has a fixed slot; a section it cannot read prints its "
+                    "file, line and reason. Every value is escaped for markdown. It "
+                    "exits 0 with or without such a line, exits 1 for a "
                     "stream with no events or an unreadable database, and exits 2 for "
                     "a usage error.",
     )
@@ -265,7 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_digest.add_argument("--stream", required=True,
                           help="the exact stream name; one with no events exits 1")
     p_digest.add_argument("--all", action="store_true", dest="show_all",
-                          help="print every item of every part, each line still clipped")
+                          help="print every item of every part in the same table, each "
+                               "row still clipped")
     p_digest.add_argument("--json", action="store_true",
                           help="the digest's data for a program, sorted keys")
 
