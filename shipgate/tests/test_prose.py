@@ -525,12 +525,27 @@ class TestClarifyConfirmBatch(unittest.TestCase):
     def test_a_lead_gets_the_batch_in_one_message(self):
         self.assertIn("report_to", self.executive)
 
+    def test_the_lead_message_and_the_printed_batch_give_an_alternative(self):
+        # 0.34.1: the PR-tree run of case 76 printed items with no alternative. Off the
+        # dialog, each item still states the answer taken, its source and an alternative.
+        para = self.executive[self.executive.index("A stream with a lead"):]
+        para = para[:para.index("With `off`")]
+        self.assertIn("each item states the answer taken, its source and at least one real "
+                      "alternative", para)
+
     def test_a_confirm_item_is_not_a_marker(self):
         self.assertRegex(self.executive,
                          r"confirm item is not a `\[NEEDS CLARIFICATION\]` marker")
 
     def test_the_unfamiliar_area_runs_the_blindspot_pass(self):
         self.assertIn("`unfamiliar`", self.clarify)
+        # 0.34.1 (review R1-7): a point a linked document answers is a sourced line.
+        area = self.clarify[self.clarify.index("**Unfamiliar area.**"):]
+        area = area[:area.index("**UI.**")]
+        # Round 2 (R2-1): the boundary is named; the exception line above stays as it is.
+        self.assertIn("A point that a document the request or the issue links answers is no "
+                      "blindspot candidate, even when the area's files also state it: it is a "
+                      "sourced line.", area)
         self.assertIn("blindspot", self.clarify)
         self.assertIn("--format=%s", self.clarify)  # subjects only, never the authors
 

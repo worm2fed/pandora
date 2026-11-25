@@ -2,6 +2,25 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.34.1 — the first tagged release of the confirm batch (#24); 0.34.0 has no tag.
+
+**0.34.0 has no tag, so an install that resolves by tag never got it.** Its evals on the
+merged tree held the tag: case 76 on Fable and case 78 on both models scored under 0.8.
+0.34.1 is the first tagged release of the 0.34.0 entry below, with these fixes:
+- Clarify: when the batch goes to a lead in one message, or is printed because no question
+  tool exists, each item states the answer taken, its source and at least one real
+  alternative, as the dialog does.
+- Clarify: a point that a linked document answers is no blindspot candidate; it is a
+  sourced line. A blindspot stays what nobody has decided yet.
+- Eval case 78 is truly fully specified: a finance document that the request links states
+  every rule its runs left open. A regex grader on the PRD fails on any line the batch rule
+  would pick, so "no batch" is judged by a script, not a model.
+- Eval case 16: a regex grader (a `NEEDS CLARIFICATION` marker in the same item as the
+  public `GET /customers` decision) replaces a noisy LLM judge of the PRD. The grader is
+  narrower: it checks that the API change sits under an escalation marker. The schema door,
+  the level of the requirements and the gate claim are no longer judged there, and no LLM
+  judge is left in that grader.
+
 v0.34.0 — clarify shows you its riskiest executive answers before design (#24, ADR 0029).
 
 **Clarify confirms its risky assumptions in one dialog (#24, ADR 0029).** In `executive`

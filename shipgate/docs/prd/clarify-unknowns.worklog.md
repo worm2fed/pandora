@@ -688,7 +688,30 @@ sources its rule (policy-sourced 3 of 3, policy-not-in-batch 3 of 3) and finds t
 planted rule in 2 of 3 runs. For those graders the PR tree can show little gain on Fable;
 the rule "a grader within 0.10 of the PR tree marks its text for removal" judges it.
 
-PR tree (after the merge, before the tag): _to fill after the merge._
+PR tree (after the merge of 0.34.0, before any tag), 2026-11-25, with arm only, 3 runs,
+judge sonnet. Every batch: no run `error`, every run cost above 0, `init` shows shipgate
+0.34.0 from the main checkout. Results dirs are under `shipgate/evals/results/pr24-prtree/`
+(gitignored); the baseline dirs are copied to `pr24-baseline/` beside it.
+
+| Case | Model | Baseline | PR tree | Verdict | Graders that moved (of 3 runs) | Cost |
+| --- | --- | --- | --- | --- | --- | --- |
+| 76 | Opus | 0.40 | 0.81 | pass | blindspot-found 1→3, lines-classed 0→2, parser-ran 0→2, policy-not-in-batch 0→3, policy-sourced 1→3; batch-items-risky 0→0 | 1.64 |
+| 76 | Fable | 0.65 | 0.79 | fail | lines-classed 0→2, parser-ran 0→3; blindspot-found 2→2, policy-sourced 3→3, policy-not-in-batch 3→3, batch-items-risky 0→0 | 3.63 |
+| 77 | Opus | 0.40 | 0.87 | pass | reference-asked 0→2, reference-in-prd 0→3 | 1.31 |
+| 77 | Fable | 0.47 | 1.00 | pass | reference-asked 0→3, reference-in-prd 1→3 | 2.54 |
+| 78 | Opus | — | 0.60 | fail | asks-nothing 0 of 3, no-open-markers 3 of 3 | 1.36 |
+| 78 | Fable | — | 0.53 | fail | asks-nothing 0 of 3, no-open-markers 2 of 3 | 2.77 |
+| 16 | Opus | 0.81 | 0.71 | pass (drop 0.095, not more than 0.10) | one-way-doors-escalated 1→0 | 1.52 |
+| 16 | Fable | 0.90 | 0.81 | pass | one-way-doors-escalated 2→1 | 3.12 |
+
+Spend: 17.88 USD for the PR tree, 26.06 USD for #24 in all. No limit was hit. The parser
+ran in every run of the four cases, with no error and no fix round. Tag held: 76 on Fable
+and 78 on both models are under 0.8. Why: the printed batch of 76 states no alternative
+for some items (`batch-items-risky` 0 of 6, as in the baseline); case 78's request leaves
+the balance rule, the month rule, the months allowed and the customer page open, so the
+runs batch real unsourced answers; case 16's one-way-door grader is an LLM judge on a long
+file, and it failed 8 of the 12 saved PRDs that all escalate the API with a marker. The
+fix is 0.34.1 below.
 
 ## After the merge (close-out, not tasks)
 
@@ -964,3 +987,153 @@ skipped; the changed test files pass on `/usr/bin/python3` 3.9.6; `claude plugin
 shipgate` passed; the byte scan finds only the U+FEFF that `main` has in `_journal/cli.py`;
 the privacy grep of the diff is clean. Next: the user's go, then the commit, the built-in
 `/security-review` on it, the push and the PR.
+
+## Fix 0.34.1 (`fix/24-confirm-batch-form`, the user's decision after the PR-tree run)
+
+0.34.0 stays untagged; 0.34.1 is the first tagged release of #24. Three changes and the
+release, nothing else; no hook file and no parser change.
+
+- [x] T070 — The printed batch (no question tool, no lead) and the one message to a lead
+  state, per item, the answer taken, its source and at least one real alternative, as the
+  dialog does — file(s): `skills/clarify/SKILL.md`, `tests/test_prose.py` — done when: the
+  prose pin fails first, then passes.
+- [x] T071 — Case 78 is truly fully specified: a finance document in the fixture states the
+  points the runs left open (the balance rule, the date that puts an item in a month, the
+  months allowed, the lines and their columns, credit balances, the file name, the
+  endpoint and the customer page, who may download), and the request links it. A regex
+  grader `no-batch-lines` on the PRD fails on any line the batch rule would pick (an
+  unsourced `domain`, `data` or `behaviour` line, or a `[blindspot]` or `[reference]`
+  candidate), whatever its end tag; `asks-nothing` stays the LLM judge of the reply —
+  file(s): `evals/78-clarify-exec-fully-specified/` (fixture, prompt, graders),
+  `tests/test_eval_graders.py` — done when: the unit test checks the regex against the
+  parser's batch rule and the case files, and the regex flags all 6 saved PRDs of the
+  PR-tree run.
+- [x] T072 — Case 16: a regex grader `api-escalated` on the PRD (a `NEEDS CLARIFICATION`
+  marker in the same item as `GET /customers` or the API contract) replaces the LLM judge
+  `one-way-doors-escalated` — file(s): `evals/16-clarify-exec-one-way-door/graders/`,
+  `tests/test_eval_graders.py` — done when: the unit test passes, and the regex matches the
+  12 saved PRDs (pr3 and pr24 PR-tree runs, all of which escalate the API) and misses a
+  PRD that decides the API in its assumptions. (T074 narrows the regex to `GET /customers`.)
+- [x] T073 — Release 0.34.1: `plugin.json`, the marketplace entry, a CHANGELOG entry that
+  says 0.34.0 has no tag and 0.34.1 is the first tagged release of this feature — file(s):
+  `shipgate/.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+  `shipgate/CHANGELOG.md` — done when: `claude plugin validate shipgate` passes.
+
+- [x] T074 — Review round 1 fixes (the user's answers): R1-1 (8 of 12, not 7); R1-2 and
+  R1-3 (`api-escalated` anchors on `GET /customers`, with no `i` flag; the 12 saved PRDs
+  still match, in Node and Python); R1-5 (an indented option list stays in the marker's
+  item); R1-6 (a `file_exists` grader `prd-written` for case 78); R1-4 (a): the grader of
+  case 16 is narrower, it checks that the API change sits under an escalation marker; the
+  schema door, the requirement level and the gate claim are no longer judged there, and no
+  LLM judge is left in it; R1-7: one clarify sentence, a point that a linked document
+  answers is no blindspot candidate; R1-12: the CHANGELOG says an install that resolves by
+  tag never got 0.34.0. Every other LOW of the round is deferred to #32 — file(s):
+  `skills/clarify/SKILL.md`, `tests/test_prose.py`, `tests/test_eval_graders.py`,
+  `evals/16-clarify-exec-one-way-door/graders/api-escalated.md`,
+  `evals/78-clarify-exec-fully-specified/graders/prd-written.md`, `CHANGELOG.md`, this
+  worklog — done when: each new test fails first, then passes on both Pythons.
+
+Eval plan after the merge: cases 76 and 78 on both models (3 runs, with arm only). Case 16
+runs only if its new grader cannot be validated on the saved runs.
+
+### Review round 1 (0.34.1)
+
+One fresh reviewer, all lenses, on the 0.34.1 diff. T070 and T073 are confirmed; T071 and
+T072 are confirmed on the saved PRDs (case 78: 6 of 6 flagged; case 16: 12 of 12 match, in
+Node and Python). New findings; the session stopped here for the lead (the rule for a
+MEDIUM):
+
+- R1-1 MEDIUM `docs/prd/clarify-unknowns.worklog.md:714` — The old judge failed 8 of the
+  12 saved PRDs, not 7.
+- R1-2 MEDIUM `evals/16-clarify-exec-one-way-door/graders/api-escalated.md:6` — "API
+  contract" alone passes a marker item about another point.
+- R1-3 MEDIUM `evals/16-clarify-exec-one-way-door/graders/api-escalated.md:4` — With the
+  `i` flag, the prose "needs clarification" counts as a marker.
+- R1-4 MEDIUM `evals/16-clarify-exec-one-way-door/graders/api-escalated.md:?` — The regex
+  covers claim 1 of the old judge only; the schema door, behaviour-level requirements and
+  "gate not passed" claims are dropped without a word.
+- R1-5 MEDIUM `evals/16-clarify-exec-one-way-door/graders/api-escalated.md:6` — An
+  indented option list ends the marker's item, so a real escalation fails.
+- R1-6 MEDIUM `evals/78-clarify-exec-fully-specified/graders/no-batch-lines.md:?` — Case
+  78 has no check that the PRD exists; two `not_contains` graders may pass on no file.
+- R1-7 MEDIUM `evals/78-clarify-exec-fully-specified/graders/no-batch-lines.md:6` — A
+  sourced `[blindspot]` line still forms a batch; clarify does not say that a point the
+  linked document answers is no blindspot.
+- R1-8 LOW `evals/78-clarify-exec-fully-specified/fixture.sh:?` — The internal route may
+  still read as a public API door.
+- R1-9 LOW `evals/78-clarify-exec-fully-specified/graders/no-batch-lines.md:6` — Two
+  spaces between tags, or a source tag on the continuation line, pass the grader.
+- R1-10 LOW `evals/16-clarify-exec-one-way-door/graders/api-escalated.md:6` — A quadratic
+  worst case; harmless at PRD size.
+- R1-11 LOW `docs/prd/clarify-unknowns.worklog.md:709` — The cost column sums to 17.89,
+  the text says 17.88 (rounding).
+- R1-12 LOW `shipgate/CHANGELOG.md:7` — "no install reached it" may overclaim.
+- R1-13 LOW `docs/prd/clarify-unknowns.worklog.md:1001` — The T071 list of settled points
+  is incomplete.
+
+The user's ruling on round 1: fix R1-1, R1-2, R1-3, R1-5 and R1-6 as proposed; R1-4 (a),
+drop the three claims and say so; R1-7, one clarify sentence; R1-12, soften the claim
+(T074). Deferred to #32: R1-8, R1-9, R1-10, R1-11 and R1-13.
+
+### Review round 2 (0.34.1)
+
+One fresh reviewer, all lenses, on the T074 diff only (7 files). Every ruling item is
+confirmed with its line or test (R1-1, R1-2, R1-3, R1-4, R1-5, R1-6, R1-7, R1-12); each new
+grader test fails on the old regex; `api-escalated` still matches the 12 saved PRDs. New
+findings; the session stopped here for the lead (the rule for a MEDIUM):
+
+- R2-1 MEDIUM `skills/clarify/SKILL.md:99` — The new sentence and the Evidence-first
+  sentence ("a blindspot candidate stays in the list whatever its source") leave the
+  boundary implicit: a source such as the area's README may back a candidate, a linked
+  document may not. The reviewer's claim that the skill holds a sourced-blindspot example is
+  wrong (the example is in a test), but the tension stands.
+- R2-2 LOW `tests/test_eval_graders.py:101` — The class docstring still names "the API
+  contract".
+- R2-3 LOW `docs/prd/clarify-unknowns.worklog.md:1011` — T072 still describes the wider
+  regex; T074 narrows it.
+- R2-4 LOW `evals/16-clarify-exec-one-way-door/graders/api-escalated.md:5` — An indented
+  marker item and its indented sibling count as one item (a nested false pass).
+- R2-5 LOW `evals/16-clarify-exec-one-way-door/graders/api-escalated.md:5` — A CRLF blank
+  line, a table row or a `+ ` item does not end the item.
+- R2-6 LOW `evals/78-clarify-exec-fully-specified/graders/prd-written.md:1` — With weight 1,
+  a run with no PRD may still score about 0.78 if a `not_contains` grader passes on a
+  missing file (unverified).
+- R2-7 LOW `shipgate/CHANGELOG.md:19` — "the gate claim is no longer judged there" is true
+  only for the PRD grader; the reply's judge still checks it.
+
+The lead's ruling on round 2: R2-1 option (a), the boundary named in the new sentence only,
+with the exception line of Evidence first unchanged; R2-2 and R2-3 taken with it (T075).
+Deferred to #32: R2-4, R2-5, R2-6 and R2-7.
+
+- [x] T075 — Round 2 fixes: the clarify sentence says that a point a document the request
+  or the issue links answers is no blindspot candidate, even when the area's files also
+  state it (R2-1); the case-16 test docstring names `GET /customers` only (R2-2); T072
+  notes that T074 narrows the regex (R2-3) — file(s): `skills/clarify/SKILL.md`,
+  `tests/test_prose.py`, `tests/test_eval_graders.py`, this worklog — done when: the prose
+  pin fails first, then passes on both Pythons.
+
+### Review round 3 (0.34.1)
+
+One fresh reviewer on the T075 edits only. All three are confirmed: the sentence names the
+boundary without touching the exception line (case 76's commit-subject candidate stays a
+candidate; case 78's linked document makes its points sourced lines), the docstring
+matches the regex, and the T072 note matches T074. Only LOW findings, deferred to #32:
+
+- R3-1 LOW `skills/clarify/SKILL.md:99` — The sentence stacks two relative clauses ("a
+  document the request or the issue links answers"); hard to parse.
+- R3-2 LOW `skills/clarify/SKILL.md:82` — The exception line does not say that the
+  linked-document rule removes a point before it becomes a candidate.
+- R3-3 LOW `skills/clarify/SKILL.md:75` — Evidence first opens the documents the issue
+  links, not those the request links; case 78 links its document from the request.
+- R3-4 LOW `skills/clarify/SKILL.md:100` — "the area's files" is a new term; commit
+  subjects are no files.
+
+### Rejected findings
+
+- `docs/prd/clarify-unknowns.worklog.md:1113` (LOW 60): T075's "both Pythons" cannot be confirmed; it can: `/usr/bin/python3` is 3.9.6, and the verify-run records that run.
+
+Verdict: ready (0.34.1, round 3). Fresh verify after T075: the full suite ran 2044 tests,
+OK, 2 skipped; the changed test files pass on `/usr/bin/python3` 3.9.6; `claude plugin
+validate shipgate` passed; the byte scan of the 13 changed files is clean; the privacy grep
+of the diff is clean. Next: the user's go, the commit, the built-in `/security-review` on
+it, the push and the PR. After the merge: cases 76 and 78 on both models, about 9.4 USD.

@@ -232,6 +232,63 @@ issue: "#388"
 
 - **SC-001** — 100% of paid invoices in a day have a matching sent receipt in the mail log.
 MD
+mkdir -p docs/finance
+cat > docs/finance/statements.md <<'MD'
+# Customer statements
+
+Owner: finance. These rules are approved for the monthly statement PDF.
+
+## Balance
+
+- A customer's balance at a date is the total of their invoices issued on or before that
+  date, minus their payments received on or before that date. The invoice `status` field
+  plays no part.
+- The opening balance is the balance at the end of the day before the month starts. The
+  closing balance is the balance at the end of the month's last day, or of today for the
+  current month.
+- An invoice belongs to the month of its `issued` date. A payment belongs to the month of
+  its `received` date. The due date plays no part.
+- A balance below zero is a credit. The statement shows it as a negative amount followed
+  by "(credit)", for example `-25.00 (credit)`.
+- Amounts have two decimals and no currency symbol: the service bills in one currency.
+
+## Months
+
+- Any past month and the current month can be requested. The current month covers the
+  activity up to today, and its title says "activity to <date>".
+- A future month is an error: "Statement month is in the future".
+- A month before the customer's first invoice gives a statement with no activity and
+  zero balances.
+- A statement is built from the records each time and is never stored. The records are
+  append-only, so a past month always gives the same statement.
+
+## Content
+
+- Header: the customer's name and id, the month, the opening balance.
+- One line per invoice and per payment, in date order, invoices before payments on the
+  same day: date, kind (`invoice` or `payment`), invoice number, amount (an invoice adds,
+  a payment subtracts), running balance.
+- Invoice lines show no due date, no overdue state and no status.
+- Footer: the closing balance.
+- File name: `statement-<customer id>-<YYYY-MM>.pdf`. The customer's name is not in it.
+
+## Where it is requested
+
+- The customer page is in the web client, which is another repository. Its "Download
+  statement" button and month picker call this service. That change is not part of this
+  repository.
+- This service adds the internal route `GET /internal/statements/<customer id>/<YYYY-MM>.pdf`,
+  which returns the PDF (`application/pdf`). Internal routes are not part of the public
+  contract: `docs/api.md` does not change, and the mobile app and the finance export do
+  not use the route.
+- Access is the same as for every other route of this service: the web client signs staff
+  in, and the service has no per-user roles.
+
+## Performance
+
+- The 3-second target holds for up to 500 invoices and 500 payments in the month, with
+  any number of earlier records behind the opening balance.
+MD
 cat > test_terms.py <<'PY'
 import unittest
 from datetime import date
