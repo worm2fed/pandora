@@ -96,6 +96,9 @@ its last 20 commits (`git log --format=%s -n 20 -- <dir>`, no authors) and the t
 files of that JSON. Ask: what would the people who work here expect this change to decide that
 the request does not mention? Add at most two candidates, tagged blindspot. Nobody asks about
 what they do not know, and in an area the user knows well they would catch it themselves.
+A point that a document the request or the issue links answers is no blindspot candidate,
+even when the area's files also state it: it is a sourced line. A blindspot stays what
+nobody has decided yet.
 
 **UI.** When the map tags a touched module `UI` and the request or the issue names no
 reference, add one
@@ -174,7 +177,9 @@ there is no dialog. Overflow lines are not asked: the phase summary lists them f
 their count. A stream with a lead (`report_to`) sends the batch to the lead in one message
 instead, and waits for the answers before `clarify-passed`. With no question tool and no
 lead, the batch is the last block of your reply; tag those PRD lines `[unconfirmed]`, record
-the dismissed form below, and go on.
+the dismissed form below, and go on. In the message to a lead and in that block, as in the
+dialog, each item states the answer taken, its source and at least one real alternative: a
+different answer to the same question, not "add or remove" or "tell me".
 
 With `off`, there is no confirm dialog, no stop and no batch to a lead; escalations still go
 to the user. The lines keep their class and source, and the phase summary lists the risky
