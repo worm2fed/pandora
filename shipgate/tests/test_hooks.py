@@ -28,6 +28,7 @@ JOURNAL = SHIPGATE / "scripts" / "journal.py"
 sys.path.insert(0, str(HOOKS))
 
 from _common import find_project, load_project  # noqa: E402
+from test_journal import _EMPTY_CONFIG_DIR  # noqa: E402
 
 SESSION = "sess-integration-1"
 SLUG = "feat"
@@ -67,12 +68,19 @@ def run_hook(
     )
 
 
+def journal_env() -> dict:
+    """The inherited environment with an empty Claude config directory: a terminal
+    append prunes the evidence root under it (ADR 0031), never the real one."""
+    return {**os.environ, "CLAUDE_CONFIG_DIR": _EMPTY_CONFIG_DIR}
+
+
 def journal(db: Path, *args: str, cwd: Path | None = None):
     return subprocess.run(
         [sys.executable, str(JOURNAL), "--db", str(db), *args],
         capture_output=True,
         text=True,
         cwd=str(cwd) if cwd else None,
+        env=journal_env(),
         timeout=60,
     )
 
@@ -1626,6 +1634,7 @@ class TestStopGateProbes(HookTestCase):
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
              "--stream", stream, "--batch", "--actor", f"orchestrator@{SESSION}", *extra],
             input=lines, capture_output=True, text=True, cwd=str(self.root), timeout=60,
+            env=journal_env(),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -4287,7 +4296,7 @@ class TestPrintedGoRequestsRunAsPrinted(ReplyHookCase):
         return subprocess.run(
             [sys.executable, str(self.script), "--db", str(self.db), "append",
              "--stream", stream, "--type", event, "--data", data],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, env=journal_env(),
         )
 
     def test_a_read_go_names_its_gate_through_kind_too(self):

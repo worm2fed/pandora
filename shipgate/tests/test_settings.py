@@ -56,7 +56,7 @@ TABLE_KEYS = (
     "autonomy", "orchestration.review", "orchestration.explore", "writing_style",
     "code_graph", "code_signals.window_months", "code_signals.fix_pattern",
     "code_signals.exclude", "code_signals.ranking_exclude", "handoff", "forge",
-    "clarify_confirm",
+    "clarify_confirm", "ui.globs", "ui.widths", "ui.capture",
 )
 
 # Key → the legacy (section, bullet) the table names.
@@ -79,7 +79,10 @@ TABLE_LEGACY = {
 }
 
 PROJECT_SCOPE = ("version", "db", "ledger", "artifact_homes", "enforce", "code_signals",
-                 "forge")
+                 "forge", "ui")
+
+CAPTURE_ALLOWED = ("a command with {url}, {width} and {out} and no quote, backtick or "
+                   "backslash, or null")
 
 
 class TestSchema(unittest.TestCase):
@@ -620,6 +623,18 @@ class TestBadValues(SettingsCase):
             {"db": 3},
             {"forge": "bitbucket"},
             {"artifact_homes": {"prd": 7}},
+            {"ui": {"globs": [""]}},
+            {"ui": {"widths": []}},
+            {"ui": {"widths": [100]}},
+            {"ui": {"widths": [4001]}},
+            {"ui": {"widths": [True]}},
+            {"ui": {"widths": 390}},
+            {"ui": {"capture": "x {url} {width}"}},
+            {"ui": {"capture": "x {url} {width} {out}\nrm -rf x"}},
+            {"ui": {"capture": 'x "{url}" {width} {out}'}},
+            {"ui": {"capture": "x '{url}' {width} {out}"}},
+            {"ui": {"capture": "x `{url}` {width} {out}"}},
+            {"ui": {"capture": "x {url} {width} {out} " + chr(92)}},
         )
         for data in cases:
             with self.subTest(data=data):
@@ -627,7 +642,9 @@ class TestBadValues(SettingsCase):
                 resolved = self.resolve()
                 self.assertEqual([p.kind for p in resolved.problems], ["bad-value"])
         for data in ({"handoff": "off"}, {"handoff": "1.5m"}, {"handoff": 300000},
-                     {"code_signals": {"ranking_exclude": []}}):
+                     {"code_signals": {"ranking_exclude": []}},
+                     {"ui": {"widths": [200, 4000], "capture": None}},
+                     {"ui": {"capture": "shot --out {out} {url} {width}"}}):
             with self.subTest(data=data):
                 self.project_json(data)
                 self.assertEqual(self.resolve().problems, [])
@@ -815,6 +832,7 @@ SAMPLE_VALUES = {
     "code_signals.window_months": 24, "code_signals.fix_pattern": "^hotfix",
     "code_signals.exclude": ["vendor/"], "code_signals.ranking_exclude": [],
     "handoff": "1m", "forge": "gitlab", "clarify_confirm": "off",
+    "ui.globs": ["web/*"], "ui.widths": [360], "ui.capture": "shot {url} {width} {out}",
 }
 
 # The legacy line per legacy key, and the value it gives (SC-002).
@@ -1233,6 +1251,66 @@ class TestConfigCommand(unittest.TestCase):
         proc = self.config("clarify_confirm", rc=2)
         self.assertIn(f'journal.py: {path}: clarify_confirm = "always" is not one of: '
                       "risky, off", proc.stderr)
+
+    def test_ui_default_project_values_user_scope_and_bad_values(self):
+        """#26 FR-001, FR-019, SC-008: the `ui` group prints its three leaves with their
+        source; the user settings file cannot set it; a bad leaf exits 2 with the key,
+        the value and the allowed values."""
+        self.assertEqual(self.config("ui").stdout.splitlines(), [
+            "ui.globs = []  (default)",
+            "ui.widths = [390, 1280]  (default)",
+            "ui.capture = null  (default)",
+        ])
+        path = self.sidecar({"ui": {"globs": ["web/templates/*"], "widths": [360],
+                                    "capture": "shot {url} {width} {out}"}})
+        source = f"(project {path.relative_to(self.root)})"
+        self.assertEqual(self.config("ui").stdout.splitlines(), [
+            f'ui.globs = ["web/templates/*"]  {source}',
+            f"ui.widths = [360]  {source}",
+            f"ui.capture = shot {{url}} {{width}} {{out}}  {source}",
+        ])
+
+        path.unlink()
+        user_file = self.write("shipgate.settings.json",
+                               json.dumps({"ui": {"globs": ["web/*"]}}), base=self.user)
+        proc = self.config("ui")
+        self.assertEqual(proc.stdout.splitlines()[0], "ui.globs = []  (default)")
+        self.assertIn(f"journal.py: {user_file}: ui is a project setting; the user settings "
+                      "file cannot set it, so it is ignored", proc.stderr)
+        user_file.unlink()
+
+        widths = "a list of at least one integer from 200 to 4000"
+        for leaf, value, shown, allowed, default in (
+                ("widths", [], "[]", widths, "[390, 1280]"),
+                ("widths", [100], "[100]", widths, "[390, 1280]"),
+                ("capture", "x {url} {width}", '"x {url} {width}"', CAPTURE_ALLOWED,
+                 "null")):
+            with self.subTest(leaf=leaf, value=value):
+                path = self.sidecar({"ui": {"globs": ["web/*"], leaf: value}})
+                proc = self.config("ui", rc=2)
+                self.assertIn(f"journal.py: {path}: ui.{leaf} = {shown} is not one of: "
+                              f"{allowed}", proc.stderr)
+                # Only the bad leaf takes its default; the group's other leaves keep the
+                # file's values, and a key that is not printed is a warning only.
+                lines = proc.stdout.splitlines()
+                self.assertIn(f"ui.{leaf} = {default}  (default)", lines)
+                self.assertIn('ui.globs = ["web/*"]  (project .claude/shipgate.json)', lines)
+                self.config(f"ui.{leaf}", rc=2)
+                self.assertIn(f"ui.{leaf}", self.config("ui.globs", rc=0).stderr)
+
+    def test_a_capture_with_a_quote_a_backtick_or_a_backslash_exits_2(self):
+        """#26 review round 1: the journal fills {url} quoted for a shell, so a template
+        that quotes it again could let the URL run code. `ui.capture` holds no quote,
+        backtick or backslash."""
+        for template in ('shot "{url}" {width} {out}', "shot '{url}' {width} {out}",
+                         "shot {url} {width} {out} `id`",
+                         "shot {url} {width} {out} " + chr(92) + "$HOME"):
+            with self.subTest(template=template):
+                path = self.sidecar({"ui": {"globs": ["web/*"], "capture": template}})
+                proc = self.config("ui.capture", rc=2)
+                shown = json.dumps(template)
+                self.assertIn(f"journal.py: {path}: ui.capture = {shown} is not one of: "
+                              f"{CAPTURE_ALLOWED}", proc.stderr)
 
     def test_unknown_key_exits_2(self):
         proc = self.config("autonomyy", rc=2)

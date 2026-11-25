@@ -118,11 +118,13 @@ EVENT_VOCABULARY: Dict[str, str] = {
 #   string_lists  keys whose value must be a JSON list of non-empty strings
 #   integers      keys whose value must be a non-negative JSON integer (a boolean is
 #                 refused)
+#   booleans      keys whose value must be JSON true or false (1 and 0 are refused)
 #   string_maps   keys whose value must be a JSON object, each of its values a
 #                 non-empty string
 #   max_chars     key -> the most characters a string value may hold
 # A sub-shape takes the validating kinds above (required, enums, lists, strings,
-# string_lists, integers, string_maps, max_chars, map_enums, objects, list_objects);
+# string_lists, integers, booleans, string_maps, max_chars, map_enums, objects,
+# list_objects);
 # aliases and defaults apply at the top level only.
 # `normalize_payload` enforces every kind, and `vocab --shape` prints them.
 #
@@ -201,6 +203,9 @@ class EventShape(TypedDict, total=False):
     ``criteria`` and ``dispositions``. ``integers`` is ADR 0014's:
     ``review-disposition.round`` is a non-negative integer. ``string_maps`` is its
     0.22.0 amendment: ``review-disposition.labels`` maps a finding key to a name.
+    ``booleans`` is ADR 0031's: ``phase-entered.ui`` is JSON ``true`` or ``false``, and
+    nothing else. An enum of the two would take ``1`` and ``0``, because Python counts
+    them equal to ``True`` and ``False``.
     """
 
     required: List[str]
@@ -212,6 +217,7 @@ class EventShape(TypedDict, total=False):
     strings: List[str]
     string_lists: List[str]
     integers: List[str]
+    booleans: List[str]
     string_maps: List[str]
     max_chars: Dict[str, int]
     map_enums: Dict[str, List[str]]
@@ -238,6 +244,9 @@ EVENT_SHAPES: Dict[str, EventShape] = {
                 "map_enums": {"repos": list(get_args(SignalSource))},
             },
         },
+        # `route-and-map` carries the computed UI flag when the project sets `ui.globs`
+        # (ADR 0031): true when `hotspots --json` counts a UI file, else false.
+        "booleans": ["ui"],
     },
     "deviation": {
         "required": ["note"],
@@ -572,6 +581,18 @@ SIGNALS_MISSING_NOTE = (
 # The `deviation` kind that waives a Stop gate finding, and the meta key that holds the
 # last recorded check (ADR 0020).
 GATE_WAIVED = "gate-waived"
+
+# ADR 0031: the evidence store of UI tasks.
+SCREENS_WAIVED = "screens-waived"
+# Beside DORMANT_DAYS: a constant, not a setting, because one root holds every project.
+EVIDENCE_KEEP_DAYS = 30
+EVIDENCE_PARTS = ("shipgate", "evidence")
+# Names inside the evidence root. ASCII digits only: `\d` would accept other scripts'
+# digits. Always matched with `fullmatch`.
+EVIDENCE_PROJECT_RE = re.compile(r"[0-9a-f]{12}")
+EVIDENCE_FILE_RE = re.compile(r"(T[0-9]+)-([0-9]+)(?:-([2-9]))?\.png")
+EVIDENCE_TMP_RE = re.compile(r"\.T[0-9]+-[0-9]+(?:-[2-9])?\.png\.[0-9]+\.tmp")
+TASK_ID_RE = re.compile(r"T[0-9]+")
 
 
 CLOSEOUT_QUESTION_PLACEHOLDER = "<the close-out question>"

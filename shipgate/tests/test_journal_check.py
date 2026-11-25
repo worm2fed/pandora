@@ -251,6 +251,20 @@ class TestCheck(JournalTestCase):
             [("fix/7-x", ["T002"])],
         )
 
+    def test_a_screens_waiver_clears_no_finding(self):
+        """#26 T013 (ADR 0031): a `screens-waived` deviation stands in for a UI task's
+        screenshots only; the Stop gate still reports its ticked box with no
+        task-done."""
+        self.worklog("- [x] T001 — first")
+        self.names_the_worklog("fix/7-x")
+        self.captured()
+        self.append_event("fix/7-x", "deviation", {
+            "kind": "screens-waived", "task_ids": ["T001"], "note": "no browser tool",
+        })
+        report = json.loads(self.check(rc=CHECK).stdout)
+        self.assertEqual([(f["missing"], f["task_id"]) for f in report["findings"]],
+                         [("task-done", "T001")])
+
     def test_a_waiver_on_another_stream_clears_nothing(self):
         self.worklog("- [x] T001 — first")
         self.names_the_worklog("fix/7-x")

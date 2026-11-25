@@ -2,6 +2,53 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.36.0 — a UI task is done with screenshots (#26, ADR 0031).
+
+**A UI task now needs screenshots before it is done (#26, ADR 0031).** A test can pass while
+the screen is wrong. Now a script marks the tasks that change a screen, and `task-done` waits
+for a screenshot of each one at each set width, or for a reason why none could be taken. You
+see the screenshots, or the reasons, in the publish digest.
+- New settings, project scope: `ui.globs` (the project's UI files; the default `[]` turns all
+  of this off), `ui.widths` (default `[390, 1280]`) and `ui.capture` (a command with `{url}`,
+  `{width}` and `{out}` that the journal prints with the URL and the path quoted, and never
+  runs; it may hold no quote, backtick or backslash, so a placeholder cannot sit inside
+  quotes). A project with no globs sees no change, except that clarify asks for no UI
+  reference. A `ui` value outside its set refuses `task-done` and `design-committed` with
+  exit 2 and names the key.
+- A Build Plan task is a UI task when a path in backticks after `file(s):` on its line
+  matches a glob. With globs set, `design-committed` refuses a task line that names neither a
+  backticked path nor `file(s): none`, and names the line.
+- `journal.py screens --stream S --task T --file F` registers PNG files: a file counts for a
+  width w when it is w, 2w or 3w pixels wide. `--url U` prints one capture command per width,
+  `--list` shows each UI task's state, and `--prune` cleans up by hand.
+- `task-done` of a UI task is refused until each width has a PNG registered after the
+  stream's `design-committed`, or a `deviation` with `kind: screens-waived`, `task_ids` and the
+  reason in `note` names it. The refusal prints the register, capture and waiver commands. A
+  `screens-waived` clears no Stop gate finding.
+- The files live outside every repository, in `$CLAUDE_CONFIG_DIR/shipgate/evidence` (else
+  `~/.claude/shipgate/evidence`), one directory per project and one per stream. The journal
+  deletes them itself: a stream's directory right after its `flow-completed` or
+  `flow-abandoned`, this project's directories of ended streams at each register, and, at
+  both moments and right after a `flow-started`, every file older than 30 days in the whole
+  root. There is no timer: the 30-day limit applies at three moments, when a stream ends,
+  when a stream starts (in any project) and when screenshots are registered, and `doctor`
+  shows what is left. A delete follows no symbolic link and removes only that layout, one
+  file at a time; a regular `.DS_Store` file that Finder leaves in a stream or project
+  directory goes with that directory. A failed delete is a warning and never changes
+  an exit code or an event. A terminal append or a `flow-started` with no evidence root on
+  disk costs one `lstat`, and any other append costs nothing new.
+- The digest gets a Screens part for a stream with a UI task: the evidence directory, then 2
+  rows of tasks (missing first), so it has at most 13 lines. `doctor` reports the evidence
+  root, its size, what the next prune would delete and the entries it refuses. The handoff
+  marks a UI next task `[UI]` and prints the rule.
+- `signals.py hotspots --json` reports `ui`: how many ranked files match the globs, with up
+  to 3 of them. Route-and-map records `ui: true` or `false` on its phase entry, and clarify's
+  UI reference ask reads it; the model's `UI` tag in the impact map is gone.
+- The verify, implement, design, model-tiers, route-and-map, clarify and setup skills say how
+  to take, register and read the screenshots, and why. Setup offers `ui.globs` when the
+  project has a web frontend.
+- No hook and no shipgate-hud file changes.
+
 v0.35.0 — the publish question shows what changed and what was decided alone (#25, ADR 0030).
 
 **The publish question shows a digest (#25, ADR 0030).** Before you approve a publish, you

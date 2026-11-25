@@ -222,6 +222,12 @@ def _validate_shape(
                 f"{event_type}: {where}.{key} must be a non-negative integer, got "
                 f"{json.dumps(value, sort_keys=True)}" + _shape_hint(event_type)
             )
+    for key in shape.get("booleans", []):
+        if key in payload and not isinstance(payload[key], bool):
+            raise GateViolation(
+                f"{event_type}: {where}.{key} must be true or false, got "
+                f"{json.dumps(payload[key], sort_keys=True)}" + _shape_hint(event_type)
+            )
     for key in shape.get("string_maps", []):
         if key not in payload:
             continue

@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from datetime import datetime, timedelta, timezone
@@ -61,11 +62,41 @@ _EMPTY_CONFIG_DIR = tempfile.mkdtemp(prefix="shipgate-test-config-")
 atexit.register(shutil.rmtree, _EMPTY_CONFIG_DIR, True)
 
 
+def _evidence_base(env):
+    """The directory whose `shipgate/evidence` the journal prunes for ENV, by the rule of
+    `screens.evidence_root`; None when ENV names no evidence root."""
+    return env.get("CLAUDE_CONFIG_DIR") or (
+        os.path.join(env["HOME"], ".claude") if env.get("HOME") else None)
+
+
+_AMBIENT_EVIDENCE_BASE = _evidence_base(os.environ)
+
+
+def isolated_env(env):
+    """ENV, with CLAUDE_CONFIG_DIR pointed at the empty directory when ENV would reach
+    the developer's evidence root: since #26 T023 every flow-started append prunes that
+    root (ADR 0031). An ENV with a root of its own, or with none, stays as it is."""
+    if (_AMBIENT_EVIDENCE_BASE is not None
+            and _evidence_base(env) == _AMBIENT_EVIDENCE_BASE):
+        return dict(env, CLAUDE_CONFIG_DIR=_EMPTY_CONFIG_DIR)
+    return env
+
+
+def journal_env(**extra):
+    """The environment of a journal subprocess a test starts itself (an `append --batch`
+    with stdin): os.environ without the session id, plus EXTRA, isolated."""
+    env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+    env.update(extra)
+    return isolated_env(env)
+
+
 def run_journal(args, cwd=None, env=None):
     if env is None:
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         if env.get("CLAUDE_CONFIG_DIR") == _AMBIENT_CONFIG_DIR:
             env["CLAUDE_CONFIG_DIR"] = _EMPTY_CONFIG_DIR
+    else:
+        env = isolated_env(env)
     return subprocess.run(
         [sys.executable, str(JOURNAL)] + [str(a) for a in args],
         cwd=str(cwd) if cwd else None,
@@ -105,6 +136,33 @@ def legacy_read_go(gate, witness):
 def _recent_ts() -> str:
     """An ISO timestamp one hour ago — for fixtures that must render as live, not dormant."""
     return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+
+def snapshot_real_root():
+    """The developer's evidence root and its tree, for a module guard: a module whose
+    tests append `flow-started` must leave that root as it found it (ADR 0031)."""
+    from test_journal_screens import _ambient_root, _tree
+    root = _ambient_root()
+    return root, _tree(root)
+
+
+def assert_real_root(snapshot):
+    from test_journal_screens import _tree
+    root, tree = snapshot
+    if _tree(root) != tree:
+        raise AssertionError(f"the real evidence root {root} changed in the tests")
+
+
+_REAL = []
+
+
+def setUpModule():
+    _REAL.append(snapshot_real_root())
+
+
+def tearDownModule():
+    assert_real_root(_REAL.pop())
+
 
 class JournalTestCase(unittest.TestCase):
     """Base: a temp project directory with an initialized journal."""
@@ -842,7 +900,7 @@ class TestAppendBatch(JournalTestCase):
         ]
         proc = subprocess.run(
             argv, input="".join(line + "\n" for line in lines),
-            capture_output=True, text=True, cwd=str(self.root),
+            capture_output=True, text=True, cwd=str(self.root), env=journal_env(),
         )
         self.assertEqual(
             proc.returncode, rc,
@@ -1790,6 +1848,391 @@ class _StreamRows:
         return [{"stream": f"{prefix}{n}-x", "version": 1, "type": etype,
                  "data": data or {"request": "x"}, "ts": ts, "actor": actor}
                 for n in range(count)]
+
+
+
+class TestPinTerminalAppend(JournalTestCase):
+    """#26 T002: a terminal append prints one stdout line and nothing on stderr, as in
+    0.35.0. A stream with no evidence directory keeps it so."""
+
+    def test_flow_completed_and_flow_abandoned(self):
+        self.init_db()
+        for number, (stream, etype) in enumerate(
+                (("feature/x", "flow-completed"), ("feature/y", "flow-abandoned"))):
+            with self.subTest(etype=etype):
+                self.append_event(stream, "flow-started", {"request": "r"})
+                proc = self.append_event(stream, etype, {"reason": "done"})
+                seq = 2 * number + 2
+                self.assertEqual(proc.stdout,
+                                 f"appended {etype} to {stream}: seq {seq}, version 2\n")
+                self.assertEqual(proc.stderr, "")
+
+
+class TestTerminalPrune(JournalTestCase):
+    """#26 T011 (ADR 0031, moment 1): right after a `flow-completed` or a
+    `flow-abandoned` commits, `append` removes the stream's evidence directory and says
+    so on stderr. T023: right after a `flow-started` commits, it runs the 30-day pass
+    alone. Any other append calls nothing, and a prune that fails never changes the exit
+    code or the recorded event."""
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.root / "config"
+        self.config.mkdir()
+        self.init_db()
+        self.append_event("feature/x", "flow-started", {"request": "r"})
+
+    def env(self):
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        return env
+
+    def journal(self, *args, cwd=None, rc=None, session_env=None):
+        proc = run_journal(args, cwd=cwd or self.root, env=self.env())
+        if rc is not None:
+            self.assertEqual(proc.returncode, rc,
+                             f"args={args!r}\nstdout: {proc.stdout}\nstderr: {proc.stderr}")
+        return proc
+
+    def evidence_dir(self, stream, files=("T001-390.png", "T001-1280.png")):
+        import hashlib
+        from urllib.parse import quote
+        key = hashlib.sha256(os.path.realpath(self.db).encode("utf-8")).hexdigest()[:12]
+        directory = (Path(os.path.realpath(self.config)) / "shipgate" / "evidence" / key
+                     / quote(stream, safe="-_."))
+        directory.mkdir(parents=True)
+        for name in files:
+            (directory / name).write_bytes(b"png")
+        return directory
+
+    def test_flow_completed_removes_the_stream_directory(self):
+        d = self.evidence_dir("feature/x")
+        other = self.evidence_dir("feature/y")
+        proc = self.append_event("feature/x", "flow-completed", {"reason": "merged"})
+        self.assertEqual(proc.stdout,
+                         "appended flow-completed to feature/x: seq 2, version 2\n")
+        self.assertEqual(proc.stderr, f"evidence: removed {d} (2 files)\n")
+        self.assertFalse(d.exists())
+        self.assertTrue(other.is_dir())
+
+    def test_flow_abandoned_removes_it_and_the_emptied_project_directory(self):
+        d = self.evidence_dir("feature/x", files=("T001-390.png",))
+        proc = self.append_event("feature/x", "flow-abandoned", {"reason": "dropped"})
+        self.assertEqual(proc.stderr.splitlines(), [
+            f"evidence: removed {d} (1 file)",
+            f"evidence: removed {d.parent} (0 files)",
+        ])
+        self.assertTrue(d.parent.parent.is_dir())
+
+    def test_a_batch_prunes_each_terminal_event(self):
+        d = self.evidence_dir("feature/x")
+        y = self.evidence_dir("feature/y")
+        self.append_event("feature/y", "flow-started", {"request": "r"})
+        proc = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
+             "--stream", "feature/x", "--batch"],
+            input=json.dumps({"type": "flow-completed", "data": {}}) + "\n"
+            + json.dumps({"type": "flow-abandoned", "data": {}, "stream": "feature/y"})
+            + "\n",
+            cwd=str(self.root), env=self.env(), capture_output=True, text=True)
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        self.assertEqual(proc.stderr.splitlines(), [
+            f"evidence: removed {d} (2 files)",
+            f"evidence: removed {y} (2 files)",
+            f"evidence: removed {d.parent} (0 files)",
+        ])
+
+    def in_process(self, module, etype="flow-completed", data=None, stream="feature/x",
+                   **kwargs):
+        """``append_event`` in this process, with the test's config directory."""
+        import contextlib
+        import io
+        err = io.StringIO()
+        conn = module.connect(Path(self.db))
+        try:
+            with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}), \
+                    contextlib.redirect_stderr(err):
+                module.append_event(conn, stream, etype, data or {}, self.root, **kwargs)
+        finally:
+            conn.close()
+        return err.getvalue()
+
+    def test_a_prune_that_raises_leaves_the_event_and_one_warning(self):
+        module = load_journal_module()
+        d = self.evidence_dir("feature/x")
+        with mock.patch.object(module._package.screens, "prune_evidence",
+                               side_effect=RuntimeError("boom")):
+            err = self.in_process(module)
+        self.assertEqual(err, "warning: the event landed, but its evidence directory "
+                              "was not pruned (boom)\n")
+        self.assertEqual(self.events("feature/x")[-1]["type"], "flow-completed")
+        self.assertTrue(d.is_dir())
+
+    def test_a_prune_that_raises_leaves_exit_0(self):
+        import contextlib
+        import io
+        module = load_journal_module()
+        self.evidence_dir("feature/x")
+        out, err = io.StringIO(), io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.object(module._package.screens, "prune_evidence",
+                               side_effect=OSError(5, "Input/output error")), \
+                mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = module.main(["--db", str(self.db), "append", "--stream", "feature/x",
+                              "--type", "flow-completed"])
+        self.assertEqual(rc, OK)
+        self.assertEqual(out.getvalue(),
+                         "appended flow-completed to feature/x: seq 2, version 2\n")
+        self.assertEqual(err.getvalue(), "warning: the event landed, but its evidence "
+                                         "directory was not pruned ([Errno 5] Input/output "
+                                         "error)\n")
+
+    def both_prunes(self, module, side_effect=None):
+        """``prune_ended_stream`` and ``prune_old_evidence`` as ``append`` calls them."""
+        import contextlib
+        stack = contextlib.ExitStack()
+        mocks = [stack.enter_context(mock.patch.object(
+            module._package.append, name, side_effect=side_effect))
+            for name in ("prune_ended_stream", "prune_old_evidence")]
+        return stack, mocks
+
+    def test_a_non_terminal_append_calls_nothing(self):
+        """Neither prune runs after any append but a terminal one (moment 1) or a
+        `flow-started` (the 30-day pass alone)."""
+        module = load_journal_module()
+        self.evidence_dir("feature/x")
+        stack, (ended, started) = self.both_prunes(module, AssertionError("called"))
+        with stack:
+            for etype, data, kwargs in (
+                    ("phase-entered", {"phase": "workspace"}, {}),
+                    ("deviation", {"note": "n"}, {}),
+                    ("design-committed", {"worklog": "docs/w.worklog.md"},
+                     {"force": True, "force_reason": "a test"}),
+                    ("verify-run", {"outcome": "pass", "task_ids": ["T001"]}, {}),
+                    ("task-done", {"task_id": "T001"},
+                     {"force": True, "force_reason": "a test"}),
+                    ("flow-suspended", {}, {}), ("flow-resumed", {}, {})):
+                self.in_process(module, etype, data, **kwargs)
+        self.assertEqual((ended.call_count, started.call_count), (0, 0))
+        stack, (ended, started) = self.both_prunes(module)
+        with stack:
+            self.in_process(module, "flow-completed")
+        self.assertEqual([c.args[1] for c in ended.call_args_list], ["feature/x"])
+        self.assertEqual(started.call_count, 0)
+        stack, (ended, started) = self.both_prunes(module)
+        with stack:
+            self.in_process(module, "flow-started", {"request": "r"}, stream="feature/n")
+        self.assertEqual((ended.call_count, started.call_count), (0, 1))
+
+    def old_file(self, directory, name="T001-390.png", days=31):
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / name
+        path.write_bytes(b"png")
+        past = time.time() - days * 86400
+        os.utime(path, (past, past))
+        return path
+
+    def root_dir(self):
+        return Path(os.path.realpath(self.config)) / "shipgate" / "evidence"
+
+    def test_a_terminal_append_applies_the_age_limit_to_the_whole_root(self):
+        """The 30-day limit has no timer: it also runs when any stream ends, over every
+        project of the root, with the same delete rules. A fresh file stays."""
+        other = self.root_dir() / "0123456789ab" / "feature%2Fz"
+        old = self.old_file(other)
+        fresh = self.old_file(other, "T002-390.png", days=1)
+        mine = self.evidence_dir("feature/y")
+        mine_old = self.old_file(mine, "T009-390.png")
+        proc = self.append_event("feature/x", "flow-completed", {"reason": "merged"})
+        self.assertEqual(proc.stdout,
+                         "appended flow-completed to feature/x: seq 2, version 2\n")
+        self.assertEqual(sorted(proc.stderr.splitlines()), sorted([
+            f"evidence: removed {old} (older than 30 days)",
+            f"evidence: removed {mine_old} (older than 30 days)",
+        ]))
+        self.assertFalse(old.exists())
+        self.assertFalse(mine_old.exists())
+        self.assertTrue(fresh.is_file())
+        self.assertTrue((mine / "T001-390.png").is_file())
+
+    def test_the_age_pass_removes_a_directory_it_empties(self):
+        other = self.root_dir() / "0123456789ab" / "feature%2Fz"
+        self.old_file(other)
+        d = self.evidence_dir("feature/x")
+        proc = self.append_event("feature/x", "flow-completed", {})
+        self.assertEqual(proc.stderr.splitlines(), [
+            f"evidence: removed {d} (2 files)",
+            f"evidence: removed {d.parent} (0 files)",
+            f"evidence: removed {other} (1 file)",
+            f"evidence: removed {other.parent} (0 files)",
+        ])
+        self.assertEqual(sorted(os.listdir(self.root_dir())), [])
+
+    def test_the_age_pass_keeps_a_link_and_does_not_name_it(self):
+        """What the age pass refuses outside the stream's own directory stays, and a
+        terminal append does not name it (`screens --prune` does)."""
+        target = self.root / "outside"
+        old = self.old_file(target)
+        project = self.root_dir() / "0123456789ab"
+        project.mkdir(parents=True)
+        os.symlink(target, project / "feature%2Fz")
+        (self.root_dir() / "notes.txt").write_text("n", encoding="utf-8")
+        proc = self.append_event("feature/x", "flow-completed", {})
+        self.assertEqual(proc.stderr, "")
+        self.assertTrue(old.is_file())
+        self.assertTrue((project / "feature%2Fz").is_symlink())
+        self.assertTrue((self.root_dir() / "notes.txt").is_file())
+
+    def test_a_broken_stderr_never_raises_out_of_the_prune(self):
+        """The prune's own report and its fallback warning both write to stderr; when
+        stderr itself fails, the prune still returns, so the landed event keeps its
+        exit code."""
+        module = load_journal_module()
+        d = self.evidence_dir("feature/x")
+
+        class Broken:
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        conn = module.connect(Path(self.db))
+        self.addCleanup(conn.close)
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}), \
+                mock.patch.object(sys, "stderr", Broken()):
+            result = module.append_event(conn, "feature/x", "flow-completed", {},
+                                         self.root)
+        self.assertEqual(result.seq, 2)
+        self.assertEqual(self.events("feature/x")[-1]["type"], "flow-completed")
+        self.assertFalse(d.exists())
+
+    def test_flow_started_applies_the_age_limit_to_the_whole_root(self):
+        """T023: the 30-day pass also runs right after a `flow-started` commits, over
+        every project of the root, and names each file it removed; it keeps a fresh
+        file, and keeps what it refuses without naming it."""
+        other = self.root_dir() / "0123456789ab" / "feature%2Fz"
+        old = self.old_file(other)
+        fresh = self.old_file(other, "T002-390.png", days=1)
+        mine = self.evidence_dir("feature/y")
+        mine_old = self.old_file(mine, "T009-390.png")
+        (self.root_dir() / "notes.txt").write_text("n", encoding="utf-8")
+        proc = self.append_event("feature/n", "flow-started", {"request": "r"})
+        self.assertEqual(proc.stdout,
+                         "appended flow-started to feature/n: seq 2, version 1\n")
+        self.assertEqual(sorted(proc.stderr.splitlines()), sorted([
+            f"evidence: removed {old} (older than 30 days)",
+            f"evidence: removed {mine_old} (older than 30 days)",
+        ]))
+        self.assertFalse(old.exists())
+        self.assertFalse(mine_old.exists())
+        self.assertTrue(fresh.is_file())
+        self.assertEqual(sorted(os.listdir(mine)), ["T001-1280.png", "T001-390.png"])
+        self.assertTrue((self.root_dir() / "notes.txt").is_file())
+
+    def test_flow_started_removes_a_directory_its_age_pass_empties(self):
+        other = self.root_dir() / "0123456789ab" / "feature%2Fz"
+        self.old_file(other)
+        proc = self.append_event("feature/n", "flow-started", {"request": "r"})
+        self.assertEqual(proc.stderr.splitlines(), [
+            f"evidence: removed {other} (1 file)",
+            f"evidence: removed {other.parent} (0 files)",
+        ])
+        self.assertEqual(os.listdir(self.root_dir()), [])
+
+    def test_flow_started_removes_no_directory_of_a_finished_stream(self):
+        """Moments 1 and 2 stay with a terminal event and `screens`: after a
+        `flow-started`, a finished stream's directory and an unknown stream's keep
+        their fresh files."""
+        self.append_event("feature/x", "flow-completed", {"reason": "merged"})
+        done = self.evidence_dir("feature/x")
+        unknown = self.evidence_dir("feature/unknown")
+        proc = self.append_event("feature/n", "flow-started", {"request": "r"})
+        self.assertEqual(proc.stderr, "")
+        for d in (done, unknown):
+            self.assertEqual(sorted(os.listdir(d)), ["T001-1280.png", "T001-390.png"])
+
+    def test_a_start_prune_that_raises_leaves_the_event_and_exit_0(self):
+        import contextlib
+        import io
+        module = load_journal_module()
+        old = self.old_file(self.root_dir() / "0123456789ab" / "feature%2Fz")
+        out, err = io.StringIO(), io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, cwd)
+        with mock.patch.object(module._package.screens, "prune_evidence",
+                               side_effect=RuntimeError("boom")), \
+                mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = module.main(["--db", str(self.db), "append", "--stream", "feature/n",
+                              "--type", "flow-started", "--data", '{"request": "r"}'])
+        self.assertEqual(rc, OK)
+        self.assertEqual(out.getvalue(),
+                         "appended flow-started to feature/n: seq 2, version 1\n")
+        self.assertEqual(err.getvalue(), "warning: the event landed, but the evidence "
+                                         "root was not pruned (boom)\n")
+        self.assertEqual(self.events("feature/n")[-1]["type"], "flow-started")
+        self.assertTrue(old.is_file())
+
+    def test_a_broken_stderr_never_raises_out_of_the_start_prune(self):
+        module = load_journal_module()
+        old = self.old_file(self.root_dir() / "0123456789ab" / "feature%2Fz")
+
+        class Broken:
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        conn = module.connect(Path(self.db))
+        self.addCleanup(conn.close)
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}), \
+                mock.patch.object(sys, "stderr", Broken()):
+            result = module.append_event(conn, "feature/n", "flow-started",
+                                         {"request": "r"}, self.root)
+        self.assertEqual(result.seq, 2)
+        self.assertEqual(self.events("feature/n")[-1]["type"], "flow-started")
+        self.assertFalse(old.exists())
+
+    def test_with_no_evidence_root_the_cost_is_one_lstat(self):
+        """The cost rule: a terminal append or a `flow-started` with no evidence root
+        on disk makes one `lstat` and no other file system call of the prune."""
+        module = load_journal_module()
+        screens = module._package.screens
+        names = ("lstat", "stat", "scandir", "listdir", "open")
+        conn = module.connect(Path(self.db))
+        self.addCleanup(conn.close)
+        prunes = {
+            "prune_ended_stream": lambda: screens.prune_ended_stream(conn, "feature/x"),
+            "prune_old_evidence": lambda: screens.prune_old_evidence(conn),
+        }
+        cases = [(prune, config) for prune in prunes for config in (self.config, None)]
+        for prune, config in cases:
+            env = ({"CLAUDE_CONFIG_DIR": str(config)} if config
+                   else {"CLAUDE_CONFIG_DIR": "", "HOME": ""})
+            with self.subTest(prune=prune, config=config), \
+                    mock.patch.dict(os.environ, env):
+                mocks = {}
+                patches = [mock.patch.object(screens.os, name, wraps=getattr(os, name))
+                           for name in names]
+                patches.append(mock.patch.object(screens.os.path, "realpath",
+                                                 wraps=os.path.realpath))
+                for name, patch in zip(names + ("realpath",), patches):
+                    mocks[name] = patch.start()
+                try:
+                    prunes[prune]()
+                finally:
+                    for patch in patches:
+                        patch.stop()
+                counts = {name: m.call_count for name, m in mocks.items()}
+                self.assertEqual(counts, {"lstat": 1 if config else 0, "stat": 0,
+                                          "scandir": 0, "listdir": 0, "open": 0,
+                                          "realpath": 0})
 
 
 if __name__ == "__main__":

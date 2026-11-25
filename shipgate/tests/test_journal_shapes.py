@@ -378,6 +378,35 @@ class TestShapeValidation(JournalTestCase):
                               proc.stderr)
         self.assertEqual(self.events(), [])
 
+    # `route-and-map` records the computed UI flag of the touched files (ADR 0031).
+    def map_entry(self, ui, stream="feature/x", rc=OK):
+        return self.append_event(stream, "phase-entered", {
+            "phase": "route-and-map", "skipped": ["workspace"],
+            "signals": {"source": "regex"}, "ui": ui}, rc=rc)
+
+    def test_a_phase_entered_takes_a_ui_flag_of_true_or_false(self):
+        for flag in (True, False):
+            with self.subTest(ui=flag):
+                stream = f"feature/ui-{str(flag).lower()}"
+                self.map_entry(flag, stream)
+                self.assertIs(self.data_of(stream)["ui"], flag)
+
+    def test_a_ui_flag_that_is_not_a_json_boolean_is_refused(self):
+        """An enum of the two JSON values would take `1` and `0`: Python counts them
+        equal to `True` and `False`."""
+        for value in (1, 0, "true", None):
+            with self.subTest(ui=value):
+                proc = self.map_entry(value, rc=GATE)
+                self.assertIn("phase-entered: data.ui must be true or false, got "
+                              + json.dumps(value), proc.stderr)
+                self.assertIn("vocab --shape phase-entered", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_vocab_prints_the_ui_rule(self):
+        proc = self.journal("--db", self.db, "vocab", "--shape", "phase-entered",
+                            rc=OK)
+        self.assertEqual(json.loads(proc.stdout)["booleans"], ["ui"])
+
     # Every key of a finding map is a location (ADR 0014, amended 0.23.0).
     FREE_LABELS = ("F21", "flush-older-sync")
 

@@ -626,7 +626,7 @@ _TYPE_CHECKS: Dict[str, Callable[[Any], bool]] = {
 
 def _valid(value: Any, node: Dict[str, Any]) -> bool:
     """VALUE against the schema subset the settings use: type, enum, minimum,
-    maximum, minLength, pattern, items, anyOf and `x-format: regex`."""
+    maximum, minLength, pattern, items, minItems, anyOf and `x-format: regex`."""
     if "anyOf" in node:
         return any(_valid(value, option) for option in node["anyOf"])
     if "enum" in node and value not in node["enum"]:
@@ -651,8 +651,11 @@ def _valid(value: Any, node: Dict[str, Any]) -> bool:
                 re.compile(value)
             except re.error:
                 return False
-    if isinstance(value, list) and "items" in node:
-        return all(_valid(item, node["items"]) for item in value)
+    if isinstance(value, list):
+        if len(value) < node.get("minItems", 0):
+            return False
+        if "items" in node:
+            return all(_valid(item, node["items"]) for item in value)
     return True
 
 

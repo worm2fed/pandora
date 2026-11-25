@@ -11,7 +11,7 @@ from typing import (
 
 from .vocab import GATE_WAIVED
 from .plugin import _suggest, NO_COMMAND
-from .text import _one_line, _string_list, _string_or_none
+from .text import _one_line, _string_list, _string_or_none, _waiver_reason
 from .store import _set_meta, _table_exists, Event, get_meta, read_events, utc_now
 from .sessions import _actor_role, event_session
 from .fold import is_work_stream
@@ -19,7 +19,6 @@ from .artifacts import (
     _artifact_key, _resolve_artifact, artifact_authors, claim_of, classify_artifact,
     parse_ticked_tasks, worklog_owners,
 )
-from .gates import _waiver_reason
 
 
 LAST_CHECK_KEY = "last_check"

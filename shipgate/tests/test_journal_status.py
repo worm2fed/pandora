@@ -17,10 +17,22 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from test_journal import (
-    _pin_rows, _PinStream, _recent_ts, _StreamRows, JOURNAL, JournalTestCase,
-    load_journal_module, OK, PIN_BLOCK, PIN_HANDOFF, PIN_NOW, PIN_STREAM, SESSION_ENV,
-    USAGE,
+    _pin_rows, _PinStream, _recent_ts, _StreamRows, assert_real_root, JOURNAL,
+    JournalTestCase, journal_env, load_journal_module, OK, PIN_BLOCK, PIN_HANDOFF, PIN_NOW,
+    PIN_STREAM, SESSION_ENV, snapshot_real_root, USAGE,
 )
+
+
+# The developer's evidence root must not change in this module's tests (ADR 0031).
+_REAL = []
+
+
+def setUpModule():
+    _REAL.append(snapshot_real_root())
+
+
+def tearDownModule():
+    assert_real_root(_REAL.pop())
 
 
 class TestStatus(JournalTestCase):
@@ -713,8 +725,7 @@ class TestSessionMatch(JournalTestCase):
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
              "--stream", "feat/1-x", "--batch", "--actor", "user"],
             input=batch, capture_output=True, text=True, cwd=str(self.root),
-            env={**{k: v for k, v in os.environ.items() if k != SESSION_ENV},
-                 SESSION_ENV: "A"},
+            env=journal_env(**{SESSION_ENV: "A"}),
         )
         self.assertEqual(proc.returncode, OK, msg=proc.stderr)
         self.assertEqual({e["actor"] for e in self.events("feat/1-x")}, {"user"})

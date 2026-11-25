@@ -60,6 +60,27 @@ def _load_config_module():
 _config = _load_config_module()
 
 
+def _load_ui_module():
+    """The UI function shared with `signals.py` (ADR 0031), loaded by path as
+    `_load_config_module` loads `_config.py`. Without it no gate can tell a UI task, so it
+    stops with an infrastructure error (exit 1).
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "_ui.py"
+    try:
+        spec = importlib.util.spec_from_file_location("shipgate_ui", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    except (OSError, ImportError) as exc:
+        sys.exit(f"error: cannot load {path} (shipgate install incomplete): {exc}")
+    return module
+
+
+_ui = _load_ui_module()
+
+
 def plugin_version() -> str:
     manifest = Path(__file__).resolve().parent.parent.parent / ".claude-plugin" / "plugin.json"
     try:

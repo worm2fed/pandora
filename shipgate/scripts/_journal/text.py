@@ -64,3 +64,13 @@ def _vocabulary_map(value: Any, allowed: Sequence[str]) -> Dict[str, Any]:
 
 def _printable(command: str) -> Optional[str]:
     return command if command.isprintable() else None
+
+
+def _waiver_reason(data: Dict[str, Any]) -> Optional[str]:
+    """The reason a waiver gives, or None when it gives none: an empty note, or one that
+    is still a ``<...>`` placeholder, the shape the printed command carries."""
+    note = data.get("note")
+    note = note.strip() if isinstance(note, str) else ""
+    if not note or (note.startswith("<") and note.endswith(">")):
+        return None
+    return note

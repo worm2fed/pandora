@@ -1,14 +1,16 @@
 """`digest`: the table the user reads before the publish question (ADR 0030, #25).
 
-Four parts in a fixed order, each with a fixed slot: what changed (the worklog's
+Five parts in a fixed order, each with a fixed slot: what changed (the worklog's
 `## What changed` section), what the orchestrator decided alone (the PRD's open assumption
 items and the executive gate decisions after the last `clarify-passed`), the deviations
-after the last `design-committed`, and the first files of the newest risk ranking.
-`build_digest` reads the journal, the worklog and the PRD; it runs no git and writes
-nothing. `render_digest` prints one markdown table, the only text form. It caps each part
-at its slot, and every cell value passes `_markdown_cell` or `_markdown_code`: one line,
-printable, every markdown character of a fixed set escaped, clipped. So a payload can add
-no line, no row, no column, no link that hides its target and no emphasis.
+after the last `design-committed`, the screenshots of each UI task under the stream's
+evidence directory (ADR 0031; absent for a stream with no UI task), and the first files of
+the newest risk ranking. `build_digest` reads the journal, the worklog, the PRD and the
+evidence directory; it runs no git and writes nothing. `render_digest` prints one markdown
+table, the only text form. It caps each part at its slot, and every cell value passes
+`_markdown_cell` or `_markdown_code`: one line, printable, every markdown character of a
+fixed set escaped, clipped. So a payload can add no line, no row, no column, no link that
+hides its target and no emphasis.
 """
 
 from __future__ import annotations
@@ -16,21 +18,27 @@ from __future__ import annotations
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, Set, TypedDict
 
-from .vocab import BRIEF_LINE_CHARS, GATE_WAIVED, SIGNALS_MISSING_KIND
-from .text import _one_line
+from .vocab import BRIEF_LINE_CHARS, GATE_WAIVED, SCREENS_WAIVED, SIGNALS_MISSING_KIND
+from .text import _one_line, _string_list
 from .store import Event, read_events
 from .artifacts import _safe_ref
+from .screens import (
+    evidence_root, render_screen_state, screen_state, ScreenState, ScreenTask,
+)
 from .status import _render_decision
 from .position import build_position, PositionDoc
 from .assumptions import is_risky, parse_assumptions, scan_section, SectionError
 
 
-# The parts in print order: (DigestDoc key, name, slot). A new part (#26's Screens) is one
-# entry here plus its items in `build_digest`; `max_lines` grows by its slot.
+# The parts in print order: (DigestDoc key, name, slot). A new part is one entry here plus
+# its items in `build_digest`; `max_lines` grows by its slot. The Screens part (#26) is not
+# one: it has a head row (the evidence directory) and is absent for a stream with no UI
+# task, so `_screens_rows` prints it after these, and `max_lines` adds its rows apart.
 PARTS = (("what_changed", "What changed", 3), ("decided", "Decided alone", 2),
          ("deviations", "Deviations", 2))
+SCREENS_SLOT = 2
 # The "## What changed" section's own cap; the table shows the first slot of them.
 WHAT_CHANGED_ITEMS = 5
 LOOK_HERE_FILES = 3
@@ -99,13 +107,15 @@ class DigestDoc(TypedDict):
     what_changed: DigestWhatChanged
     decided: DigestDecidedPart
     deviations: DigestDeviationsPart
+    screens: ScreenState
     look_here: DigestLookHere
 
 
 def max_lines() -> int:
     """The most lines the table prints without ``--all``: the header row, the separator,
-    the slot of each part, and the Look first row."""
-    return 2 + sum(slot for _, _, slot in PARTS) + 1
+    the slot of each part, the Screens part's directory row and slot, and the Look first
+    row."""
+    return 2 + sum(slot for _, _, slot in PARTS) + (1 + SCREENS_SLOT) + 1
 
 
 def parse_what_changed(text: str) -> Optional[List[str]]:
@@ -230,12 +240,23 @@ def _note(data: Dict[str, Any]) -> str:
     return "(no note)"
 
 
-def _deviations(events: List[Event]) -> DigestDeviationsPart:
+def _shown_in_screens(data: Dict[str, Any], rows: Set[str]) -> bool:
+    """True for a screens-waived whose every named task has a row in the Screens part,
+    which shows the reason there; any other waiver stays under Deviations."""
+    named = _string_list(data.get("task_ids"))
+    return (data.get("kind") == SCREENS_WAIVED and bool(named)
+            and all(task in rows for task in named))
+
+
+def _deviations(events: List[Event], screens: ScreenState) -> DigestDeviationsPart:
     since = _last_seq(events, "design-committed")
+    rows = {task["task_id"] for task in screens["tasks"]}
     return {"items": [
         {"seq": e.seq, "text": _note(e.data)} for e in events
         if e.type == "deviation" and e.seq > since
-        and e.data.get("kind") not in BOOKKEEPING_KINDS and "report_to" not in e.data
+        and e.data.get("kind") not in BOOKKEEPING_KINDS
+        and not _shown_in_screens(e.data, rows)
+        and "report_to" not in e.data
     ]}
 
 
@@ -274,6 +295,7 @@ def build_digest(conn: sqlite3.Connection, stream: str, project_dir: Path,
     worklog = _plain_ref(recorded)
     prd = _plain_ref(position["artifacts"]["prd"])
     verdict = position["verdict"]
+    screens = screen_state(conn, stream, project_dir)
     return {
         "stream": stream,
         "verdict": ({"verdict": verdict["verdict"], "round": verdict["round"]}
@@ -286,7 +308,8 @@ def build_digest(conn: sqlite3.Connection, stream: str, project_dir: Path,
         "what_changed": _what_changed(project_dir, worklog,
                                       recorded is not None and worklog is None),
         "decided": _decided(project_dir, prd, events),
-        "deviations": _deviations(events),
+        "deviations": _deviations(events, screens),
+        "screens": screens,
         "look_here": _look_here(position),
     }
 
@@ -352,6 +375,37 @@ def _part_rows(name: str, texts: List[str], show_all: bool, slot: int,
     return rows
 
 
+def _screens_rank(task: ScreenTask) -> int:
+    """0 for a task that misses a width, 1 for a waived one, 2 for a complete one: the
+    precedence of ``render_screen_state``, where every width present is complete."""
+    if not task["missing"]:
+        return 2
+    return 1 if task["waived"] is not None else 0
+
+
+def _screens_rows(state: ScreenState, show_all: bool) -> List[str]:
+    """The Screens part: the stream's evidence directory on the head row, then one row
+    per UI task as ``screens --list`` words it, the tasks that miss a width first, then
+    the waived, then the complete, plan order inside each. No row with no UI task."""
+    tasks = state["tasks"]
+    if not tasks:
+        return []
+    texts = render_screen_state(state)[1:]
+    order = sorted(range(len(tasks)), key=lambda index: _screens_rank(tasks[index]))
+    shown = order if show_all else order[:SCREENS_SLOT]
+    first = "**Screens**" + (f" ({len(tasks)})" if len(shown) < len(tasks) else "")
+    room = _room(first)
+    if state["dir"] is not None:
+        head = _markdown_code(state["dir"], room)
+    elif evidence_root() is None:
+        head = _markdown_cell("— no evidence root (set CLAUDE_CONFIG_DIR or HOME)", room)
+    else:
+        head = _markdown_cell("— no evidence directory (the stream name cannot name one)",
+                              room)
+    return [_row(first, head)] + [
+        _row("", _markdown_cell(texts[index], _room(""))) for index in shown]
+
+
 def _look_first_row(look: DigestLookHere) -> str:
     first = "**Look first**"
     room = _room(first)
@@ -384,5 +438,6 @@ def render_digest(doc: DigestDoc, show_all: bool = False) -> str:
         texts = [item if isinstance(item, str) else item["text"]
                  for item in part["items"]]
         lines += _part_rows(name, texts, show_all, slot, error=part.get("error"))
+    lines += _screens_rows(doc["screens"], show_all)
     lines.append(_look_first_row(doc["look_here"]))
     return "\n".join(lines)

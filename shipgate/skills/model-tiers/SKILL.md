@@ -168,6 +168,12 @@ A worker starts with zero context, so the worker brief must be self-contained:
 
    Say that an `explore` or `node` result counts as a Read of the files it prints, so the
    worker does not Read them again. When the code graph is absent, say nothing about codegraph.
+
+   For a UI task (the handoff marks it `[UI]`), the brief adds three things: the widths of
+   `ui.widths`, the register command with the stream and the task filled in, and the step to
+   read each screenshot and compare it with the PRD's reference before the report. The
+   worker took the screenshots, so it can see a wrong screen first. Its report lists the
+   registered files, so you see the evidence before you record `task-done`.
 5. **No commit, no staging** — rules 2 and 3 of the built-in worker discipline. The worker
    leaves changes in the working tree for orchestrator review, and the index as it found it.
 6. **Report-back format** — rule 8 of the built-in worker discipline: evidence (real command

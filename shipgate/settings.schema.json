@@ -117,6 +117,48 @@
       "x-scope": "any",
       "x-since": "0.34.0"
     },
+    "ui": {
+      "description": "Visual evidence for UI tasks (ADR 0031). An empty globs list turns it off.",
+      "type": "object",
+      "properties": {
+        "globs": {
+          "description": "The project's UI files, as globs on paths from the project root.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "widths": {
+          "description": "The CSS widths in pixels each UI task shows.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 4000
+          },
+          "minItems": 1,
+          "default": [
+            390,
+            1280
+          ],
+          "x-allowed": "a list of at least one integer from 200 to 4000"
+        },
+        "capture": {
+          "description": "A command the journal prints, one per width; it never runs it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?!.*[\"'`\\\\])(?=.*\\{url\\})(?=.*\\{width\\})(?=.*\\{out\\}).+$",
+          "default": null,
+          "x-allowed": "a command with {url}, {width} and {out} and no quote, backtick or backslash, or null"
+        }
+      },
+      "x-scope": "project",
+      "x-since": "0.36.0"
+    },
     "orchestration": {
       "description": "How the review and explore fans run.",
       "type": "object",

@@ -71,6 +71,8 @@ A task line is a `-` or `*` bullet, a box, then the id: `T` and digits, bare (`T
 bold (`**T001**` or `**T001:**`). The title follows, after an optional dash or colon:
 `- [ ] T001 — title`, `- [ ] **T001** title`, `- [ ] **T001**: title`. A line in any other
 form is not a task, so the HUD's Plan tab and the Stop gate both skip it.
+With `ui.globs` set, a task line names its files in backticks after `file(s):`, or says
+`file(s): none`, because the journal marks a UI task from those paths.
 
 ## Setup / foundations
 - [ ] T001 — <task> — file(s): `...` — done when: <...>

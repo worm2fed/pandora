@@ -164,7 +164,11 @@ project config declares. The worklog has two sections with different lifecycles:
   the file(s) it touches and what "done" means. Write each task line as the worklog
   template's Build Plan rule says: a bullet, a box, then the id `T` and digits, bare or
   bold (`- [ ] T001 — title`, `- [ ] **T001**: title`). The journal skips a line in any
-  other form. This section is *living*: implementation
+  other form. When the project sets `ui.globs`, put each task's files in backticks after
+  `file(s):`, or write `file(s): none`. The journal marks a UI task from those paths, and a
+  UI task needs screenshots before `task-done`. So `design-committed` refuses a task line
+  with neither form, and its refusal names that line.
+  This section is *living*: implementation
   ticks the boxes and logs deviations here. A slice can **introduce new domain shapes**
   (entities, value objects, error unions, command/handler signatures). Then plan a
   **declarations task** ahead of that slice's body tasks. It holds types and signatures only,

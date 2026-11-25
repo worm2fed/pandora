@@ -64,6 +64,7 @@ you're about to write one, stop and run the command instead:
 | Bug is fixed | Reproduce first (must fail), apply fix, reproduce again (now passes) |
 | Phase complete | Each acceptance criterion verified individually, not as a bundle |
 | Feature works | An end-to-end run or a concrete manual walkthrough, not "the code looks right" |
+| UI task done (the project sets `ui.globs`) | A registered screenshot for every width in `ui.widths` (`journal.py screens --list`), read by the one who took it, or a `screens-waived` deviation with the reason |
 | No regressions in shared code | The affected suite run **before** the change (baseline) and after — zero *new* failures; "pre-existing" is a claim to check, not to assume (it may be your own branch's earlier debt) |
 
 ## Bug fixes: prove the test catches the bug
@@ -122,6 +123,28 @@ EOF
 Record failures too, with `"outcome":"fail"`. A gate that caught something is the most
 useful entry in the log. It is what lets a later session see that the fix was proven rather
 than assumed.
+
+**A UI task also needs its screenshots.** When the project sets `ui.globs`, the journal
+computes which tasks are UI tasks from the paths on their Build Plan lines. The handoff marks
+the next one `[UI]`, and `journal.py screens --stream <branch> --list` lists them all. A UI
+task's command can pass while its screen is wrong. So its `task-done` also needs a
+screenshot for each width of `ui.widths`. Take one per width with the browser tool you have:
+set the viewport to that width in CSS pixels, and save a PNG file. Then register the files:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" screens \
+  --stream <branch> --task T010 --file <png> [--file <png> ...]
+```
+
+The command stores them in the evidence root, outside every repository, and prints the
+widths still missing. With `ui.capture` set,
+`screens --stream <branch> --task T010 --url <url>` prints one capture command per width
+instead. Each one writes its screenshot straight into the evidence root, so run them and skip
+the register step. Read each screenshot and compare it with the reference that the PRD
+names. You took it, so you can see a wrong screen before the user does. Then send the
+`verify-run` and `task-done` batch above. When you cannot take the screenshots, for example
+with no browser tool, the `task-done` refusal prints the waiver command. Write the real reason
+in its `note`, because the user reads it at the publish gate.
 
 ## When verification fails
 

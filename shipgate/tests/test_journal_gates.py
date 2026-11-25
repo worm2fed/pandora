@@ -8,9 +8,17 @@ Each event type's precondition, and the implied phases. Split out of ``test_jour
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import unittest
+from datetime import datetime
+from pathlib import Path
 
-from test_journal import CONFLICT, GATE, JournalTestCase, load_journal_module, OK, USAGE
+from test_journal import (
+    CONFLICT, GATE, JournalTestCase, load_journal_module, OK, run_journal, SESSION_ENV,
+    USAGE,
+)
+from test_ui import png_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -796,6 +804,367 @@ class TestClarifyConfirmRecordingForms(JournalTestCase):
                          ["orchestrator", "user", "orchestrator"])
         self.assertEqual([e["actor"].split("@")[0] for e in events],
                          ["user", "user", "orchestrator"])
+
+
+
+class TestPinTaskDoneRefusal(JournalTestCase):
+    """#26 T002: the task-done refusal as 0.35.0 prints it. A project with no `ui.globs`
+    keeps it word for word."""
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+
+    def test_the_refusal_text_of_a_task_done_with_no_verify_run(self):
+        self.append_event("feature/x", "flow-started", {"request": "r"})
+        proc = self.append_event("feature/x", "task-done", {"task_id": "T001"}, rc=GATE)
+        self.assertEqual(proc.stdout, "")
+        self.assertEqual(
+            proc.stderr,
+            "gate violation: task-done T001: no prior verify-run with outcome=pass in "
+            "stream 'feature/x' names it in data.task_ids\n",
+        )
+
+
+
+UI_WORKLOG = """# Worklog: demo
+
+# Build Plan
+
+- [ ] T001 — the core — file(s): `lib/core.py` — done when: it runs
+- [ ] T004 — the form — file(s): `web/form.html` — done when: it shows
+"""
+
+
+class TestGateUiTaskDone(JournalTestCase):
+    """#26 T013 (ADR 0031): with `ui.globs` set, `task-done` of a UI task needs a
+    registered screenshot newer than the stream's design-committed at every set width,
+    or a `screens-waived` deviation that names it; `design-committed` needs each task
+    line's paths; a project with no globs sees no change."""
+
+    S = "feat/7-ui"
+    WORKLOG = "docs/prd/demo.worklog.md"
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.root / "config"
+        self.config.mkdir()
+        self.settings({"globs": ["web/*"]})
+        self.write(self.WORKLOG, UI_WORKLOG)
+        (self.root / "shots").mkdir()
+        self.init_db()
+        self.append_event(self.S, "flow-started", {"request": "r"})
+        self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG})
+        self.append_event(self.S, "verify-run",
+                          {"outcome": "pass", "task_ids": ["T001", "T004"]})
+
+    def settings(self, ui):
+        data = {} if ui is None else {"ui": ui}
+        self.write(".claude/shipgate.json", json.dumps(data))
+
+    def env(self, root=True):
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        if not root:
+            env.pop("CLAUDE_CONFIG_DIR")
+            env.pop("HOME", None)
+        return env
+
+    def journal(self, *args, cwd=None, rc=None, session_env=None, env=None):
+        proc = run_journal(args, cwd=cwd or self.root, env=env or self.env())
+        if rc is not None:
+            self.assertEqual(proc.returncode, rc,
+                             f"args={args!r}\nstdout: {proc.stdout}\nstderr: {proc.stderr}")
+        return proc
+
+    def shot(self, name, width):
+        path = self.root / "shots" / name
+        path.write_bytes(png_bytes(width))
+        return path
+
+    def register(self, *files, task="T004"):
+        args = []
+        for path in files:
+            args += ["--file", path]
+        self.journal("--db", self.db, "screens", "--stream", self.S, "--task", task,
+                     *args, rc=OK)
+
+    def task_done(self, task="T004", rc=OK, env=None):
+        return self.journal("--db", self.db, "append", "--stream", self.S,
+                            "--type", "task-done", "--data",
+                            json.dumps({"task_id": task}), rc=rc, env=env)
+
+    def refusal(self, missing, capture=False, root=True):
+        """The refusal as the gate prints it, the commands built here by hand."""
+        j = load_journal_module()
+        db = Path(os.path.realpath(self.db))
+        lines = ["gate violation: task-done T004: T004 is a UI task (a path on its Build "
+                 "Plan line matches ui.globs) and "
+                 + (f"misses a screenshot newer than its design-committed at {missing}."
+                    if root else
+                    "there is no evidence root (set CLAUDE_CONFIG_DIR or HOME).")]
+        if root:
+            lines.append("Take each missing width with the browser tool you have, read "
+                         "the files and compare them with the PRD's reference, then "
+                         "register them:")
+            lines.append("  " + j._journal_command(db, "screens", "--stream=" + self.S,
+                                                   "--task", "T004", "--file", "<png>"))
+            if capture:
+                lines.append("  " + j._journal_command(
+                    db, "screens", "--stream=" + self.S, "--task", "T004", "--url",
+                    "<url>"))
+        lines.append("If no screenshot can be taken, record why (the user reads the "
+                     "reason in the publish digest):")
+        lines.append("  " + j._suggest(db, self.S, "deviation", {
+            "kind": "screens-waived", "task_ids": ["T004"],
+            "note": "<why no screenshot can be taken>"}))
+        return "\n".join(lines) + "\n"
+
+    def test_refused_with_no_file(self):
+        proc = self.task_done(rc=GATE)
+        self.assertEqual(proc.stderr, self.refusal("390, 1280"))
+        self.assertIn("screens --stream=feat/7-ui --task T004 --file '<png>'", proc.stderr)
+        self.assertNotIn("task-done", [e["type"] for e in self.events(self.S)])
+
+    def test_refused_with_one_width_only(self):
+        self.register(self.shot("a.png", 780))
+        self.assertEqual(self.task_done(rc=GATE).stderr, self.refusal("1280"))
+
+    def test_refused_with_a_file_older_than_the_design(self):
+        self.register(self.shot("a.png", 390), self.shot("b.png", 2560))
+        design = next(e for e in self.events(self.S) if e["type"] == "design-committed")
+        old = datetime.fromisoformat(design["ts"]).timestamp() - 60
+        directory = next((self.config / "shipgate" / "evidence").iterdir()) / "feat%2F7-ui"
+        os.utime(directory / "T004-1280.png", (old, old))
+        self.assertEqual(self.task_done(rc=GATE).stderr, self.refusal("1280"))
+
+    def test_accepted_with_1x_and_2x_files(self):
+        self.register(self.shot("a.png", 390), self.shot("b.png", 2560))
+        self.task_done()
+        self.assertEqual(self.events(self.S)[-1]["type"], "task-done")
+
+    def test_accepted_with_a_screens_waiver(self):
+        self.append_event(self.S, "deviation", {
+            "kind": "screens-waived", "task_ids": ["T004"],
+            "note": "no browser tool in the worker session"})
+        self.task_done()
+
+    def test_the_printed_commands_run(self):
+        """The register command with a file in place of <png>, and the waiver command
+        with a reason in place of its note, each run as printed."""
+        self.settings({"globs": ["web/*"], "widths": [390]})
+        lines = self.task_done(rc=GATE).stderr.splitlines()
+        register = lines[2].strip().replace("'<png>'", str(self.shot("a.png", 1170)))
+        proc = subprocess.run(register, shell=True, cwd=str(self.root), env=self.env(),
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        self.task_done()
+        self.append_event(self.S, "flow-started", {"request": "again"})
+        self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG})
+        lines = self.task_done(rc=GATE).stderr.splitlines()
+        waiver = lines[-1].strip().replace("<why no screenshot can be taken>",
+                                           "no browser in this session")
+        proc = subprocess.run(waiver, shell=True, cwd=str(self.root), env=self.env(),
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, OK, proc.stderr)
+        self.task_done()
+
+    def test_the_capture_command_shows_when_set(self):
+        self.settings({"globs": ["web/*"], "capture": "shot {url} {width} {out}"})
+        self.assertEqual(self.task_done(rc=GATE).stderr,
+                         self.refusal("390, 1280", capture=True))
+
+    def test_no_evidence_root(self):
+        proc = self.task_done(rc=GATE, env=self.env(root=False))
+        self.assertEqual(proc.stderr, self.refusal("390, 1280", root=False))
+
+    def test_a_task_that_is_not_ui_passes(self):
+        self.task_done("T001")
+
+    def test_a_bad_ui_value_refuses_the_append_and_names_the_key(self):
+        """The gates read `ui.*` strictly: a value outside its set refuses task-done of
+        any task, and design-committed, with exit 2 and one line that names the file,
+        the key, the value and what is allowed. Nothing is appended."""
+        path = self.root.resolve() / ".claude" / "shipgate.json"
+        before = self.events(self.S)
+        cases = (
+            ({"globs": "web/*"}, "ui.globs", '"web/*"', "a list of non-empty strings"),
+            ({"globs": ["web/*"], "widths": [100]}, "ui.widths", "[100]",
+             "a list of at least one integer from 200 to 4000"),
+            ({"globs": ["web/*"], "capture": "shot {url} {width}"}, "ui.capture",
+             '"shot {url} {width}"', "a command with {url}, {width} and {out} and no "
+             "quote, backtick or backslash, or null"),
+        )
+        for ui, key, value, allowed in cases:
+            self.settings(ui)
+            line = f"error: {path}: {key} = {value} is not one of: {allowed}\n"
+            for task in ("T001", "T004"):
+                with self.subTest(key=key, task=task):
+                    proc = self.task_done(task, rc=USAGE)
+                    self.assertEqual((proc.stdout, proc.stderr), ("", line))
+        self.settings({"globs": "web/*"})
+        proc = self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG},
+                                 rc=USAGE)
+        self.assertEqual(proc.stderr, f"error: {path}: ui.globs = \"web/*\" is not one "
+                                      "of: a list of non-empty strings\n")
+        self.assertEqual(self.events(self.S), before)
+
+    def test_a_stream_name_that_names_no_directory(self):
+        """No evidence directory can exist for a stream whose encoded name is longer
+        than a file name, so the refusal prints no register command, only the
+        waiver."""
+        stream = "feature/" + chr(0xE9) * 50
+        self.assertIsNone(load_journal_module().stream_dir_name(stream))
+        self.append_event(stream, "flow-started", {"request": "r"})
+        self.append_event(stream, "design-committed", {"worklog": self.WORKLOG})
+        self.append_event(stream, "verify-run", {"outcome": "pass", "task_ids": ["T004"]})
+        proc = self.journal("--db", self.db, "append", "--stream", stream,
+                            "--type", "task-done", "--data",
+                            json.dumps({"task_id": "T004"}), rc=GATE)
+        j = load_journal_module()
+        self.assertEqual(proc.stderr.splitlines(), [
+            "gate violation: task-done T004: T004 is a UI task (a path on its Build Plan "
+            "line matches ui.globs) and no evidence directory can exist for this stream "
+            "(the stream name cannot name one).",
+            "If no screenshot can be taken, record why (the user reads the reason in the "
+            "publish digest):",
+            "  " + j._suggest(Path(os.path.realpath(self.db)), stream, "deviation", {
+                "kind": "screens-waived", "task_ids": ["T004"],
+                "note": "<why no screenshot can be taken>"}),
+        ])
+
+    def test_a_journal_with_no_file_names_no_directory(self):
+        import sqlite3
+        from unittest import mock
+        gates = load_journal_module()._package.gates
+        conn = sqlite3.connect(":memory:")
+        self.addCleanup(conn.close)
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}):
+            text = gates._screens_refusal(conn, self.S, "T004", [390], False)
+        self.assertEqual(text.splitlines(), [
+            "task-done T004: T004 is a UI task (a path on its Build Plan line matches "
+            "ui.globs) and no evidence directory can exist for this stream (the journal "
+            "has no file).",
+            "If no screenshot can be taken, record why (the user reads the reason in the "
+            "publish digest):",
+            "  " + gates.NO_COMMAND,
+        ])
+
+    def test_force_skips_it(self):
+        self.journal("--db", self.db, "append", "--stream", self.S, "--type", "task-done",
+                     "--data", json.dumps({"task_id": "T004"}), "--force",
+                     "--force-reason", "the screen is checked by hand", rc=OK)
+
+    def test_no_globs_keeps_the_pinned_refusal_and_asks_for_no_screen(self):
+        self.settings(None)
+        self.task_done()
+        proc = self.journal("--db", self.db, "append", "--stream", "feat/8-x",
+                            "--type", "task-done", "--data",
+                            json.dumps({"task_id": "T001"}), rc=GATE)
+        self.assertEqual(
+            proc.stderr,
+            "gate violation: task-done T001: no prior verify-run with outcome=pass in "
+            "stream 'feat/8-x' names it in data.task_ids\n")
+
+    def test_a_screens_waiver_needs_tasks_and_a_reason(self):
+        for data, part in (
+            ({"kind": "screens-waived", "task_ids": [], "note": "a reason"},
+             "a screens-waived deviation names the tasks it waives: data.task_ids is a "
+             "non-empty list of task ids"),
+            ({"kind": "screens-waived", "note": "a reason"},
+             "a screens-waived deviation names the tasks it waives"),
+            ({"kind": "screens-waived", "task_ids": ["T004"],
+              "note": "<why no screenshot can be taken>"},
+             "a screens-waived deviation says why: write the reason in data.note, in "
+             "place of an empty note or a <...> placeholder"),
+            ({"kind": "screens-waived", "task_ids": ["T004"], "note": " "},
+             "a screens-waived deviation says why"),
+        ):
+            for force in ((), ("--force",)):
+                with self.subTest(data=data, force=force):
+                    proc = self.append_event(self.S, "deviation", data, *force, rc=GATE)
+                    self.assertIn(part, proc.stderr)
+        self.task_done(rc=GATE)
+
+    def test_the_gate_waived_text_stays(self):
+        proc = self.append_event(self.S, "deviation", {"kind": "gate-waived",
+                                                      "task_ids": [], "note": "n"},
+                                 rc=GATE)
+        self.assertEqual(proc.stderr, "gate violation: a gate-waived deviation names the "
+                                      "tasks it waives: data.task_ids is a non-empty list "
+                                      "of task ids\n")
+
+    # -- design-committed ------------------------------------------------
+
+    def test_design_committed_refuses_a_line_with_no_paths(self):
+        self.write(self.WORKLOG, UI_WORKLOG.replace(
+            "- [ ] T001 — the core — file(s): `lib/core.py` — done when: it runs",
+            "- [ ] T001 — the core — done when: it runs\n"
+            "- [ ] T002 — the docs — file(s): the README — done when: read"))
+        proc = self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG},
+                                 rc=GATE)
+        self.assertEqual(proc.stderr, (
+            "gate violation: design-committed: the Build Plan names each task's paths "
+            "when ui.globs is set:\n"
+            f"{self.WORKLOG}:5: T001 no file(s): part\n"
+            f"{self.WORKLOG}:6: T002 file(s): names no path in backticks and is not none\n"))
+
+    def test_design_committed_lists_ten_and_counts_the_rest(self):
+        lines = "\n".join(f"- [ ] T{n:03d} — task {n}" for n in range(1, 14))
+        self.write(self.WORKLOG, f"# Build Plan\n\n{lines}\n")
+        proc = self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG},
+                                 rc=GATE)
+        shown = proc.stderr.splitlines()
+        self.assertEqual(len(shown), 12)
+        self.assertEqual(shown[-2], f"{self.WORKLOG}:12: T010 no file(s): part")
+        self.assertEqual(shown[-1], "and 3 more")
+
+    def test_design_committed_accepts_file_s_none(self):
+        self.write(self.WORKLOG, UI_WORKLOG + "- [ ] T005 — the release — file(s): none\n")
+        self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG})
+
+    def test_design_committed_warns_and_passes_on_an_unreadable_worklog(self):
+        proc = self.append_event(self.S, "design-committed",
+                                 {"worklog": "docs/prd/gone.worklog.md"})
+        self.assertEqual(proc.stderr,
+                         f"warning: design-committed: {self.root.resolve()}/docs/prd/"
+                         "gone.worklog.md cannot be read, so no task is UI\n")
+
+    def test_a_worklog_ref_with_a_nul_byte_reads_as_unreadable(self):
+        """A ref that no file can have (a NUL byte) is a worklog that cannot be read:
+        design-committed warns and passes, and then no task is UI."""
+        ref = "docs/prd/a" + chr(0) + ".md"
+        proc = self.append_event(self.S, "design-committed", {"worklog": ref}, rc=OK)
+        self.assertIn("cannot be read, so no task is UI", proc.stderr)
+        self.task_done("T004", rc=OK)
+        listed = self.journal("--db", self.db, "screens", "--stream", self.S, "--list",
+                              rc=OK)
+        self.assertIn("no UI task:", listed.stdout)
+        self.assertIn("cannot be read", listed.stdout)
+
+    def test_design_committed_refuses_a_task_id_that_is_not_ascii_digits(self):
+        """`screens --task` takes T and ASCII digits only, so a Build Plan id with other
+        digits names a UI task no file can ever be registered for."""
+        task = "T" + chr(0x0663)
+        self.write(self.WORKLOG, UI_WORKLOG
+                   + f"- [ ] {task} — a screen — file(s): `web/x.html`\n"
+                   + f"- [ ] **{task}9** — notes\n")
+        proc = self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG},
+                                 rc=GATE)
+        self.assertEqual(proc.stderr, (
+            "gate violation: design-committed: the Build Plan names each task's paths "
+            "when ui.globs is set:\n"
+            f"{self.WORKLOG}:7: {task} is not T and ASCII digits\n"
+            f"{self.WORKLOG}:8: {task}9 is not T and ASCII digits\n"
+            f"{self.WORKLOG}:8: {task}9 no file(s): part\n"))
+        self.settings(None)
+        self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG})
+
+    def test_design_committed_with_no_globs_reads_no_paths(self):
+        self.settings(None)
+        self.write(self.WORKLOG, "# Build Plan\n\n- [ ] T001 — no paths here\n")
+        proc = self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG})
+        self.assertEqual(proc.stderr, "")
 
 
 if __name__ == "__main__":

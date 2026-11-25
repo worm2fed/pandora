@@ -14,7 +14,21 @@ import subprocess
 import sys
 import unittest
 
-from test_journal import GATE, JOURNAL, OK, JournalTestCase
+from test_journal import (
+    GATE, JOURNAL, OK, JournalTestCase, assert_real_root, journal_env, snapshot_real_root,
+)
+
+# The developer's evidence root must not change in this module's tests (ADR 0031).
+_REAL = []
+
+
+def setUpModule():
+    _REAL.append(snapshot_real_root())
+
+
+def tearDownModule():
+    assert_real_root(_REAL.pop())
+
 
 STREAM = "feat/x"
 PHASES = ["workspace", "route-and-map", "explore", "clarify", "design", "implement",
@@ -254,6 +268,7 @@ class TestSignalsMissingDeviation(TraceCase):
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
              "--stream", STREAM, "--batch"],
             input=lines + "\n", capture_output=True, text=True, cwd=str(self.root),
+            env=journal_env(),
         )
         self.assertEqual(proc.returncode, OK, proc.stderr)
         self.assertEqual(self.types(), ["flow-started", "phase-entered", "deviation",
