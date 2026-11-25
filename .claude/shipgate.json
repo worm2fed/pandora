@@ -22,5 +22,6 @@
       "shipgate/evals/"
     ]
   },
-  "forge": "github"
+  "forge": "github",
+  "clarify_confirm": "risky"
 }

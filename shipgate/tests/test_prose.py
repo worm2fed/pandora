@@ -624,5 +624,96 @@ class TestClarifyConfirmBatch(unittest.TestCase):
         self.assertIn("ADR 0029", rows["**confirm batch**"])
 
 
+class TestReviewGoPins(unittest.TestCase):
+    """#25 T002: the review text the digest change edits around. Steps 1 to 4 of the
+    user's go and the MR/PR body bullets keep their substance through the edit."""
+
+    @classmethod
+    def setUpClass(cls):
+        text = (SHIPGATE / "skills/review/SKILL.md").read_text()
+        cls.go = flat(section(text, "### The user's go (commit and publish)"))
+        cls.mr = flat(section(text, "## Opening the MR/PR (on the user's publish go)"))
+
+    def test_step_1_records_the_go_request_first(self):
+        self.assertIn("1. **Record the go request** on the stream whose work the user "
+                      "approves, then ask:", self.go)
+        self.assertIn("--type go-requested", self.go)
+
+    def test_step_2_asks_with_the_gate_as_header_and_first_option(self):
+        self.assertIn("2. **Ask with `AskUserQuestion`.** The header is the gate: `Commit` "
+                      "or `Publish`. The first option is the gate word: `Commit` or "
+                      "`Publish`. For several streams, ask one multi-select question whose "
+                      "option labels are the stream names, and record one go request per "
+                      "stream first.", self.go)
+
+    def test_step_3_the_recorder_records_the_answer(self):
+        self.assertIn("3. **The recorder records the answer.**", self.go)
+        self.assertIn("You record nothing.", self.go)
+
+    def test_step_4_any_other_reply_gets_one_confirming_question(self):
+        self.assertIn("4. **Any other reply gets one confirming question.**", self.go)
+        self.assertIn("Every new question needs a new go request.", self.go)
+
+    def test_the_body_bullets_stay(self):
+        self.assertRegex(self.mr, r"- \*\*Summary\*\* ← ")
+        self.assertIn("- **Trade-offs / risks** ← the impact map", self.mr)
+        self.assertIn("- **Verification** ← the `verify`-gate evidence.", self.mr)
+
+
+class TestPublishDigestText(unittest.TestCase):
+    """#25, ADR 0030 (SC-004): the review writes the What changed section, prints the
+    digest with a ready verdict and as a message right before the publish question."""
+
+    COMMAND = 'journal.py" digest --stream'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (SHIPGATE / "skills/review/SKILL.md").read_text()
+        cls.step6 = section(cls.text, "## Step 6 — Verify, then verdict")
+        cls.go = flat(section(cls.text, "### The user's go (commit and publish)"))
+
+    def test_a_the_review_writes_the_what_changed_section(self):
+        body = flat(paragraph(self.step6, "**Before a ready verdict, write what changed.**"))
+        self.assertIn("`## What changed`", body)
+        self.assertIn("1 to 5 list items, one line each", body)
+        self.assertIn("After a fix round that changes what the change does, rewrite the "
+                      "section.", body)
+        self.assertIn("`journal.py digest` accepts only this form", body)
+
+    def test_b_the_digest_prints_with_a_ready_verdict(self):
+        body = flat(paragraph(self.step6,
+                              "**Journaled: show the digest with a ready verdict.**"))
+        self.assertIn(self.COMMAND + " <branch>", body)
+        self.assertIn("under the verdict", body)
+        self.assertIn("`<file>:<line>`", body)
+        self.assertIn("Print the output as its own message, not inside a code block, so its "
+                      "table renders.", body)
+
+    def test_c_the_digest_is_a_message_right_before_the_publish_question(self):
+        """The user's decision after the first dialog (ADR 0030, amendment): a chat
+        message reads better than an option preview, so the preview is gone."""
+        self.assertIn("run the digest of each stream you ask about just before you ask, and "
+                      "print its output, as printed, as a message right before the question.",
+                      self.go)
+        self.assertIn("When the ready verdict comes right before the question, the digest "
+                      "under it is that message.", self.go)
+        self.assertIn("the option carries no preview", self.go)
+        self.assertNotIn("`preview`", self.go)
+        self.assertNotIn("multi-select question has no preview", self.go)
+
+    def test_d_a_teammate_sends_its_stream_and_worktree(self):
+        body = flat(paragraph(self.text, "A session that asks the user about another "
+                                         "session's stream"))
+        self.assertIn("cd <worktree> && python3", body)
+        self.assertIn(self.COMMAND + " <stream>", body)
+        self.assertIn("its stream name and its worktree path, not the digest text", body)
+        self.assertIn("It prints that output as its own message, then asks.", body)
+
+    def test_e_the_summary_starts_from_what_changed(self):
+        mr = flat(section(self.text, "## Opening the MR/PR (on the user's publish go)"))
+        self.assertIn("- **Summary** ← the worklog's What changed section, then the PRD for "
+                      "the why.", mr)
+
+
 if __name__ == "__main__":
     unittest.main()

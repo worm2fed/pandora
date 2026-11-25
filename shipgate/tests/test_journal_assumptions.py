@@ -577,5 +577,49 @@ class TestTemplateMatchesTheParser(unittest.TestCase):
                 self.assertNotIn(word, text)
 
 
+class TestScanSection(unittest.TestCase):
+    """#25 T003: the section scanner with other words. The assumptions section is one
+    call of it; the digest's What changed section is another."""
+
+    HEADING = re.compile(r"^## Notes\s*$")
+
+    def scan(self, text):
+        return J.scan_section(text, self.HEADING, "## Notes", "notes", "note lines")
+
+    def refused(self, text, line, reason):
+        with self.assertRaises(J.SectionError) as caught:
+            self.scan(text)
+        self.assertEqual((caught.exception.line, caught.exception.reason), (line, reason))
+
+    def test_items_with_their_lines_and_the_heading_line(self):
+        text = "# T\n\n## Notes\n- a\n  more\n\n* b\n## Next\n- c\n"
+        self.assertEqual(self.scan(text), (3, [(4, "a more"), (7, "b")]))
+
+    def test_no_heading(self):
+        self.assertEqual(self.scan("# T\n- a\n"), (None, []))
+
+    def test_each_refusal_names_its_line_in_the_given_words(self):
+        self.refused("## Notes\n- a\n## Notes\n", 3, 'a second "## Notes" heading')
+        self.refused("## Notes\n- a\n  ```\n", 3, "code block in the notes section")
+        self.refused("## Notes\n- a\n  * [x]\n", 3, "indented list item")
+        self.refused("## Notes\nprose\n", 2, "only note lines belong in this section")
+        self.refused("## Notes\n\n  orphan\n", 3, "only note lines belong in this section")
+
+    def test_the_error_is_a_value_error_and_keeps_the_old_name(self):
+        self.assertIs(J.AssumptionError, J.SectionError)
+        self.assertTrue(issubclass(J.SectionError, ValueError))
+
+    def test_is_risky_is_the_batch_rule_without_the_end_tag(self):
+        items = J.parse_assumptions(
+            "## Assumptions (executive)\n"
+            "- [domain] [no source found in x] q1? → a [kept by the user]\n"
+            "- [technical] [no source found in x] q2? → a\n"
+            "- [technical] [reference] [source: y] q3? → a\n"
+            "- [data] [source: y] q4? → a\n")
+        self.assertEqual([J.is_risky(i) for i in items], [True, False, True, False])
+        batch, _ = J.risky_batch(items)
+        self.assertEqual([i["question"] for i in batch], ["q3?"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -401,9 +401,24 @@ those test files by name, as well as the suite. Then give a clear verdict:
 - **Not ready**: list blockers. Route back to `implement` (code wrong) or `design` (approach
   wrong). Don't soften a blocker into a suggestion.
 
+**Before a ready verdict, write what changed.** Give the worklog a `## What changed`
+section: 1 to 5 list items, one line each, that say what the change does for the person
+who uses it, not the build steps. The user reads them at the publish question, and the
+MR/PR Summary starts from them. After a fix round that changes what the change does,
+rewrite the section. `journal.py digest` accepts only this form and names the line it
+refuses.
+
 **Journaled: append `review-verdict` as you state the verdict.** The form is under **Record the
 outcome**. Do it in the same turn, before the MR/PR question, for Ready and Not ready alike. A
 verdict delivered without the event leaves the stream saying the review never happened.
+
+**Journaled: show the digest with a ready verdict.** After the verdict's append, run
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py" digest --stream <branch>` and show its
+output under the verdict. The script computes what changed, what you decided alone, the
+deviations and the files to read first from the journal and the artifacts, so you do not
+retell them. A line that names `<file>:<line>` is a section the script could not read:
+fix that section and run it again. Print the output as its own message, not inside a code
+block, so its table renders.
 
 **Journaled: the fix round records its dispositions too, and closes every one.** Append
 `review-disposition` with `fixing` when you dispatch a fix for a finding. Append the closed
@@ -449,7 +464,7 @@ of truth. With no config, fall back to the repo's own template
 (`.github/PULL_REQUEST_TEMPLATE.md` / `.gitlab/merge_request_templates/default.md`) or the
 forge default (**Summary / Trade-offs & risks / Verification**). Either way, fill it from what
 this flow already produced. You don't reverse-engineer any of it:
-- **Summary** ← the PRD / worklog (what changed and why).
+- **Summary** ← the worklog's What changed section, then the PRD for the why.
 - **Trade-offs / risks** ← the impact map (data obligations, write-path, flags, public API).
   Write "none" only if there genuinely are none.
 - **Verification** ← the `verify`-gate evidence. Tick "tests added/passing", "behind flag",
@@ -650,7 +665,10 @@ a publish go. A ready verdict is no go. Get the go in one form, every time:
 2. **Ask with `AskUserQuestion`.** The header is the gate: `Commit` or `Publish`. The first
    option is the gate word: `Commit` or `Publish`. For several streams, ask one multi-select
    question whose option labels are the stream names, and record one go request per stream
-   first.
+   first. For the `publish` gate, run the digest of each stream you ask about just before
+   you ask, and print its output, as printed, as a message right before the question. When
+   the ready verdict comes right before the question, the digest under it is that message.
+   The user reads it in the chat before the dialog opens, and the option carries no preview.
 3. **The recorder records the answer.** An answer that is the gate word, a selected stream
    name, or a typed `commit`, `publish`, `push`, `yes`, `y`, `ok`, `go`, `approve` or `all` is an
    exact go. You record nothing.
@@ -663,7 +681,12 @@ a publish go. A ready verdict is no go. Get the go in one form, every time:
    no more. Every new question needs a new go request.
 
 A session that asks the user about another session's stream records the go request itself,
-on that stream. The go then authorizes the session that works on the stream; it does not
+on that stream. It runs the digest for that stream with the other session's worktree as its
+working directory (`cd <worktree> && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/journal.py"
+digest --stream <stream>`), because the PRD and the worklog are uncommitted there. It prints
+that output as its own message, then asks. A session that reports to a lead sends, with its ready verdict, its stream name and its
+worktree path, not the digest text.
+The go then authorizes the session that works on the stream; it does not
 bind the asking session. A worker never asks the user: when the command gate holds its
 commit, it reports the hold and hands the question back.
 

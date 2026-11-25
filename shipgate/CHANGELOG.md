@@ -2,6 +2,33 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.35.0 — the publish question shows what changed and what was decided alone (#25, ADR 0030).
+
+**The publish question shows a digest (#25, ADR 0030).** Before you approve a publish, you
+now read one short table: what the change does, the decisions the orchestrator took alone,
+where the build left the design, and the files to read first. A script computes it from the
+journal and the artifacts, so the model does not retell it.
+- `journal.py digest --stream S [--all] [--json]` prints one markdown table of at most 10
+  lines of at most 160 characters: 3 rows for What changed, 2 for Decided alone, 2 for
+  Deviations and one Look first row. A terminal shows it as plain text. "Decided alone" lists the PRD's assumption lines with no end tag or with
+  `[unconfirmed]`, risky ones first, and the executive gate decisions after the last
+  `clarify-passed`. "Deviations" lists the `deviation` events after the last
+  `design-committed`, without the bookkeeping kinds. A part over its slot shows its full
+  count, and `--all` prints every item in the same table. Every value is escaped for
+  markdown, so a journal row or a file cannot add a row, a link that hides its target or emphasis. A section the script cannot read prints its file, line and reason,
+  and the command still exits 0. The digest does not read a worklog or a PRD whose path
+  holds whitespace or a control character; it prints a line that says so.
+- The review writes a `## What changed` section in the worklog before a ready verdict: 1
+  to 5 list items of one line each. The digest accepts only this form. The MR/PR Summary
+  starts from it.
+- The review prints the digest with a ready verdict, as its own message and not in a code
+  block, so the table renders. When the publish question comes later, it prints the digest
+  again as a chat message right before it. The `Publish` option carries
+  no preview. A lead runs the digest of a teammate's stream in that teammate's worktree and
+  prints it before it asks.
+- No hook and no shipgate-hud file changes. The publish approval reads the same events as
+  before.
+
 v0.34.1 — the first tagged release of the confirm batch (#24); 0.34.0 has no tag.
 
 **0.34.0 has no tag, so an install that resolves by tag never got it.** Its evals on the
