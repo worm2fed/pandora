@@ -154,6 +154,9 @@ LABELLED_SIGNALS = (
 )
 # A file needs this many in-window commits before its fix rate may rank above `low`.
 MIN_COMMITS_FOR_FIX_RATE = 3
+# A directory row is `unfamiliar` when the current identity authored less than this
+# share of its in-window commits (#24, ADR 0029). Exactly this share is familiar.
+UNFAMILIAR_OWN_SHARE = 0.10
 
 SECONDS_PER_DAY = 86400
 
@@ -622,7 +625,7 @@ def diff_files(repo: Repo, rev: str) -> set:
 
 class _Acc:
     __slots__ = ("first", "last", "commits", "fixes", "authors", "commit_ids",
-                 "fix_ids")
+                 "fix_ids", "own_ids")
 
     def __init__(self) -> None:
         self.first: Optional[int] = None
@@ -633,6 +636,8 @@ class _Acc:
         # In-window commit ordinals, so `--by-dir` can union instead of summing.
         self.commit_ids: set = set()
         self.fix_ids: set = set()
+        # The in-window ordinals the current identity authored (#24): a count, no name.
+        self.own_ids: set = set()
 
 
 def months_before(epoch: int, months: int) -> int:
@@ -650,7 +655,38 @@ class Trajectory(NamedTuple):
     commits_scanned: int
 
 
-def scan_trajectory(repo: Repo, cfg: Config) -> Trajectory:
+def current_identity(root: Path) -> Optional[str]:
+    """The current git identity's email, lower-cased and mapped through `.mailmap`, or
+    None when git has none. It only ever reaches `scan_trajectory`'s comparison: never
+    a payload, a log line, an error text or the environment (code-signals FR-007)."""
+    try:
+        proc = run_git(root, "config", "user.email")
+    except OSError:
+        return None
+    email = proc.stdout.strip().lower() if proc.returncode == 0 else ""
+    if not email:
+        return None
+    # The name too: a `.mailmap` entry keyed on name and email matches only with both,
+    # as it does for `%aE`. The argument starts with the name or `<`, never a dash.
+    try:
+        named = run_git(root, "config", "user.name")
+        name = named.stdout.strip() if named.returncode == 0 else ""
+        usable = name and not name.startswith("-") and not set(name) & {"<", ">"}
+        contact = f"{name} <{email}>" if usable else f"<{email}>"
+        mapped = run_git(root, "check-mailmap", contact)
+    except OSError:
+        return email
+    if mapped.returncode == 0:
+        line = mapped.stdout.strip()
+        start, end = line.rfind("<"), line.rfind(">")
+        if 0 <= start < end:
+            return line[start + 1:end].strip().lower() or email
+    return email
+
+
+def scan_trajectory(repo: Repo, cfg: Config, own: Optional[str] = None) -> Trajectory:
+    """One `git log` pass. OWN, the current identity from `current_identity`, only
+    marks the commits it authored in each path's `own_ids`."""
     assert repo.now is not None
     cutoff = months_before(repo.now, cfg.window_months)
     argv = _git_argv(repo.root, [
@@ -687,6 +723,8 @@ def scan_trajectory(repo: Repo, cfg: Config) -> Trajectory:
                 acc.commits += 1
                 acc.authors[email] += 1
                 acc.commit_ids.add(scanned)
+                if own is not None and email == own:
+                    acc.own_ids.add(scanned)
                 if is_fix:
                     acc.fixes += 1
                     acc.fix_ids.add(scanned)
@@ -1440,9 +1478,12 @@ def dir_of(path: str, depth: int) -> str:
 
 
 def aggregate_dirs(rows: List[Dict[str, Any]], depth: int, traj: Optional[Trajectory],
-                   graph: Optional[Graph]) -> List[Dict[str, Any]]:
+                   graph: Optional[Graph], own_known: bool = False
+                   ) -> List[Dict[str, Any]]:
     """Directory rows over the population rows: distinct commits (a multi-file
-    commit is one commit), max labels, importer union minus the dir's own files."""
+    commit is one commit), max labels, importer union minus the dir's own files.
+    OWN_KNOWN: the trajectory marked the current identity's commits, so each row
+    gets `own_share` and `unfamiliar`; otherwise both are null."""
     members: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
         members.setdefault(dir_of(row["path"], depth), []).append(row)
@@ -1453,17 +1494,28 @@ def aggregate_dirs(rows: List[Dict[str, Any]], depth: int, traj: Optional[Trajec
         if traj is not None:
             commit_ids: set = set()
             fix_ids: set = set()
+            own_ids: set = set()
             for path in own:
                 acc = traj.stats.get(path)
                 if acc is not None:
                     commit_ids |= acc.commit_ids
                     fix_ids |= acc.fix_ids
+                    own_ids |= acc.own_ids
             commits = len(commit_ids)
             entry.update({"commits": commits, "fixes": len(fix_ids),
                           "fix_rate": round(len(fix_ids) / commits, 2)
                           if commits else 0.0})
+            if own_known:
+                # The flag follows the rounded share the row shows, so a row never says
+                # `own_share: 0.1` and `unfamiliar: true` at once.
+                share = round(len(own_ids) / commits, 2) if commits else 0.0
+                entry.update({"own_share": share,
+                              "unfamiliar": share < UNFAMILIAR_OWN_SHARE})
+            else:
+                entry.update({"own_share": None, "unfamiliar": None})
         else:
-            entry.update({"commits": None, "fixes": None, "fix_rate": None})
+            entry.update({"commits": None, "fixes": None, "fix_rate": None,
+                          "own_share": None, "unfamiliar": None})
         known = [p for p in own if graph is not None and p in graph.status]
         if known:
             importers: set = set()
@@ -1822,6 +1874,9 @@ class Analysis(NamedTuple):
     traj_info: Dict[str, Any]
     graph: Optional[Graph]
     selection: Any = None  # the code graph preflight (`_codegraph.Selection`)
+    # Why the dir rows' own share is unknown: no-identity, a trajectory reason, or
+    # None when it is known. The identity itself is never kept here.
+    own_reason: Optional[str] = None
 
 
 def _configure(args: argparse.Namespace, repo: Path, start: Optional[Path] = None
@@ -1831,14 +1886,16 @@ def _configure(args: argparse.Namespace, repo: Path, start: Optional[Path] = Non
                             loaded.inherit)
 
 
-def analyse(args: argparse.Namespace, want_traj: bool, want_struct: bool) -> Analysis:
+def analyse(args: argparse.Namespace, want_traj: bool, want_struct: bool,
+            want_own: bool = False) -> Analysis:
     start = _start_dir(args)
     try:
         repo = probe(start)
     except Unavailable as exc:
         cfg = _configure(args, start)
         return Analysis(None, cfg, exc.reason, [], None,
-                        _unavailable_trajectory(exc.reason), None)
+                        _unavailable_trajectory(exc.reason), None,
+                        own_reason=exc.reason)
     cfg = _configure(args, repo.root, start)
     reason = "empty-history" if repo.head is None else (
         "shallow" if repo.shallow else None)
@@ -1848,15 +1905,20 @@ def analyse(args: argparse.Namespace, want_traj: bool, want_struct: bool) -> Ana
     population = [p for p in graph_files if _under(p, scope)]
     traj = None
     traj_info = _unavailable_trajectory(reason or "not-requested")
+    own_reason: Optional[str] = traj_info["reason"]
     if want_traj and reason is None:
-        traj = scan_trajectory(repo, cfg)
+        own = current_identity(repo.root) if want_own else None
+        own_reason = (None if own is not None else "no-identity") if want_own \
+            else "not-requested"
+        traj = scan_trajectory(repo, cfg, own)
         traj_info = {"available": True, "reason": None,
                      "commits_scanned": traj.commits_scanned}
     graph = selection = None
     if want_struct:
         selection = graph_select(repo.root, cfg.code_graph, len(tracked))
         graph, selection = graph_structure(repo.root, tracked, graph_files, selection)
-    return Analysis(repo, cfg, reason, population, traj, traj_info, graph, selection)
+    return Analysis(repo, cfg, reason, population, traj, traj_info, graph, selection,
+                    own_reason)
 
 
 def _envelope(a: Analysis, reason: Optional[str]) -> Dict[str, Any]:
@@ -1976,7 +2038,7 @@ def _blast(a: Analysis, graph: Graph, seeds: Sequence[str], limit: int
 
 def cmd_hotspots(args: argparse.Namespace) -> int:
     _check_counts(args)
-    a = analyse(args, want_traj=True, want_struct=True)
+    a = analyse(args, want_traj=True, want_struct=True, want_own=True)
     graph = _graph(a)
     reason = None
     if a.repo is None:
@@ -1985,6 +2047,7 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
         reason = a.reason or (a.graph.reason if a.graph else None)
     payload = _envelope(a, reason)
     payload["trajectory"] = a.traj_info
+    payload["own_reason"] = a.own_reason
     if reason is not None:
         payload["files"] = []
         payload["ranking"] = ranking([], payload["structure"], reason)
@@ -2010,7 +2073,8 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
     lines = _graph_notes(payload) + _half_notes(a.traj_info, payload["structure"])
     if args.by_dir is not None:
         wanted = {dir_of(r["path"], args.by_dir) for r in selected}
-        dirs = [d for d in aggregate_dirs(rows, args.by_dir, a.traj, graph)
+        dirs = [d for d in aggregate_dirs(rows, args.by_dir, a.traj, graph,
+                                          own_known=a.own_reason is None)
                 if d["dir"] in wanted]
         dirs = sort_rows(dirs, key="dir")[:top]
         payload["files"] = []

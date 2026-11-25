@@ -76,13 +76,15 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
    ```
 
    For each touched module, keep its labels (churn from `commits`, fix-rate, fan-in) and its
-   `risk`. Also keep the `blast.size` of the touched set. Labels are relative to this repo, so
-   `top` means top *here*. Signals inform routing. They never override a routing rule that a
-   CLAUDE.md states. The signals can be unavailable at the top level (`no-git`, `shallow`,
-   `empty-history`; `no-adapter` only when neither half could be computed). Then the map
-   carries the one-line note below instead of the block. A structure-only or trajectory-only
-   result shows in `trajectory.reason` / `structure.reason`; `no-adapter` usually arrives
-   there. Then keep whichever half is available. There is no error, and nothing to install.
+   `risk`. Keep `own_share` and `unfamiliar` too: clarify reads them to decide where the user
+   may not know what the area's owners expect. Also keep the `blast.size` of the touched set.
+   Labels are relative to this repo, so `top` means top *here*. Signals inform routing. They
+   never override a routing rule that a CLAUDE.md states. The signals can be unavailable at
+   the top level (`no-git`, `shallow`, `empty-history`; `no-adapter` only when neither half
+   could be computed). Then the map carries the one-line note below instead of the block. A
+   structure-only or trajectory-only result shows in `trajectory.reason` / `structure.reason`;
+   `no-adapter` usually arrives there. Then keep whichever half is available. There is no
+   error, and nothing to install.
 
    The JSON names its source in `structure.source`. It is `graph` when the code graph
    answered, and `regex` when the regex scanner ran. Under `graph`, `blast.tests` lists the
@@ -150,6 +152,8 @@ The rules that decide routing are **not** hardcoded here. They live in the repo'
 
 ### Risk signals
 - <module> — churn <label> · fix-rate <label> · fan-in <label> → risk <label>
+- Unfamiliar to you: <dir> (own share <n>)        (each touched dir with `unfamiliar` true)
+- Own share unknown (<own_reason>)                 (when `unfamiliar` is null)
 - Blast radius of the touched set: <size> files (<top importing dirs>) · source <graph|regex>
 - Tests the diff reaches: <n> files — <paths>                    (graph only)
 - Symbol impact: <symbol> (<path>) — <n> affected · ambiguous <yes|no>   (graph only)

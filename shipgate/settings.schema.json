@@ -107,6 +107,16 @@
         "key": "Mode"
       }
     },
+    "clarify_confirm": {
+      "description": "In executive mode, whether clarify puts its risky assumptions to the user in one dialog before design (risky) or only lists them in the phase summary (off).",
+      "enum": [
+        "risky",
+        "off"
+      ],
+      "default": "risky",
+      "x-scope": "any",
+      "x-since": "0.34.0"
+    },
     "orchestration": {
       "description": "How the review and explore fans run.",
       "type": "object",

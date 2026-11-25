@@ -477,5 +477,137 @@ class TestSettingsAreNotReadFromTheConfig(unittest.TestCase):
                 self.assertNotIn(term, rows)
 
 
+class TestClarifyConfirmBatch(unittest.TestCase):
+    """#24, ADR 0029 (SC-005): the sentences the confirm batch rests on. What `off` does
+    has no code path, so these pins are its test."""
+
+    END_TAGS = ("[kept by the user]", "[changed by the user, was: ", "[unconfirmed]")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.clarify = flat((SHIPGATE / "skills/clarify/SKILL.md").read_text())
+        cls.executive = flat(section((SHIPGATE / "skills/clarify/SKILL.md").read_text(),
+                                     "### Executive mode (the `autonomy` setting is `executive`)"))
+
+    def test_clarify_reads_the_setting_and_says_what_off_does(self):
+        for phrase in ('journal.py" config clarify_confirm', "`risky`", "`off`"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.executive)
+        off = self.executive[self.executive.index("`off`"):]
+        self.assertRegex(off, r"no (confirm )?dialog")
+        self.assertIn("escalations still go to the user", off)
+        self.assertRegex(off, r"phase summary lists the risky lines first")
+
+    def test_the_batch_is_one_dialog_of_at_most_4(self):
+        self.assertRegex(self.executive, r"at most 4")
+        # Escalations take dialog slots first; the script caps the rest.
+        self.assertIn("--cap <n>", self.executive)
+        self.assertIn("overflow", self.executive)
+        self.assertIn("AskUserQuestion", self.executive)
+        self.assertIn("Keep", self.executive)
+
+    def test_clarify_computes_the_batch_with_the_parser(self):
+        self.assertIn('journal.py" assumptions', self.executive)
+        self.assertIn("--risky", self.executive)
+        # A PRD the script cannot read (a home outside the repo): the same rule by hand.
+        self.assertRegex(self.executive, r"cannot read")
+
+    def test_lines_carry_a_class_and_a_source_or_say_none_was_found(self):
+        for phrase in ("`domain`", "`data`", "`behaviour`", "`technical`", "no source found"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, self.clarify)
+
+    def test_the_three_end_tags(self):
+        for tag in self.END_TAGS:
+            with self.subTest(tag=tag):
+                self.assertIn(tag, self.executive)
+
+    def test_a_lead_gets_the_batch_in_one_message(self):
+        self.assertIn("report_to", self.executive)
+
+    def test_a_confirm_item_is_not_a_marker(self):
+        self.assertRegex(self.executive,
+                         r"confirm item is not a `\[NEEDS CLARIFICATION\]` marker")
+
+    def test_the_unfamiliar_area_runs_the_blindspot_pass(self):
+        self.assertIn("`unfamiliar`", self.clarify)
+        self.assertIn("blindspot", self.clarify)
+        self.assertIn("--format=%s", self.clarify)  # subjects only, never the authors
+
+    def test_a_named_reference_is_a_sourced_line_not_a_candidate(self):
+        # The user's rule (#24, after review round 2): a UI reference candidate exists only
+        # when the request names none; a named reference opens no dialog.
+        ui = self.clarify[self.clarify.index("**UI.**"):]
+        ui = ui[:ui.index("## Step 2")]
+        # The user's scope answer (round 4): the request OR the issue names it.
+        self.assertIn("the request or the issue names no reference", ui)
+        self.assertIn("When the request or the issue names the reference", ui)
+        self.assertIn("no candidate", ui)
+        self.assertIn("[source: the request]", ui)
+        self.assertIn("[source: issue #<n>]", ui)  # round 4, R4-4
+
+    def test_clarify_reads_section_and_keeps_blindspots_in_the_list(self):
+        # Round 4: a wrong or hidden heading must not skip the dialog silently (R3-2),
+        # and a sourced blindspot candidate stays in the list (R3-3).
+        # R4-2: only a false `section` means a wrong heading; a correct batch can be empty.
+        self.assertIn("When `section` is false, the heading is wrong or hidden", self.executive)
+        self.assertNotIn("0 items", self.executive)
+        evidence = self.clarify[self.clarify.index("**Evidence first.**"):]
+        evidence = evidence[:evidence.index("**Unfamiliar area.**")]
+        self.assertIn("A blindspot candidate is the exception", evidence)
+        self.assertIn("tagged `[blindspot]`", evidence)  # R4-6
+
+    def test_the_section_holds_only_assumption_lines(self):
+        # Round 5 (R5-1, R5-4): the strict section, said where the model writes the lines.
+        self.assertIn("the section holds only assumption lines", self.executive)
+        self.assertIn("[blindspot]` or `[reference]` after the class", self.executive)
+        step3 = flat(section((SHIPGATE / "skills/clarify/SKILL.md").read_text(),
+                             "## Step 3 — Write the PRD"))
+        self.assertIn("In `ask` mode, leave out its \"Assumptions (executive)\" section", step3)
+
+    def test_the_prd_and_the_changelog_name_the_request_or_the_issue(self):
+        # R4-3 and R4-5: the UI rule's scope is the request or the issue, everywhere.
+        for path in ("docs/prd/clarify-unknowns.md", "CHANGELOG.md",
+                     "docs/adr/0029-clarify-confirms-its-risky-assumptions-in-one-batch.md"):
+            with self.subTest(path=path):
+                text = flat((SHIPGATE / path).read_text())
+                self.assertNotIn("the request names no reference", text)
+                self.assertIn("the request or the issue names no reference", text)
+
+    def test_evidence_first_replaces_recall_before_asking(self):
+        self.assertNotIn("Recall before asking", self.clarify)
+        self.assertIn("Evidence first", self.clarify)
+        self.assertIn("--comments", self.clarify)
+
+    def test_the_template_shows_the_tagged_line(self):
+        # The end tags are pinned in the skill (test_the_three_end_tags); round 5 moved the
+        # template's explanation there, so the section holds the placeholder alone.
+        body = flat(section((SHIPGATE / "skills/clarify/references/prd-template.md").read_text(),
+                            "## Assumptions (executive)"))
+        self.assertRegex(body, r"- \[<class>\] \[source: <ref>\] <question> → <answer>")
+
+    def test_the_contract_names_the_batch_and_the_setting(self):
+        body = flat(section((SHIPGATE / "skills/feature/SKILL.md").read_text(),
+                            "## The executive contract"))
+        bullet = body[body.index("Clarify answers go"):body.index("Design choices go")]
+        self.assertIn("one dialog", bullet)
+        self.assertIn("`clarify_confirm`", bullet)
+
+    def test_route_and_map_keeps_the_own_share_for_clarify(self):
+        text = (SHIPGATE / "skills/route-and-map/SKILL.md").read_text()
+        self.assertIn("`unfamiliar`", flat(text))
+        block = section(text, "### Risk signals")
+        self.assertIn("Unfamiliar to you:", block)
+        self.assertIn("Own share unknown", block)
+
+    def test_the_glossary_defines_the_two_terms(self):
+        rows = {l.split("|")[1].strip(): l for l in (SHIPGATE / "docs/glossary.md").read_text().splitlines()
+                if l.startswith("| **")}
+        for term in ("**confirm batch**", "**own share**"):
+            with self.subTest(term=term):
+                self.assertIn(term, rows)
+        self.assertIn("ADR 0029", rows["**confirm batch**"])
+
+
 if __name__ == "__main__":
     unittest.main()

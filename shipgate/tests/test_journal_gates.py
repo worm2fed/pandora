@@ -767,5 +767,36 @@ class TestGateMisc(JournalTestCase):
         self.assertEqual(self.events(), [])
 
 
+class TestClarifyConfirmRecordingForms(JournalTestCase):
+    """#24 FR-010 / SC-004: the journal accepts the three forms clarify records a confirm
+    batch with: kept and changed as the user's, a dismissed dialog as the
+    orchestrator's. A pin of today's behaviour: no new event type, no new shape."""
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+
+    def test_kept_changed_and_dismissed_are_accepted(self):
+        q = "Is the fee its own posting?"
+        self.append_event("feature/x", "gate-decision", {
+            "gate": "clarify", "question": q, "decision": "kept: yes, a fee posting",
+            "mode": "ask", "raised_by": "orchestrator"}, "--actor", "user")
+        self.append_event("feature/x", "gate-decision", {
+            "gate": "clarify", "question": "Does the notice show the fee?",
+            "decision": "yes, as its own line", "mode": "ask", "raised_by": "user"},
+            "--actor", "user")
+        self.append_event("feature/x", "gate-decision", {
+            "gate": "clarify", "question": "confirm batch",
+            "decision": "dismissed: 2 items unconfirmed", "mode": "executive",
+            "raised_by": "orchestrator"})
+        events = [e for e in self.events("feature/x") if e["type"] == "gate-decision"]
+        self.assertEqual(len(events), 3)
+        self.assertEqual([e["data"]["mode"] for e in events], ["ask", "ask", "executive"])
+        self.assertEqual([e["data"]["raised_by"] for e in events],
+                         ["orchestrator", "user", "orchestrator"])
+        self.assertEqual([e["actor"].split("@")[0] for e in events],
+                         ["user", "user", "orchestrator"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

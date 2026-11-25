@@ -55,10 +55,7 @@ Measurable and technology-agnostic — how we'll know it works and is done.
 
 ## Assumptions (executive)
 
-Executive mode only — the coverage-scan questions answered without asking. One line each;
-delete this section when the flow ran in `ask` mode.
-
-- <question> → <answer taken> — <one-sentence rationale>
+- [<class>] [source: <ref>] <question> → <answer> — <one-sentence rationale>
 
 ## Open questions
 

@@ -1520,12 +1520,207 @@ class TestByDir(SignalsCase):
         self.assertEqual(set(self.dirs("--by-dir", "1", "d2")), {"d2"})
         self.assertEqual(len(self.dirs("--by-dir", "1", "--top", "1")), 1)
 
+    def test_dir_row_keys_are_pinned(self):
+        # Additive changes extend this set on purpose; a drop or a rename breaks
+        # route-and-map and clarify, which read these rows.
+        for row in self.dirs("--by-dir", "2").values():
+            self.assertEqual(set(row), {"dir", "files", "commits", "fixes", "fix_rate",
+                                        "fan_in", "labels", "risk", "own_share",
+                                        "unfamiliar"}, msg=row["dir"])
+
     def test_by_dir_table(self):
         proc = self.signals("hotspots", "--repo", self.root, "--by-dir", "1")
         lines = proc.stdout.splitlines()
         self.assertEqual(lines[0].split(), ["dir", "files", "commits", "fix%", "in",
                                             "risk"])
         self.assertTrue(any(line.split()[:3] == ["d1", "5", "2"] for line in lines))
+
+
+OWNER = ("Owner Fixture", "owner@example.test")
+ME = ("Me Fixture", "me@example.test")
+
+
+def no_git_identity_env(base=None):
+    """The hermetic environment with git's global and system files out of reach, so
+    only a repo-local `user.email` gives an identity: the maintainer's own must never
+    reach a test."""
+    env = hermetic_env(base)
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    return env
+
+
+class TestOwnShare(SignalsCase):
+    """#24 FR-014, FR-015 / SC-001: the current identity's share of a directory's
+    in-window commits, and `unfamiliar` below 0.10. HEAD is 2021-06-01; the default
+    12-month window starts 2020-06-01.
+
+    mine/   2 commits, both by ME                         -> 1.0,  familiar
+    theirs/ 20 by OWNER, 1 by ME touching both its files  -> 1/21, unfamiliar
+    edge/   9 by OWNER, 1 by ME                           -> 0.10, familiar (not below)
+    old/    2 by ME, both before the window               -> 0.0,  unfamiliar
+    near/   19 by OWNER, 2 by ME                          -> 2/21 = 0.095, shown 0.1,
+                                                             familiar: the flag follows
+                                                             the number the row shows
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls._tmp.name) / "repo"
+        repo = cls.repo = FixtureRepo(cls.root)
+        repo.commit("old one", ts(2019, 1, 1), writes={"old/o.py": "1\n"}, author=ME)
+        repo.commit("old two", ts(2019, 2, 1), writes={"old/o.py": "2\n"}, author=ME)
+        for i in range(20):
+            repo.commit(f"theirs {i}", ts(2020, 7, 1) + i * 3600,
+                        writes={"theirs/a.py": f"{i}\n"}, author=OWNER)
+        repo.commit("fix: both theirs files", ts(2020, 8, 1),
+                    writes={"theirs/a.py": "me\n", "theirs/b.py": "me\n"}, author=ME)
+        for i in range(9):
+            repo.commit(f"edge {i}", ts(2020, 9, 1) + i * 3600,
+                        writes={"edge/e.py": f"{i}\n"}, author=OWNER)
+        repo.commit("edge mine", ts(2020, 10, 1), writes={"edge/e.py": "me\n"}, author=ME)
+        for i in range(19):
+            repo.commit(f"near {i}", ts(2020, 11, 1) + i * 3600,
+                        writes={"near/n.py": f"{i}\n"}, author=OWNER)
+        for i in range(2):
+            repo.commit(f"near mine {i}", ts(2020, 12, 1) + i * 3600,
+                        writes={"near/n.py": f"me {i}\n"}, author=ME)
+        repo.commit("mine one", ts(2021, 5, 1), writes={"mine/m.py": "1\n"}, author=ME)
+        repo.commit("mine two", ts(2021, 6, 1), writes={"mine/m.py": "2\n"}, author=ME)
+        # Upper case on purpose: `%aE` is lower-cased, so the identity must be too.
+        repo.git("config", "user.email", ME[1].upper())
+        repo.git("config", "user.name", ME[0])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def payload(self, root=None, *args, env=None):
+        return self.signals_json("hotspots", "--repo", root or self.root, "--by-dir", "1",
+                                 *args, env=env or no_git_identity_env())
+
+    def dirs(self, root=None, env=None):
+        return {d["dir"]: d for d in self.payload(root, env=env)["dirs"]}
+
+    def test_the_threshold_is_a_pinned_constant(self):
+        self.assertEqual(load_signals_module().UNFAMILIAR_OWN_SHARE, 0.10)
+
+    def test_an_owned_directory_is_familiar(self):
+        mine = self.dirs()["mine"]
+        self.assertEqual((mine["own_share"], mine["unfamiliar"]), (1.0, False))
+
+    def test_a_foreign_directory_is_unfamiliar_and_a_multi_file_commit_counts_once(self):
+        theirs = self.dirs()["theirs"]
+        self.assertEqual(theirs["commits"], 21)
+        self.assertEqual((theirs["own_share"], theirs["unfamiliar"]),
+                         (round(1 / 21, 2), True))
+
+    def test_a_share_of_exactly_the_threshold_is_not_unfamiliar(self):
+        edge = self.dirs()["edge"]
+        self.assertEqual((edge["own_share"], edge["unfamiliar"]), (0.1, False))
+
+    def test_the_flag_follows_the_rounded_share_the_row_shows(self):
+        near = self.dirs()["near"]
+        self.assertEqual((near["commits"], near["own_share"], near["unfamiliar"]),
+                         (21, 0.1, False))
+
+    def test_a_directory_with_no_in_window_commits_is_unfamiliar(self):
+        old = self.dirs()["old"]
+        self.assertEqual((old["commits"], old["own_share"], old["unfamiliar"]),
+                         (0, 0.0, True))
+
+    def test_own_reason_is_null_when_the_share_is_known(self):
+        self.assertIsNone(self.payload()["own_reason"])
+
+    def test_own_reason_is_on_every_hotspots_payload(self):
+        payload = self.signals_json("hotspots", "--repo", self.root,
+                                    env=no_git_identity_env())
+        self.assertIn("own_reason", payload)
+        for row in payload["files"]:  # file rows do not change
+            self.assertNotIn("own_share", row)
+            self.assertNotIn("unfamiliar", row)
+
+    def test_no_identity_gives_nulls_and_says_why(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bare = FixtureRepo(Path(tmp.name) / "repo")  # no repo-local user.email
+        bare.commit("one", ts(2020, 1, 1), writes={"a/x.py": "1\n"}, author=ME)
+        payload = self.payload(bare.path)
+        self.assertEqual(payload["own_reason"], "no-identity")
+        for row in payload["dirs"]:
+            self.assertIsNone(row["own_share"])
+            self.assertIsNone(row["unfamiliar"])
+
+    def test_no_trajectory_gives_nulls_and_the_trajectory_reason(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        source = FixtureRepo(Path(tmp.name) / "src")
+        source.commit("one", ts(2020, 1, 1), writes={"a/x.py": "1\n"}, author=ME)
+        source.commit("two", ts(2020, 2, 1), writes={"a/x.py": "2\n"}, author=ME)
+        dst = Path(tmp.name) / "shallow"
+        result = subprocess.run(
+            ["git", "clone", "-q", "--depth", "1", f"file://{source.path}", str(dst)],
+            capture_output=True, text=True)
+        if result.returncode != 0:
+            raise unittest.SkipTest(f"shallow clone failed: {result.stderr}")
+        subprocess.run(["git", "-C", str(dst), "config", "user.email", ME[1]], check=True)
+        payload = self.payload(dst)
+        self.assertEqual(payload["own_reason"], "shallow")
+        for row in payload["dirs"]:
+            self.assertIsNone(row["own_share"])
+            self.assertIsNone(row["unfamiliar"])
+
+    def test_a_mailmap_entry_maps_the_configured_email(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = FixtureRepo(Path(tmp.name) / "repo")
+        repo.commit("mine", ts(2020, 1, 1), writes={"mine/m.py": "1\n"}, author=ME)
+        repo.git("config", "user.email", "old-me@example.test")
+        # Unmapped, the configured email matches no commit.
+        self.assertEqual(self.dirs(repo.path)["mine"]["own_share"], 0.0)
+        repo.write(".mailmap", f"{ME[0]} <{ME[1]}> <old-me@example.test>\n")
+        self.assertEqual(self.dirs(repo.path)["mine"]["own_share"], 1.0)
+
+    def test_a_name_keyed_mailmap_entry_maps_the_configured_identity(self):
+        # `Proper <p> Old Name <old>` matches only with the name, as `%aE` does.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = FixtureRepo(Path(tmp.name) / "repo")
+        repo.commit("mine", ts(2020, 1, 1), writes={"mine/m.py": "1\n"}, author=ME)
+        repo.git("config", "user.email", "old-me@example.test")
+        repo.git("config", "user.name", "Old Name")
+        repo.write(".mailmap", f"{ME[0]} <{ME[1]}> Old Name <old-me@example.test>\n")
+        payload = self.payload(repo.path)
+        self.assertEqual(payload["dirs"][0]["own_share"], 1.0)
+        self.assertNotIn("Old Name", json.dumps(payload))
+
+    def test_a_name_with_angle_brackets_falls_back_to_the_email(self):
+        # R3-5: `git check-mailmap "A <b> c <email>"` echoes `A <b>`; the name must not
+        # be used when it holds `<` or `>`.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = FixtureRepo(Path(tmp.name) / "repo")
+        repo.commit("mine", ts(2020, 1, 1), writes={"mine/m.py": "1\n"}, author=ME)
+        repo.git("config", "user.email", ME[1])
+        repo.git("config", "user.name", "A <b> c")
+        payload = self.payload(repo.path)
+        self.assertEqual(payload["dirs"][0]["own_share"], 1.0)
+        self.assertNotIn("<b>", json.dumps(payload))
+
+    def test_the_identity_reaches_no_output_form(self):
+        # SC-002: the identity matches commits here, so it is live in the scan.
+        needles = ("Me Fixture", "me@example.test", "ME@EXAMPLE.TEST", "Owner Fixture",
+                   "owner@example.test", "example.test")
+        env = no_git_identity_env()
+        for argv in (["hotspots"], ["hotspots", "--by-dir", "1"],
+                     ["hotspots", "--by-dir", "1", "--blast"],
+                     ["blast", "mine/m.py"], ["suspects", "mine/m.py"]):
+            for mode in ([], ["--json"]):
+                proc = self.signals(*argv, "--repo", self.root, *mode, env=env)
+                for needle in needles:
+                    self.assertNotIn(needle, proc.stdout + proc.stderr,
+                                     msg=f"{argv} {mode}")
 
 
 class TestSuspects(SignalsCase):
