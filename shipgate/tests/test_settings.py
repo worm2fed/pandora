@@ -56,6 +56,7 @@ TABLE_KEYS = (
     "autonomy", "orchestration.review", "orchestration.explore", "writing_style",
     "code_graph", "code_signals.window_months", "code_signals.fix_pattern",
     "code_signals.exclude", "code_signals.ranking_exclude", "handoff", "forge",
+    "clarify_confirm",
 )
 
 # Key → the legacy (section, bullet) the table names.
@@ -813,7 +814,7 @@ SAMPLE_VALUES = {
     "writing_style": "ste-80", "code_graph": "root",
     "code_signals.window_months": 24, "code_signals.fix_pattern": "^hotfix",
     "code_signals.exclude": ["vendor/"], "code_signals.ranking_exclude": [],
-    "handoff": "1m", "forge": "gitlab",
+    "handoff": "1m", "forge": "gitlab", "clarify_confirm": "off",
 }
 
 # The legacy line per legacy key, and the value it gives (SC-002).
@@ -1219,6 +1220,19 @@ class TestConfigCommand(unittest.TestCase):
             "ended": date.today() > date.fromisoformat(until)})
         one = json.loads(self.config("code_graph", "--json").stdout)
         self.assertEqual(list(one["settings"]), ["code_graph"])
+
+    def test_clarify_confirm_default_project_value_and_bad_value(self):
+        """#24 FR-012 / SC-003: risky by default, off from a project file, exit 2 on
+        a value outside the set. The status-line tests pin that it is not shown."""
+        self.assertEqual(self.config("clarify_confirm").stdout.splitlines(),
+                         ["clarify_confirm = risky  (default)"])
+        path = self.sidecar({"clarify_confirm": "off"})
+        self.assertEqual(self.config("clarify_confirm").stdout.splitlines(),
+                         [f"clarify_confirm = off  (project {path.relative_to(self.root)})"])
+        path = self.sidecar({"clarify_confirm": "always"})
+        proc = self.config("clarify_confirm", rc=2)
+        self.assertIn(f'journal.py: {path}: clarify_confirm = "always" is not one of: '
+                      "risky, off", proc.stderr)
 
     def test_unknown_key_exits_2(self):
         proc = self.config("autonomyy", rc=2)

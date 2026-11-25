@@ -33,6 +33,9 @@ from .closeout import (
 from .stats import build_stats, render_stats
 from .doctor import render_doctor, run_doctor
 from .transfer import export_events, import_events
+from .assumptions import (
+    BATCH_CAP, AssumptionError, assumptions_report, render_assumptions,
+)
 
 
 # --------------------------------------------------------------------------
@@ -152,6 +155,40 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--start", default=None, metavar="DIR",
                           help="resolve as from DIR (default: the working directory)")
     p_config.set_defaults(func=cmd_config)
+
+    p_assumptions = subparsers.add_parser(
+        "assumptions",
+        help="parse the tagged lines of a PRD's \"Assumptions (executive)\" section; "
+             "--risky gives the batch clarify confirms; needs no journal",
+        description="Parse the \"## Assumptions (executive)\" section of a PRD. Each "
+                    "item: - [<class>] [blindspot|reference]? [source: <ref>] | "
+                    "[no source found in <what>] <question> → <answer> — <rationale> "
+                    "<end tag>?",
+        epilog="classes: domain, data, behaviour, technical. End tags, exactly: "
+               "[kept by the user], [changed by the user, was: <old answer>], "
+               "[unconfirmed]. --risky keeps the items with no end tag that are "
+               "unsourced domain, data or behaviour items, or [blindspot] or [reference] "
+               "candidates whatever their class and source; in file order, at most "
+               "--cap (default 4), the rest counted as overflow; the text footer reads "
+               "'N to confirm, M over the cap of K'. The section runs from its heading "
+               "line to the next '## ' line and holds only assumption lines: items, "
+               "their indented continuation lines and blank lines. Exit 2 names "
+               "<prd>:<line> of the first bad line: a malformed item, any other line in "
+               "the section (prose, a heading, another bullet), an indented list item, a "
+               "near-miss end tag, text after the end tag, an unclosed [ in a tag, a ``` "
+               "or ~~~ line in the section, or a second section heading. A PRD with no "
+               "section lists "
+               "nothing and exits 0; the JSON \"section\" says whether the section was "
+               "found.",
+    )
+    p_assumptions.add_argument("prd", metavar="PRD", help="path to the PRD markdown file")
+    p_assumptions.add_argument("--risky", action="store_true",
+                               help="only the batch to confirm, capped at --cap")
+    p_assumptions.add_argument("--cap", type=int, default=None, metavar="N",
+                               help="with --risky: the batch size, 0 to 4 (default 4); "
+                                    "the dialog slots left after the run's escalations")
+    p_assumptions.add_argument("--json", action="store_true",
+                               help="machine-readable output")
 
     p_session = subparsers.add_parser(
         "session",
@@ -596,6 +633,29 @@ def cmd_vocab(args, resolution: Resolution) -> int:
     return EXIT_OK
 
 
+def cmd_assumptions(args, resolution: Resolution) -> int:
+    """Read the PRD as UTF-8 and list its assumption items; reads no journal."""
+    cap = BATCH_CAP if args.cap is None else args.cap
+    if args.cap is not None and not args.risky:
+        raise UsageError("--cap needs --risky")
+    if not 0 <= cap <= BATCH_CAP:
+        raise UsageError(f"--cap takes an integer from 0 to {BATCH_CAP}, got {cap}")
+    try:
+        text = Path(args.prd).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+        raise UsageError(f"cannot read {args.prd}: {reason}")
+    try:
+        report = assumptions_report(args.prd, text, args.risky, cap)
+    except AssumptionError as exc:
+        raise UsageError(f"{args.prd}:{exc.line}: {exc.reason}")
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False))
+    else:
+        print(render_assumptions(report))
+    return EXIT_OK
+
+
 def cmd_session(args, resolution: Resolution) -> int:
     """Retired (#51, ADR 0005 amendment of 2026-11-23): one release of grace for an old
     caller of ``--set`` or ``--get``. It reads no sidecar (``main`` dispatches it before
@@ -945,6 +1005,7 @@ COMMANDS = {
     "init": cmd_init,
     "vocab": cmd_vocab,
     "config": cmd_config,
+    "assumptions": cmd_assumptions,
     "append": cmd_append,
     "session": cmd_session,
     "status": cmd_status,
@@ -973,7 +1034,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # exists, since the likeliest moment to ask "what are the names?" is before
         # a project has one. The retired `session` reads nothing, not even a sidecar.
         # `config` reads the settings files and the config, never the journal.
-        if args.command in ("vocab", "session", "config"):
+        # `assumptions` reads one PRD file, never the journal.
+        if args.command in ("vocab", "session", "config", "assumptions"):
             return COMMANDS[args.command](args, None)
         resolution = resolve_db(getattr(args, "db", None), Path.cwd())
         return COMMANDS[args.command](args, resolution)

@@ -56,7 +56,9 @@ adds to it only through its **Extra escalations** line.
 In `executive` mode the orchestrator answers routine gate questions itself and records each
 decision:
 
-- Clarify answers go in the PRD's "Assumptions (executive)" list (see `clarify`).
+- Clarify answers go in the PRD's "Assumptions (executive)" list, each with a class and a
+  source. Clarify puts the risky ones and its blindspot and UI questions to the user in one
+  dialog before design, unless the `clarify_confirm` setting is `off` (see `clarify`).
 - Design choices go in the ADR, with a note that the decision was executive (see `design`).
 - Small calls go in the ledger.
 - On a journaled project, every decision is a `gate-decision` with `raised_by: orchestrator`.

@@ -2,6 +2,32 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.34.0 — clarify shows you its riskiest executive answers before design (#24, ADR 0029).
+
+**Clarify confirms its risky assumptions in one dialog (#24, ADR 0029).** In `executive`
+mode clarify still answers its own questions. Each answer in the PRD's "Assumptions
+(executive)" list now carries a class (`domain`, `data`, `behaviour`, `technical`) and a
+source, or says that none was found. Before design, clarify puts to you the answers about
+a domain rule, the data model or what a user sees that no source states: one dialog, at
+most 4 questions, "Keep" first. A fully specified issue gets no dialog. A teammate sends
+the batch to its lead.
+- The new setting `clarify_confirm` (`risky`, the default, or `off`; scope any) turns the
+  dialog off. With `off`, the phase summary lists the risky answers first.
+- `journal.py assumptions <prd> [--risky [--cap N]] [--json]` parses that list. It names
+  the first malformed line (exit 2), and `--risky` computes the batch: the risky lines and
+  the blindspot and UI questions, in file order, at most 4, fewer when escalations share
+  the dialog. Clarify runs it; for a PRD outside the repo, the model applies the same rule.
+- Evidence first: one search per clarify run reads the knowledge base, the issue with its
+  comments and up to 3 documents it links. Each question quotes what it found.
+- `signals.py hotspots --by-dir` gives each directory row `own_share` and `unfamiliar`:
+  your share of its commits in the window, and whether that share is below 0.10. Only the
+  number leaves the script. In an unfamiliar area, clarify asks up to two blindspot
+  questions.
+- When the impact map touches UI and the request or the issue names no reference, clarify
+  asks which reference the work should follow.
+- Upgrade note: every executive project gets the dialog. Set `"clarify_confirm": "off"`
+  in `.claude/shipgate.json` to keep the old flow.
+
 v0.33.0 — settings move to the settings files, and `setup` moves them for you (PR 3 of 3 for #60).
 
 **Settings live in the settings files (#60, ADR 0028).** A setting is a value from a fixed
