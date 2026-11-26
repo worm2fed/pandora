@@ -144,32 +144,31 @@ with no recorded model.
 
 | case | ask | what it tells you |
 |---|---|---|
-| 01 regression, failing test | "the tests started failing this week, what's going on?" | ceiling — both arms diagnose it; the with arm must also hold the fix back |
 | 02 selective bug | "EU invoices are wrong, US fine" | the approval gate: propose with trade-offs, don't patch |
 | 03 suggested quick fix | "I think we just need a null check — confirm?" | does the skill resist the user's own guess |
 | 04 pasted stack trace | prod traceback + log lines, no repo access | triggering on pasted evidence; the answer is hypotheses + the evidence that decides them |
 | 05 fix-it wording | "off by one for some users. Just fix it." | triggering on a report with an instruction attached, and that the instruction is not plan approval |
-| 06 negative | add a CSV export (feature request) | must not trigger |
-| 07 negative | explain how the retry/backoff works | must not trigger |
-| 08 bug localization | "which file has the defect?" | ceiling — the bug is readable in the code; both arms ≈0.9 |
-| 09 blast radius | "what does the change at HEAD affect?" | ceiling — transitive importers are findable by grep |
-| 10 risk ranking | "rank the changed files by regression risk" | bare model ≈ coin-flip on the two hot files |
-| 11 negative | one-line README typo | must not trigger the flow or run signals |
-| 12–14 explicit | same as 08–10, prompt names the shipgate skill | the signals path itself (`review` + `hotspots --diff`) |
-| 70 fact retention | review the change at HEAD; three planted findings in three files | the with arm's report keeps every planted fact (file:line, severity, failing input) while following the Writing for people rule; readability rubric at weight 0.25, paired with a hedge-word regex |
-| 71 reuse detection | add retry with exponential delay to `fetchInvoice`; prompt names `implement` | the reuse step finds `withBackoff`, a helper whose name does not say "retry", and wraps the call in it instead of writing a new loop |
-| 72 blast radius, large | the change at HEAD in a generated 484-file npm workspace (`@app/*` package imports, barrel re-exports, `require`, a `__tests__/` tree); prompt names `route-and-map` | recall and precision against the generated truth (44 importers, 15 tests); the regex scanner does not resolve workspace package names (2 of 59 files); the graph alone missed the re-export and package-entry hops (56 of 59), and from shipgate 0.24.0 the re-export pass reaches all 59 |
-| 73 reuse, hidden helper | as 71, in a generated 290-file workspace; the helper `withPolicy` sits in `packages/platform/src/net/resilience/` and no file says "retry" or "backoff" | whether the reuse step still finds the helper when its name and path give nothing away |
+| 06, 07 negative (probe) | add a CSV export; explain how the retry/backoff works | `structured-debug` must not fire |
+| 08 bug localization (probe) | "which file has the defect?" | `structured-debug` fires on the natural prompt; the ranking itself is a fixture test of `signals.py suspects` (`monthRange.ts` first) |
+| 09 blast radius (probe) | "what does the change at HEAD affect?" | `route-and-map` fires; the blast radius is the fixture of 13 |
+| 10 risk ranking (probe) | "rank the changed files by regression risk" | `review` fires; the ranking is a fixture test of `hotspots --diff` (`promo.ts`, then `calendar.ts`) |
+| 11 negative (probe) | one-line README typo | `route-and-map` must not fire, and no Bash call names `signals.py` or `codegraph` |
+| 13 blast radius (fixture) | — | `test_signal_grader.py` scores the offline `signals.py blast` of its fixture against `expected.json` |
+| 58 regression, large journaled repo | "the pricing tests started failing this month, what's going on?" | names the cause and the commit, says why the regression slipped through, holds the fix back; the with arm records its debug event (with-only) |
+| 70 fact retention | review the change at HEAD; three planted findings in three files, and an authorised INFO-logging deviation | the report keeps every planted fact (file:line, severity, failing input), does not raise the recorded deviation, has no sentence over 40 words (a script grader) and names the files in code form |
+| 72 blast radius, large (fixture) | — | a generated 484-file npm workspace (`@app/*` package imports, barrel re-exports, `require`, a `__tests__/` tree); `test_eval_fixtures.py` runs `signal_grader.py fixture --arm graph` offline when codegraph is on `PATH` (44 importers, 15 tests); the regex scanner does not resolve workspace package names (2 of 59 files); the graph alone missed the re-export and package-entry hops (56 of 59), and from shipgate 0.24.0 the re-export pass reaches all 59 |
+| 73 reuse, hidden helper | add retry with exponential delay to `fetchInvoice`, in a generated 290-file workspace; prompt names `implement` | whether the reuse step finds `withPolicy` in `packages/platform/src/net/resilience/` when no name, comment, caller or commit subject gives it away (the fixture asserts it) |
 | 74 canon lens | review the change at HEAD in a journaled TS repo whose config's Style section names a project skill, `typed-canon` | whether the review names both canon violations (a `switch` over a closed union; an unbranded id in a domain type) as must-fix findings before its verdict, and records `style` on the review entry (#11) |
-| 75 graph past route | review the change at HEAD in a journaled TS repo; the journal is at review with graph signals on its route-and-map entry; graph arm only | whether the graph still feeds the flow after route-and-map: `hotspots --diff` runs, the verdict carries `ranking` with `source: graph` and the hot file first, and the answer says it looked hardest at that file and why (#10) |
 
-On naturally phrased prompts (08–10) no shipgate skill has fired in any run so far, so their
-Δ measures **triggering**, not the signals. Case 14 is the one that shows the signals'
-contribution: with `signals.py`, the two files with the worst fix history rank #1/#2 in 6/6
-runs; the same `review` skill without signals manages 2/6, no plugin 3/6.
+The table shows the cases this section explains, not every case: `sets.json` lists them
+all. Before #28, the natural prompts of 08–10 fired no shipgate skill in any run, so their Δ
+measured **triggering**, not the signals. They are trigger probes now. The explicit twins
+12–14 (12 and 14 removed in #28) showed the signals' contribution: with `signals.py`, the
+two files with the worst fix history ranked #1/#2 in 6/6 runs of 14; the same `review`
+skill without signals managed 2/6, no plugin 3/6.
 
 Graders are outcome checks (regex over the answer, LLM rubrics for evidence quality);
-`skill-fired` is display-only under ablation except in 12–14, where it is scored.
+`skill-fired` is display-only under ablation.
 
 Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a fact found):
 
@@ -188,6 +187,8 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
   on every claim; the harness judge split 2/3 at best. Keep such a rubric at a low weight
   (0.25) and pair it with a deterministic regex for the part that can be matched (hedge
   words, fenced blocks). Grade the facts with their own regexes; they are the signal.
+  Since #28 case 70 has no rubric: a script grader checks the sentence length, and a regex
+  checks the file names in code form.
 - `baseline.json` drifts with the harness. On 2026-10-12, 5 of 23 rows moved by more than
   0.10 against the 2026-10-06 baseline on the unchanged tree, mostly in the without arm, and
   the full suite was re-recorded that day. Each row now carries the harness (`claude`) and
@@ -209,8 +210,11 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
 
 The harness's `--ablation with-without` turns the plugin on and off. It does not turn
 codegraph on and off. The code-graph ablation (PRD `code-graph`, SC-007) is two separate
-runs of the same cases: 08–14 and 71–73. Cases 72 and 73 exist for this ablation: their
-workspaces are too large to read whole in 30 turns, so a score depends on what the signals find.
+runs of the same cases. Since #28 it has one eval case, 73: 08–10 are trigger probes, 13 and
+72 are fixture cases that run offline (`signal_grader.py fixture`, `test_eval_fixtures.py`),
+and 12, 14 and 71 are removed. The results below ran on the suite before #28. Cases 72 and
+73 exist for this ablation: their workspaces are too large to read whole in 30 turns, so a
+score depends on what the signals find.
 
 - **Graph arm.** Run the case as usual with `codegraph` on `PATH`. The agent sandbox sees
   `PATH`, so `signals.py` builds the index in `app/` and prints `"source": "graph"`.
@@ -221,8 +225,8 @@ workspaces are too large to read whole in 30 turns, so a score depends on what t
 
 ```
 S=.claude/skills/run-evals/scripts
-$S/run-case.sh --ablation none --model M shipgate 13                  # graph arm
-$S/run-case.sh --no-codegraph --ablation none --model M shipgate 13   # regex arm
+$S/run-case.sh --ablation none --model M shipgate 73                  # graph arm
+$S/run-case.sh --no-codegraph --ablation none --model M shipgate 73   # regex arm
 ```
 
 Do not use `SHIPGATE_CODEGRAPH_BIN=/nonexistent` for the regex arm. The harness removes
@@ -253,11 +257,12 @@ scanner. The regex-arm agent saw the low count, wrote its own import resolver in
 and listed 43–44 of 44 importers and 15 of 15 tests. The graph-arm agent trusted the
 graph, which misses one file reached only through a second barrel. With-plugin scores:
 graph 0.88/0.88/0.88, regex 0.88/1.00/0.88 (3 runs each, `--ablation none`). In 73 every
-arm scored 1.00: `git log` names the helper's commit ("call policies for flaky
-upstreams"), and a grep for `attempt` finds `attempts` in `policy.ts`.
+arm scored 1.00: `git log` named the helper's commit ("call policies for flaky
+upstreams"), and a grep for `attempt` found `attempts` in `policy.ts`. #28 removed both
+giveaways and the helper's two callers.
 
-Case 11 grades the negative side: `no-codegraph-run` fails on any Bash call that names
-`codegraph` or runs `signals.py graph`, in both arms.
+The probe of case 11 grades the negative side: it fails on any Bash call that names
+`signals.py` or `codegraph`.
 
 ## Signal grader
 
@@ -266,8 +271,8 @@ read: the `blast` object of `signals.py blast --json` or `signals.py hotspots --
 --json`. On case 72 the two arms give the same answer score, but the signals differ by a
 factor of 28. The grader shows that difference (ADR 0016, #6).
 
-It reads the case's `expected.json`. Only cases 13 and 72 have one. Case 09 is a
-blast-radius case too, but it has no `expected.json`, so it gets no signal grade.
+It reads the case's `expected.json`. Only the fixture cases 13 and 72 have one, and since
+#28 the harness runs neither. Case 09 is a trigger probe.
 
 The grader gives two numbers for each of two lists:
 
@@ -309,7 +314,8 @@ python3 $G results shipgate/evals/results/<timestamp>
 - `results` runs `trace` for each run of each case with an `expected.json`. It prints one
   row per run: case, arm, run, files P/R, tests P/R and source. `run-case.sh` runs it after
   each such case, in both arms (also with `--no-codegraph`), before it removes the kept
-  sandboxes. A harness run without `--keep-temp` keeps no trace; the row then says
+  sandboxes. Since #28 no eval case has an `expected.json`, so this path runs only for a
+  results dir from before. A harness run without `--keep-temp` keeps no trace; the row then says
   "trace gone".
 
 Every subcommand takes `--json`. The grader adds nothing to the harness score or to

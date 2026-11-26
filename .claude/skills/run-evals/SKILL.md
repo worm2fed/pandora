@@ -33,7 +33,7 @@ S=.claude/skills/run-evals/scripts
 $S/run-case.sh --ablation with-without --model claude-opus-5-5 shipgate 05   # both arms
 $S/run-case.sh --ablation none --model claude-fable-5-2 shipgate 48          # with arm only
 $S/run-case.sh --bare --model claude-fable-5-2 shipgate 24                   # bare arm only (ADR 0035)
-$S/run-case.sh --ablation none --model M shipgate 10 --runs 1 -j 3 --max-cost-usd 2   # extras pass through
+$S/run-case.sh --ablation none --model M shipgate 02 --runs 1 -j 3 --max-cost-usd 2   # extras pass through
 $S/probe.sh --model claude-opus-5-5 shipgate 11        # one probe case, 3 runs
 $S/probe.sh --model claude-opus-5-5 shipgate probes    # the probes set
 python3 $S/summarize.py shipgate/evals/results/<timestamp>          # or the results/ root
@@ -139,10 +139,11 @@ out of the score, under `none` it counts it.
   tested. It skips every case and model that has a refusal in the run, so a refused
   partner never turns a `bare+none` row into a half row.
 
-When the case holds an `expected.json` (13, 72), `run-case.sh` then runs
+When the case holds an `expected.json`, `run-case.sh` then runs
 `shipgate/evals/signal_grader.py results <dir>`: one row per run with the precision and
 recall of the `signals.py` blast result the agent read. The grader's exit status never
-changes the script's. See the evals README, "Signal grader".
+changes the script's. Since #28 no eval case has one: 13 and 72 are fixture cases, scored
+offline by `signal_grader.py fixture`. See the evals README, "Signal grader".
 
 ## Cost
 

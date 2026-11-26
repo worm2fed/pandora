@@ -1,0 +1,14 @@
+{
+  "skill": "knowledge-base",
+  "fires": false,
+  "zero": {
+    "edit": [
+      "app/docs/",
+      "app/CLAUDE\\.md"
+    ],
+    "write": [
+      "app/docs/",
+      "app/CLAUDE\\.md"
+    ]
+  }
+}

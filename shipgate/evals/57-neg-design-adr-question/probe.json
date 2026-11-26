@@ -1,0 +1,10 @@
+{
+  "skill": "design",
+  "fires": false,
+  "zero": {
+    "edit": [],
+    "write": [
+      "app/docs/"
+    ]
+  }
+}

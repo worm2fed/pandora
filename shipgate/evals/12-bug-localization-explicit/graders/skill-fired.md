@@ -1,6 +1,0 @@
----
-type: tool_used
-tool: Skill
-input_match: structured-debug
-min: 1
----

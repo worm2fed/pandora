@@ -1,4 +1,0 @@
-schema_version: "1.1"
-name: 34-neg-route-one-line
-context:
-  scaffold_script: fixture.sh

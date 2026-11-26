@@ -3,15 +3,15 @@
 # A seeded generator writes a TS workspace (~300 files, 11 packages, `@app/*` path aliases,
 # barrel index.ts re-exports) in 4 commits. An existing helper already does "call again with a
 # growing pause": `withPolicy` in packages/platform/src/net/resilience/policy.ts, re-exported
-# from `@app/platform` and used by two callers in other packages. No file or symbol in the
-# repo says "retry" or "backoff". The ask is a retry with exponential delay around
-# `fetchInvoice` in packages/billing/src/gateway/invoiceClient.ts; the right answer reuses
-# withPolicy.
+# from `@app/platform` and called nowhere. Only its body says what it does: no file, symbol,
+# comment, caller or commit subject names the idea (the generator asserts it over the file
+# text and the subjects). The ask is a retry with exponential delay around `fetchInvoice` in
+# packages/billing/src/gateway/invoiceClient.ts; the right answer reuses withPolicy.
 set -e
 gen=$(mktemp "${TMPDIR:-/tmp}/gen73.XXXXXX")
 trap 'rm -f "$gen"' EXIT
 cat > "$gen" <<'PY'
-import json, os, random, subprocess, sys
+import json, os, random, re, subprocess, sys
 
 rng = random.Random(73)
 PKGS = [
@@ -79,15 +79,12 @@ put("packages/reports/src/exports/scheduleExport.ts",
 # The helper, behind a barrel, with a name and path that do not say what it is for.
 put("packages/platform/src/net/resilience/policy.ts",
     'import { pause } from "../../time/pause";\n\n'
-    "export interface Policy {\n  /** Total calls, the first one included. */\n  attempts: number;\n"
-    "  /** Pause before the second call, in ms; it doubles after each failed call. */\n  pauseMs: number;\n"
+    "export interface Policy {\n  calls: number;\n  pauseMs: number;\n"
     "  /** Upper bound for one pause, in ms. */\n  maxPauseMs?: number;\n"
     "  /** Return false to stop at once on this error. */\n  keepGoing?: (err: unknown) => boolean;\n}\n\n"
-    "/** Run `fn` under a policy: on failure, pause and call it again until it succeeds or the\n"
-    " * attempts run out. Rethrows the last error. */\n"
     "export async function withPolicy<T>(fn: () => Promise<T>, policy: Policy): Promise<T> {\n"
     "  let wait = policy.pauseMs;\n  for (let n = 1; ; n++) {\n    try {\n      return await fn();\n"
-    "    } catch (err) {\n      if (n >= policy.attempts || (policy.keepGoing && !policy.keepGoing(err))) throw err;\n"
+    "    } catch (err) {\n      if (n >= policy.calls || (policy.keepGoing && !policy.keepGoing(err))) throw err;\n"
     "      await pause(Math.min(wait, policy.maxPauseMs ?? Number.POSITIVE_INFINITY));\n      wait *= 2;\n    }\n  }\n}\n")
 put("packages/platform/src/index.ts",
     'export * from "./net/resilience/policy";\nexport * from "./time/pause";\n')
@@ -106,16 +103,15 @@ put("packages/http/src/client/json.ts",
 put("packages/http/src/index.ts", 'export * from "./client/json";\n')
 
 put("packages/catalog/src/feed/pullFeed.ts",
-    'import { getJson } from "@app/http";\nimport { withPolicy } from "@app/platform";\n\n'
+    'import { getJson } from "@app/http";\n\n'
     "export interface FeedItem {\n  sku: string;\n  name: string;\n}\n\n"
     "export async function pullFeed(url: string): Promise<FeedItem[]> {\n"
-    "  const res = await withPolicy(() => getJson<FeedItem[]>(url), { attempts: 4, pauseMs: 250, maxPauseMs: 4_000 });\n"
+    "  const res = await getJson<FeedItem[]>(url);\n"
     "  return res.body;\n}\n")
 put("packages/notify/src/hooks/deliverHook.ts",
-    'import { postJson } from "@app/http";\nimport { withPolicy } from "@app/platform";\n\n'
+    'import { postJson } from "@app/http";\n\n'
     "export async function deliverHook(url: string, event: { type: string; id: string }): Promise<void> {\n"
-    "  const status = await withPolicy(() => postJson(url, event), {\n    attempts: 3,\n    pauseMs: 500,\n"
-    "    keepGoing: (err) => !(err instanceof TypeError),\n  });\n"
+    "  const status = await postJson(url, event);\n"
     "  if (status >= 400) throw new Error(`hook rejected with ${status}`);\n}\n")
 
 CLIENT = ('import { getJson } from "@app/http";\n\n'
@@ -144,11 +140,13 @@ put("package.json", json.dumps({"name": "commerce-workspace", "private": True, "
 put("README.md", "# commerce-workspace\n\nTypeScript packages for billing, pricing, orders, catalog and more. "
                  "Packages import each other through the `@app/*` path aliases in `tsconfig.json`.\n")
 
+# The authority for this pattern is TestCase73NoGiveaway.GIVEAWAY in shipgate/tests/test_eval_fixtures.py.
+GIVEAWAY = re.compile(r"retry|back-?off|exponential|attempt|flak|5xx", re.I)
 for p, t in files.items():
-    low = t.lower()
-    assert "retry" not in low and "backoff" not in low and "back-off" not in low, p
+    assert not GIVEAWAY.search(t), p
 
 def commit(root, date, msg):
+    assert not GIVEAWAY.search(msg), msg
     env = dict(os.environ, GIT_AUTHOR_DATE=f"{date}T10:00:00+00:00", GIT_COMMITTER_DATE=f"{date}T10:00:00+00:00")
     subprocess.run(["git", "add", "-A"], cwd=root, check=True)
     subprocess.run(["git", "-c", "user.name=dev", "-c", "user.email=dev@example.com", "-c", "commit.gpgsign=false",
@@ -168,9 +166,9 @@ special = {"packages/platform/src/net/resilience/policy.ts", "packages/platform/
            "packages/catalog/src/feed/pullFeed.ts", "packages/notify/src/hooks/deliverHook.ts"}
 write(root, [p for p in files if p not in special]); commit(root, "2025-01-13", "feat: workspace packages, http client, billing gateway")
 write(root, ["packages/platform/src/net/resilience/policy.ts", "packages/platform/src/index.ts"])
-commit(root, "2025-03-10", "feat(platform): call policies for flaky upstreams")
-write(root, ["packages/catalog/src/feed/pullFeed.ts"]); commit(root, "2025-03-24", "feat(catalog): pull the feed under a call policy")
-write(root, ["packages/notify/src/hooks/deliverHook.ts"]); commit(root, "2025-04-14", "feat(notify): hooks use a call policy")
+commit(root, "2025-03-10", "feat(platform): net module in the package barrel")
+write(root, ["packages/catalog/src/feed/pullFeed.ts"]); commit(root, "2025-03-24", "feat(catalog): pull the product feed")
+write(root, ["packages/notify/src/hooks/deliverHook.ts"]); commit(root, "2025-04-14", "feat(notify): deliver hook events")
 PY
 if [ "${1:-}" = "--count" ]; then python3 "$gen" --count; exit 0; fi
 mkdir app && cd app && git init -q -b main
