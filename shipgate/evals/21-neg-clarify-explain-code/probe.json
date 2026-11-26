@@ -1,0 +1,9 @@
+{
+  "skill": "clarify",
+  "fires": false,
+  "zero": {
+    "write": [
+      "app/docs/prd/"
+    ]
+  }
+}

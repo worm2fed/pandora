@@ -10,9 +10,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -21,16 +24,39 @@ REPO = SHIPGATE.parent
 EVALRUN = SHIPGATE / "evals" / "evalrun.py"
 SCRIPTS = REPO / ".claude" / "skills" / "run-evals" / "scripts"
 RUN_CASE = SCRIPTS / "run-case.sh"
+RUN_SET = SCRIPTS / "run-set.sh"
 BASH = "/bin/bash" if os.path.exists("/bin/bash") else "bash"
 
 STUB_CLAUDE = r'''#!/usr/bin/env python3
-import fnmatch, json, os, sys, tempfile, time
+import fnmatch, json, os, signal, sys, tempfile, time
 argv = sys.argv[1:]
 with open(os.environ["STUB_ARGV_FILE"], "a") as fh:
     fh.write(json.dumps(argv) + "\n")
 if argv[:2] != ["plugin", "eval"]:
     sys.exit(0)
+if os.environ.get("STUB_EVENTS_FILE"):
+    with open(os.environ["STUB_EVENTS_FILE"], "a") as fh:
+        fh.write("start\n")
+    time.sleep(0.3)
+if os.environ.get("STUB_PID_DIR"):
+    # Ctrl-C: the default action, or a handler that exits 130 (STUB_SIGINT_EXIT).
+    if os.environ.get("STUB_SIGINT_EXIT"):
+        signal.signal(signal.SIGINT, lambda *a: os._exit(int(os.environ["STUB_SIGINT_EXIT"])))
+    else:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+    with open(os.path.join(os.environ["STUB_PID_DIR"], "%d.pid" % os.getpid()), "w") as fh:
+        fh.write(str(os.getpid()))
+    time.sleep(30)
+given_out = argv[argv.index("--output-dir") + 1] if "--output-dir" in argv else None
+if os.environ.get("STUB_SEEN_FILE"):
+    with open(os.environ["STUB_SEEN_FILE"], "a") as fh:
+        fh.write(("existed" if given_out and os.path.isdir(given_out) else "absent") + "\n")
 if os.environ.get("STUB_ABORT"):
+    if os.environ["STUB_ABORT"] in ("empty-dir", "partial-dir") and given_out:
+        os.makedirs(given_out, exist_ok=True)
+        if os.environ["STUB_ABORT"] == "partial-dir":
+            with open(os.path.join(given_out, "agent-mocks.json"), "w") as fh:
+                fh.write("{}")
     print("stub: aborted before any result", file=sys.stderr)
     sys.exit(3)
 target = argv[2]
@@ -44,7 +70,8 @@ model = opt("--model")
 with open(os.path.join(target, ".claude-plugin", "plugin.json")) as fh:
     manifest = json.load(fh)
 evals = os.path.join(target, "evals")
-cost, judge = 0.5, 0.1
+cost = float(os.environ.get("STUB_COST_USD", "0.5"))
+judge = float(os.environ.get("STUB_JUDGE_COST_USD", "0.1"))
 sandbox_root = os.environ["STUB_SANDBOX_ROOT"]
 arms = ["with", "without"] if ablation == "with-without" else ["with"]
 cases = []
@@ -68,8 +95,13 @@ for name in sorted(os.listdir(evals)):
                                   "durationSeconds": 1, "error": None, "tracePath": trace, "graders": []})
     cases.append({"name": name, "dir": name, "graders": [], "arms": arm_runs,
                   "aggregates": {"score": 1.0, "passRate": 1.0}})
-out = os.path.join(evals, "results", time.strftime("%Y-%m-%dT%H-%M-%S") + "-%d" % os.getpid())
-os.makedirs(out)
+out = opt("--output-dir") or os.path.join(evals, "results", time.strftime("%Y-%m-%dT%H-%M-%S") + "-%d" % os.getpid())
+if not given_out and os.path.exists(out):
+    # The harness refuses a DEFAULT results dir that already exists ("already existed");
+    # a dir given with --output-dir it makes recursively, existing or not.
+    print("stub: %s already existed" % out, file=sys.stderr)
+    sys.exit(3)
+os.makedirs(out, exist_ok=True)
 suite = {"ablation": ablation, "judgeModel": "sonnet", "root": evals, "caseFilter": case_glob,
          "plugins": [{"name": manifest["name"], "path": target, "version": manifest["version"]}]}
 if model:
@@ -78,8 +110,19 @@ agg = {"schemaVersion": 1, "claudeVersion": "0.0.0-stub", "costUsd": 0, "duratio
        "suite": suite, "cases": cases}
 with open(os.path.join(out, "aggregate-result.json"), "w") as fh:
     json.dump(agg, fh)
-if not os.environ.get("STUB_NO_REPORT"):
+if os.environ.get("STUB_FOREIGN_DIR"):
+    # Another run (a shard side by side) writes a newer dir while this one runs.
+    foreign = os.path.join(evals, "results", "zz-foreign-%d" % os.getpid())
+    os.makedirs(foreign)
+    with open(os.path.join(foreign, "aggregate-result.json"), "w") as fh:
+        json.dump(agg, fh)
+if os.environ.get("STUB_REPORT_DIR"):
+    print("Report: %s/report.html" % os.environ["STUB_REPORT_DIR"])
+elif not os.environ.get("STUB_NO_REPORT"):
     print("Report: %s/report.html" % out)
+if os.environ.get("STUB_EVENTS_FILE"):
+    with open(os.environ["STUB_EVENTS_FILE"], "a") as fh:
+        fh.write("end\n")
 sys.exit(int(os.environ.get("STUB_EXIT", "0")))
 '''
 
@@ -167,17 +210,37 @@ class TestRunCaseArgv(StubEnv):
         root = self.plug / "evals" / "results"
         return sorted(p for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
+    def output_dir(self, argv):
+        """The --output-dir run-case.sh passed: a new dir under the real results root, named
+        like the harness's own dirs (UTC stamp with milliseconds) plus the script's pid."""
+        out = Path(argv[argv.index("--output-dir") + 1])
+        self.assertEqual(out.parent, self.plug / "evals" / "results")
+        self.assertRegex(out.name, r"^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z-\d+$")
+        return out
+
+    def test_two_runs_get_different_dirs(self):
+        for _ in range(2):
+            r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        outs = [self.output_dir(a) for a in self.argvs()]
+        self.assertEqual(len(set(outs)), 2)
+        self.assertEqual(self.results_dirs(), sorted(outs))
+        for out in outs:
+            self.assertTrue((out / "shadow.json").exists())
+
     def test_argv_pin(self):
         r = self.run_script(RUN_CASE, "--config-dir", self.cfg, "--ablation", "with-without", "--model", MODEL, self.plug, "05")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.argvs(), [
-            ["plugin", "eval", str(self.plug), "--runs", "3", "--ablation", "with-without"]
-            + TODAY_TAIL + ["--model", MODEL, "--keep-temp", "--case", "05-*"]])
+        (argv,) = self.argvs()
+        out = self.output_dir(argv)
+        self.assertEqual(argv, ["plugin", "eval", str(self.plug), "--runs", "3", "--ablation", "with-without"]
+                         + TODAY_TAIL + ["--model", MODEL, "--keep-temp", "--output-dir", str(out), "--case", "05-*"])
         self.assertIn("mode=with-without", r.stderr)
         self.assertIn("model=" + MODEL, r.stderr)
         self.assertIn("--ablation with-without", r.stderr)
         self.assertIn("--model " + MODEL, r.stderr)
         (res,) = self.results_dirs()
+        self.assertEqual(res, out)
         self.assertIn("run-evals: results dir: %s" % res, r.stdout)
         shadow = json.loads((res / "shadow.json").read_text())
         self.assertIs(shadow["shadowed"], False)
@@ -216,13 +279,92 @@ class TestRunCaseArgv(StubEnv):
     def test_an_aborted_harness_keeps_its_status_and_says_so(self):
         r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05", STUB_ABORT="1")
         self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
-        self.assertIn("no new dir under", r.stderr)
+        out = self.output_dir(self.argvs()[0])
+        self.assertIn("no aggregate-result.json in %s" % out, r.stderr)
+        self.assertIn("harness exit status 3", r.stderr)
+        self.assertIn("any kept sandboxes of its runs stay on disk", r.stderr)
+        self.assertNotIn("results dir:", r.stdout)
+        self.assertNotIn("post-run:", r.stdout)
+        self.assertEqual(self.results_dirs(), [])
 
-    def test_no_report_line_falls_back_to_the_dir_listing(self):
-        r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05", STUB_NO_REPORT="1")
+    def test_the_script_makes_the_dir_before_the_harness_runs(self):
+        seen = self.tmp / "seen"
+        r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05", STUB_SEEN_FILE=str(seen))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        (res,) = self.results_dirs()
-        self.assertIn("run-evals: results dir: %s" % res, r.stdout)
+        self.assertEqual(seen.read_text().split(), ["existed"])
+
+    def test_a_results_dir_that_cannot_be_made_stops_before_any_spend(self):
+        root = self.plug / "evals" / "results"
+        for how in ("file", "read-only"):
+            with self.subTest(how=how):
+                if how == "file":
+                    root.write_text("not a dir")
+                else:
+                    root.unlink()
+                    root.mkdir()
+                    root.chmod(0o555)
+                    self.addCleanup(root.chmod, 0o755)
+                r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05")
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("run-evals: cannot make", r.stderr)
+                self.assertFalse(self.argv_file.exists(), "the stub claude ran")
+
+    def test_a_dir_with_files_and_no_result_stays_and_is_named(self):
+        r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05", STUB_ABORT="partial-dir")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        out = self.output_dir(self.argvs()[0])
+        self.assertTrue((out / "agent-mocks.json").exists())
+        self.assertIn("%s stays: it holds files but no aggregate-result.json" % out, r.stderr)
+        self.assertNotIn("post-run:", r.stdout)
+
+    def test_printed_summarize_and_grader_commands_parse_on_a_path_with_a_space(self):
+        spaced = self.tmp / "a dir's name"
+        spaced.mkdir()
+        plug = make_plugin(spaced)
+        (plug / "evals" / "signal_grader.py").write_text("import sys\nsys.exit(0)\n")
+        (plug / "evals" / "05-x" / "expected.json").write_text("{}")
+        r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, plug, "05")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (res,) = [p for p in (plug / "evals" / "results").iterdir()]
+        (summ,) = [l for l in r.stdout.splitlines() if l.startswith("run-evals: summarize:")]
+        self.assertEqual(shlex.split(summ.split(":", 2)[2]), ["python3", str(SCRIPTS / "summarize.py"), str(res)])
+        (grad,) = [l for l in r.stdout.splitlines() if l.startswith("run-evals: signal grader")]
+        self.assertEqual(shlex.split(grad.split(": ", 2)[2]),
+                         ["python3", str(plug / "evals" / "signal_grader.py"), "results", str(res)])
+
+    def test_an_empty_results_dir_is_removed(self):
+        r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05", STUB_ABORT="empty-dir")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertFalse(self.output_dir(self.argvs()[0]).exists())
+        self.assertNotIn("post-run:", r.stdout)
+
+    def test_post_run_reads_the_output_dir_whatever_the_report_line_says(self):
+        foreign = self.plug / "evals" / "results" / "zz-foreign"
+        for env in ({"STUB_NO_REPORT": "1"}, {"STUB_REPORT_DIR": str(foreign)}, {"STUB_FOREIGN_DIR": "1"}):
+            with self.subTest(env=env):
+                if self.argv_file.exists():
+                    self.argv_file.unlink()
+                r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, self.plug, "05", **env)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                out = self.output_dir(self.argvs()[0])
+                self.assertIn("run-evals: results dir: %s" % out, r.stdout)
+                self.assertTrue((out / "shadow.json").exists())
+                for d in self.results_dirs():
+                    if d.name.startswith("zz-foreign"):
+                        self.assertFalse((d / "shadow.json").exists(), "post-run ran on %s" % d.name)
+
+    def test_the_printed_post_run_command_runs_on_a_path_with_a_space(self):
+        spaced = self.tmp / "a dir's name"
+        spaced.mkdir()
+        plug = make_plugin(spaced)
+        r = self.run_script(RUN_CASE, "--ablation", "none", "--model", MODEL, plug, "05")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (line,) = [l for l in r.stdout.splitlines() if l.startswith("run-evals: post-run: ")]
+        (res,) = [p for p in (plug / "evals" / "results").iterdir()]
+        (res / "shadow.json").unlink()
+        again = subprocess.run([BASH, "-c", line[len("run-evals: post-run: "):]], env=self.env,
+                               capture_output=True, text=True, timeout=60)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertTrue((res / "shadow.json").exists())
 
     def test_harness_status_stands(self):
@@ -264,11 +406,9 @@ class TestRunCaseArgv(StubEnv):
         self.assertIn("mode=bare", r.stderr)
         self.assertTrue((self.plug / "evals" / "05-x" / "prompt.md").exists())
         (res,) = self.results_dirs()
+        self.assertEqual(res, self.output_dir(argv))
         line = [l for l in r.stdout.splitlines() if l.startswith("run-evals: results dir: ")]
-        self.assertEqual(len(line), 1, r.stdout)
-        printed = line[0].split(": ", 2)[2]
-        self.assertTrue(os.path.isdir(printed), printed)
-        self.assertEqual(os.path.realpath(printed), os.path.realpath(res))
+        self.assertEqual(line, ["run-evals: results dir: %s" % res], r.stdout)
         self.assertEqual(json.loads((res / "bare.json").read_text()),
                          {"arm": "bare", "plugin": "shipgate", "stub": "shipgate-bare", "version": "9.9.9"})
         shadow = json.loads((res / "shadow.json").read_text())
@@ -295,6 +435,13 @@ class TestRunCaseRefusals(StubEnv):
 
     def test_bad_ablation(self):
         self.refused("--ablation", "both", "--model", MODEL, self.plug, "05")
+
+    def test_output_dir_among_the_extras(self):
+        for flag in (("--output-dir", str(self.tmp / "mine")), ("--output-dir=%s" % (self.tmp / "mine"),)):
+            with self.subTest(flag=flag):
+                r = self.refused("--ablation", "none", "--model", MODEL, self.plug, "05", *flag)
+                self.assertIn("--output-dir", r.stderr.splitlines()[0])
+                self.assertIn("sets the results dir itself", r.stderr.splitlines()[0])
 
     def test_no_model(self):
         r = self.refused("--ablation", "with-without", self.plug, "05")
@@ -714,6 +861,27 @@ class TestBareStub(EvalrunCase):
         self.assertEqual(os.listdir(out), ["x"])
 
 
+class TestSpent(EvalrunCase):
+    def test_sums_agent_and_judge_cost_of_every_run(self):
+        self.write_result({"05-x": {"with": [None, None], "without": [None]}})
+        second = self.results.parent / "stamp-2"
+        write_json(second / "aggregate-result.json", {"cases": [{"name": "06-y", "arms": {"with": [
+            {"costUsd": 1.25}, {"costUsd": None, "judgeCostUsd": 0.5}]}}]})
+        r = evalrun("spent", self.results, second)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertAlmostEqual(float(r.stdout.strip()), 3 * 0.6 + 1.25 + 0.5)
+
+    def test_no_dirs_is_zero(self):
+        r = evalrun("spent")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(float(r.stdout.strip()), 0.0)
+
+    def test_a_dir_without_its_result_is_an_error(self):
+        r = evalrun("spent", self.tmp / "nowhere")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual(r.stdout, "")
+
+
 class TestSetCases(EvalrunCase):
     def sets(self, obj):
         path = self.tmp / "sets.json"
@@ -748,6 +916,263 @@ class TestSetCases(EvalrunCase):
         r = evalrun("set-cases", self.sets({"kept": ["05-x", "78-p"], "parked": ["78-p"]}), "kept")
         self.assertEqual(r.returncode, 1)
         self.assertIn("78-p", r.stderr)
+
+
+class TestRunSet(StubEnv):
+    """The serial set runner: one run-case.sh at a time, in the foreground, under one ceiling."""
+
+    cases = ("02-a", "05-x", "06-y")
+
+    def setUp(self):
+        super().setUp()
+        self.sets = self.tmp / "sets.json"
+        write_json(self.sets, {"kept": ["02-a", "05-x", "06-y"], "guards": ["05-x"], "parked": ["78-p"]})
+        (self.tmp / "t").mkdir()
+        self.env["TMPDIR"] = str(self.tmp / "t")
+
+    def run_set(self, *args, **env):
+        return self.run_script(RUN_SET, "--sets", self.sets, *args, **env)
+
+    def eval_argvs(self):
+        return [a for a in self.argvs() if a[:2] == ["plugin", "eval"]]
+
+    def cases_run(self):
+        return [a[a.index("--case") + 1] for a in self.eval_argvs()]
+
+    def test_runs_every_case_in_set_order_with_the_mode_and_model(self):
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "with-without", "--model", MODEL,
+                         self.plug, "kept", "--runs", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.cases_run(), ["02-a", "05-x", "06-y"])
+        for a in self.eval_argvs():
+            self.assertEqual(a[2], str(self.plug))
+            self.assertEqual(a[a.index("--ablation") + 1], "with-without")
+            self.assertEqual(a[a.index("--model") + 1], MODEL)
+            self.assertEqual(a[-4:-1], ["--runs", "1", "--max-cost-usd"])
+            self.assertEqual(a.count("--max-cost-usd"), 1)
+        self.assertEqual(len(list((self.plug / "evals" / "results").iterdir())), 3)
+        self.assertIn("run-evals: results dir:", r.stdout, "a case's output reaches the caller")
+
+    def test_one_case_at_a_time(self):
+        events = self.tmp / "events"
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "kept",
+                         STUB_EVENTS_FILE=str(events))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(events.read_text().split(), ["start", "end"] * 3)
+
+    def test_bare_set(self):
+        r = self.run_set("--max-cost-usd", "100", "--bare", "--model", MODEL, self.plug, "guards")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (a,) = self.eval_argvs()
+        self.assertNotEqual(a[2], str(self.plug))
+        self.assertEqual(a[a.index("--ablation") + 1], "none")
+        self.assertEqual(a[a.index("--case") + 1], "05-x")
+        (res,) = list((self.plug / "evals" / "results").iterdir())
+        self.assertTrue((res / "bare.json").exists())
+
+    def test_each_case_gets_what_is_left_and_the_set_stops_at_the_ceiling(self):
+        # Each case costs 2 arms x 3 runs x (1.00 agent + 0.50 judge) = 9.00.
+        r = self.run_set("--max-cost-usd", "15", "--ablation", "with-without", "--model", MODEL,
+                         self.plug, "kept", STUB_COST_USD="1.0", STUB_JUDGE_COST_USD="0.5")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(self.cases_run(), ["02-a", "05-x"])
+        self.assertEqual([a[a.index("--max-cost-usd") + 1] for a in self.eval_argvs()], ["15.00", "6.00"])
+        self.assertIn("ceiling reached: spent 18.00 of 15 USD; not started: 06-y", r.stdout)
+
+    def test_a_case_that_hits_its_ceiling_stops_the_set(self):
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "kept",
+                         STUB_EXIT="2")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertEqual(self.cases_run(), ["02-a"])
+        self.assertIn("ceiling reached in 02-a", r.stdout)
+        self.assertIn("not started: 05-x 06-y", r.stdout)
+
+    def test_the_last_case_hitting_its_ceiling_is_exit_2(self):
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "guards",
+                         STUB_EXIT="2")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+
+    def test_zero_ceiling_runs_nothing(self):
+        r = self.run_set("--max-cost-usd", "0", "--ablation", "none", "--model", MODEL, self.plug, "kept")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertFalse(self.argv_file.exists(), "the stub claude ran")
+        self.assertIn("not started: 02-a 05-x 06-y", r.stdout)
+
+    def test_shards_split_the_set_by_index(self):
+        for shard, want in (("1/2", ["02-a", "06-y"]), ("2/2", ["05-x"]), ("3/3", ["06-y"]), ("1/1", ["02-a", "05-x", "06-y"])):
+            with self.subTest(shard=shard):
+                if self.argv_file.exists():
+                    self.argv_file.unlink()
+                r = self.run_set("--shard", shard, "--max-cost-usd", "100", "--ablation", "none", "--model", MODEL,
+                                 self.plug, "kept")
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertEqual(self.cases_run(), want)
+
+    def test_an_empty_shard_runs_nothing(self):
+        r = self.run_set("--shard", "2/2", "--max-cost-usd", "100", "--ablation", "none", "--model", MODEL,
+                         self.plug, "guards")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(self.argv_file.exists(), "the stub claude ran")
+        self.assertIn("no case", r.stdout)
+
+    def test_a_case_without_results_dir_stops_the_set(self):
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "kept",
+                         STUB_ABORT="1")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(self.cases_run(), ["02-a"])
+        self.assertIn("02-a left no results dir", r.stderr)
+        self.assertIn("not started: 05-x 06-y", r.stderr)
+
+    def test_shards_side_by_side_never_count_a_foreign_dir(self):
+        # Each case's stub also writes a newer foreign dir and prints no Report line.
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "kept",
+                         STUB_NO_REPORT="1", STUB_FOREIGN_DIR="1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.cases_run(), ["02-a", "05-x", "06-y"])
+        self.assertIn("spent 5.40 USD", r.stdout)
+        for d in (self.plug / "evals" / "results").iterdir():
+            self.assertEqual((d / "shadow.json").exists(), not d.name.startswith("zz-foreign"), d.name)
+
+    def test_refusals_before_any_run(self):
+        cap = ("--max-cost-usd", "100")
+        mode = ("--ablation", "none", "--model", MODEL)
+        cases = [
+            (cap + mode + (self.plug, "nope"), 1),
+            (cap + mode + (self.plug, "parked"), 1),
+            (cap + ("--model", MODEL, self.plug, "kept"), 64),
+            (cap + ("--ablation", "none", self.plug, "kept"), 64),
+            (("--max-cost-usd", "lots") + mode + (self.plug, "kept"), 64),
+            (("--max-cost-usd", "5") + mode + (self.plug, "kept", "--max-cost-usd", "2"), 64),
+            (mode + (self.plug, "kept"), 64),
+            (mode + (self.plug, "kept", "--max-cost-usd", "2"), 64),
+            (cap + mode + (self.plug, "kept", "--model", MODEL), 64),
+            (cap + mode + (self.plug, "kept", "--shard", "1/2"), 64),
+            (cap + mode + (self.plug,), 64),
+        ]
+        for shard in ("0/2", "3/2", "2", "a/b", "1/0", "", "1/2/3"):
+            cases.append((("--shard", shard) + cap + mode + (self.plug, "kept"), 64))
+        for args, status in cases:
+            with self.subTest(args=args):
+                r = self.run_set(*args)
+                self.assertEqual(r.returncode, status, r.stdout + r.stderr)
+                self.assertFalse(self.argv_file.exists(), "the stub claude ran")
+
+    def test_a_set_that_names_a_missing_case_is_refused(self):
+        write_json(self.sets, {"kept": ["02-a", "09-gone"]})
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "kept")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("09-gone", r.stderr)
+        self.assertFalse(self.argv_file.exists(), "the stub claude ran")
+
+    def test_no_ceiling_is_a_usage_error_that_names_the_flag(self):
+        r = self.run_set("--ablation", "none", "--model", MODEL, self.plug, "kept")
+        self.assertEqual(r.returncode, 64, r.stdout + r.stderr)
+        self.assertIn("--max-cost-usd", r.stderr.splitlines()[0])
+
+    def test_unknown_set_names_the_sets(self):
+        r = self.run_set("--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "nope")
+        self.assertIn("kept", r.stderr)
+        self.assertIn("guards", r.stderr)
+
+    def test_default_sets_file_is_the_plugins(self):
+        r = self.run_script(RUN_SET, "--max-cost-usd", "100", "--ablation", "none", "--model", MODEL, self.plug, "kept")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sets.json", r.stderr)
+        self.assertFalse(self.argv_file.exists())
+
+    def test_same_name_install_stops_the_set_at_the_first_case(self):
+        write_json(self.cfg / "settings.json", {"enabledPlugins": {"shipgate@market": True}})
+        r = self.run_set("--config-dir", self.cfg, "--max-cost-usd", "100", "--ablation", "none", "--model", MODEL,
+                         self.plug, "kept")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("shipgate@market", r.stderr)
+        self.assertFalse(self.argv_file.exists(), "the stub claude ran")
+
+
+class TestRunSetCaseNames(StubEnv):
+    """FR-013: a set runs only its own case dirs, not every dir that shares a two-digit prefix."""
+
+    cases = ("05-a", "05-b")
+
+    def test_only_the_named_case_runs(self):
+        sets = self.tmp / "sets.json"
+        write_json(sets, {"kept": ["05-a"]})
+        r = self.run_script(RUN_SET, "--sets", sets, "--max-cost-usd", "100", "--ablation", "none", "--model", MODEL,
+                            self.plug, "kept")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (a,) = [x for x in self.argvs() if x[:2] == ["plugin", "eval"]]
+        self.assertEqual(a[a.index("--case") + 1], "05-a")
+        (res,) = list((self.plug / "evals" / "results").iterdir())
+        agg = json.loads((res / "aggregate-result.json").read_text())
+        self.assertEqual([c["name"] for c in agg["cases"]], ["05-a"])
+
+
+class TestRunSetCtrlC(StubEnv):
+    """Ctrl-C (SIGINT to the foreground process group) stops the running case with its claude
+    child, and the set starts no more cases. The test sends the signal to the group, as a
+    terminal does."""
+
+    cases = ("02-a", "05-x")
+
+    def setUp(self):
+        super().setUp()
+        self.sets = self.tmp / "sets.json"
+        write_json(self.sets, {"kept": ["02-a", "05-x"]})
+        self.pids = self.tmp / "pids"
+        self.pids.mkdir()
+        self.addCleanup(self.kill_leftovers)
+
+    def stub_pids(self):
+        return [int(p.read_text()) for p in self.pids.glob("*.pid") if p.read_text().strip()]
+
+    def kill_leftovers(self):
+        for pid in self.stub_pids():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    def alive(self, pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        return bool(st) and not st.startswith("Z")
+
+    def ctrl_c(self, **env):
+        e = dict(self.env, STUB_PID_DIR=str(self.pids), **env)
+        proc = subprocess.Popen(
+            [BASH, str(RUN_SET), "--sets", str(self.sets), "--max-cost-usd", "100", "--ablation", "none",
+             "--model", MODEL, str(self.plug), "kept"],
+            env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+
+        def kill_group():
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        self.addCleanup(kill_group)
+        deadline = time.time() + 20
+        while not self.stub_pids() and time.time() < deadline and proc.poll() is None:
+            time.sleep(0.1)
+        (stub,) = self.stub_pids()
+        os.killpg(proc.pid, signal.SIGINT)
+        out, err = proc.communicate(timeout=20)
+        self.assertIn(proc.returncode, (130, -signal.SIGINT), out + err)
+        deadline = time.time() + 5
+        while self.alive(stub) and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(self.alive(stub), "the case's claude still runs")
+        self.assertEqual(len([a for a in self.argvs() if a[:2] == ["plugin", "eval"]]), 1, "a case started after Ctrl-C")
+
+    def test_a_claude_that_dies_of_sigint(self):
+        self.ctrl_c()
+
+    def test_a_claude_that_catches_sigint_and_exits_130(self):
+        self.ctrl_c(STUB_SIGINT_EXIT="130")
 
 
 if __name__ == "__main__":

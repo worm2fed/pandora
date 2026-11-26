@@ -15,7 +15,8 @@ The ``graph`` subcommand runs one codegraph query (impact, callers, callees,
 affected, query, node or explore) on the same index.
 
 ``hotspots --json`` reports ``ui``: how many of the files it ranks are UI files by the
-project's ``ui.globs`` setting, with the rule of ``_ui.py`` (ADR 0031).
+project's ``ui.globs`` setting, with the rule of ``_ui.py`` (ADR 0031). ``ui`` is the
+first key of that JSON, and the first table line when it is not null.
 
 Exit codes (also printed by ``--help``):
 
@@ -1687,7 +1688,12 @@ def render_suspects(suspects: List[Dict[str, Any]]) -> List[str]:
 
 def emit(payload: Dict[str, Any], as_json: bool, lines: Sequence[str] = ()) -> None:
     if as_json:
-        sys.stdout.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        text = json.dumps(payload, sort_keys=True, indent=2)
+        if "ui" in payload:
+            # `hotspots`: the UI flag first, so a reader of the head sees it (FR-025).
+            ordered = json.loads(text)
+            text = json.dumps({"ui": ordered.pop("ui"), **ordered}, indent=2)
+        sys.stdout.write(text + "\n")
     elif not payload["available"]:
         advisory = f"{payload['advisory']}\n" if payload.get("advisory") else ""
         sys.stdout.write(f"{advisory}signals unavailable: {payload['reason']}\n")
@@ -2023,6 +2029,16 @@ def ui_flag(rows: Sequence[Dict[str, Any]], globs: Sequence[str]
     return {"files": len(paths), "sample": paths[:UI_SAMPLE]}
 
 
+def _ui_line(ui: Optional[Dict[str, Any]]) -> List[str]:
+    """Table mode: the first line when `ui` is not null (FR-025)."""
+    if ui is None:
+        return []
+    count = ui["files"]
+    verb = "file matches" if count == 1 else "files match"
+    sample = f" ({', '.join(ui['sample'])})" if ui["sample"] else ""
+    return [f"ui: {count} {verb} ui.globs{sample}"]
+
+
 def _unavailable_trajectory(reason: str) -> Dict[str, Any]:
     return {"available": False, "reason": reason, "commits_scanned": 0}
 
@@ -2116,7 +2132,8 @@ def cmd_hotspots(args: argparse.Namespace) -> int:
               if not ranking_excluded(r["path"], a.cfg.ranking_exclude)]
     payload["ranking"] = ranking(sort_rows(ranked), payload["structure"])
     payload["ui"] = ui_flag(sort_rows(selected), a.cfg.ui_globs)
-    lines = _graph_notes(payload) + _half_notes(a.traj_info, payload["structure"])
+    lines = (_ui_line(payload["ui"]) + _graph_notes(payload)
+             + _half_notes(a.traj_info, payload["structure"]))
     if args.by_dir is not None:
         wanted = {dir_of(r["path"], args.by_dir) for r in selected}
         dirs = [d for d in aggregate_dirs(rows, args.by_dir, a.traj, graph,

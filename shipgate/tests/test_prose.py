@@ -1003,5 +1003,61 @@ class TestObservedVerifyRunText(unittest.TestCase):
                       "session's run log, so you do not run them again to cite them.", text)
 
 
+# #28 (FR-022, decision D2): no eval grades a phase skill's journal event any more, so the
+# record step of each phase skill is pinned here. The callout names the event owed, and
+# every append example of that event in the skill is a payload the journal accepts.
+APPEND_EXAMPLE = re.compile(r"--type (?P<type>[a-z-]+) \\\n\s*--data '(?P<data>\{.*?\})'", re.S)
+
+
+class TestRecordSteps(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from test_journal import load_journal_module
+        cls.J = load_journal_module()
+
+    def text(self, skill: str) -> str:
+        return (SHIPGATE / "skills" / skill / "SKILL.md").read_text()
+
+    def examples(self, skill: str, event: str) -> list:
+        found = [json.loads(m["data"]) for m in APPEND_EXAMPLE.finditer(self.text(skill))
+                 if m["type"] == event]
+        self.assertTrue(found, f"{skill} has no `--type {event}` append example")
+        for data in found:
+            self.J.normalize_payload(event, data)  # raises GateViolation on a bad shape
+        return found
+
+    def test_clarify_records_clarify_passed_with_the_prd(self):
+        text = flat(self.text("clarify"))
+        self.assertIn("Append `clarify-passed` when the PRD's last marker goes (Step 3).", text)
+        self.assertIn("append `clarify-passed` {prd, fr_count}.", text)
+        self.assertLessEqual(set(self.J.EVENT_SHAPES["clarify-passed"]["required"]),
+                             {"prd", "fr_count"})
+
+    def test_design_records_design_committed_with_the_ranking(self):
+        text = flat(self.text("design"))
+        self.assertIn("The event owed here is `design-committed`.", text)
+        self.assertIn("Copy `ranking` unchanged into `design-committed`", text)
+        for data in self.examples("design", "design-committed"):
+            self.assertIn("ranking", data)
+
+    def test_review_records_review_verdict_with_the_ranking(self):
+        text = flat(self.text("review"))
+        self.assertIn("The second is `review-verdict`. Append it the moment Step 6 states the "
+                      "verdict", text)
+        self.assertIn("`ranking` is the Step 1 hotspots JSON's `ranking`, copied as it is", text)
+        for data in self.examples("review", "review-verdict"):
+            self.assertIn("ranking", data)
+
+    def test_route_and_map_records_its_phase_entered_with_the_signals(self):
+        text = flat(self.text("route-and-map"))
+        self.assertIn("The event owed here is `phase-entered {phase: route-and-map}`.", text)
+        maps = [d for d in self.examples("route-and-map", "phase-entered")
+                if d.get("phase") == "route-and-map"]
+        self.assertTrue(maps)
+        for data in maps:
+            self.assertIn("source", data["signals"])
+
+
 if __name__ == "__main__":
     unittest.main()

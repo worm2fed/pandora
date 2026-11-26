@@ -33,21 +33,26 @@ S=.claude/skills/run-evals/scripts
 $S/run-case.sh --ablation with-without --model claude-opus-5-5 shipgate 05   # both arms
 $S/run-case.sh --ablation none --model claude-fable-5-2 shipgate 48          # with arm only
 $S/run-case.sh --bare --model claude-fable-5-2 shipgate 24                   # bare arm only (ADR 0035)
-$S/run-case.sh --ablation none --model M shipgate 10 --runs 1 -j 3 --max-cost-usd 2   # extras pass through
+$S/run-case.sh --ablation none --model M shipgate 02 --runs 1 -j 3 --max-cost-usd 2   # extras pass through
+$S/run-set.sh --max-cost-usd 31 --bare --model claude-fable-5-2 shipgate ablation-32   # a set, one case at a time
 $S/probe.sh --model claude-opus-5-5 shipgate 11        # one probe case, 3 runs
 $S/probe.sh --model claude-opus-5-5 shipgate probes    # the probes set
 python3 $S/summarize.py shipgate/evals/results/<timestamp>          # or the results/ root
 python3 shipgate/evals/compare.py shipgate/evals/results/<timestamp>  # against baseline.json
 ```
 
-The options (`--config-dir`, `--no-codegraph`, the mode and `--model`) go before
-`<plugin-dir>`. `run-case.sh` refuses a mode or model flag among the extra eval flags.
+The options of `run-case.sh` (`--config-dir`, `--no-codegraph`, the mode and `--model`) go
+before `<plugin-dir>`. `run-case.sh` refuses a mode or model flag among the extra eval
+flags, and `--output-dir` (exit 64), because it sets the results dir itself. The options
+of `run-set.sh` are `--config-dir`, `--sets`, `--shard`, `--max-cost-usd`, the mode and
+`--model`; it takes no `--no-codegraph`.
 
 `run-case.sh` runs:
 
 ```
 claude plugin eval <plugin-dir | bare stub> --runs 3 --ablation <with-without|none> --scaffold \
   --judge-model sonnet --no-publish --allow-tools Bash Edit Write --model <M> --keep-temp \
+  --output-dir <plugin-dir>/evals/results/<stamp>-<pid> \
   --case 'NN-*' [extra flags]       # or --case <full case dir name>
 ```
 
@@ -62,14 +67,17 @@ claude plugin eval <plugin-dir | bare stub> --runs 3 --ablation <with-without|no
 - **After the run** it calls `evalrun.py post-run`: `shadow.json` (which plugin loaded in
   each run, from the trace's init record), `script-graders.json` (when a case has
   `script-graders/*.py`), then it removes the kept sandboxes. Pass `--keep-temp` yourself
-  to keep them. The signal grader runs before the clean-up.
+  to keep them. The signal grader runs before the clean-up. The results dir is the
+  script's own: a new dir under `evals/results/` that it passes as `--output-dir`. A run
+  that leaves no `aggregate-result.json` there has no result, and no post-run step runs;
+  any kept sandboxes stay on disk at the paths the harness printed.
 - `--scaffold` is mandatory: without it every case scores 0 in both arms.
 - `--judge-model sonnet`: the default haiku judge mis-grades ranked answers.
 - `--case` accepts only `NN-*` globs (no braces or brackets), so it is one invocation per
   case. `run-case.sh` also takes the full name of an eval case (a dir that holds
   `prompt.md` or `case.yaml`) in place of `NN`; then the filter is that name alone. It
   refuses any other dir under `evals/` (a probe or fixture case, `results`) with exit 64.
-  A serial set runner comes in a later PR; until then run one `run-case.sh` per case.
+  `run-set.sh` runs the cases of a named set by their full names ("Running many cases").
 - Exit 1 is normal: the default `--threshold` is 1.0. Exit 2 means `--max-cost-usd` was hit.
 
 `probe.sh` needs `--model`, runs `config-check` too, and checks every `probe.json`
@@ -112,9 +120,9 @@ per run.
 
 ## Reading results
 
-Results land in `<plugin>/evals/results/<timestamp>/aggregate-result.json` + `report.html`
-(gitignored), with the sidecar files `shadow.json`, `bare.json` (bare runs) and
-`script-graders.json`. JSON: `suite` (`ablation`, `modelOverride` = the model,
+Results land in `<plugin>/evals/results/<timestamp>-<pid>/aggregate-result.json` +
+`report.html` (gitignored), with the sidecar files `shadow.json`, `bare.json` (bare runs)
+and `script-graders.json`. JSON: `suite` (`ablation`, `modelOverride` = the model,
 `plugins[0].version` = the tested version, `judgeModel`), `cases[]` → `name`, `graders[]`,
 `arms.with[]` / `arms.without[]` (per run: `score`, `passed`, `turns`, `costUsd` (agent
 only), `judgeCostUsd`, `durationSeconds`, `tracePath`, `error`, `graders[]`) and
@@ -139,10 +147,11 @@ out of the score, under `none` it counts it.
   tested. It skips every case and model that has a refusal in the run, so a refused
   partner never turns a `bare+none` row into a half row.
 
-When the case holds an `expected.json` (13, 72), `run-case.sh` then runs
+When the case holds an `expected.json`, `run-case.sh` then runs
 `shipgate/evals/signal_grader.py results <dir>`: one row per run with the precision and
 recall of the `signals.py` blast result the agent read. The grader's exit status never
-changes the script's. See the evals README, "Signal grader".
+changes the script's. Since #28 no eval case has one: 13 and 72 are fixture cases, scored
+offline by `signal_grader.py fixture`. See the evals README, "Signal grader".
 
 ## Cost
 
@@ -158,11 +167,30 @@ Set `--max-cost-usd` on every run.
 
 ## Running many cases
 
-A serial set runner comes in a later PR; until then run one `run-case.sh` per case, by
-its full case name, and keep each run's output in a log file. Two limits bite: the
-account's 5-hour session limit (4 runs at once exhausted it twice in one afternoon; every
-run after that returns `score 0.00 $0.00 error: You've hit your session limit`, exit 1; 3
-at once fit a full pass in one window), and the weekly limit (gotcha 3).
+`run-set.sh` runs the cases of a set from `sets.json` one after another, by their full
+case names. It keeps the stdout of each case in a log dir that it prints. `--max-cost-usd
+C` is required. Before each case the script sums the spend of the cases so far, and it
+stops at C with exit 2. Each case gets what is left of C as its own `--max-cost-usd`, and
+a case that hits it (exit 2) stops the set with exit 2. A case that leaves no results dir
+stops the set with exit 1, because its spend is unknown. Ctrl-C stops the running case
+with its `claude` child, and no further case starts.
+
+To run a set faster, start shards side by side, one per terminal, each with its own
+ceiling. Shard K/N runs the cases whose place in the set is K modulo N:
+
+```bash
+$S/run-set.sh --shard 1/3 --max-cost-usd 15 --ablation with-without --model M shipgate kept
+$S/run-set.sh --shard 2/3 --max-cost-usd 15 --ablation with-without --model M shipgate kept
+$S/run-set.sh --shard 3/3 --max-cost-usd 15 --ablation with-without --model M shipgate kept
+```
+
+Stop a shard with Ctrl-C in its terminal. A signal to the script's PID alone does not
+reach the running case: send it to the process group (`kill -INT -<pgid>`).
+
+Two limits bite: the account's 5-hour session limit (4 runs at once exhausted it twice in
+one afternoon; every run after that returns `score 0.00 $0.00 error: You've hit your
+session limit`, exit 1; 3 at once fit a full pass in one window), and the weekly limit
+(gotcha 3).
 
 Afterwards grep each run's log for `hit your session limit` before trusting its score,
 and re-run those cases: `compare.py` takes the latest results dir per case and model, so

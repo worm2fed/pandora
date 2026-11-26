@@ -1,0 +1,7 @@
+{
+  "skill": "verify",
+  "fires": false,
+  "zero": {
+    "bash": []
+  }
+}

@@ -1,4 +1,0 @@
-schema_version: "1.1"
-name: 67-big-neg-one-line
-context:
-  scaffold_script: fixture.sh
