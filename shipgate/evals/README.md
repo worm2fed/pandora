@@ -10,15 +10,122 @@ which the harness cannot run (one prompt, no `AskUserQuestion`). Its README says
 
 ## Run
 
+Run cases through the run-evals scripts (`.claude/skills/run-evals/`), not through the
+harness directly. Each run names its mode and its model; there is no default.
+
 ```
-claude plugin eval . --runs 3 --ablation with-without --scaffold --judge-model sonnet --no-publish
+S=.claude/skills/run-evals/scripts
+$S/run-case.sh --ablation with-without --model claude-opus-5-5 shipgate 05
+$S/probe.sh --model claude-opus-5-5 shipgate 11
 ```
+
+`run-case.sh` calls `claude plugin eval <target> --runs 3 --ablation <mode> --scaffold
+--judge-model sonnet --no-publish --allow-tools Bash Edit Write --model <M> --keep-temp
+--case 'NN-*'`, or `--case <name>` when you pass the full name of an eval case in place
+of `NN`. An eval case is a dir under `evals/` that holds `prompt.md` or `case.yaml`;
+`run-case.sh` refuses any other dir there (a probe or fixture case, `results`) with
+exit 64.
 
 - `--scaffold` is required — without it the fixture repos are never built and every case
   scores 0 in both arms.
 - `--judge-model sonnet`: the default judge is a small model and mis-grades ranked answers.
 - `--case '10-*'` filters; only `NN-*`-style globs work (no braces, no brackets).
 - Bash-granting cases need `--allow-tools Bash Edit Write`.
+
+### Modes and arms
+
+The **with arm** loads the plugin; the **bare arm** (the harness calls it "without") loads
+none.
+
+| mode | flag | arms that run |
+|---|---|---|
+| `with-without` | `--ablation with-without` | both; the harness computes Δ |
+| `none` | `--ablation none` | the with arm only |
+| `bare` | `--bare` | the bare arm only (ADR 0035) |
+
+The harness has no bare-only mode. `--bare` builds a stub plugin `<name>-bare` with no
+skill, agent, hook, command or MCP server, and an `evals` link to this directory. It runs
+the stub under `none` and writes `bare.json` into the results dir. `compare.py` pairs a
+`bare` result and a `none` result of one case and model into one `bare+none` row.
+
+A grader is **with-only** when its config says `arm: with-only`, or when it is a
+`tool_used: Skill` grader without `arm: both`. Under `with-without` the harness leaves it
+out of the score; under `none` it counts it. So the raw scores of the two modes differ on
+the same answers. `compare.py` scores every row under the **both-arm rule** (the
+with-only graders left out), and recomputes it from the per-run grader results of a `none`
+or `bare` run.
+
+### The shadow guard (#49)
+
+An installed plugin of the same name loads in place of the tree under test, in both arms.
+Two checks stop that:
+
+- before the run, `evalrun.py config-check` refuses a paying config dir that has a plugin
+  of the same name installed (any scope) or enabled. It names the install and the fix, and
+  never changes the config dir;
+- after the run, `evalrun.py post-run` reads each run's kept trace. The init record must
+  name the tree under test in a with run, and no plugin of that name in a bare run. It
+  writes `shadow.json`. `compare.py` refuses a shadowed results dir. It warns on a
+  results dir with no `shadow.json`, and `--record` refuses that dir. A dir with no
+  `shadow.json` or a shadowed run counts only in one "skipped N older results dirs" line
+  when compare uses a newer result of the same case and model. A dir with no recorded
+  model counts only in that line when it is older than the newest pick of its case, any
+  model; else compare refuses it. A run with no trace to check gives a warning only when
+  compare uses its dir. `--record` skips every case and model that has a refusal in the
+  run, so a refused partner never turns a `bare+none` row into a half row.
+
+### Script graders
+
+A case can hold `script-graders/<name>.py`, beside `graders/`. After the run,
+`evalrun.py post-run` runs each script per run as `python3 <script> <trace.jsonl>`. Exit 0
+is a pass. Exit 1 with a line on stdout is a fail, whether the script crashed or not:
+Python flushes stdout at exit, after the traceback, so a printed line survives (a hard
+kill or `os._exit` loses it). Exit 1 with an empty stdout is an
+error (a crash before any print, `sys.exit("message")`, a syntax error), and so is any
+other exit, a timeout or a missing trace. An error has `passed: null`. The reason of a
+pass or a fail is the first stdout line. The reason of an error is the last stderr line,
+or "exited N" when stderr is empty. So print a line on stdout only when the script
+decides to fail, or just before exit 0. The results go into `script-graders.json`,
+beside the harness score and never inside it (as for the signal grader, ADR 0016).
+`compare.py` shows the pass rate per arm and flags a fall against the baseline row. Test a
+script grader with a canned trace; it costs nothing.
+
+### Three case forms
+
+The file names of a case directory decide what it is (ADR 0036):
+
+| form | files | run by |
+|---|---|---|
+| eval case | `prompt.md` + `graders/*.md` (or `case.yaml`), `fixture.sh`, optional `script-graders/` | the harness |
+| probe case | `fixture.sh`, `probe.md` (the prompt), `probe.json` (the expectation) | `probe.sh` |
+| fixture case | `fixture.sh`, `expected.json` | unit tests and `signal_grader.py fixture` |
+
+The harness never runs a probe or fixture case: it holds no `prompt.md` and no `graders/`.
+`probe.json` names the skill that must or must not fire and the calls that must stay at 0:
+
+```json
+{"skill": "structured-debug", "fires": false,
+ "zero": {"bash": ["signals\\.py", "codegraph"], "agent": true, "edit": ["docs/"], "write": []}}
+```
+
+An empty pattern list counts every call of that tool. A probe passes when all its runs
+pass (3 of 3).
+
+### Sets
+
+`sets.json` (from PR 2 of #28) names the sets: `kept`, `guards`, `ablation-32`, `probes`
+and `parked`. Each lists case directory names. `probe.sh --model M shipgate probes` runs
+the probe set. A serial set runner for the eval sets comes in a later PR; until then run
+one `run-case.sh` per case, by its full name. The `parked` set never runs.
+
+### Baseline
+
+`baseline.json` holds one row per case and model (ADR 0034): the mode, the scoring rule,
+the version the run tested, the harness and judge, the runs, the results dir, the score
+per arm, Δ, the mean cost and time of one run per arm, the judge cost, and the
+script-grader rates. Rows recorded before the model was recorded sit under the key
+`unrecorded`. `compare.py` never crosses a model, a mode or a rule, and refuses a result
+with no recorded model.
 
 ## macOS notes
 
@@ -87,8 +194,10 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
   `judge` that produced it, and `compare.py` marks a row recorded under a different harness
   with `~` and prints the count. A flag on a `~` row is a question, not a verdict: re-run
   the case once on the unchanged tree the same day, compare the after-run with that
-  before-run, then `--record` the after-run. After a harness update, re-record the whole
-  suite (about $100 and 95 minutes on 3 lanes) rather than reading 70 `~` rows one by one.
+  before-run, then `--record` the after-run. After a harness update, re-record the kept
+  suite per model rather than reading every `~` row one by one: one `run-case.sh
+  --ablation with-without --model M` per kept case until the serial set runner of a later
+  PR lands. The cost per model is in the run-evals skill, "Cost".
 - A grader that reads `.claude/shipgate.db` reads the SQLite record as text. In the
   `events` row the `type` column comes directly before the `data` column. `journal.py`
   writes `data` with `json.dumps(sort_keys=True)` and the default `", "` and `": "`
@@ -112,8 +221,8 @@ workspaces are too large to read whole in 30 turns, so a score depends on what t
 
 ```
 S=.claude/skills/run-evals/scripts
-$S/run-case.sh shipgate 13                  # graph arm
-$S/run-case.sh --no-codegraph shipgate 13   # regex arm
+$S/run-case.sh --ablation none --model M shipgate 13                  # graph arm
+$S/run-case.sh --no-codegraph --ablation none --model M shipgate 13   # regex arm
 ```
 
 Do not use `SHIPGATE_CODEGRAPH_BIN=/nonexistent` for the regex arm. The harness removes
@@ -127,7 +236,7 @@ dir per case, so a regex-arm dir there replaces the graph arm in every later com
 
 Runs that start in the same millisecond get the same default results dir. The second
 run then refuses to write it ("already existed"), and only its `--json` file keeps the
-result. Start parallel lanes with `--output-dir` or `--json`.
+result. Start runs in parallel with `--output-dir` or `--json`.
 
 Result on 2026-10-19 (plugin 0.17.0, 3 runs per arm): every case scored 1.00 with and
 without the plugin in both arms. The graph arm read `"source": "graph"` in 20 of 21
@@ -199,8 +308,9 @@ python3 $G results shipgate/evals/results/<timestamp>
   the trace" and exits 3.
 - `results` runs `trace` for each run of each case with an `expected.json`. It prints one
   row per run: case, arm, run, files P/R, tests P/R and source. `run-case.sh` runs it after
-  each such case, in both arms (also with `--no-codegraph`). The trace exists only with
-  `--keep-temp`; without it the row says "trace gone".
+  each such case, in both arms (also with `--no-codegraph`), before it removes the kept
+  sandboxes. A harness run without `--keep-temp` keeps no trace; the row then says
+  "trace gone".
 
 Every subcommand takes `--json`. The grader adds nothing to the harness score or to
 `baseline.json`, and `compare.py` does not track it (ADR 0016).

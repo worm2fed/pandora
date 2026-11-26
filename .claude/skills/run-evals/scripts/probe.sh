@@ -1,94 +1,127 @@
 #!/usr/bin/env bash
-# Cheap triggering probe: does the plugin's skill fire on a case's prompt?
-# No graders, no ablation, about $0.10 per run. It measures TRIGGERING ONLY,
-# not answer quality; the harness (run-case.sh) is the gate. Use it to iterate
-# on a skill description before paying for a full tree.
+# Cheap triggering probe: does the plugin's skill fire on a case's prompt, and does the
+# run stay clear of the calls the case names? No graders, no ablation, about $0.10 per
+# run. It measures TRIGGERING ONLY, not answer quality (ADR 0036).
 #
-#   probe.sh [--config-dir DIR] <plugin-dir> <NN> [runs=1] [max-turns=4]
+#   probe.sh [--config-dir DIR] --model M <plugin-dir> <NN|probes> [runs=3] [max-turns=4]
+#               (the flags may come in any position)
 #
-# Prints one line per run:
-#   05-fix-it-wording run1: skill=[shipgate:structured-debug] turns=3 cost=$0.08
+#   --model M   required; passed to `claude -p --model M` and saved with the result
+#   NN          one probe case: <plugin-dir>/evals/NN-*/ with probe.md (the prompt) and
+#               probe.json (the expectation). A case with prompt.md and no probe.json
+#               runs count-only.
+#   probes      every case in the "probes" list of <plugin-dir>/evals/sets.json, read by
+#               `evalrun.py set-cases` (it refuses a parked, empty or repeated case)
+#   runs, max-turns  whole numbers above 0
+#
+# Refuses to start (exit 1) when evals/evalrun.py config-check finds a plugin of the same
+# name in the paying config dir. probe.py judges the runs; one result file per case goes
+# to <plugin-dir>/evals/results/probes/<stamp>/<case>.json. Prints one line per run:
+#   11-neg-one-line-change run1: PASS skill=[] bash{signals\.py}=0 agent=0 turns=3 cost=$0.08 12s
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source-path=SCRIPTDIR
 . "$here/_common.sh"
 
-cfg_flag=""
-if [ "${1:-}" = "--config-dir" ]; then cfg_flag="${2:-}"; shift 2; fi
-if [ $# -lt 2 ]; then sed -n '2,11p' "$0" >&2; exit 64; fi
+usage() { usage_exit "$0" "$@"; }
+
+cfg_flag="" model="" args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config-dir) [ $# -ge 2 ] || usage; cfg_flag=$2; shift 2 ;;
+    --model) [ $# -ge 2 ] || usage; model=$2; shift 2 ;;
+    -h|--help) usage ;;
+    --*) usage "unknown flag: $1" ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+[ -n "$model" ] || usage "--model is required"
+[ ${#args[@]} -ge 2 ] || usage
+set -- "${args[@]}"
 [ -d "$1" ] || die "plugin dir not found: $1"
 plugin=$(cd "$1" && pwd); shift
-nn=$1; shift
-runs=${1:-1}
+target=$1; shift
+runs=${1:-3}
 max_turns=${2:-4}
+case "$runs" in ''|0*|*[!0-9]*) usage "runs takes a whole number above 0, got: $runs" ;; esac
+case "$max_turns" in ''|0*|*[!0-9]*) usage "max-turns takes a whole number above 0, got: $max_turns" ;; esac
 
-matches=( "$plugin/evals/$nn"-*/ )
-[ ${#matches[@]} -eq 1 ] && [ -d "${matches[0]}" ] || die "expected exactly one case matching $plugin/evals/$nn-*/, got: ${matches[*]}"
-case_dir=${matches[0]%/}
-case_name=$(basename "$case_dir")
-[ -f "$case_dir/prompt.md" ] || die "no prompt.md in $case_dir"
+evals="$plugin/evals"
+probe_py="$evals/probe.py"
+[ -f "$probe_py" ] || die "no $probe_py"
+evalrun_py=$(evalrun_of "$plugin")
 
-# Strip the YAML frontmatter block (--- ... ---) the harness reads; claude -p must not see it.
-prompt=$(awk 'NR==1 && $0=="---" {fm=1; next} fm && $0=="---" {fm=0; next} !fm' "$case_dir/prompt.md")
-[ -n "$prompt" ] || die "empty prompt after stripping frontmatter: $case_dir/prompt.md"
+if [ "$target" = probes ]; then
+  sets="$evals/sets.json"
+  [ -f "$sets" ] || die "no sets file $sets: the probes set needs a \"probes\" list there"
+  names=$(python3 "$evalrun_py" set-cases "$sets" probes) || exit 1
+  case_dirs=()
+  while IFS= read -r name; do case_dirs+=("$evals/$name"); done <<EOF
+$names
+EOF
+else
+  matches=( "$evals/$target"-*/ )
+  [ ${#matches[@]} -eq 1 ] && [ -d "${matches[0]}" ] || die "expected exactly one case matching $evals/$target-*/, got: ${matches[*]}"
+  case_dirs=( "${matches[0]%/}" )
+fi
+
+for case_dir in "${case_dirs[@]}"; do
+  [ -d "$case_dir" ] || die "no case dir $case_dir"
+  if [ -f "$case_dir/probe.md" ]; then
+    [ -f "$case_dir/probe.json" ] || die "probe.md without probe.json in $case_dir"
+    python3 "$probe_py" check "$case_dir/probe.json" || exit 1
+  elif [ ! -f "$case_dir/prompt.md" ]; then
+    die "no probe.md (or prompt.md) in $case_dir"
+  fi
+done
 
 cfg=$(resolve_config_dir "$cfg_flag")
+python3 "$evalrun_py" config-check --config-dir "$cfg" --plugin-dir "$plugin" || exit 1
 check_git
 home=$(make_scratch_home)
 trap 'rm -rf "$home"' EXIT
-out=$(mktemp -d "${TMPDIR:-/tmp}/eval-probe.$case_name.XXXXXX")
+stamp=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+results="$evals/results/probes/$stamp"
+out=$(mktemp -d "${TMPDIR:-/tmp}/eval-probe.XXXXXX")
 tools="Bash Read Grep Glob Skill Edit Write"
 
-printf 'run-evals: probe %s x%s (max-turns %s) config-dir=%s\n' "$case_name" "$runs" "$max_turns" "$cfg" >&2
+printf 'run-evals: probe %s x%s (max-turns %s) model=%s config-dir=%s\n' \
+  "$target" "$runs" "$max_turns" "$model" "$cfg" >&2
 
-for ((k = 1; k <= runs; k++)); do
-  work="$out/run$k"
-  mkdir -p "$work"
-  if [ -f "$case_dir/fixture.sh" ]; then
-    (cd "$work" && bash "$case_dir/fixture.sh" > "$out/run$k.fixture.log" 2>&1) \
-      || die "fixture.sh failed for $case_name (see $out/run$k.fixture.log)"
+for case_dir in "${case_dirs[@]}"; do
+  case_name=$(basename "$case_dir")
+  expect=()
+  if [ -f "$case_dir/probe.md" ]; then
+    prompt_file="$case_dir/probe.md"
+    expect=(--expect "$case_dir/probe.json")
+  else
+    prompt_file="$case_dir/prompt.md"
+    printf 'run-evals: %s has no probe.json; counting only\n' "$case_name" >&2
   fi
-  log="$out/run$k.jsonl"
-  (cd "$work" && env -u CLAUDECODE HOME="$home" CLAUDE_CONFIG_DIR="$cfg" \
-    claude -p "$prompt" --plugin-dir "$plugin" --setting-sources "" --strict-mcp-config \
-      --allowedTools "$tools" --max-turns "$max_turns" \
-      --output-format stream-json --verbose) > "$log" 2> "$out/run$k.stderr" || true
+  # Strip the YAML frontmatter block (--- ... ---); claude -p must not see it.
+  prompt=$(awk 'NR==1 && $0=="---" {fm=1; next} fm && $0=="---" {fm=0; next} !fm' "$prompt_file")
+  [ -n "$prompt" ] || die "empty prompt after stripping frontmatter: $prompt_file"
 
-  python3 - "$case_name" "$k" "$log" "$out/run$k.stderr" <<'PY'
-import json, sys
-case, k, log, errlog = sys.argv[1:5]
-skills, turns, cost, err, raw = [], None, None, None, []
-with open(log, encoding="utf-8") as fh:
-    for line in fh:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            e = json.loads(line)
-        except ValueError:
-            raw.append(line)          # e.g. "You've hit your weekly limit"
-            continue
-        t = e.get("type")
-        if t == "assistant":
-            for b in (e.get("message") or {}).get("content") or []:
-                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Skill":
-                    skills.append(str((b.get("input") or {}).get("skill", "?")))
-        elif t == "result":
-            turns, cost = e.get("num_turns"), e.get("total_cost_usd")
-            if e.get("is_error"):
-                err = e.get("result") or e.get("subtype")
-turns_s = "?" if turns is None else str(turns)
-cost_s = "?" if cost is None else f"{cost:.2f}"
-print(f"{case} run{k}: skill=[{', '.join(skills)}] turns={turns_s} cost=${cost_s}")
-if err:
-    print(f"  error: {err}")
-for r in raw[:3]:
-    print(f"  stdout: {r}")
-if turns is None and not raw:
-    tail = open(errlog, encoding="utf-8", errors="replace").read().strip().splitlines()[-3:]
-    for r in tail:
-        print(f"  stderr: {r}")
-PY
+  logs=()
+  for ((k = 1; k <= runs; k++)); do
+    work="$out/$case_name/run$k"
+    mkdir -p "$work"
+    if [ -f "$case_dir/fixture.sh" ]; then
+      (cd "$work" && bash "$case_dir/fixture.sh" > "$out/$case_name/run$k.fixture.log" 2>&1) \
+        || die "fixture.sh failed for $case_name (see $out/$case_name/run$k.fixture.log)"
+    fi
+    log="$out/$case_name/run$k.jsonl"
+    printf 'run-evals: %s run %s/%s\n' "$case_name" "$k" "$runs" >&2
+    (cd "$work" && env -u CLAUDECODE HOME="$home" CLAUDE_CONFIG_DIR="$cfg" \
+      claude -p "$prompt" --model "$model" --plugin-dir "$plugin" --setting-sources "" --strict-mcp-config \
+        --allowedTools "$tools" --max-turns "$max_turns" \
+        --output-format stream-json --verbose) > "$log" 2> "$out/$case_name/run$k.stderr" || true
+    logs+=("$log")
+  done
+
+  python3 "$probe_py" judge --case "$case_name" --model "$model" --plugin-dir "$plugin" \
+    ${expect[@]+"${expect[@]}"} --out "$results/$case_name.json" "${logs[@]}"
+  printf 'result: %s\n' "$results/$case_name.json"
 done
 printf 'run-evals: stream logs kept in %s\n' "$out" >&2

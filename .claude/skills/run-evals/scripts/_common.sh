@@ -6,6 +6,22 @@
 
 die() { printf 'run-evals: %s\n' "$*" >&2; exit 1; }
 
+# Print the calling script's header comment (from line 2 to the first line that is not a
+# comment) as its usage, then exit 64. A message, when given, comes first.
+usage_exit() {
+  local script=$1; shift
+  [ $# -eq 0 ] || printf 'run-evals: %s\n' "$*" >&2
+  awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$script" >&2
+  exit 64
+}
+
+# Print the path of the plugin's evalrun.py (config check, post-run checks, bare stub).
+evalrun_of() {
+  local f="$1/evals/evalrun.py"
+  [ -f "$f" ] || die "no $f: the run needs its config check and post-run checks (ADR 0036)"
+  printf '%s\n' "$f"
+}
+
 # Print the Claude config dir to bill eval runs to. Resolution order:
 #   1. --config-dir DIR (passed in as $1)
 #   2. $EVAL_CONFIG_DIR   — set this in your shell profile to the account that should pay
