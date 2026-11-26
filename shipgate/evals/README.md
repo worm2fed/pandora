@@ -153,6 +153,20 @@ script-grader rates. Rows recorded before the model was recorded sit under the k
 `unrecorded`. `compare.py` never crosses a model, a mode or a rule, and refuses a result
 with no recorded model.
 
+### What the harness does to a run (2.1.332)
+
+Found in the first paid runs of #28:
+
+- It keeps each sandbox read-only (mode 500) with a `sealed/` dir at 000. `post-run --clean`
+  unseals a sandbox before it removes it, and names any it could not remove.
+- A grader that reads `last_message` sees only the final assistant message. When the agent
+  starts a background task, the run can end with a short follow-up after the task
+  finishes, and the answer sits in an earlier message. Such a run scores low with nothing
+  wrong in the answer (case 74, run 3: 1 turn, 501 s, a 337-character follow-up). Read a
+  low run's report, and compare its last message with the other runs, before you call the
+  fall behaviour.
+- The init record of a bare run lists no plugin at all, not the stub.
+
 ## macOS notes
 
 - The agent sandbox blocks the Xcode git shim (`/usr/bin/git` → `xcrun` cache under

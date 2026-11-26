@@ -566,6 +566,15 @@ judges the same scenario. The table names what moved, what is lost, and what kee
   ceiling (projected 24.85, ratio 0.89). Stage 1b: 29 and 55, 3.43 USD against 12.00. At
   1.00 bare: 17, 25, 29 (after 1b), 30, 31, 32, 33, 36, 39, 40, 54, 69. Fell: 24, 47, 53,
   55 (the dip grader failed again in 1b) and 74. These five go to stage 2.
+- 2026-11-26, plan change for stage 3 (the user's go "Both models, bare", relayed by the
+  lead). The bare arm of the `kept` set runs on both models first, through `run-set.sh
+  --bare`; the with arm (`none`) follows on a later go. Each kept row is then a `bare+none`
+  pair (ADR 0034), not one `with-without` run: the same arms, the same cost, the same
+  information, and the bare half does not depend on the plugin version.
+- 2026-11-26, a candidate, not built: a post-run flag for a run whose graded last message
+  is far shorter than an earlier assistant message of the same run (case 74, run 3). It is
+  a flag to read, never a verdict. Until it exists, every result table carries that count
+  per case, from the kept traces where a run kept them.
 - 2026-11-26, a T045 rule for the stage-1b cases (29, 55). `compare.py` takes the newest
   results dir per case, model and mode, so it reads only the 3 runs of the 1b dir. Pooling
   the two dirs needs a marker that tells an extension from a rerun that supersedes, and a
