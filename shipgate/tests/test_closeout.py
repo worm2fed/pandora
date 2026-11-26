@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from test_journal import JOURNAL, SESSION_ENV, load_journal_module
+from test_journal import JOURNAL, SESSION_ENV, isolated_env, load_journal_module
 
 FORGE = Path(__file__).resolve().parent / "fixtures" / "forge"
 HEAD = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
@@ -788,7 +788,7 @@ class CloseoutCase(unittest.TestCase):
     def env(self):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         env["CLAUDE_CONFIG_DIR"] = str(self.user)
-        return env
+        return isolated_env(env)  # HOME too (#81: the run log)
 
     def run_j(self, *args, rc=None):
         proc = subprocess.run([sys.executable, str(JOURNAL), *map(str, args)],

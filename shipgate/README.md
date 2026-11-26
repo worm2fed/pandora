@@ -504,25 +504,30 @@ last main-thread assistant record. Past the threshold it prints one line, as a
 it off). The line is advice: it never blocks. Any other Bash
 call pays two substring checks and does not import the nudge's code.
 
-**Observed runs (ADR 0032, ADR 0033).** A `verify-run` names its commands, and the journal
-checks them against the runs the hooks saw.
+**Observed runs (ADR 0032, ADR 0033, both amended by #81).** A `verify-run` names its
+commands, and the journal checks them against the runs the hooks saw.
 
 - **The run log.** In a journaled project, the **PreToolUse hook on Bash** appends a start
   row for each call: its `tool_use_id` and an 8-byte BLAKE2b hash of the command as the
   model typed it. A command that another PreToolUse hook rewrites still matches, because
-  the hash is taken before the rewrite. The **PostToolUse hook**, and the
-  **PostToolUseFailure hook** on Bash, append an end row: the `tool_use_id` and the exit
-  code, when the payload shows it. A row holds no command text, no output, no time, no
-  directory and no agent id. The file is `$CLAUDE_CONFIG_DIR/shipgate/runs/<session>.jsonl`,
-  else `~/.claude/shipgate/runs/<session>.jsonl`, outside every repository. At 256 KB it is
-  renamed to `<session>.jsonl.1`, so a session keeps about 512 KB at most. The journal
-  deletes a session's files 7 days after their last write, right after a `flow-started` and
-  right after a terminal append, in any project; `doctor` shows what is kept. The start row
+  the hash is taken before the rewrite. The hash leaves out each leading `cd <dir> && `
+  whose `<dir>` holds no space and no shell operator: Claude Code removes one `cd <cwd> &&
+  ` before the hook sees the command, and the model cites the form it typed. The
+  **PostToolUse hook**, and the **PostToolUseFailure hook** on Bash, append an end row:
+  the `tool_use_id` and the exit code, when the payload shows it. A row holds no command
+  text, no output, no time, no directory and no agent id. The file is
+  `$HOME/.claude/shipgate/runs/<session>.jsonl`, outside every repository, whatever
+  `CLAUDE_CONFIG_DIR` says: the hooks get the config directory the session runs under, but
+  the Bash shell that runs `journal.py` reads the user's shell profile, which may set
+  another one. With no absolute `HOME` nothing is written. At 256 KB it is renamed to
+  `<session>.jsonl.1`, so a session keeps about 512 KB at most. The journal deletes a
+  session's files 7 days after their last write, right after a `flow-started` and right
+  after a terminal append, in any project; `doctor` shows what is kept. The start row
   finds the project from the payload's `cwd` only. The end row needs that project too, and
   the post hook's first check needs a settings file above the session's project directory
-  or the hook's own working directory, as for every other post hook path. A project with no
-  settings file, with `"db": null` or with `enforce.auto_capture: false` gets no row, and a
-  failure to write is silent.
+  or the hook's own working directory, as for every other post hook path. A project with
+  no settings file, with `"db": null` or with `enforce.auto_capture: false` gets no row,
+  and a failure to write is silent.
 - **What counts.** A foreground run of the session, and a subagent's or a Workflow agent's
   foreground run, which the hooks log under the parent session.
 - **Not observed.** A background run (no hook sees its exit code). A foreground run that
@@ -540,8 +545,11 @@ checks them against the runs the hooks saw.
   newest run ended with another code. It owns both keys and replaces a caller's value.
 - **No gate reads it yet.** A row that does not match is stored and still counts for
   `task-done` and the ready verdict. `append` prints one `not observed: …` line per such
-  command after its `appended` line, with the same exit code. `stats` counts the rows, so
-  the December review can decide on a gate from one month of data.
+  command after its `appended` line, with the same exit code. The line names the cause:
+  the shell has no session id, the session has no log under the runs root, the log has no
+  foreground run of the command (a run past the Bash time limit moves to the background
+  and is never seen), or the newest run ended with another exit code. `stats` counts the
+  rows, so the December review can decide on a gate from one month of data.
 
 A row with `observed: true` proves that this session ran that exact command with that exit
 code. It does not prove where the command ran, what its exit code means (`pytest | tail`

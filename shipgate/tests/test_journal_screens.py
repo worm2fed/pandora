@@ -24,7 +24,7 @@ from pathlib import Path
 from unittest import mock
 
 from test_journal import (
-    INFRA, JOURNAL, OK, SESSION_ENV, USAGE, load_journal_module,
+    INFRA, JOURNAL, OK, SESSION_ENV, USAGE, isolated_env, load_journal_module,
 )
 from test_ui import png_bytes
 
@@ -125,7 +125,7 @@ class ScreensCase(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         env["CLAUDE_CONFIG_DIR"] = str(self.config)
         env.update(extra)
-        return env
+        return isolated_env(env)  # HOME too (#81: the run log)
 
     def run_j(self, *args, rc=None, env=None):
         proc = subprocess.run(

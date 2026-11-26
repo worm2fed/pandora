@@ -2,7 +2,7 @@
 type: adr
 title: "0032. The Bash hooks log each observed run by session"
 created: 2026-11-25
-updated: 2026-11-25
+updated: 2026-11-26
 tags:
   - adr
   - shipgate
@@ -10,10 +10,11 @@ tags:
   - verify
 status: accepted
 date: 2026-11-25
-issue: "#27 (shipgate), child of #37"
+issue: "#27 (shipgate), child of #37; amended by #81"
 related:
   - "../prd/observed-verify-run.md"
   - "../prd/observed-verify-run.worklog.md"
+  - "../prd/observed-run-match.worklog.md"
   - "./0033-a-verify-run-names-its-commands-and-the-journal-records-what-it-saw.md"
   - "./0031-a-ui-task-is-done-with-screenshots-on-disk.md"
   - "./0023-the-users-go-is-recorded-where-the-user-answers.md"
@@ -28,7 +29,9 @@ related:
 > status, when the status is known. The rows go to one file per session under the Claude
 > config directory, outside every repository. The journal joins them when a `verify-run`
 > is appended (ADR 0033). The hook contract changes, a one-way door: the user accepted
-> this ADR on 2026-11-25, in a question dialog relayed by the lead.
+> this ADR on 2026-11-25, in a question dialog relayed by the lead. Amended by #81
+> (2026-11-26): the file is under `$HOME/.claude` whatever `CLAUDE_CONFIG_DIR` says, and
+> the hash leaves out each leading `cd <dir> && `.
 
 ## Context
 
@@ -81,7 +84,9 @@ The hot path sets the other limits:
 - start, from PreToolUse: `{"i": "<tool_use_id>", "h": "<16 hex digits>"}`. The hash is
   BLAKE2b with an 8-byte digest over the stripped command text, encoded as UTF-8 with
   `surrogateescape`. The command is `tool_input.command` as PreToolUse receives it, which
-  is the text the model typed.
+  is the text the model typed. (Amended by #81: Claude Code first removes one leading
+  `cd <cwd> && ` from that text, and each leading `cd <word> && ` is removed before the
+  hash. See the amendment at the end.)
 - end, from PostToolUse or PostToolUseFailure: `{"i": "<tool_use_id>", "x": <exit>}`.
 
 No row holds command text, output, a time, a working directory or an agent id. The join
@@ -98,14 +103,17 @@ rest. The parse uses string methods, not `re`.
 
 **Where.** `<base>/shipgate/runs/<session_id>.jsonl`. `<base>` is `$CLAUDE_CONFIG_DIR`
 when it is set and not empty, else `$HOME/.claude`, by the rule of ADR 0031's evidence
-root: environment variables only, and no write when the base is not absolute. The session
-id is the payload's `session_id`. It must be a plain token of at most 128 characters from
-`[A-Za-z0-9_-]`, checked with string methods; any other id writes nothing.
+root: environment variables only, and no write when the base is not absolute. (Amended by
+#81: `<base>` is `$HOME/.claude`, and `CLAUDE_CONFIG_DIR` is not read. See the amendment
+at the end.) The session id is the payload's `session_id`. It must be a plain token of at
+most 128 characters from `[A-Za-z0-9_-]`, checked with string methods; any other id writes
+nothing.
 
 **One definition.** `hooks/_common.py` holds `runs_root()`, `run_fingerprint()` and the
 size bound. The journal loads `_common` by path already (`scripts/_journal/plugin.py`), so
 hooks and journal compute one path and one hash. A test pins `runs_root()` and
-`evidence_root()` to the same base.
+`evidence_root()` to the same base. (Amended by #81: the test now pins that `runs_root()`
+does not read `CLAUDE_CONFIG_DIR`.)
 
 **Who writes, and when.**
 
@@ -217,3 +225,98 @@ next prune deletes, and the names it refuses.
 - The hook contract changes: PreToolUse writes a file in a journaled project, and a new
   event is registered. The release check for a hook change and the full `/security-review`
   apply.
+
+## Amendment (2026-11-26, #81): the log under HOME, and a key without a leading `cd`
+
+On the first day of 0.37.0, three of four honest `verify-run` appends for one passing suite
+were stored `observed: false` (issue #81, counts only). Two causes are in this ADR.
+
+A probe on 2026-11-26 (Claude Code 2.1.332, nested `claude -p` on Haiku, scratch logging
+hooks, three runs) set the facts. Each run had a shell profile directory of its own: one
+empty, one with a profile that sets `CLAUDE_CONFIG_DIR` to another directory.
+
+- **The environment.** The hook process gets the `CLAUDE_CONFIG_DIR` that the session runs
+  under, with the profile and without it. Claude Code starts the hook directly, so no
+  shell profile runs there. The Bash tool's shell does run the profile, so a profile that
+  sets `CLAUDE_CONFIG_DIR` wins in that shell. `journal.py append` runs in that shell, so it
+  read another directory than the hooks wrote, which held no log of the session. `HOME`
+  and `CLAUDE_CODE_SESSION_ID` are the same on both sides. No other variable in the shell
+  names the session's config directory.
+- **The `cd` prefix.** Claude Code removes one leading `cd <cwd> && ` from the Bash tool's
+  input before PreToolUse sees it. `<cwd>` is the working directory as it is, unquoted.
+  The transcript stores the shorter form, but the model's context keeps the form it typed.
+  Claude Code keeps `cd '<cwd>' &&`, `cd "<cwd>" &&`, `cd <cwd>/ &&`, `cd <cwd>; x`,
+  `cd <cwd>&&x`, a symbolic-link path to the cwd, another directory and a relative
+  directory. `cd <cwd> && cd sub && x` arrives as `cd sub && x`. So a command cited as
+  typed, with the prefix, hashed to another key than the hook's.
+
+The user accepted both changes below on 2026-11-26, in a question dialog relayed by the
+lead ("Accept both").
+
+**Where (replaces the base rule of the Decision).** `<base>` is `$HOME/.claude`. The run
+log does not read `CLAUDE_CONFIG_DIR`. When `HOME` is not set, is empty or is not an
+absolute path, `runs_root()` is None and nothing is written, read or pruned. The hooks and
+the journal still call the one `runs_root()` of `hooks/_common.py`.
+
+- The evidence root of ADR 0031 does not change. Only the journal writes and reads it,
+  from the Bash shell, so the split between the hook and the shell does not reach it. The
+  test that pinned `runs_root()` and `evidence_root()` to one base now pins that
+  `runs_root()` ignores `CLAUDE_CONFIG_DIR`.
+- A log written by 0.37.0 under `$CLAUDE_CONFIG_DIR/shipgate/runs` stays there. Nothing
+  reads or prunes it. It holds hashes and exit statuses only, and the changelog says it can
+  be deleted by hand.
+
+**The key (amends "What is written").** `run_fingerprint` strips the command, then removes
+each leading `cd <word> && `, and hashes the rest. `<word>` is a non-empty run of
+characters with no whitespace and no shell operator (`;`, `|`, `&`, `<`, `>`, `(`, `)` or a
+backtick), so a step that runs more than a `cd` stays in the key. A quote is an ordinary
+character there. The code uses string methods, not `re`.
+
+- The typed form and Claude Code's shorter form give one key, because the rule removes
+  what Claude Code removed. The hook and the journal call the same function.
+- A form that Claude Code keeps reaches the hook as the model typed it, and the journal
+  gets the same text in the citation. So both sides give one key for it too.
+
+**What does not change.** The row forms, the file names, the rotation, the prune, the
+threats and the exit-status table. Rows stored `observed: false` since 0.37.0 are not
+rewritten. No gate reads `observed` or `contradicted`.
+
+**Alternatives considered.**
+
+- **A log beside the journal**, `<realpath db>.runs/`, like ADR 0023's request markers. No
+  environment variable at all. Rejected for the reason this ADR gave first: a cloned
+  repository picks that path through a link in place of the database, and the hook would
+  create directories there on every Bash call.
+- **SessionStart hands the base to the shell** through `CLAUDE_ENV_FILE` (the probe shows
+  that SessionStart hooks get it). Rejected: a new writer and a second variable, and no
+  document says whether the shell reads that file before or after the profile.
+- **A search over candidate directories**, or the config directory taken from the
+  transcript path. Rejected: guessing code.
+- **The evidence root under `$HOME/.claude` too**, for one rule. Rejected: ADR 0031's gate
+  reads it, so screenshots captured under `CLAUDE_CONFIG_DIR` before the upgrade would stop
+  counting in the middle of a stream.
+- **For the prefix, the journal alone removes `cd <its cwd> && ` once**, as Claude Code
+  does. Rejected: the result depends on the working directory at the time of the append,
+  and on a rule of Claude Code that no document promises.
+- **For the prefix, a rule in prose** ("cite the command without `cd`"). Rejected: the
+  model sees the form it typed, so it cannot know the shorter one.
+
+**Consequences.**
+
+- A user whose config directory is not `~/.claude` gets `~/.claude/shipgate/runs` on the
+  first journaled Bash call. Several config directories on one machine share that
+  directory. The files are named by session id, so they do not collide.
+- The key no longer tells `cd a && pytest` from `pytest`. The PRD's non-goal already says
+  that the log proves nothing about where a command ran. The rejected alternative "the
+  working directory in the hash" stays rejected.
+- A hook from before this change wrote the full text for a command with a `cd` prefix.
+  The new journal hashes it without the prefix, so such a run does not match. At most the
+  one session that spans the upgrade is touched.
+- A test that runs a hook or `journal.py` gives a temporary `HOME` as well as a temporary
+  `CLAUDE_CONFIG_DIR`, and the root `CLAUDE.md` says so. A release check that reads the log
+  must set a temporary `HOME`.
+- `doctor` does not get a new check. After this change, the split it would report cannot
+  occur. Its runs line names `HOME` in place of the config directory.
+- Not seen, and out of scope: a profile that sets `HOME` would split the run log the same
+  way. A profile that picks `CLAUDE_CONFIG_DIR` by directory could split the evidence root
+  between two shells of one session.
