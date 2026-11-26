@@ -405,7 +405,7 @@ Tests are tasks, not a separate phase. Tick boxes as you go; log deviations inli
 
 ## Review and release
 
-- [ ] T040 — Security and release checks: the full `/security-review` on the working tree by the `review` skill's method (hooks and a write outside the plugin directory), briefed with ADR 0032's threat cases (a forged row, a planted log, a link in place of the directory or the file, a secret in a command, growth); then, after the merge, the release check for a hook change (`git archive` of the merge commit into the scratchpad, run each changed hook with payloads in an empty directory and in a journaled temporary project with a temporary `CLAUDE_CONFIG_DIR`, confirm the no-op path and the rows); grep the diff for private names, tracker ids and paths — file(s): none — done when: no finding is open, the release check output is recorded here, and the grep finds nothing.
+- [x] T040 — Security and release checks: the full `/security-review` on the working tree by the `review` skill's method (hooks and a write outside the plugin directory), briefed with ADR 0032's threat cases (a forged row, a planted log, a link in place of the directory or the file, a secret in a command, growth); then, after the merge, the release check for a hook change (`git archive` of the merge commit into the scratchpad, run each changed hook with payloads in an empty directory and in a journaled temporary project with a temporary `CLAUDE_CONFIG_DIR`, confirm the no-op path and the rows); grep the diff for private names, tracker ids and paths — file(s): none — done when: no finding is open, the release check output is recorded here, and the grep finds nothing.
 
 ## Traceability
 
@@ -481,6 +481,13 @@ Tests are tasks, not a separate phase. Tick boxes as you go; log deviations inli
     `verify_observed_share` (2 places, null with no recorded row) per stream and in total.
   - T014: a failing Bash call now starts the post hook (about 25 ms with no settings file),
     the cost of the PostToolUseFailure registration that ADR 0032 decided.
+
+- T040 release check, 2026-11-26, run by the lead in its own session after the merge (PR #78,
+  merge commit 70ae314): on the merge commit's archive and again on the updated install
+  (0.37.0-717adb2), 26 of 26 checks pass. The three hook events stay silent and write no
+  file in an empty directory; a scratch journaled project gets four rows that hold hashes
+  and exit codes only, with modes 0600 and 0700. The tag `shipgate--v0.37.0` is on 717adb2.
+  This tick stays in the worktree only: the branch was merged before it.
 
 ## What changed
 
