@@ -25,7 +25,10 @@
 # (credential-store symlink check), refuses the Xcode git shim, and drops CLAUDECODE so
 # the nested claude starts clean. The harness always gets --keep-temp; after the run,
 # `evalrun.py post-run` writes shadow.json (and script-graders.json), then removes the
-# kept sandboxes unless you passed --keep-temp yourself.
+# kept sandboxes unless you passed --keep-temp yourself. The script sets the results dir:
+# a new dir under <plugin-dir>/evals/results, passed as --output-dir, so it refuses a
+# caller's --output-dir among the extras (exit 64). A run that leaves no
+# aggregate-result.json there has no result, and no post-run step runs.
 # Exit status is the harness's: 1 means some case scored below --threshold (default 1.0,
 # so 1 is normal), 2 means --max-cost-usd was hit. 64 is a usage error; 1 before the run
 # is a refusal.
@@ -63,6 +66,7 @@ for a in "${@:3}"; do
   case "$a" in
     --ablation|--ablation=*|--bare|--model|--model=*) usage_exit "$0" "$a goes before <plugin-dir>, not among the extra eval flags" ;;
     --keep-temp) keep_asked=1 ;;
+    --output-dir|--output-dir=*) usage_exit "$0" "$a: run-case.sh sets the results dir itself, a new dir under <plugin-dir>/evals/results" ;;
   esac
 done
 [ -d "$1" ] || die "plugin dir not found: $1"
@@ -95,65 +99,61 @@ if [ -n "$no_codegraph" ]; then
 fi
 home=$(make_scratch_home)
 stub_root=""
-harness_log=""
-trap 'rm -rf "$home" ${harness_log:+"$harness_log"} ${stub_root:+"$stub_root"}' EXIT
+trap 'rm -rf "$home" ${stub_root:+"$stub_root"}' EXIT
 target=$plugin
 if [ "$mode" = bare ]; then
   stub_root=$(mktemp -d "${TMPDIR:-/tmp}/eval-bare.XXXXXX")
   target=$(python3 "$evalrun" bare-stub "$plugin" "$stub_root/plugin") || die "cannot build the bare stub"
 fi
+
+# The results dir is this script's own: a name like the harness's default dirs (a UTC
+# stamp with milliseconds, so compare.py's by-name order holds) plus this script's pid, so
+# two runs side by side never share it. mkdir fails on an existing name. The harness
+# writes into a dir given with --output-dir whether or not it exists.
 results_root="$plugin/evals/results"
-before=$(ls -d "$results_root"/*/ 2>/dev/null | sort || true)
+mkdir -p "$results_root" || die "cannot make the results root $results_root"
+stamp=$(python3 -c 'import datetime as d; t = d.datetime.now(d.timezone.utc); print(t.strftime("%Y-%m-%dT%H-%M-%S-") + "%03dZ" % (t.microsecond // 1000))') \
+  || die "cannot make the results dir name"
+out="$results_root/$stamp-$$"
+mkdir "$out" || die "cannot make the results dir $out"
 
 eval_args=(plugin eval "$target" --runs 3 --ablation "$ablation" --scaffold --judge-model sonnet --no-publish
   --allow-tools Bash Edit Write --model "$model")
 [ -n "$keep_asked" ] || eval_args+=(--keep-temp)
-eval_args+=(--case "$glob")
+eval_args+=(--output-dir "$out" --case "$glob")
 
 printf 'run-evals: plugin=%s case=%s mode=%s model=%s config-dir=%s\n' "$plugin" "$glob" "$mode" "$model" "$cfg" >&2
 [ "$mode" != bare ] || printf 'run-evals: bare stub: %s (no component; evals -> %s/evals)\n' "$target" "$plugin" >&2
 printf 'run-evals: claude%s\n' "$(printf ' %q' "${eval_args[@]}" "$@")" >&2
 
 status=0
-harness_log=$(mktemp "${TMPDIR:-/tmp}/eval-run.XXXXXX")
 env -u CLAUDECODE HOME="$home" CLAUDE_CONFIG_DIR="$cfg" PATH="$run_path" \
-  "$claude_bin" "${eval_args[@]}" "$@" 2>&1 | tee "$harness_log" || status=$?
+  "$claude_bin" "${eval_args[@]}" "$@" 2>&1 || status=$?
 
-# The harness prints its own results dir ("Report: <dir>/report.html"); trust that first,
-# because a before/after listing picks up dirs written by other cases running in parallel.
-new=$(grep -oE 'Report: .*/report\.html' "$harness_log" | tail -1 | sed -e 's/^Report: //' -e 's|/report\.html$||' || true)
-if [ -z "$new" ]; then
-  after=$(ls -d "$results_root"/*/ 2>/dev/null | sort || true)
-  new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | tail -1)
-fi
-# A bare run reports its dir through the stub's evals link, which goes away on exit.
-if [ -n "$new" ] && [ "$mode" = bare ]; then
-  case "$new" in
-    "$target/evals/"*) new="$plugin/evals/${new#"$target/evals/"}" ;;
-    *) [ ! -d "$new" ] || new=$(cd "$new" && pwd -P) ;;
-  esac
-fi
-if [ -n "$new" ]; then
-  printf '\nrun-evals: results dir: %s\n' "${new%/}"
-  printf 'run-evals: summarize:   python3 %s/summarize.py %s\n' "$here" "${new%/}"
+if [ -f "$out/aggregate-result.json" ]; then
+  new=$out
+  printf '\nrun-evals: results dir: %s\n' "$new"
+  printf 'run-evals: summarize:   python3%s\n' "$(printf ' %q' "$here/summarize.py" "$new")"
   # A case with an expected.json gets the signal grader (ADR 0016): precision and recall
   # of the signals.py blast result the agent read. It never changes this script's status.
   grader="$plugin/evals/signal_grader.py"
   for d in "$plugin"/evals/$glob/; do
     if [ -f "$grader" ] && [ -f "${d}expected.json" ]; then
-      printf '\nrun-evals: signal grader (reads the kept trace.jsonl): python3 %s results %s\n' "$grader" "${new%/}"
-      python3 "$grader" results "${new%/}" || printf 'run-evals: signal grader exited %s; the harness status stands\n' "$?" >&2
+      printf '\nrun-evals: signal grader (reads the kept trace.jsonl): python3%s\n' "$(printf ' %q' "$grader" results "$new")"
+      python3 "$grader" results "$new" || printf 'run-evals: signal grader exited %s; the harness status stands\n' "$?" >&2
       break
     fi
   done
   # Shadow check, script graders and clean-up (ADR 0036). Never changes this script's status.
-  post_args=(post-run "${new%/}" --plugin-dir "$plugin")
+  post_args=(post-run "$new" --plugin-dir "$plugin")
   [ "$mode" != bare ] || post_args+=(--bare)
   [ -n "$keep_asked" ] || post_args+=(--clean)
-  printf '\nrun-evals: post-run: python3 %s %s\n' "$evalrun" "${post_args[*]}"
+  printf '\nrun-evals: post-run: python3%s\n' "$(printf ' %q' "$evalrun" "${post_args[@]}")"
   python3 "$evalrun" "${post_args[@]}" || printf 'run-evals: post-run exited %s; the harness status stands\n' "$?" >&2
 else
-  printf '\nrun-evals: no new dir under %s (did you pass --output-dir/--eval-dir, or did the run abort?)\n' "$results_root" >&2
+  printf '\nrun-evals: no aggregate-result.json in %s, so this run has no result; no post-run check, grade or clean-up ran\n' "$out" >&2
+  rmdir "$out" 2>/dev/null || printf 'run-evals: %s stays: it holds files but no aggregate-result.json\n' "$out" >&2
+  printf 'run-evals: any kept sandboxes of its runs stay on disk; the harness printed their paths above\n' >&2
 fi
 printf 'run-evals: harness exit status %s (1 = below --threshold, 2 = cost ceiling hit)\n' "$status" >&2
 exit "$status"

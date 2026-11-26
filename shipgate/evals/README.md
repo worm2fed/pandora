@@ -21,10 +21,18 @@ $S/probe.sh --model claude-opus-5-5 shipgate 11
 
 `run-case.sh` calls `claude plugin eval <target> --runs 3 --ablation <mode> --scaffold
 --judge-model sonnet --no-publish --allow-tools Bash Edit Write --model <M> --keep-temp
---case 'NN-*'`, or `--case <name>` when you pass the full name of an eval case in place
-of `NN`. An eval case is a dir under `evals/` that holds `prompt.md` or `case.yaml`;
-`run-case.sh` refuses any other dir there (a probe or fixture case, `results`) with
-exit 64.
+--output-dir <dir> --case 'NN-*'`, or `--case <name>` when you pass the full name of an
+eval case in place of `NN`. An eval case is a dir under `evals/` that holds `prompt.md` or
+`case.yaml`; `run-case.sh` refuses any other dir there (a probe or fixture case,
+`results`) with exit 64. `run-case.sh` sets the results dir itself: a new dir under
+`evals/results/`, named by the UTC time and the script's process id, so runs side by side
+never share one. It passes the dir as `--output-dir` and refuses a caller's own
+`--output-dir` (exit 64). A run that leaves no `aggregate-result.json` there has no
+result: `run-case.sh` says so with the harness status, removes the dir when it is empty,
+and runs no post-run check, grade or clean-up. An extra `--report <path>` puts the HTML
+report where you name it. With an explicit `--output-dir` the harness skips two checks it
+makes on its default dir: the warning that results under `<plugin>/evals` may load as
+plugin components, and its ownership check. The dir is where its default dir was.
 
 - `--scaffold` is required — without it the fixture repos are never built and every case
   scores 0 in both arms.
@@ -115,8 +123,10 @@ pass (3 of 3).
 
 `sets.json` (from PR 2 of #28) names the sets: `kept`, `guards`, `ablation-32`, `probes`
 and `parked`. Each lists case directory names. `probe.sh --model M shipgate probes` runs
-the probe set. A serial set runner for the eval sets comes in a later PR; until then run
-one `run-case.sh` per case, by its full name. The `parked` set never runs.
+the probe set. `run-set.sh --max-cost-usd C --ablation X --model M shipgate kept` runs an
+eval set one case at a time under one ceiling; `--shard K/N` splits it across
+invocations side by side (the run-evals skill, "Running many cases"). The `parked` set
+never runs.
 
 ### Baseline
 
@@ -195,9 +205,9 @@ Writing graders for a *behaviour* (a lens applied, a stance taken, rather than a
   with `~` and prints the count. A flag on a `~` row is a question, not a verdict: re-run
   the case once on the unchanged tree the same day, compare the after-run with that
   before-run, then `--record` the after-run. After a harness update, re-record the kept
-  suite per model rather than reading every `~` row one by one: one `run-case.sh
-  --ablation with-without --model M` per kept case until the serial set runner of a later
-  PR lands. The cost per model is in the run-evals skill, "Cost".
+  suite per model rather than reading every `~` row one by one: `run-set.sh
+  --max-cost-usd C --ablation with-without --model M shipgate kept`, in shards when it is
+  long. The cost per model is in the run-evals skill, "Cost".
 - A grader that reads `.claude/shipgate.db` reads the SQLite record as text. In the
   `events` row the `type` column comes directly before the `data` column. `journal.py`
   writes `data` with `json.dumps(sort_keys=True)` and the default `", "` and `": "`
@@ -230,13 +240,9 @@ unknown variables from the agent's environment, so the agent still finds codegra
 A `case.yaml` can set only `EVAL_*` variables. Confirm each arm from a kept trace
 (`--keep-temp`): look for `"source": "graph"` or `"source": "regex"` in a `signals.py`
 result. Record the graph arm with `compare.py --record`; keep the regex arm out of
-`baseline.json`. Also keep the regex arm's results dirs out of `evals/results/` (pass
-`--output-dir <scratch dir>`, or move them after the run). `compare.py` takes the newest
-dir per case, so a regex-arm dir there replaces the graph arm in every later compare.
-
-Runs that start in the same millisecond get the same default results dir. The second
-run then refuses to write it ("already existed"), and only its `--json` file keeps the
-result. Start runs in parallel with `--output-dir` or `--json`.
+`baseline.json`. Also move the regex arm's results dirs out of `evals/results/` after the
+run. `compare.py` takes the newest dir per case, so a regex-arm dir there replaces the
+graph arm in every later compare.
 
 Result on 2026-10-19 (plugin 0.17.0, 3 runs per arm): every case scored 1.00 with and
 without the plugin in both arms. The graph arm read `"source": "graph"` in 20 of 21
