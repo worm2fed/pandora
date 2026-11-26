@@ -90,7 +90,10 @@ skip it when it doesn't. The sink-to-Sonnet rule still applies either way.
 - **Review before anything is staged.** Read the worker's diff against the design artifacts
   (ADR, worklog, PRD). Check the evidence in its report (real command output). Commit to the
   delegation: acceptance-check, and don't re-derive the worker's findings or redo its work.
-  Staging and committing need the user's go (form: `review`, **The user's go**).
+  Cite the worker's commands and exit codes in your own `verify-run`, character for
+  character. A worker's foreground runs are in this session's run log, so you do not run
+  them again to cite them. Staging and committing need the user's go (form: `review`,
+  **The user's go**).
 
 ## The worker brief — every dispatch includes
 
@@ -179,7 +182,8 @@ A worker starts with zero context, so the worker brief must be self-contained:
 6. **Report-back format** — rule 8 of the built-in worker discipline: evidence (real command
    output, not "tests pass"), deviations from the brief with reasons, and blockers quoted
    verbatim. Rule 6 covers the wall: a worker that hit one reports it. It does not improvise
-   a different design.
+   a different design. The report names each command exactly as the worker typed it, with
+   its exit code, so the orchestrator can cite it in its own `verify-run`.
 7. **Paste the built-in worker discipline above, then the config's Worker guardrails section,
    word for word.** Do not summarize either one, trim it to the rules you judge relevant, or
    rephrase it in your own voice. Compression of a guardrail is how every recorded worker

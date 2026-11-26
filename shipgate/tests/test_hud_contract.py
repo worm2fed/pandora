@@ -164,7 +164,8 @@ SCRIPT = [
         "labels": {"src/golden.py:30": "golden-deferral"},
     }, None),
     # `ready` needs a passing run after the last task-done.
-    (DISPOSITIONS, "verify-run", {"outcome": "pass", "task_ids": ["T001"]}, None),
+    (DISPOSITIONS, "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                  "outcome": "pass", "task_ids": ["T001"]}, None),
     (DISPOSITIONS, "review-verdict", {
         "verdict": "ready", "note": "the round closes",
         "dispositions": {"src/golden.py:12": "fixed"},
@@ -187,7 +188,8 @@ SCRIPT = [
     (STARTED, "flow-started", {"request": "a flow that only started"}, None),
     (NAMED, "flow-started", {"request": "a flow whose worklog is found by name"}, None),
     # An implied jump from no phase to implement: every phase before it is skipped.
-    (NAMED, "verify-run", {"outcome": "pass", "task_ids": ["T001"], "scope": "unit"},
+    (NAMED, "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"], "scope": "unit"},
      None),
     (FLOW, "flow-started", {"request": "the full flow", "branch": FLOW}, None),
     (FLOW, "phase-entered", {"phase": "workspace"}, None),
@@ -202,10 +204,12 @@ SCRIPT = [
         "adrs": ["docs/adr/0001-golden-choice.md"],
         "refs": ["docs/adr/0002-golden-other.md#context", "/etc/unsafe.md"],
     }, None),
-    (FLOW, "verify-run", {"outcome": "pass", "task_ids": ["T001"], "scope": "unit"},
+    (FLOW, "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                          "outcome": "pass", "task_ids": ["T001"], "scope": "unit"},
      None),
     (FLOW, "task-done", {"task_id": "T001"}, None),
-    (FLOW, "verify-run", {"outcome": "pass", "task_ids": ["T001", "T002"]}, None),
+    (FLOW, "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                          "outcome": "pass", "task_ids": ["T001", "T002"]}, None),
     (FLOW, "review-verdict", {
         "verdict": "not-ready",
         "criteria": {"SC-001": "met", "SC-002": "unmet"},
@@ -213,7 +217,8 @@ SCRIPT = [
     }, None),
     # Back from review: review stays `revisited`.
     (FLOW, "phase-entered", {"phase": "implement"}, None),
-    (FLOW, "verify-run", {"outcome": "fail", "task_ids": ["T002"]}, None),
+    (FLOW, "verify-run", {"commands": [{"cmd": "make test", "exit": 1}],
+                          "outcome": "fail", "task_ids": ["T002"]}, None),
     # The user's approval, as the HUD's publish dialog records it (shipgate 0.23.0,
     # ADR 0015): the `source` marker and a `user` actor. It authorizes `publish`.
     (FLOW, "gate-decision", {

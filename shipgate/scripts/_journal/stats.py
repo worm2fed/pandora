@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, get_args
 
-from .vocab import DecisionSource, UsageError
+from .vocab import CONTRADICTED_KEY, DecisionSource, OBSERVED_KEY, UsageError
 from .store import _parse_ts, Event, read_events
 from .sessions import _actor_role, event_session
 from .approval import _go_gate
@@ -149,6 +149,10 @@ def _stream_stats(
         "review-verdict": 0, "review-feedback": 0,
     }
     implied = 0
+    # ADR 0033: what the journal stored at append. A row with no bool `observed` (before
+    # 0.37.0, or from an older journal.py) is not recorded, never not observed (FR-014).
+    observed = {"verify_observed": 0, "verify_unobserved": 0, "verify_contradicted": 0,
+                "verify_unrecorded": 0}
     deviation_kinds: Dict[str, int] = {}
     # The go records by marker (ADR 0023 §19).
     go: Dict[str, int] = dict.fromkeys(get_args(DecisionSource), 0)
@@ -174,6 +178,10 @@ def _stream_stats(
             # it once.
             for task in set(str(t) for t in event.data.get("task_ids") or []):
                 verified[task] = verified.get(task, 0) + 1
+            observed[_observed_key(event.data)] += 1
+            if (event.data.get(OBSERVED_KEY) is False
+                    and event.data.get(CONTRADICTED_KEY) is True):
+                observed["verify_contradicted"] += 1
         elif event.type == "task-done":
             task_id = event.data.get("task_id")
             if isinstance(task_id, str) and task_id:
@@ -189,6 +197,8 @@ def _stream_stats(
         "decisions": decisions,
         "deviations": tallies["deviation"],
         "verify_runs": tallies["verify-run"],
+        **observed,
+        "verify_observed_share": _observed_share(observed),
         # Distinct ids, as the brief counts them — a task re-recorded after review
         # feedback is one task done, not two.
         "tasks_done": len(task_ids),
@@ -204,9 +214,27 @@ def _stream_stats(
     }
 
 
+def _observed_share(counts: Dict[str, int]) -> Optional[float]:
+    """Observed over the rows that record it (observed and not observed), to two
+    places as `signals.py` rounds its shares; None when no row records it (SC-006)."""
+    recorded = counts["verify_observed"] + counts["verify_unobserved"]
+    return round(counts["verify_observed"] / recorded, 2) if recorded else None
+
+
+def _observed_key(data: Dict[str, Any]) -> str:
+    """The count a `verify-run` row goes to by its `observed` value."""
+    value = data.get(OBSERVED_KEY)
+    if value is True:
+        return "verify_observed"
+    if value is False:
+        return "verify_unobserved"
+    return "verify_unrecorded"
+
+
 STATS_SUMS = (
     "events", "deviations", "verify_runs", "tasks_done", "tasks_reverified",
-    "review_rounds", "review_feedback", "implied_phases",
+    "review_rounds", "review_feedback", "implied_phases", "verify_observed",
+    "verify_unobserved", "verify_contradicted", "verify_unrecorded",
 )
 
 
@@ -244,6 +272,8 @@ def build_stats(
         for name, events in sorted(grouped.items())
     ]
     totals: Dict[str, Any] = {key: sum(row[key] for row in rows) for key in STATS_SUMS}
+    # A share does not sum: the total's comes from the summed counts.
+    totals["verify_observed_share"] = _observed_share(totals)
     totals["by_role"] = _merge_counts(row["by_role"] for row in rows)
     totals["decisions"] = _merge_counts(row["decisions"] for row in rows)
     totals["deviation_kinds"] = _merge_counts(row["deviation_kinds"] for row in rows)
@@ -274,6 +304,10 @@ STATS_COLUMNS = (
     ("dec", lambda r: sum(r["decisions"].values())),
     ("dev", lambda r: r["deviations"]),
     ("vfy", lambda r: r["verify_runs"]),
+    # Observed / recorded, so a stream's share reads off its row (SC-006).
+    ("obs", lambda r: f"{r['verify_observed']}/"
+                      f"{r['verify_observed'] + r['verify_unobserved']}"),
+    ("ctr", lambda r: r["verify_contradicted"]),
     ("task", lambda r: r["tasks_done"]),
     ("rvfy", lambda r: r["tasks_reverified"]),
     ("rnd", lambda r: r["review_rounds"]),
@@ -327,7 +361,16 @@ def render_stats(report: Dict[str, Any]) -> str:
         lines.append("  none recorded")
     lines.append("")
     lines.extend(_render_trace(report))
+    totals = report["totals"]
+    marked = {"yes": totals["verify_observed"], "no": totals["verify_unobserved"]}
+    lines.append(f"observed verify runs: {_share(marked, 'yes')} recorded · "
+                 f"{totals['verify_contradicted']} contradicted · "
+                 f"{totals['verify_unrecorded']} not recorded")
     return "\n".join(lines)
+
+
+def _share(counts: Dict[str, int], hit: str) -> str:
+    return f"{counts.get(hit, 0)} of {sum(counts.values())}"
 
 
 def _render_trace(report: Dict[str, Any]) -> List[str]:
@@ -349,17 +392,13 @@ def _render_trace(report: Dict[str, Any]) -> List[str]:
         )
 
     totals = report["totals"]["trace"]
-
-    def share(counts: Dict[str, int], hit: str) -> str:
-        return f"{counts.get(hit, 0)} of {sum(counts.values())}"
-
     graph, style = totals["graph"], totals["style"]
     lines.extend([
-        f"  graph at route-and-map: {share(graph['route'], 'graph')} mapped streams",
-        f"  graph fed design: {share(graph['design'], 'graph')} designed streams",
-        f"  graph fed review: {share(graph['review'], 'graph')} reviewed streams",
-        f"  style named at implement: {share(style['implement'], 'named')}",
-        f"  style named at review: {share(style['review'], 'named')}",
+        f"  graph at route-and-map: {_share(graph['route'], 'graph')} mapped streams",
+        f"  graph fed design: {_share(graph['design'], 'graph')} designed streams",
+        f"  graph fed review: {_share(graph['review'], 'graph')} reviewed streams",
+        f"  style named at implement: {_share(style['implement'], 'named')}",
+        f"  style named at review: {_share(style['review'], 'named')}",
     ])
     kinds = report["totals"]["deviation_kinds"]
     named = [f"{kind} {kinds[kind]}" for kind in sorted(kinds) if kind != "-"]

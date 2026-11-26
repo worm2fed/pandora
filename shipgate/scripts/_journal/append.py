@@ -11,17 +11,21 @@ from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional, Tuple
 
 from .vocab import (
-    ARTIFACT_CLAIM_DEDUPE_SECONDS, ARTIFACT_DEDUPE_SECONDS, EVENT_VOCABULARY, InfraError,
-    PHASE_OF_EVENT, PHASE_ORDER, RECORDED_BY_KEY, SIGNALS_MISSING_KIND,
-    SIGNALS_MISSING_NOTE, TERMINAL_TYPES, VersionConflict,
+    ARTIFACT_CLAIM_DEDUPE_SECONDS, ARTIFACT_DEDUPE_SECONDS, CONTRADICTED_KEY,
+    EVENT_VOCABULARY, InfraError, OBSERVED_KEY, PHASE_OF_EVENT, PHASE_ORDER,
+    RECORDED_BY_KEY, SIGNALS_MISSING_KIND, SIGNALS_MISSING_NOTE, TERMINAL_TYPES,
+    VersionConflict,
 )
 from .plugin import _hooks_common
 from .store import _row_to_event, _seconds_since, current_version, Event, utc_now
-from .sessions import _actor_session, parse_actor, recorded_by_for
+from .sessions import _actor_session, appending_session, parse_actor, recorded_by_for
 from .fold import folded_phase
 from .artifacts import _artifact_key, _claim_rank, claim_of
-from .shapes import check_payload_size, normalize_payload, validate_event_type
+from .shapes import (
+    _settle_verify_outcome, check_payload_size, normalize_payload, validate_event_type,
+)
 from .screens import prune_ended_stream, prune_old_evidence
+from .runs import not_observed_lines, observe, prune_old_runs
 from .gates import (
     _refuse_closeout_placeholders, _refuse_read_go, _require_closure_reason,
     _validate_go_request, _validate_mr_opened, _validate_own_session, _validate_waiver,
@@ -46,6 +50,8 @@ class AppendResult(NamedTuple):
     # `version` is then the stream head, the deviation's version, one past the event's
     # own: a caller chaining `--expect` needs the head, which is what it always was.
     deviation_seq: Optional[int] = None
+    # A `verify-run`'s line per command the run log does not confirm (ADR 0033).
+    notices: Tuple[str, ...] = ()
 
 
 def _recent_duplicate_artifact(
@@ -167,6 +173,7 @@ def append_event(
     # Like the vocabulary check, this is about whether the event can be read at all,
     # so `--force` does not waive it.
     payload = normalize_payload(event_type, payload)
+    _settle_verify_outcome(event_type, payload)
     _refuse_closeout_placeholders(event_type, payload)
     check_payload_size(stream, payload, force, force_reason)
     # After the cap check: the key is the journal's bookkeeping, not prose the caller
@@ -176,6 +183,7 @@ def append_event(
     recorded_by = recorded_by_for(conn, canonical_actor)
     if recorded_by:
         payload[RECORDED_BY_KEY] = recorded_by
+    notices = _record_observation(conn, event_type, payload)
 
     for attempt in range(2):
         conn.execute("BEGIN IMMEDIATE")
@@ -242,11 +250,13 @@ def append_event(
                 _touch_request_marker(conn, canonical_actor)
             if event_type in TERMINAL_TYPES:
                 prune_ended_stream(conn, stream)
+                prune_old_runs()
             elif event_type == "flow-started":
                 prune_old_evidence(conn)
+                prune_old_runs()
             return AppendResult(
                 seq, version, implied_phase, version_before=existing,
-                deviation_seq=deviation_seq,
+                deviation_seq=deviation_seq, notices=notices,
             )
         except sqlite3.IntegrityError:
             conn.execute("ROLLBACK")
@@ -260,6 +270,27 @@ def append_event(
             raise
 
     raise InfraError(f"could not append to stream {stream!r} after a retry")
+
+
+def _record_observation(conn: sqlite3.Connection, event_type: str,
+                        payload: Dict[str, Any]) -> Tuple[str, ...]:
+    """Set what the run log says of a ``verify-run`` (ADR 0033) and return its notices.
+
+    Like ``recorded_by``, after the cap check, and a caller's own value never survives:
+    ``observed`` is true only when every command's newest run in the appending session
+    ended with the cited exit, and ``contradicted`` is set only when one ended with
+    another. A forced row is checked the same way. The run log is read before the write
+    transaction opens, so the read holds no lock.
+    """
+    if event_type != "verify-run":
+        return ()
+    payload.pop(OBSERVED_KEY, None)
+    payload.pop(CONTRADICTED_KEY, None)
+    observation = observe(payload["commands"], appending_session(conn))
+    payload[OBSERVED_KEY] = observation.observed
+    if observation.contradicted:
+        payload[CONTRADICTED_KEY] = True
+    return not_observed_lines(observation)
 
 
 def _touch_request_marker(conn: sqlite3.Connection, actor: str) -> None:

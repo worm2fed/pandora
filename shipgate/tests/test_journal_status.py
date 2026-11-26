@@ -211,7 +211,8 @@ class TestTerminalAndDormant(JournalTestCase):
         self.seed()
         self.append_event("feature/x", "flow-completed", {})
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.assertFalse(self.one()["terminal"])
 
     def test_a_stale_capture_done_reads_as_terminal(self):
@@ -342,7 +343,8 @@ class TestCurrentPhase(JournalTestCase):
     def test_an_implied_phase_is_marked_implied(self):
         self.append_event("feature/x", "flow-started", {"request": "build it"})
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         implied = [e for e in self.events("feature/x") if e["type"] == "phase-entered"]
         self.assertEqual(self.current(), {
             "phase": "implement", "entered_at": implied[-1]["ts"], "implied": True,
@@ -527,7 +529,8 @@ class TestBriefRendering(JournalTestCase):
     def finish(self, count):
         task_ids = [f"T{n:03d}" for n in range(1, count + 1)]
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": task_ids})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": task_ids})
         for task_id in task_ids:
             self.append_event("feature/x", "task-done", {"task_id": task_id})
         return task_ids
@@ -629,13 +632,15 @@ class TestBriefRendering(JournalTestCase):
 
     def test_the_verify_timestamp_is_cut_to_the_minute(self):
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         line = self.brief_line("last verify")
         self.assertRegex(line, r"\(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}\)$")
 
     def test_an_implied_phase_is_marked(self):
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.assertTrue(self.status_json()["features"][0]["implied_phase"])
         self.assertIn("(implied)", self.render())
 

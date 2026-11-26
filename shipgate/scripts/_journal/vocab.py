@@ -290,11 +290,17 @@ EVENT_SHAPES: Dict[str, EventShape] = {
         "objects": {"ranking": RANKING_SHAPE},
     },
     "task-done": {"required": ["task_id"]},
+    # ADR 0033: `commands` names each run; `outcome` is derived from the exits when
+    # left out, and the journal owns OBSERVED_KEY and CONTRADICTED_KEY.
     "verify-run": {
-        "required": ["outcome", "task_ids"],
+        "required": ["task_ids", "commands"],
         "enums": {"outcome": list(get_args(VerifyOutcome))},
-        "lists": ["task_ids"],
+        "lists": ["task_ids", "commands"],
         "aliases": {"result": "outcome", "tasks": "task_ids"},
+        "list_objects": {
+            "commands": {"required": ["cmd", "exit"], "strings": ["cmd"],
+                         "integers": ["exit"]},
+        },
     },
     "review-verdict": {
         "required": ["verdict"],
@@ -593,6 +599,15 @@ EVIDENCE_PROJECT_RE = re.compile(r"[0-9a-f]{12}")
 EVIDENCE_FILE_RE = re.compile(r"(T[0-9]+)-([0-9]+)(?:-([2-9]))?\.png")
 EVIDENCE_TMP_RE = re.compile(r"\.T[0-9]+-[0-9]+(?:-[2-9])?\.png\.[0-9]+\.tmp")
 TASK_ID_RE = re.compile(r"T[0-9]+")
+
+# ADR 0032 and ADR 0033: the run log of the Bash hooks. A session's files go this many
+# days after their last write, and a `verify-run` append reads at most this much of them.
+RUNS_KEEP_DAYS = 7
+RUNS_READ_BYTES = 1024 * 1024
+# The keys of a `verify-run` the journal owns (ADR 0033): set at append from the run log,
+# after the cap check, like RECORDED_BY_KEY; a caller's own value never survives.
+OBSERVED_KEY = "observed"
+CONTRADICTED_KEY = "contradicted"
 
 
 CLOSEOUT_QUESTION_PLACEHOLDER = "<the close-out question>"

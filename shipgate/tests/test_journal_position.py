@@ -81,8 +81,10 @@ class TestPosition(JournalTestCase):
         self.append_event(stream, "design-committed", data)
 
     def verify(self, outcome, *task_ids, stream=S):
+        code = 0 if outcome == "pass" else 1
         self.append_event(stream, "verify-run",
-                          {"outcome": outcome, "task_ids": list(task_ids)})
+                          {"commands": [{"cmd": "make test", "exit": code}],
+                           "outcome": outcome, "task_ids": list(task_ids)})
 
     # -- the envelope -------------------------------------------------------
 

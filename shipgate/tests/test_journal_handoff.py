@@ -134,7 +134,9 @@ class TestHandoff(JournalTestCase):
 
     def test_the_next_task_skips_the_done_ones(self):
         self.designed()
-        self.append_event(self.S, "verify-run", {"outcome": "pass", "task_ids": ["T001"]})
+        self.append_event(self.S, "verify-run",
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event(self.S, "task-done", {"task_id": "T001"})
         brief = self.handoff()
         tasks = self.line(brief, "tasks")
@@ -145,7 +147,9 @@ class TestHandoff(JournalTestCase):
     def test_all_tasks_done_points_at_review(self):
         self.write(self.WORKLOG, "# Build Plan\n- [x] T001 — only\n")
         self.designed()
-        self.append_event(self.S, "verify-run", {"outcome": "pass", "task_ids": ["T001"]})
+        self.append_event(self.S, "verify-run",
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event(self.S, "task-done", {"task_id": "T001"})
         brief = self.handoff()
         self.assertIn("1/1 done", self.line(brief, "tasks"))
@@ -169,7 +173,9 @@ class TestHandoff(JournalTestCase):
     def test_the_publish_gate_held_then_authorized(self):
         self.designed()
         self.assertIn("publish held", self.handoff())
-        self.append_event(self.S, "verify-run", {"outcome": "pass", "task_ids": []})
+        self.append_event(self.S, "verify-run",
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": []})
         self.append_event(self.S, "review-verdict", {"verdict": "ready"})
         brief = self.handoff()
         self.assertIn("publish authorized by review-verdict", brief)
@@ -177,7 +183,9 @@ class TestHandoff(JournalTestCase):
 
     def test_a_not_ready_verdict_and_open_findings_mean_a_fix_round(self):
         self.designed()
-        self.append_event(self.S, "verify-run", {"outcome": "fail", "task_ids": ["T001"]})
+        self.append_event(self.S, "verify-run",
+                          {"commands": [{"cmd": "make test", "exit": 1}],
+                           "outcome": "fail", "task_ids": ["T001"]})
         self.append_event(self.S, "review-verdict", {"verdict": "not-ready"})
         self.append_event(self.S, "review-disposition", {
             "dispositions": {"src/a.py:12": "fixing"}, "round": 1,
@@ -449,7 +457,9 @@ class TestNudge(JournalTestCase):
         self.append_event(self.S, "design-committed", {"worklog": "docs/prd/demo.worklog.md"})
 
     def verdict(self, verdict):
-        self.append_event(self.S, "verify-run", {"outcome": "pass", "task_ids": []})
+        self.append_event(self.S, "verify-run",
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": []})
         self.append_event(self.S, "review-verdict", {"verdict": verdict})
 
     def test_the_default_threshold_is_500k(self):
@@ -689,7 +699,8 @@ class TestHandoffUiTask(JournalTestCase):
         self.add("design-committed", {"worklog": self.WORKLOG}, stream)
 
     def done(self, task, stream=S):
-        self.add("verify-run", {"outcome": "pass", "task_ids": [task]}, stream)
+        self.add("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                "outcome": "pass", "task_ids": [task]}, stream)
         self.add("task-done", {"task_id": task}, stream)
 
     def brief(self, stream=S):

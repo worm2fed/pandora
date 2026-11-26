@@ -15,7 +15,9 @@ Every hook here obeys three rules, and they are the whole reason this module exi
    only a rare path needs lives in a module imported on that path (`_nudge.py`, ADR 0022).
 3. **Hold no policy.** Hooks locate the journal and shell out; every rule about what is
    valid lives in `scripts/journal.py`, so the event taxonomy can grow without touching
-   a single hook.
+   a single hook. The run log (ADR 0032) is the one exception: `_runs.py` writes its
+   rows itself, because a `journal.py` process on every Bash call costs tens of
+   milliseconds, and it holds only the exit-status table of ADR 0032.
 """
 
 from __future__ import annotations
@@ -43,6 +45,11 @@ _SESSION_ID_RE = None
 # read `db`, `artifact_homes` and `enforce`. A newer shipgate may write a higher version:
 # this one warns and reads only the keys it knows.
 SIDECAR_VERSION = 2
+# ADR 0032: the Bash hooks log each observed run in `runs_root()/<session_id>.jsonl`, and
+# rotate the file to `.jsonl.1` at RUNS_FILE_BYTES. The journal loads this module by path
+# and reads the log with the same root and the same `run_fingerprint`.
+RUNS_PARTS = ("shipgate", "runs")
+RUNS_FILE_BYTES = 256 * 1024
 
 
 def _session_id_re():
@@ -75,6 +82,40 @@ def marker_path(db_path, session_id):
     if not isinstance(session_id, str) or not _session_id_re().match(session_id):
         return None
     return os.path.join(os.path.realpath(str(db_path)) + REQUESTS_SUFFIX, session_id)
+
+
+def runs_root():
+    """`$CLAUDE_CONFIG_DIR/shipgate/runs` when the variable is set and not empty, else
+    `$HOME/.claude/shipgate/runs`. None when neither variable is set, or when the chosen
+    one is not an absolute path. The rule of the journal's `evidence_root()` (ADR 0031),
+    and a test pins the two to one base: environment variables only, no file created."""
+    config = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if config:
+        base = os.path.expanduser(config)
+    else:
+        home = os.environ.get("HOME", "")
+        if not home:
+            return None
+        base = os.path.join(home, ".claude")
+    if not os.path.isabs(base):
+        return None
+    return os.path.join(base, *RUNS_PARTS)
+
+
+def run_fingerprint(command):
+    """The run log's key of `command`, a str: the 8-byte BLAKE2b digest of the stripped
+    text encoded UTF-8 with `surrogateescape`, as 16 hex digits (ADR 0032).
+
+    `_blake2` first, because importing `hashlib` loads OpenSSL (rule 2). A Python built
+    without `_blake2` gets `hashlib.blake2b`, which gives the same digest. A surrogate
+    that `surrogateescape` cannot encode raises UnicodeEncodeError.
+    """
+    try:
+        from _blake2 import blake2b
+    except ImportError:
+        from hashlib import blake2b
+    data = command.strip().encode("utf-8", "surrogateescape")
+    return blake2b(data, digest_size=8).hexdigest()
 
 
 def sidecar_version_note(sidecar):

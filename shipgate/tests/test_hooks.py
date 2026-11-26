@@ -11,9 +11,11 @@ response read back off stdout.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,7 +30,7 @@ JOURNAL = SHIPGATE / "scripts" / "journal.py"
 sys.path.insert(0, str(HOOKS))
 
 from _common import find_project, load_project  # noqa: E402
-from test_journal import _EMPTY_CONFIG_DIR  # noqa: E402
+from test_journal import _EMPTY_CONFIG_DIR, load_journal_module  # noqa: E402
 
 SESSION = "sess-integration-1"
 SLUG = "feat"
@@ -45,6 +47,23 @@ WORKLOG_ONE_TICKED = WORKLOG_UNTICKED.replace("- [ ] T001", "- [x] T001")
 WORKLOG_TWO_TICKED = WORKLOG_ONE_TICKED.replace("- [ ] T002", "- [x] T002")
 
 
+# Since #27 (ADR 0032) the Bash hooks write a run log under the Claude config directory,
+# and every hook reads the user's settings file there. A hook a test starts gets a fresh
+# temporary directory of its own under this root unless the test names one.
+_HOOK_CONFIG_ROOT = tempfile.mkdtemp(prefix="shipgate-hook-config-")
+atexit.register(shutil.rmtree, _HOOK_CONFIG_ROOT, True)
+
+
+def hook_env(extra: dict | None = None) -> dict:
+    """The environment of a hook a test starts: os.environ without Claude Code's session
+    id (it would label the hooks' appends; a test sets it when it means to), with a fresh
+    temporary CLAUDE_CONFIG_DIR, then EXTRA, which may name its own."""
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+    env["CLAUDE_CONFIG_DIR"] = tempfile.mkdtemp(dir=_HOOK_CONFIG_ROOT)
+    env.update(extra or {})
+    return env
+
+
 def run_hook(
     name: str,
     payload: dict,
@@ -53,10 +72,8 @@ def run_hook(
     hooks_dir: Path | None = None,
     env_extra: dict | None = None,
 ):
-    # Claude Code's session id would label the hooks' appends; a test sets it when it means to.
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
-    env["CLAUDE_PROJECT_DIR"] = str(project_dir if project_dir else cwd)
-    env.update(env_extra or {})
+    env = hook_env({"CLAUDE_PROJECT_DIR": str(project_dir if project_dir else cwd),
+                    **(env_extra or {})})
     return subprocess.run(
         [sys.executable, str((hooks_dir or HOOKS) / f"{name}.py")],
         input=json.dumps(payload),
@@ -161,6 +178,33 @@ class HookTestCase(unittest.TestCase):
             {"session_id": SESSION, "cwd": str(self.root), "stop_hook_active": active},
             self.root,
         )
+
+
+class TestRunHookConfigDir(unittest.TestCase):
+    """#27 T001: a hook a test starts never reaches the developer's config directory."""
+
+    PROBE = "import os, sys\nsys.stdout.write(os.environ.get('CLAUDE_CONFIG_DIR', ''))\n"
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.hooks = Path(tmp.name).resolve()
+        (self.hooks / "probe.py").write_text(self.PROBE, encoding="utf-8")
+
+    def seen(self, **kwargs) -> str:
+        result = run_hook("probe", {}, self.hooks, hooks_dir=self.hooks, **kwargs)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_each_hook_gets_a_fresh_temporary_config_dir(self):
+        first = self.seen()
+        self.assertTrue(first.startswith(_HOOK_CONFIG_ROOT + os.sep), first)
+        self.assertTrue(os.path.isdir(first))
+        self.assertNotEqual(self.seen(), first)
+
+    def test_a_test_may_name_its_own(self):
+        own = str(self.hooks)
+        self.assertEqual(self.seen(env_extra={"CLAUDE_CONFIG_DIR": own}), own)
 
 
 class TestCapture(HookTestCase):
@@ -608,6 +652,535 @@ class TestMarkerPathFollowsTheDbFile(unittest.TestCase):
             link.parent.mkdir()
             link.symlink_to(real)
             self.assertEqual(marker_path(str(link), "s1"), marker_path(str(real), "s1"))
+
+
+class TestRunLogPathAndHash(unittest.TestCase):
+    """#27 T010, ADR 0032: the hooks write the run log and the journal reads it, so both
+    take its directory and its hash from `_common`."""
+
+    # (environment, its Claude config directory or None): CLAUDE_CONFIG_DIR and HOME each
+    # set, empty and unset, then a tilde and relative values.
+    BASES = (
+        ({"CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}, "/c"),
+        ({"CLAUDE_CONFIG_DIR": "/c", "HOME": ""}, "/c"),
+        ({"CLAUDE_CONFIG_DIR": "/c"}, "/c"),
+        ({"CLAUDE_CONFIG_DIR": "", "HOME": "/h"}, "/h/.claude"),
+        ({"CLAUDE_CONFIG_DIR": "", "HOME": ""}, None),
+        ({"CLAUDE_CONFIG_DIR": ""}, None),
+        ({"HOME": "/h"}, "/h/.claude"),
+        ({"HOME": ""}, None),
+        ({}, None),
+        ({"CLAUDE_CONFIG_DIR": "~/c", "HOME": "/h"}, "/h/c"),
+        ({"CLAUDE_CONFIG_DIR": "rel/c", "HOME": "/h"}, None),
+        ({"HOME": "rel/h"}, None),
+    )
+    PINNED = ("python3 -m unittest discover -s shipgate/tests", "702259831bb42128")
+    SAMPLES = (
+        PINNED[0],
+        "echo 'héllo wörld' ✓ 日本語",
+        "printf %s " + chr(0xDCFF),
+        "  \t pytest -q tests/ \n",
+        "",
+    )
+
+    @staticmethod
+    def by_hashlib(command):
+        import hashlib
+
+        data = command.strip().encode("utf-8", "surrogateescape")
+        return hashlib.blake2b(data, digest_size=8).hexdigest()
+
+    def test_the_run_log_shares_the_base_of_the_evidence_store(self):
+        from unittest import mock
+
+        import _common
+
+        evidence_root = load_journal_module().evidence_root
+        self.assertEqual(_common.RUNS_PARTS, ("shipgate", "runs"))
+        self.assertEqual(_common.RUNS_FILE_BYTES, 256 * 1024)
+        for env, base in self.BASES:
+            with self.subTest(env=env):
+                with mock.patch.dict(os.environ, env, clear=True):
+                    runs, evidence = _common.runs_root(), evidence_root()
+                if base is None:
+                    self.assertIsNone(runs)
+                    self.assertIsNone(evidence)
+                else:
+                    self.assertEqual(runs, os.path.join(base, "shipgate", "runs"))
+                    self.assertEqual(evidence, os.path.join(base, "shipgate", "evidence"))
+
+    def test_the_fingerprint_is_an_8_byte_blake2b_of_the_stripped_text(self):
+        from _common import run_fingerprint
+
+        self.assertEqual(run_fingerprint(self.PINNED[0]), self.PINNED[1])
+        for command in self.SAMPLES:
+            with self.subTest(command=command):
+                fingerprint = run_fingerprint(command)
+                self.assertRegex(fingerprint, r"\A[0-9a-f]{16}\Z")
+                self.assertEqual(fingerprint, self.by_hashlib(command))
+                self.assertEqual(run_fingerprint(" " + command + "\n"), fingerprint)
+        self.assertNotEqual(run_fingerprint("pytest  -q"), run_fingerprint("pytest -q"))
+
+    def test_blake2_comes_first(self):
+        try:
+            import _blake2  # noqa: F401
+        except ImportError:
+            self.skipTest("this Python has no _blake2")
+        import hashlib
+        from unittest import mock
+
+        from _common import run_fingerprint
+
+        with mock.patch.object(hashlib, "blake2b",
+                               side_effect=AssertionError("hashlib used")) as fallback:
+            self.assertEqual(run_fingerprint(self.PINNED[0]), self.PINNED[1])
+        fallback.assert_not_called()
+
+    def test_without_blake2_hashlib_gives_the_same_fingerprints(self):
+        import hashlib
+        from unittest import mock
+
+        from _common import run_fingerprint
+
+        expected = [self.by_hashlib(command) for command in self.SAMPLES]
+        with mock.patch.dict(sys.modules, {"_blake2": None}), \
+                mock.patch.object(hashlib, "blake2b", wraps=hashlib.blake2b) as fallback:
+            self.assertEqual([run_fingerprint(c) for c in self.SAMPLES], expected)
+        self.assertEqual(fallback.call_count, len(self.SAMPLES))
+
+    def test_neither_the_import_nor_a_fingerprint_loads_re_or_hashlib(self):
+        """Every Bash call imports `_common`, and in a journaled project hashes one
+        command. `hashlib` loads OpenSSL, about 5 ms; `_blake2` costs about 1 ms."""
+        try:
+            import _blake2  # noqa: F401
+        except ImportError:
+            self.skipTest("this Python has no _blake2")
+        probe = (
+            "import sys\n"
+            "heavy = ('re', 'hashlib', '_hashlib')\n"
+            "before = {m for m in heavy if m in sys.modules}\n"
+            f"sys.path.insert(0, {str(HOOKS)!r})\n"
+            "import _common\n"
+            "print(sorted(m for m in heavy if m in sys.modules and m not in before))\n"
+            "_common.runs_root()\n"
+            "_common.run_fingerprint('pytest -q')\n"
+            "print(sorted(m for m in heavy if m in sys.modules and m not in before))\n"
+        )
+        result = subprocess.run([sys.executable, "-S", "-c", probe], capture_output=True,
+                                text=True, timeout=60, env=hook_env())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["[]", "[]"])
+
+
+RUN_SESSION = "sess-runs-1"
+RUN_ID = "toolu_01probe"
+# The tool_response of a Bash call that exited 0, as the probe of 2026-11-25 saw it.
+PASSED_RESPONSE = {"stdout": "probe-pass", "stderr": "", "interrupted": False,
+                   "isImage": False, "noOutputExpected": False}
+
+
+def probe_payload(event, cwd, **fields):
+    """A Bash hook payload with every field of the probe of 2026-11-25 (Claude Code
+    2.1.332), then FIELDS."""
+    payload = {
+        "session_id": RUN_SESSION, "transcript_path": "/tmp/session.jsonl",
+        "cwd": str(cwd), "permission_mode": "default", "prompt_id": "prompt-1",
+        "effort": "high", "hook_event_name": event, "tool_name": "Bash",
+        "tool_input": {"command": "echo probe", "description": "probe"},
+        "tool_use_id": RUN_ID, "duration_ms": 120,
+    }
+    payload.update(fields)
+    return payload
+
+
+def run_log(config, session=RUN_SESSION, suffix=""):
+    """The rows of SESSION's run log under the config directory CONFIG, or None."""
+    path = Path(config) / "shipgate" / "runs" / f"{session}.jsonl{suffix}"
+    if path.is_symlink() or not path.is_file():
+        return None
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def failed(error, **fields):
+    """The PostToolUseFailure fields of a Bash call: no tool_response, an `error`."""
+    return {"error": error, "is_interrupt": False, **fields}
+
+
+def passed(**response):
+    """The PostToolUse fields of a Bash call: the probe's tool_response, then RESPONSE."""
+    return {"tool_response": {**PASSED_RESPONSE, **response}}
+
+
+# ADR 0032's table, on the probe's payloads: (case, event, fields, the end row's exit).
+END_ROWS = (
+    ("exit 0", "PostToolUse", passed(), 0),
+    ("exit 3", "PostToolUseFailure", failed("Exit code 3\nprobe-out\nprobe-err"), 3),
+    ("timeout", "PostToolUseFailure", failed("Exit code 143\nCommand timed out after 2s"),
+     143),
+    ("exit 127", "PostToolUseFailure",
+     failed("Exit code 127\nzsh: command not found: no-such-command-xyz"), 127),
+    ("exit 255, no output", "PostToolUseFailure", failed("Exit code 255"), 255),
+    ("grep, no match", "PostToolUse",
+     passed(stdout="", returnCodeInterpretation="No matches found"), None),
+    ("diff, files differ", "PostToolUse",
+     passed(returnCodeInterpretation="Files differ"), None),
+    ("test, false", "PostToolUse",
+     passed(stdout="", returnCodeInterpretation="Condition is false"), None),
+    ("background launch", "PostToolUse",
+     {**passed(stdout="", backgroundTaskId="b2soun51s"), "duration_ms": 5,
+      "tool_input": {"command": "sleep 30", "run_in_background": True}}, None),
+    ("background flag only", "PostToolUse",
+     {**passed(), "tool_input": {"command": "sleep 30", "run_in_background": True}}, None),
+    ("background id only", "PostToolUse", passed(backgroundTaskId="b2soun51s"), None),
+    ("interrupted", "PostToolUse", passed(interrupted=True), None),
+    ("no interrupted flag", "PostToolUse", {"tool_response": {"stdout": ""}}, None),
+    ("no tool_response", "PostToolUse", {}, None),
+    ("is_interrupt", "PostToolUseFailure",
+     failed("Exit code 130\nprobe-out", is_interrupt=True), None),
+    ("exit 256", "PostToolUseFailure", failed("Exit code 256\nprobe-out"), None),
+    ("a non-ASCII digit", "PostToolUseFailure", failed("Exit code " + chr(0xFF13)), None),
+    ("four digits", "PostToolUseFailure", failed("Exit code 0003"), None),
+    ("no number", "PostToolUseFailure", failed("Exit code \nprobe-out"), None),
+    ("a sign", "PostToolUseFailure", failed("Exit code -1"), None),
+    ("no prefix", "PostToolUseFailure", failed("Command failed\nExit code 3"), None),
+    ("an error that is no str", "PostToolUseFailure", failed(None), None),
+    ("another event", "PreToolUse", passed(), None),
+    ("another tool", "PostToolUse", {**passed(), "tool_name": "Write"}, None),
+)
+
+
+class RunLogCase(unittest.TestCase):
+    """A journaled project and a temporary Claude config directory, set in os.environ."""
+
+    def setUp(self) -> None:
+        from unittest import mock
+
+        import _runs
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name).resolve()
+        self.root, self.config = base / "proj", base / "config"
+        (self.root / ".claude").mkdir(parents=True)
+        self.config.mkdir()
+        self.write_sidecar({"version": 2, "db": ".claude/shipgate.db"})
+        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.runs = _runs
+        self.runs_dir = self.config / "shipgate" / "runs"
+        self.log = self.runs_dir / f"{RUN_SESSION}.jsonl"
+
+    def write_sidecar(self, sidecar) -> None:
+        (self.root / ".claude" / "shipgate.json").write_text(json.dumps(sidecar),
+                                                             encoding="utf-8")
+
+    def start(self, command="echo probe", **fields):
+        payload = probe_payload("PreToolUse", self.root, tool_input={"command": command},
+                                **fields)
+        self.runs.record_start(payload, command, str(self.root))
+
+    def end(self, event="PostToolUse", project=None, **fields):
+        fields = fields or passed()
+        self.runs.record_end(probe_payload(event, self.root, **fields),
+                             project or load_project(str(self.root)))
+
+    def driver(self, body, *args):
+        """The argv of a fresh Python that imports `_runs` and runs BODY with `root`,
+        `payload` (a PreToolUse probe payload), `args`, and `loaded`, the modules loaded
+        before `_runs`."""
+        code = (
+            "import json, sys\n"
+            "loaded = set(sys.modules)\n"
+            f"sys.path.insert(0, {str(HOOKS)!r})\n"
+            "import _runs\n"
+            "from _common import load_project\n"
+            "root, payload, args = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3:]\n"
+            + body
+        )
+        return [sys.executable, "-c", code, str(self.root),
+                json.dumps(probe_payload("PreToolUse", self.root)), *args]
+
+    def driver_env(self):
+        return hook_env({"CLAUDE_CONFIG_DIR": str(self.config)})
+
+
+class TestRunLogWriter(RunLogCase):
+    """#27 T011, ADR 0032: `hooks/_runs.py` writes the run log."""
+
+    def test_a_start_row_holds_the_call_s_id_and_the_typed_command_s_hash(self):
+        import stat
+
+        from _common import run_fingerprint
+
+        self.start("  echo rewrite-me\n")
+        self.assertEqual(run_log(self.config),
+                         [{"i": RUN_ID, "h": run_fingerprint("echo rewrite-me")}])
+        self.assertEqual(stat.S_IMODE(os.stat(self.runs_dir).st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(os.stat(self.log).st_mode), 0o600)
+
+    def test_each_post_event_gets_the_end_row_of_adr_0032_s_table(self):
+        project = load_project(str(self.root))
+        for n, (case, event, fields, status) in enumerate(END_ROWS):
+            session = f"case-{n}"
+            with self.subTest(case=case):
+                self.runs.record_end(
+                    probe_payload(event, self.root, session_id=session, **fields), project)
+                self.assertEqual(run_log(self.config, session),
+                                 None if status is None else [{"i": RUN_ID, "x": status}])
+
+    def test_a_subagent_s_run_goes_under_the_parent_session(self):
+        self.end("PostToolUseFailure", agent_id="ad189dd3d82fd5a69",
+                 agent_type="general-purpose", **failed("Exit code 5\nsub-out"))
+        self.assertEqual(os.listdir(self.runs_dir), [f"{RUN_SESSION}.jsonl"])
+        self.assertEqual(run_log(self.config), [{"i": RUN_ID, "x": 5}])
+
+    def test_no_row_holds_text_output_place_or_agent(self):
+        command = "API_KEY=s3cret-probe pytest -q"
+        agent = {"agent_id": "ad189dd3d82fd5a69", "agent_type": "general-purpose"}
+        self.start(command, **agent)
+        self.end("PostToolUseFailure", tool_input={"command": command}, **agent,
+                 **failed("Exit code 5\nsub-out s3cret-probe"))
+        raw = self.log.read_bytes()
+        for fragment in ("s3cret", "pytest", "sub-out", str(self.root), RUN_SESSION,
+                         "ad189dd3d82fd5a69", "general-purpose", "prompt-1", "session.jsonl"):
+            with self.subTest(fragment=fragment):
+                self.assertNotIn(fragment.encode(), raw)
+        self.assertEqual([sorted(row) for row in run_log(self.config)],
+                         [["h", "i"], ["i", "x"]])
+
+    def test_an_id_that_is_no_plain_token_writes_nothing(self):
+        bad = [{"session_id": session} for session in (
+            "a/b", "../x", "..", ".", "", "s" * 129, "a b", "a.b", "x\n", "é", None, 42,
+            ["s"])]
+        bad += [{"tool_use_id": tool_use_id}
+                for tool_use_id in ("", "t" * 129, None, 42, ["t"])]
+        for fields in bad:
+            with self.subTest(fields=fields):
+                self.start(**fields)
+                self.end(**passed(), **fields)
+                self.assertEqual(os.listdir(self.config), [])
+
+    def test_the_longest_ids_write_a_row_under_200_bytes(self):
+        for session in ("s" * 128, "-", "A_b-9"):
+            with self.subTest(session=session):
+                self.end("PostToolUseFailure", session_id=session, tool_use_id="t" * 128,
+                         **failed("Exit code 255"))
+                self.assertEqual(run_log(self.config, session),
+                                 [{"i": "t" * 128, "x": 255}])
+                path = self.runs_dir / f"{session}.jsonl"
+                self.assertLess(len(path.read_bytes()), 200)
+
+    def test_a_row_of_200_bytes_or_more_is_not_written(self):
+        """One `write` of under 200 bytes per row (ADR 0032): an id that JSON escapes
+        past that writes nothing."""
+        self.end(tool_use_id="é" * 128, **passed())
+        self.assertFalse(os.path.lexists(self.log))
+
+    def test_an_id_with_a_newline_stays_one_line(self):
+        self.end(tool_use_id="toolu\nx", **passed())
+        self.assertEqual(self.log.read_bytes().count(b"\n"), 1)
+        self.assertEqual(run_log(self.config), [{"i": "toolu\nx", "x": 0}])
+
+    def test_db_null_and_auto_capture_off_write_nothing(self):
+        for sidecar in ({"version": 2, "db": None},
+                        {"version": 2, "enforce": {"auto_capture": False}}):
+            with self.subTest(sidecar=sidecar):
+                self.write_sidecar(sidecar)
+                self.start()
+                project = load_project(str(self.root))
+                if project is not None:
+                    self.end(project=project, **passed())
+                self.runs.record_end(probe_payload("PostToolUse", self.root, **passed()),
+                                     project)
+                self.assertEqual(os.listdir(self.config), [])
+
+    def test_a_command_the_hash_cannot_take_writes_nothing(self):
+        """U+D800 has no `surrogateescape` byte, and a Python may lack both BLAKE2b
+        modules: that run gets no start row, and nothing raises."""
+        from unittest import mock
+
+        self.start("echo " + chr(0xD800))
+        self.assertEqual(os.listdir(self.config), [])
+        with mock.patch.dict(sys.modules, {"_blake2": None, "hashlib": None}):
+            self.start()
+        self.assertEqual(os.listdir(self.config), [])
+
+    def write_both(self):
+        self.start()
+        self.end(**passed())
+
+    def test_a_link_in_place_of_the_runs_directory_writes_nothing(self):
+        elsewhere, missing = self.config.parent / "elsewhere", self.config.parent / "missing"
+        elsewhere.mkdir()
+        self.runs_dir.parent.mkdir()
+        for target in (elsewhere, missing):
+            with self.subTest(target=target.name):
+                if os.path.lexists(self.runs_dir):
+                    self.runs_dir.unlink()
+                self.runs_dir.symlink_to(target)
+                self.write_both()
+                self.assertTrue(self.runs_dir.is_symlink())
+                self.assertEqual(list(elsewhere.iterdir()), [])
+                self.assertFalse(os.path.lexists(missing))
+
+    def test_a_link_or_a_directory_in_place_of_the_file_gets_no_write(self):
+        self.runs_dir.mkdir(parents=True, mode=0o700)
+        outside = self.config.parent / "outside.txt"
+        outside.write_bytes(b"keep\n")
+        self.log.symlink_to(outside)
+        self.write_both()
+        self.assertTrue(self.log.is_symlink())
+        self.assertEqual(outside.read_bytes(), b"keep\n")
+        self.log.unlink()
+        self.log.mkdir()
+        self.write_both()
+        self.assertEqual(list(self.log.iterdir()), [])
+
+    def test_a_fifo_in_place_of_the_file_does_not_hang_the_hook(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("no FIFOs here")
+        self.runs_dir.mkdir(parents=True, mode=0o700)
+        os.mkfifo(self.log)
+        result = subprocess.run(
+            self.driver("_runs.record_start(payload, 'echo probe', root)\n"),
+            capture_output=True, text=True, timeout=30, env=self.driver_env())
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+        # With a reader the open succeeds, and only the regular-file check stops a write.
+        reader = os.open(self.log, os.O_RDONLY | os.O_NONBLOCK)
+        self.addCleanup(os.close, reader)
+        self.write_both()
+        try:
+            written = os.read(reader, 4096)
+        except BlockingIOError:
+            written = b""
+        self.assertEqual(written, b"")
+
+    def test_a_read_only_runs_directory_raises_and_prints_nothing(self):
+        import contextlib
+        import io
+
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root writes to a read-only directory")
+        self.runs_dir.mkdir(parents=True)
+        os.chmod(self.runs_dir, 0o500)
+        self.addCleanup(os.chmod, self.runs_dir, 0o700)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.write_both()
+        self.assertEqual(os.listdir(self.runs_dir), [])
+        self.assertEqual(out.getvalue() + err.getvalue(), "")
+
+    def test_a_file_at_the_cap_is_rotated_and_one_older_file_kept(self):
+        from _common import RUNS_FILE_BYTES
+
+        older = self.runs_dir / f"{RUN_SESSION}.jsonl.1"
+        self.runs_dir.mkdir(parents=True, mode=0o700)
+        self.log.write_bytes(b"#" * (RUNS_FILE_BYTES - 2) + b"\n")
+        older.write_bytes(b"older\n")
+        self.end("PostToolUseFailure", **failed("Exit code 1"))  # below the cap: grows
+        self.assertEqual(older.read_bytes(), b"older\n")
+        full = self.log.read_bytes()
+        self.assertGreater(len(full), RUNS_FILE_BYTES)
+        self.end("PostToolUseFailure", **failed("Exit code 3"))  # at the cap: rotated
+        self.assertEqual(older.read_bytes(), full)
+        self.assertEqual(run_log(self.config), [{"i": RUN_ID, "x": 3}])
+        self.assertEqual(sorted(os.listdir(self.runs_dir)),
+                         [f"{RUN_SESSION}.jsonl", f"{RUN_SESSION}.jsonl.1"])
+
+    def test_rotation_replaces_a_link_at_the_older_name_without_following_it(self):
+        from _common import RUNS_FILE_BYTES
+
+        older = self.runs_dir / f"{RUN_SESSION}.jsonl.1"
+        outside = self.config.parent / "outside.txt"
+        outside.write_bytes(b"keep\n")
+        self.runs_dir.mkdir(parents=True, mode=0o700)
+        self.log.write_bytes(b"#" * RUNS_FILE_BYTES)
+        older.symlink_to(outside)
+        self.end(**passed())
+        self.assertFalse(older.is_symlink())
+        self.assertEqual(older.read_bytes(), b"#" * RUNS_FILE_BYTES)
+        self.assertEqual(outside.read_bytes(), b"keep\n")
+        self.assertEqual(run_log(self.config), [{"i": RUN_ID, "x": 0}])
+
+    def test_a_hook_that_loses_the_rotation_race_keeps_its_row(self):
+        """Review round 1, F7: hooks A and B both see the full file, and B renames it
+        before A looks again. A writes its row to a fresh file and renames nothing."""
+        from unittest import mock
+
+        from _common import RUNS_FILE_BYTES
+
+        older = self.runs_dir / f"{RUN_SESSION}.jsonl.1"
+        self.runs_dir.mkdir(parents=True, mode=0o700)
+        self.log.write_bytes(b"#" * RUNS_FILE_BYTES)
+        real_stat = os.stat
+
+        def b_rotates_first(path, *, dir_fd=None, follow_symlinks=True):
+            if dir_fd is not None and path == self.log.name:
+                os.replace(path, older.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+        project = load_project(str(self.root))
+        with mock.patch.object(self.runs.os, "stat", b_rotates_first):
+            self.runs.record_end(probe_payload("PostToolUse", self.root, **passed()),
+                                 project)
+        self.assertEqual(older.read_bytes(), b"#" * RUNS_FILE_BYTES)
+        self.assertEqual(run_log(self.config), [{"i": RUN_ID, "x": 0}])
+
+    def test_the_writer_s_session_rule_is_session_id_pattern(self):
+        """Review round 1, F9: `_runs` checks a session id with string methods, to keep
+        `re` out of the hook; the reader uses `SESSION_ID_RE`. One rule for both."""
+        from _common import SESSION_ID_RE
+
+        cases = ("s" * 128, "s" * 129, "", ".", "..", "/", "a/b", "a.b", "é",
+                 chr(0xFF41), "-x", "_", "a\n", "a ", "0b6f1c2e-5d4a-4f3b-9a8e-1c2d3e4f5a6b")
+        accepted = []
+        for session in cases:
+            with self.subTest(session=session):
+                writer = self.runs._session({"session_id": session}) is not None
+                self.assertEqual(writer, bool(SESSION_ID_RE.match(session)))
+                if writer:
+                    accepted.append(session)
+        self.assertEqual(accepted, ["s" * 128, "-x", "_",
+                                    "0b6f1c2e-5d4a-4f3b-9a8e-1c2d3e4f5a6b"])
+
+    def test_two_processes_appending_500_rows_each_leave_1000_whole_lines(self):
+        body = (
+            "project = load_project(root)\n"
+            "for n in range(500):\n"
+            "    _runs.record_end(dict(payload, hook_event_name='PostToolUse',\n"
+            "                          tool_use_id=f'toolu_{args[0]}_{n}',\n"
+            "                          tool_response={'interrupted': False}), project)\n"
+        )
+        writers = [subprocess.Popen(self.driver(body, tag), stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True,
+                                    env=self.driver_env())
+                   for tag in ("a", "b")]
+        for writer in writers:
+            out, err = writer.communicate(timeout=120)
+            self.assertEqual((writer.returncode, out, err), (0, "", ""))
+        rows = run_log(self.config)
+        self.assertEqual(len(rows), 1000)
+        self.assertEqual({row["i"] for row in rows},
+                         {f"toolu_{tag}_{n}" for tag in ("a", "b") for n in range(500)})
+        self.assertEqual({row["x"] for row in rows}, {0})
+
+    def test_the_writer_loads_no_hashlib(self):
+        """The hook has `json`, and so `re`, already; `_runs` adds neither `hashlib`
+        nor `_hashlib` (OpenSSL)."""
+        try:
+            import _blake2  # noqa: F401
+        except ImportError:
+            self.skipTest("this Python has no _blake2")
+        body = (
+            "_runs.record_start(payload, 'pytest -q', root)\n"
+            "print(sorted(m for m in ('re', 'hashlib', '_hashlib')\n"
+            "             if m in sys.modules and m not in loaded))\n"
+        )
+        result = subprocess.run(self.driver(body), capture_output=True, text=True,
+                                timeout=60, env=self.driver_env())
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "[]\n", ""))
+        self.assertEqual(len(run_log(self.config)), 1)
 
 
 class TestRunJournalOptions(unittest.TestCase):
@@ -1738,7 +2311,8 @@ class TestStopGateProbes(HookTestCase):
         self.assertIsNotNone(self.blocked())
         self.record(
             self.ISSUE_BRANCH,
-            ("verify-run", {"outcome": "pass", "task_ids": ["T001"], "scope": "T001"}),
+            ("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                            "outcome": "pass", "task_ids": ["T001"], "scope": "T001"}),
             ("task-done", {"task_id": "T001"}),
         )
         self.assertIsNone(self.blocked())
@@ -1888,7 +2462,8 @@ class TestStopGateProbes(HookTestCase):
         self.force_task_done()
         self.assertIsNotNone(self.blocked())
         self.record(self.BRANCH, (
-            "verify-run", {"outcome": "pass", "task_ids": ["T001"], "scope": "T001"},
+            "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"], "scope": "T001"},
         ))
         self.assertIsNone(self.blocked())
 
@@ -2443,8 +3018,29 @@ class TestHookWiring(unittest.TestCase):
         self.assertEqual(prompt[0]["hooks"][0]["args"], recorder)
         self.assertEqual(prompt[0]["hooks"][0]["timeout"], 10)
         self.assertEqual(sorted(config["hooks"]),
-                         ["PostToolUse", "PreToolUse", "SessionStart", "Stop",
-                          "UserPromptSubmit"])
+                         ["PostToolUse", "PostToolUseFailure", "PreToolUse",
+                          "SessionStart", "Stop", "UserPromptSubmit"])
+
+    def test_the_whole_wiring_event_by_event(self):
+        """#27 T002: every event, matcher, script and timeout in one list, so a change
+        to the hook contract shows up here first (ADR 0032)."""
+        config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
+        wiring = [
+            (event, entry.get("matcher"), hook["args"][-1].rsplit("/", 1)[-1],
+             hook["timeout"])
+            for event, entries in config["hooks"].items()
+            for entry in entries
+            for hook in entry["hooks"]
+        ]
+        self.assertEqual(wiring, [
+            ("SessionStart", "startup|resume|clear|compact|fork", "session_start.py", 15),
+            ("PreToolUse", "Bash", "pre_tool_use.py", 10),
+            ("PostToolUse", "Write|Edit|NotebookEdit|Bash", "post_tool_use.py", 10),
+            ("PostToolUse", "AskUserQuestion", "reply.py", 10),
+            ("PostToolUseFailure", "Bash", "post_tool_use.py", 10),
+            ("UserPromptSubmit", None, "reply.py", 10),
+            ("Stop", None, "stop.py", 20),
+        ])
 
     def test_pre_tool_use_fires_on_bash(self):
         config = json.loads((HOOKS / "core.json").read_text(encoding="utf-8"))
@@ -2453,6 +3049,194 @@ class TestHookWiring(unittest.TestCase):
         self.assertEqual(
             entries[0]["hooks"][0]["args"], ["${CLAUDE_PLUGIN_ROOT}/hooks/pre_tool_use.py"]
         )
+
+
+class TestBashHooksWriteNoRunLogOffAJournal(unittest.TestCase):
+    """#27 T002, FR-004: with no settings file at the payload's cwd, the Bash hooks leave
+    the Claude config directory as they found it."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name).resolve()
+        self.root, self.config = base / "plain", base / "config"
+        self.root.mkdir()
+        self.config.mkdir()
+
+    def test_the_bash_hooks_create_nothing_under_the_config_dir(self):
+        payload = {"session_id": SESSION, "tool_use_id": "toolu_t002", "tool_name": "Bash",
+                   "cwd": str(self.root), "tool_input": {"command": "ls -la"}}
+        runs = [
+            ("pre_tool_use", {**payload, "hook_event_name": "PreToolUse"}),
+            ("post_tool_use", {**payload, "hook_event_name": "PostToolUse",
+                               "tool_response": {"stdout": "", "stderr": "",
+                                                 "interrupted": False}}),
+            ("post_tool_use", {**payload, "hook_event_name": "PostToolUseFailure",
+                               "error": "Exit code 2\nls: x: No such file",
+                               "is_interrupt": False}),
+        ]
+        for hook, body in runs:
+            with self.subTest(hook=hook, event=body["hook_event_name"]):
+                result = run_hook(hook, body, self.root,
+                                  env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(list(self.config.iterdir()), [])
+
+
+class BashHookCase(unittest.TestCase):
+    """A journaled project, a directory with no settings file, and a temporary Claude
+    config directory that the test reads."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name).resolve()
+        self.root, self.plain, self.config = base / "proj", base / "plain", base / "config"
+        (self.root / ".claude").mkdir(parents=True)
+        self.plain.mkdir()
+        self.config.mkdir()
+        self.write_sidecar({"version": 2, "db": ".claude/shipgate.db"})
+
+    def write_sidecar(self, sidecar) -> None:
+        (self.root / ".claude" / "shipgate.json").write_text(json.dumps(sidecar),
+                                                             encoding="utf-8")
+
+    def hook(self, name, payload, cwd=None, project_dir=None):
+        """Run hook NAME with this test's config directory; it must exit 0 silently."""
+        result = run_hook(name, payload, cwd or self.root, project_dir=project_dir,
+                          env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+        return result
+
+    def pre(self, command, cwd=None, **fields):
+        payload = probe_payload("PreToolUse", cwd or self.root,
+                                tool_input={"command": command}, **fields)
+        return self.hook("pre_tool_use", payload)
+
+
+class TestPreToolUseWritesTheStartRow(BashHookCase):
+    """#27 T012, ADR 0032: in a journaled project PreToolUse logs the call's start."""
+
+    def test_a_journaled_call_writes_one_start_row_with_the_typed_command_s_hash(self):
+        from _common import run_fingerprint
+
+        self.pre("echo rewrite-me")
+        self.assertEqual(run_log(self.config),
+                         [{"i": RUN_ID, "h": run_fingerprint("echo rewrite-me")}])
+
+    def test_the_walk_finds_the_project_from_a_subdirectory(self):
+        deep = self.root / "src" / "deep"
+        deep.mkdir(parents=True)
+        self.pre("pytest -q", cwd=deep)
+        self.assertEqual(len(run_log(self.config)), 1)
+
+    def test_the_payload_cwd_alone_names_the_project(self):
+        """A journaled CLAUDE_PROJECT_DIR and process directory do not make an
+        unjournaled payload cwd journaled; a payload with no absolute cwd writes
+        nothing."""
+        for cwd in (str(self.plain), None, ".", ""):
+            with self.subTest(cwd=cwd):
+                payload = probe_payload("PreToolUse", self.plain)
+                if cwd is None:
+                    del payload["cwd"]
+                else:
+                    payload["cwd"] = cwd
+                self.hook("pre_tool_use", payload, cwd=self.root, project_dir=self.root)
+                self.assertEqual(list(self.config.iterdir()), [])
+
+    def test_db_null_and_auto_capture_off_write_nothing(self):
+        for sidecar in ({"version": 2, "db": None},
+                        {"version": 2, "enforce": {"auto_capture": False}}):
+            with self.subTest(sidecar=sidecar):
+                self.write_sidecar(sidecar)
+                self.pre("echo probe")
+                self.assertEqual(list(self.config.iterdir()), [])
+
+    def test_a_command_the_hash_cannot_take_exits_0_silently_and_writes_nothing(self):
+        """`run_hook` sends JSON with ASCII escapes, so the hook reads U+D800 from a
+        `\\ud800` escape, as Claude Code's JSON could carry it."""
+        self.pre("echo " + chr(0xD800))
+        self.assertEqual(list(self.config.iterdir()), [])
+
+    def test_the_forgery_net_still_refuses_in_a_journaled_project(self):
+        payload = probe_payload("PreToolUse", self.root, tool_input={
+            "command": f"{J} append --stream s --type reply-witnessed --data '{{}}'"})
+        result = run_hook("pre_tool_use", payload, self.root,
+                          env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+        self.assertEqual(decision, "deny")
+        self.assertEqual(len(run_log(self.config)), 1)
+
+
+class TestPostHooksWriteTheEndRow(HookTestCase):
+    """#27 T013, ADR 0032: PostToolUse and PostToolUseFailure write the end row, and a
+    failed call claims no artifact."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        config = tempfile.TemporaryDirectory()
+        self.addCleanup(config.cleanup)
+        self.config = Path(config.name).resolve()
+
+    def run_bash_hook(self, name, event, **fields):
+        result = run_hook(name, probe_payload(event, self.root, **fields), self.root,
+                          env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+
+    def post(self, event, **fields):
+        self.run_bash_hook("post_tool_use", event, **fields)
+
+    def claims(self):
+        return [row["data"]["path"] for row in self.events(event_type="artifact-written")]
+
+    def test_a_pass_writes_x_0(self):
+        self.post("PostToolUse", **passed())
+        self.assertEqual(run_log(self.config), [{"i": RUN_ID, "x": 0}])
+
+    def test_a_failure_writes_its_exit_and_claims_no_artifact(self):
+        command = "printf x > docs/prd/feat.md; exit 3"
+        self.prd.write_text("# PRD: feat\n\nWritten, then the call failed.\n",
+                            encoding="utf-8")
+        self.post("PostToolUseFailure", tool_input={"command": command}, duration_ms=1500,
+                  **failed("Exit code 3\nprobe-out"))
+        self.assertEqual(run_log(self.config), [{"i": RUN_ID, "x": 3}])
+        self.assertEqual(self.claims(), [])
+        # The same call as a pass claims the artifact: the failure is why none was.
+        self.post("PostToolUse", tool_input={"command": command}, duration_ms=1500,
+                  tool_use_id="toolu_control", **passed())
+        self.assertEqual(self.claims(), [f"docs/prd/{SLUG}.md"])
+
+    def test_a_subagent_s_failure_goes_under_the_parent_session(self):
+        self.post("PostToolUseFailure", agent_id="ad189dd3d82fd5a69",
+                  agent_type="general-purpose", **failed("Exit code 5\nsub-out"))
+        self.assertEqual(run_log(self.config), [{"i": RUN_ID, "x": 5}])
+
+    def test_the_rewritten_command_keeps_the_typed_command_s_hash(self):
+        """A rewrite hook changes what PostToolUse sees; the start row has the text the
+        model typed, and the end row carries no text."""
+        from _common import run_fingerprint
+
+        self.run_bash_hook("pre_tool_use", "PreToolUse",
+                           tool_input={"command": "echo rewrite-me"})
+        self.post("PostToolUse", tool_input={"command": "echo rewritten-by-hook"},
+                  **passed(stdout="rewritten-by-hook"))
+        self.assertEqual(run_log(self.config), [
+            {"i": RUN_ID, "h": run_fingerprint("echo rewrite-me")},
+            {"i": RUN_ID, "x": 0},
+        ])
+
+    def test_db_null_and_auto_capture_off_write_nothing(self):
+        sidecar = self.root / ".claude" / "shipgate.json"
+        base = json.loads(sidecar.read_text(encoding="utf-8"))
+        for change in ({"db": None}, {"enforce": {"auto_capture": False}}):
+            with self.subTest(change=change):
+                sidecar.write_text(json.dumps({**base, **change}), encoding="utf-8")
+                self.post("PostToolUse", **passed())
+                self.post("PostToolUseFailure", **failed("Exit code 1"))
+                self.assertEqual(list(self.config.iterdir()), [])
 
 
 class TestUnjournaledProjectIsInert(unittest.TestCase):
@@ -2576,7 +3360,7 @@ class TestUnjournaledProjectIsInert(unittest.TestCase):
                         capture_output=True,
                         text=True,
                         cwd=str(self.root),
-                        env={**os.environ, "CLAUDE_PROJECT_DIR": str(self.root)},
+                        env=hook_env({"CLAUDE_PROJECT_DIR": str(self.root)}),
                         timeout=60,
                     )
                     self.assertEqual(result.returncode, 0)
@@ -3510,7 +4294,7 @@ class TestPreToolUseNoOpPath(PreToolUseCase):
         return subprocess.run(
             [sys.executable, str(HOOKS / "pre_tool_use.py")],
             input=stdin_text, capture_output=True, text=True, cwd=str(self.cwd),
-            timeout=60,
+            env=hook_env(), timeout=60,
         )
 
     def test_not_applicable_inputs_are_silent(self):
@@ -3556,7 +4340,8 @@ class TestPreToolUseNoOpPath(PreToolUseCase):
         payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls -la"}})
         result = subprocess.run(
             [sys.executable, "-c", driver, str(HOOKS / "pre_tool_use.py")],
-            input=payload, capture_output=True, text=True, cwd=str(self.cwd), timeout=60,
+            input=payload, capture_output=True, text=True, cwd=str(self.cwd),
+            env=hook_env(), timeout=60,
         )
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
@@ -3664,7 +4449,8 @@ class TestCommandGate(CommandGateCase):
                 self.assertPassed(command)
 
     def test_a_ready_verdict_is_no_go(self):
-        for event, data in (("verify-run", '{"outcome":"pass","task_ids":["T1"]}'),
+        for event, data in (("verify-run", '{"commands":[{"cmd":"make test","exit":0}],'
+                                           '"outcome":"pass","task_ids":["T1"]}'),
                             ("review-verdict", '{"verdict":"ready"}')):
             journal(self.db, "append", "--stream", self.BRANCH, "--type", event,
                     "--data", data)
@@ -3838,7 +4624,7 @@ class TestCommandGateReadsNoFile(PreToolUseCase):
                 result = subprocess.run(
                     [sys.executable, "-c", driver, str(HOOKS / "pre_tool_use.py")],
                     input=payload, capture_output=True, text=True, cwd=str(self.cwd),
-                    timeout=60,
+                    env=hook_env(), timeout=60,
                 )
                 self.assertEqual(result.returncode, 0)
                 self.assertEqual(result.stdout, "")
@@ -4537,10 +5323,12 @@ class TestContextNudge(HookTestCase):
 
     def test_a_not_ready_verdict_nudges_a_ready_one_does_not(self):
         self.write_transcript(usage_record(800_000))
-        self.append("verify-run", {"outcome": "pass", "task_ids": []})
+        self.append("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                   "outcome": "pass", "task_ids": []})
         stdout = self.append("review-verdict", {"verdict": "not-ready"})
         self.assert_nudged(self.post(stdout), 800)
-        self.append("verify-run", {"outcome": "pass", "task_ids": []})
+        self.append("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                   "outcome": "pass", "task_ids": []})
         stdout = self.append("review-verdict", {"verdict": "ready"})
         self.assertIsNone(self.post(stdout))
 
@@ -4574,7 +5362,8 @@ class TestContextNudge(HookTestCase):
     def test_a_design_commit_in_a_batch_wins_over_a_later_ready_verdict(self):
         self.committed()
         design = self.newest_seq("design-committed")
-        self.append("verify-run", {"outcome": "pass", "task_ids": []})
+        self.append("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                   "outcome": "pass", "task_ids": []})
         self.append("review-verdict", {"verdict": "ready"})
         verdict = self.newest_seq("review-verdict")
         stdout = json.dumps([

@@ -437,7 +437,8 @@ class TestStats(JournalTestCase):
     def test_counts_deviations_verify_runs_and_tasks(self):
         self.append_event("feature/x", "deviation", {"note": "a"})
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001", "T002"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001", "T002"]})
         self.append_event("feature/x", "task-done", {"task_id": "T001"})
         row = self.row()
         self.assertEqual(row["deviations"], 1)
@@ -447,27 +448,32 @@ class TestStats(JournalTestCase):
     def test_a_task_re_recorded_after_review_is_one_task_done(self):
         """`tasks_done` counts distinct ids, as the brief does."""
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event("feature/x", "task-done", {"task_id": "T001"})
         self.append_event("feature/x", "task-done", {"task_id": "T001"})
         self.assertEqual(self.row()["tasks_done"], 1)
 
     def test_a_task_verified_twice_is_counted_once(self):
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001", "T002"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001", "T002"]})
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "fail", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 1}],
+                           "outcome": "fail", "task_ids": ["T001"]})
         self.assertEqual(self.row()["tasks_reverified"], 1)
 
     def test_a_task_listed_twice_in_one_run_is_not_reverified(self):
         """One run naming a task twice verified it once — that is not a second round."""
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001", "T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001", "T001"]})
         self.assertEqual(self.row()["tasks_reverified"], 0)
 
     def test_review_rounds_and_feedback(self):
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event("feature/x", "review-verdict", {"verdict": "not-ready"})
         self.append_event("feature/x", "review-feedback", {"refs": ["!1#note_1"]})
         self.append_event("feature/x", "review-verdict", {"verdict": "ready"})
@@ -532,7 +538,8 @@ class TestStats(JournalTestCase):
     def test_implied_phase_transitions_are_counted(self):
         self.append_event("feature/x", "phase-entered", {"phase": "workspace"})
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.assertEqual(self.row()["implied_phases"], 1)
 
     def test_the_totals_brief_bytes_is_the_real_brief(self):
@@ -626,6 +633,118 @@ class TestStats(JournalTestCase):
 
 
 
+
+class TestStatsObserved(JournalTestCase):
+    """#27 T024 (SC-006): per stream and in total, the `verify-run` rows the journal
+    stored as observed, as not observed, the contradicted ones among those, and the
+    rows with no `observed` key, which count only as not recorded (FR-014)."""
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+        # Inserted past the append, so the rows keep the marks as written: the journal
+        # owns `observed` and `contradicted` at append (ADR 0033).
+        for stream, marks in (
+                ("feature/x", {}),
+                ("feature/x", {}),
+                ("feature/x", {"observed": True}),
+                ("feature/x", {"observed": True}),
+                ("feature/x", {"observed": False}),
+                ("feature/x", {"observed": False, "contradicted": True}),
+                ("feature/y", {"observed": False, "contradicted": True}),
+                ("feature/y", {}),
+                # A value an older journal let a model type: no mark of this journal.
+                ("feature/y", {"observed": "yes"}),
+                # Never stored by this journal: observed, and not counted contradicted.
+                ("feature/y", {"observed": True, "contradicted": True})):
+            insert_legacy_row(self.db, stream, "verify-run",
+                              {"outcome": "pass", "task_ids": ["T001"], **marks},
+                              "orchestrator")
+        insert_legacy_row(self.db, "feature/y", "deviation",
+                          {"note": "n", "observed": True}, "orchestrator")
+
+    def stats(self):
+        return json.loads(self.journal("--db", self.db, "stats", "--json", rc=OK).stdout)
+
+    def test_the_counts_per_stream_and_in_total(self):
+        report = self.stats()
+        rows = {row["stream"]: row for row in report["streams"]}
+        keys = ("verify_observed", "verify_unobserved", "verify_contradicted",
+                "verify_unrecorded")
+        self.assertEqual([rows["feature/x"][k] for k in keys], [2, 2, 1, 2])
+        self.assertEqual([rows["feature/y"][k] for k in keys], [1, 1, 1, 2])
+        self.assertEqual([report["totals"][k] for k in keys], [3, 3, 2, 4])
+
+    def test_each_row_counts_once(self):
+        """Observed, not observed and not recorded split the verify runs; the
+        contradicted rows are among the not observed."""
+        report = self.stats()
+        for row in report["streams"] + [report["totals"]]:
+            with self.subTest(stream=row.get("stream", "TOTAL")):
+                self.assertEqual(row["verify_observed"] + row["verify_unobserved"]
+                                 + row["verify_unrecorded"], row["verify_runs"])
+                self.assertLessEqual(row["verify_contradicted"], row["verify_unobserved"])
+
+    def test_a_journal_with_old_rows_only(self):
+        """Rows from before the mark are not recorded, never not observed."""
+        old = self.root / "old.db"
+        self.journal("--db", old, "init", rc=OK)
+        for _ in range(3):
+            insert_legacy_row(old, "feature/z", "verify-run",
+                              {"outcome": "pass", "task_ids": ["T001"]}, "orchestrator")
+        report = json.loads(self.journal("--db", old, "stats", "--json", rc=OK).stdout)
+        totals = report["totals"]
+        self.assertEqual([totals["verify_observed"], totals["verify_unobserved"],
+                          totals["verify_contradicted"], totals["verify_unrecorded"]],
+                         [0, 0, 0, 3])
+        text = self.journal("--db", old, "stats", rc=OK).stdout
+        self.assertEqual(text.splitlines()[-1],
+                         "observed verify runs: 0 of 0 recorded · 0 contradicted · "
+                         "3 not recorded")
+
+    def test_the_observed_share_per_stream_and_in_total(self):
+        """SC-006: observed over recorded, rounded to two places, null with no row
+        that records it; the total from the summed counts, not a sum of shares."""
+        db = self.root / "share.db"
+        self.journal("--db", db, "init", rc=OK)
+        for stream, marks in (("feature/a", {"observed": True}),
+                              ("feature/a", {"observed": True}),
+                              ("feature/a", {"observed": False}),
+                              ("feature/a", {}),
+                              ("feature/b", {"observed": False, "contradicted": True}),
+                              ("feature/c", {})):
+            insert_legacy_row(db, stream, "verify-run",
+                              {"outcome": "pass", "task_ids": ["T001"], **marks},
+                              "orchestrator")
+        report = json.loads(self.journal("--db", db, "stats", "--json", rc=OK).stdout)
+        shares = {row["stream"]: row["verify_observed_share"] for row in report["streams"]}
+        self.assertEqual(shares, {"feature/a": 0.67, "feature/b": 0.0, "feature/c": None})
+        self.assertEqual(report["totals"]["verify_observed_share"], 0.5)
+        lines = self.journal("--db", db, "stats", rc=OK).stdout.splitlines()
+        at = lines[0].split().index("obs")
+        self.assertEqual({line.split()[0]: line.split()[at] for line in lines[1:5]},
+                         {"feature/a": "2/3", "feature/b": "0/1", "feature/c": "0/0",
+                          "TOTAL": "2/4"})
+        empty = self.root / "empty.db"
+        self.journal("--db", empty, "init", rc=OK)
+        report = json.loads(self.journal("--db", empty, "stats", "--json", rc=OK).stdout)
+        self.assertIsNone(report["totals"]["verify_observed_share"])
+
+    def test_the_text_columns_and_the_footer(self):
+        lines = self.journal("--db", self.db, "stats", rc=OK).stdout.splitlines()
+        header = lines[0].split()
+        at = header.index("vfy")
+        self.assertEqual(header[at:at + 3], ["vfy", "obs", "ctr"])
+        cells = {line.split()[0]: line.split() for line in lines[1:4]}
+        # `obs` is observed / recorded (observed and not observed), so each stream's
+        # share reads off its row (SC-006).
+        self.assertEqual(cells["feature/x"][at:at + 3], ["6", "2/4", "1"])
+        self.assertEqual(cells["feature/y"][at:at + 3], ["4", "1/2", "1"])
+        self.assertEqual(cells["TOTAL"][at:at + 3], ["10", "3/6", "2"])
+        self.assertEqual(lines[-1], "observed verify runs: 3 of 6 recorded · "
+                                    "2 contradicted · 4 not recorded")
+
+
 # The labels of the doctor report of 0.35.0, in order, for a project with a sidecar and
 # no Stop gate record (#26 T002). A later block comes after them.
 DOCTOR_LABELS_0_35 = [
@@ -681,6 +800,11 @@ def _snapshot(root):
     return sorted(out)
 
 
+def runs_block_at(lines):
+    """The index of the runs block's first line in a doctor report."""
+    return next(i for i, line in enumerate(lines) if line.startswith("runs root"))
+
+
 class TestDoctorEvidence(JournalTestCase):
     """#26 T015: after its other lines, `doctor` reports the evidence root of this Claude
     config directory: this project and the whole root, what the next prune would remove
@@ -717,7 +841,10 @@ class TestDoctorEvidence(JournalTestCase):
         return proc.stdout
 
     def doctor(self, env=None):
-        return self.run_j("doctor", env=env).splitlines()
+        """The report's lines up to the runs block (#27 T023), which TestDoctorRuns
+        pins."""
+        lines = self.run_j("doctor", env=env).splitlines()
+        return lines[:runs_block_at(lines)]
 
     def doctor_json(self, env=None):
         return json.loads(self.run_j("doctor", "--json", env=env))["evidence"]
@@ -1010,6 +1137,173 @@ class TestDoctorEvidence(JournalTestCase):
                          [".DS_Store", "feature%2Flive"])
         self.assertEqual(sorted(os.listdir(self.evidence / self.key / "feature%2Flive")),
                          [".DS_Store", "T001-390.png"])
+
+
+# ---------------------------------------------------------------------------
+# #27 T023: the runs block (FR-011, SC-005)
+# ---------------------------------------------------------------------------
+
+RUNS_OLD = time.time() - 8 * 86400 - 3600
+
+
+class TestDoctorRuns(JournalTestCase):
+    """#27 T023: after the evidence block, `doctor` reports the run log of the Bash
+    hooks in this Claude config directory: the files, their size, what the next prune
+    deletes and the names it refuses. It deletes nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.root / "config"
+        self.config.mkdir()
+        self.runs = self.config / "shipgate" / "runs"
+        self.shown = os.path.join(os.path.realpath(self.runs.parent), "runs")
+        self.outside = self.root / "outside"
+        self.outside.mkdir()
+        (self.outside / "s9.jsonl").write_bytes(b"x" * 7)
+        self.run_j("init")
+
+    def env(self):
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        return env
+
+    def run_j(self, *args, env=None):
+        proc = run_journal(["--db", self.db, *args], cwd=self.root,
+                           env=env or self.env())
+        self.assertEqual(proc.returncode, OK, proc.stdout + proc.stderr)
+        return proc.stdout
+
+    def doctor(self, env=None):
+        return self.run_j("doctor", env=env).splitlines()
+
+    def doctor_json(self, env=None):
+        return json.loads(self.run_j("doctor", "--json", env=env))["runs"]
+
+    def plant(self, name, size, old=False):
+        self.runs.mkdir(parents=True, exist_ok=True)
+        path = self.runs / name
+        path.write_bytes(b"x" * size)
+        if old:
+            os.utime(path, (RUNS_OLD, RUNS_OLD))
+        return path
+
+    def plant_store(self):
+        """A fresh log and two old ones, a foreign name and a link."""
+        self.plant("s1.jsonl", 100)
+        self.plant("s1.jsonl.1", 200, old=True)
+        self.plant("s2.jsonl", 300, old=True)
+        self.plant("notes.txt", 1, old=True)
+        os.symlink(self.outside / "s9.jsonl", self.runs / "s3.jsonl")
+
+    def test_a_root_with_files(self):
+        self.plant_store()
+        lines = self.doctor()
+        self.assertEqual(lines[-4:], [
+            f"runs root       : {self.shown} (this Claude config directory)",
+            "  run logs      : 3 files · 600 B · oldest 8 days",
+            "  next prune    : 2 files over 7 days",
+            f"  refused       : 2 entries outside the layout (first: "
+            f"{os.path.join(self.shown, 'notes.txt')})",
+        ])
+        self.assertEqual(lines[-5], NOTE)
+
+    def test_the_json_of_a_root_with_files(self):
+        self.plant_store()
+        self.assertEqual(self.doctor_json(), {
+            "root": self.shown, "exists": True,
+            "logs": {"files": 3, "bytes": 600, "oldest_days": 8},
+            "next_prune": {"files": 2},
+            "refused": {"count": 2, "first": os.path.join(self.shown, "notes.txt")},
+        })
+
+    def test_an_empty_root(self):
+        self.runs.mkdir(parents=True)
+        self.assertEqual(self.doctor()[-3:], [
+            f"runs root       : {self.shown} (this Claude config directory)",
+            "  run logs      : no files",
+            "  next prune    : 0 files over 7 days",
+        ])
+        self.assertEqual(self.doctor_json(), {
+            "root": self.shown, "exists": True,
+            "logs": {"files": 0, "bytes": 0, "oldest_days": None},
+            "next_prune": {"files": 0}, "refused": {"count": 0, "first": None}})
+
+    def test_a_missing_root(self):
+        lines = self.doctor()
+        self.assertEqual(lines[-1], f"runs root       : {self.shown} (none yet)")
+        self.assertEqual(lines[-2], NOTE)
+        self.assertEqual(self.doctor_json(), {
+            "root": self.shown, "exists": False, "logs": None, "next_prune": None,
+            "refused": None})
+        self.assertFalse(os.path.lexists(self.config / "shipgate"))
+
+    def test_no_config_directory_and_no_home(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in (SESSION_ENV, "CLAUDE_CONFIG_DIR", "HOME")}
+        lines = self.doctor(env=env)
+        self.assertEqual(lines[-1], "runs root       : none (no CLAUDE_CONFIG_DIR, no HOME)")
+        self.assertEqual(lines[-2], "evidence root   : none (no CLAUDE_CONFIG_DIR, no HOME)")
+        self.assertEqual(self.doctor_json(env=env), {
+            "root": None, "exists": False, "logs": None, "next_prune": None,
+            "refused": None})
+
+    def test_a_link_in_place_of_the_root(self):
+        """The journal never reads or prunes through it, and says so."""
+        self.runs.parent.mkdir(parents=True)
+        os.symlink(self.outside, self.runs)
+        self.assertEqual(self.doctor()[-1],
+                         f"runs root       : {self.shown} (not a directory: the journal "
+                         "reads and prunes nothing there)")
+        self.assertEqual(self.doctor_json(), {
+            "root": self.shown, "exists": False, "logs": None, "next_prune": None,
+            "refused": {"count": 1, "first": self.shown}})
+
+    def test_the_doctor_changes_nothing_on_disk(self):
+        self.plant_store()
+        before = (_snapshot(str(self.config)), _snapshot(str(self.outside)))
+        self.doctor()
+        self.doctor_json()
+        self.assertEqual((_snapshot(str(self.config)), _snapshot(str(self.outside))),
+                         before)
+
+    def test_the_doctor_calls_no_write(self):
+        self.plant_store()
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError(f"the doctor wrote to the disk: {args!r}")
+
+        out = io.StringIO()
+        cwd = os.getcwd()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(
+                os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}))
+            stack.callback(os.chdir, cwd)
+            os.chdir(str(self.root))
+            for name in ("unlink", "remove", "rmdir", "removedirs", "mkdir", "makedirs",
+                         "replace", "rename", "utime"):
+                stack.enter_context(mock.patch.object(os, name, side_effect=forbidden))
+            stack.enter_context(contextlib.redirect_stdout(out))
+            rc = J.main(["--db", str(self.db), "doctor"])
+        self.assertEqual(rc, OK)
+        self.assertIn("  next prune    : 2 files over 7 days", out.getvalue().splitlines())
+
+    def test_the_survey_and_the_prune_agree(self):
+        """What the doctor says the next prune deletes and refuses is what it deletes
+        and keeps."""
+        self.plant_store()
+        (self.runs / "d.jsonl").mkdir()
+        survey = J.survey_runs(str(self.runs))
+        self.assertEqual(survey["next_prune"], {"files": 2})
+        self.assertEqual(survey["refused"]["count"], 3)
+        report = J.prune_runs(str(self.runs))
+        self.assertEqual(report["warnings"], [])
+        self.assertEqual(len(report["removed"]), survey["next_prune"]["files"])
+        after = J.survey_runs(str(self.runs))
+        self.assertEqual(after["next_prune"], {"files": 0})
+        self.assertEqual(after["refused"], survey["refused"])
+        self.assertEqual(after["logs"]["files"], 1)
+        self.assertEqual(sorted(os.listdir(self.runs)),
+                         ["d.jsonl", "notes.txt", "s1.jsonl", "s3.jsonl"])
 
 
 if __name__ == "__main__":

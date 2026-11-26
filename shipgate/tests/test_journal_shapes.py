@@ -37,6 +37,7 @@ class TestShapeValidation(JournalTestCase):
 
     def test_a_value_outside_the_enum_is_a_gate_violation(self):
         proc = self.append_event("feature/x", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 0}],
             "outcome": "green", "task_ids": ["T001"],
         }, rc=GATE)
         self.assertIn("outcome", proc.stderr)
@@ -44,14 +45,16 @@ class TestShapeValidation(JournalTestCase):
 
     def test_a_list_key_must_hold_a_list(self):
         proc = self.append_event(
-            "feature/x", "verify-run", {"outcome": "pass", "task_ids": "T001"}, rc=GATE
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": "T001"}, rc=GATE
         )
         self.assertIn("task_ids", proc.stderr)
         self.assertEqual(self.events(), [])
 
     def test_key_aliases_are_stored_canonically(self):
         self.append_event(
-            "feature/x", "verify-run", {"result": "pass", "tasks": ["T001"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "result": "pass", "tasks": ["T001"]}
         )
         data = self.data_of()
         self.assertEqual(data["outcome"], "pass")
@@ -61,7 +64,8 @@ class TestShapeValidation(JournalTestCase):
 
     def test_a_canonical_key_alone_is_left_untouched(self):
         self.append_event(
-            "feature/x", "verify-run", {"outcome": "pass", "task_ids": ["T001"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": ["T001"]}
         )
         data = self.data_of()
         self.assertEqual(data["outcome"], "pass")
@@ -71,7 +75,8 @@ class TestShapeValidation(JournalTestCase):
         """Which one did the caller mean? Resolving it would drop a real value."""
         proc = self.append_event(
             "feature/x", "verify-run",
-            {"outcome": "pass", "result": "fail", "task_ids": ["T001"]},
+            {"commands": [{"cmd": "make test", "exit": 0}],
+             "outcome": "pass", "result": "fail", "task_ids": ["T001"]},
             rc=GATE,
         )
         combined = proc.stdout + proc.stderr
@@ -474,7 +479,8 @@ class TestShapeValidation(JournalTestCase):
         self.disposition()
         self.assertIsNone(self.status_json()["features"][0]["current"])
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.disposition(dispositions={"src/a.py:12": "fixed"})
         current = self.status_json()["features"][0]["current"]
         self.assertEqual(current["phase"], "implement")
@@ -558,6 +564,121 @@ class TestTerminalPayloads(JournalTestCase):
     def test_vocab_prints_the_shape(self):
         out = self.journal("vocab", "--shape", "flow-completed", rc=OK).stdout
         self.assertEqual(json.loads(out)["strings"], ["reason", "evidence", "url"])
+
+
+class TestVerifyRunShape(JournalTestCase):
+    """#27 T021 (SC-004, ADR 0033): a `verify-run` names its commands, each with `cmd`
+    and `exit`; the journal derives `outcome` from the exits and refuses one that
+    disagrees. `--force` waives none of it: these rules decide whether the row can be
+    read at all."""
+
+    FORCE = ("--force", "--force-reason", "a test of the force path")
+
+    def setUp(self):
+        super().setUp()
+        self.init_db()
+
+    def verify(self, data, *args, rc=OK):
+        return self.append_event("feature/x", "verify-run", data, *args, rc=rc)
+
+    def test_no_commands_key_is_refused(self):
+        for args in ((), self.FORCE):
+            with self.subTest(args=args):
+                proc = self.verify({"outcome": "pass", "task_ids": ["T001"]}, *args,
+                                   rc=GATE)
+                self.assertIn("missing required data key(s): commands", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_an_item_that_names_no_run_is_refused(self):
+        for item, word in (({"cmd": "", "exit": 0}, "cmd"),
+                           ({"exit": 0}, "cmd"),
+                           ({"cmd": "make test"}, "exit"),
+                           ({"cmd": 5, "exit": 0}, "must be a string"),
+                           ({"cmd": "make test", "exit": -1}, "non-negative integer"),
+                           ({"cmd": "make test", "exit": True}, "non-negative integer"),
+                           ({"cmd": "make test", "exit": "0"}, "non-negative integer"),
+                           ({"cmd": "make test", "exit": 1.0}, "non-negative integer"),
+                           ("make test", "must be a JSON object")):
+            with self.subTest(item=item):
+                proc = self.verify({"commands": [item], "task_ids": ["T001"]}, rc=GATE)
+                self.assertIn(word, proc.stderr)
+                self.assertIn("data.commands[0]", proc.stderr)
+        proc = self.verify({"commands": {"cmd": "make test", "exit": 0},
+                            "task_ids": ["T001"]}, rc=GATE)
+        self.assertIn("data.commands must be a list", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_an_absent_outcome_is_derived_from_the_exits(self):
+        self.verify({"commands": [{"cmd": "make test", "exit": 0},
+                                  {"cmd": "make lint", "exit": 0}], "task_ids": ["T001"]})
+        self.assertEqual(self.events()[-1]["data"]["outcome"], "pass")
+        self.verify({"commands": [{"cmd": "make test", "exit": 0},
+                                  {"cmd": "make lint", "exit": 2}], "task_ids": ["T001"]})
+        self.assertEqual(self.events()[-1]["data"]["outcome"], "fail")
+
+    def test_an_outcome_that_agrees_with_the_exits_is_kept(self):
+        self.verify({"commands": [{"cmd": "make test", "exit": 1}], "outcome": "fail",
+                     "task_ids": ["T001"]})
+        self.assertEqual(self.events()[-1]["data"]["outcome"], "fail")
+
+    def test_an_outcome_that_disagrees_with_the_exits_is_refused(self):
+        for args in ((), self.FORCE):
+            with self.subTest(args=args):
+                proc = self.verify({"commands": [{"cmd": "make test", "exit": 0},
+                                                 {"cmd": "make lint", "exit": 1}],
+                                    "outcome": "pass", "task_ids": ["T001"]}, *args,
+                                   rc=GATE)
+                message = proc.stderr.strip()
+                self.assertEqual(len(message.splitlines()), 1, message)
+                self.assertIn("data.outcome is 'pass'", message)
+                self.assertIn("exit 0, 1", message)
+                proc = self.verify({"commands": [{"cmd": "make test", "exit": 0}],
+                                    "outcome": "fail", "task_ids": ["T001"]}, *args,
+                                   rc=GATE)
+                self.assertIn("data.outcome is 'fail'", proc.stderr)
+                self.assertIn("exit 0", proc.stderr)
+        self.assertEqual(self.events(), [])
+
+    def test_an_alias_of_outcome_is_checked_too(self):
+        proc = self.verify({"commands": [{"cmd": "make test", "exit": 3}],
+                            "result": "pass", "tasks": ["T001"]}, rc=GATE)
+        self.assertIn("exit 3", proc.stderr)
+
+    def test_an_empty_list_needs_an_outcome(self):
+        """The way out for a check that is no Bash command (FR-006)."""
+        for args in ((), self.FORCE):
+            with self.subTest(args=args):
+                proc = self.verify({"commands": [], "task_ids": ["T001"]}, *args,
+                                   rc=GATE)
+                message = proc.stderr.strip()
+                self.assertEqual(len(message.splitlines()), 1, message)
+                self.assertIn("data.commands is empty", message)
+                self.assertIn("data.outcome", message)
+        self.assertEqual(self.events(), [])
+        self.verify({"commands": [], "outcome": "pass", "scope": "the page by hand",
+                     "task_ids": ["T001"]})
+        self.assertEqual(self.events()[-1]["data"]["outcome"], "pass")
+
+    def test_the_other_keys_of_an_item_are_kept(self):
+        self.verify({"commands": [{"cmd": "make test", "exit": 0, "tail": "9 passed",
+                                   "ran": "2026-11-25T10:00:00Z"}],
+                     "task_ids": ["T001"]})
+        self.assertEqual(self.events()[-1]["data"]["commands"], [
+            {"cmd": "make test", "exit": 0, "tail": "9 passed",
+             "ran": "2026-11-25T10:00:00Z"}])
+
+    def test_vocab_prints_the_new_shape(self):
+        proc = self.journal("--db", self.db, "vocab", "--shape", "verify-run", rc=OK)
+        self.assertEqual(json.loads(proc.stdout), {
+            "required": ["task_ids", "commands"],
+            "enums": {"outcome": ["pass", "fail"]},
+            "lists": ["task_ids", "commands"],
+            "aliases": {"result": "outcome", "tasks": "task_ids"},
+            "list_objects": {
+                "commands": {"required": ["cmd", "exit"], "strings": ["cmd"],
+                             "integers": ["exit"]},
+            },
+        })
 
 
 if __name__ == "__main__":

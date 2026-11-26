@@ -919,5 +919,84 @@ class TestUiEvidenceText(unittest.TestCase):
         self.assertIn("`code_signals`, `forge`, `ui`)", flat(text))
 
 
+class TestObservedVerifyRunText(unittest.TestCase):
+    """#27 T030, T031 (FR-006, FR-013, ADR 0033): the skills say how to cite a command so
+    that the journal's run log matches it, and how a worker's run reaches the orchestrator."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.read = {rel: (SHIPGATE / rel).read_text() for rel in (
+            "skills/verify/SKILL.md", "skills/implement/SKILL.md",
+            "skills/model-tiers/SKILL.md")}
+
+    def record(self):
+        return flat(section(self.read["skills/verify/SKILL.md"],
+                            "## Record the evidence (journaled projects)"))
+
+    def test_verify_says_how_to_cite_a_command(self):
+        record = self.record()
+        for sentence in (
+            "**Cite each command exactly as you ran it.**",
+            "The Bash hooks log every foreground run in this session, a subagent's and a "
+            "Workflow agent's included: a hash of the command and its exit code, no text and "
+            "no output.",
+            "It stores `observed: true` when every command ran here with the `exit` the row "
+            "names, and `observed: false` when one did not.",
+            "Copy `cmd` character for character from the command you ran: the same `cd`, "
+            "flags, pipes and redirects.",
+            "A shortened or retyped command does not match.",
+            "A pipe ends with the exit code of its last command: `pytest | tail -5` exits 0 "
+            "when the tests fail. Run the command that proves the claim without such a pipe, "
+            "or start it with `set -o pipefail;`, so its exit code is the result.",
+            "Run it in this session and in the foreground.",
+            "A background run is never observed, because no hook sees its exit code.",
+            "A run that must count runs in the foreground.",
+            "A foreground run that passes the Bash tool's time limit moves to the background, "
+            "so it is not observed either: give it a longer timeout, or run a narrower "
+            "command in the foreground.",
+            "You may leave out `outcome`.",
+            "The journal derives it from the exit codes: `pass` when every one is 0, else "
+            "`fail`. It refuses an `outcome` that disagrees with them.",
+            "A check that is no Bash command (a manual UI check, an MCP tool, a read of a "
+            "file) sends an empty list, `\"commands\":[]`, with `outcome` and the check in "
+            "`scope`.",
+            "The row is stored `observed: false`, because there was nothing to observe.",
+            "The journal owns `observed` and `contradicted`. It replaces any value you send.",
+            "A `not observed:` line after `appended` names a command the log does not show "
+            "ending with that exit code.",
+            "Run the command again in the foreground and cite it as you typed it, or fix the "
+            "citation.",
+            "The row is stored all the same, and it still counts for `task-done`.",
+        ):
+            with self.subTest(sentence=sentence[:40]):
+                self.assertIn(sentence, record)
+
+    def test_verify_keeps_commands_in_its_examples_and_records_failures(self):
+        record = self.record()
+        self.assertEqual(record.count('"commands":[{"cmd":"yarn test","exit":0'), 2)
+        self.assertIn('Record failures too, with `"outcome":"fail"`.', record)
+        self.assertLess(record.index("**Cite each command exactly as you ran it.**"),
+                        record.index("Record failures too"))
+
+    def test_implement_cites_the_worker_s_commands(self):
+        text = flat(section(self.read["skills/implement/SKILL.md"], "## Who types the code"))
+        self.assertIn("A worker's report names each command it ran, exactly as it typed it, "
+                      "with its exit code. Cite those in your own `verify-run` (see `verify`).",
+                      text)
+        self.assertIn("The worker's foreground runs are in this session's run log, so the "
+                      "journal sees them. Do not run a command again only to cite it.", text)
+
+    def test_model_tiers_asks_for_the_commands_and_cites_them(self):
+        text = flat(self.read["skills/model-tiers/SKILL.md"])
+        item = between(self.read["skills/model-tiers/SKILL.md"], "6. **Report-back format**",
+                       "7. **Paste the built-in worker discipline")
+        self.assertIn("The report names each command exactly as the worker typed it, with its "
+                      "exit code, so the orchestrator can cite it in its own `verify-run`.",
+                      item)
+        self.assertIn("Cite the worker's commands and exit codes in your own `verify-run`, "
+                      "character for character. A worker's foreground runs are in this "
+                      "session's run log, so you do not run them again to cite them.", text)
+
+
 if __name__ == "__main__":
     unittest.main()
