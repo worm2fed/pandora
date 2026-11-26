@@ -50,11 +50,26 @@ check_git() {
   esac
 }
 
-# An empty scratch HOME: the harness scans $HOME for credential stores that
+# A scratch HOME: the harness scans $HOME for credential stores that
 # contain symlinks (Docker Desktop's ~/.docker does) and refuses Bash-granting
-# runs when it finds one. An empty HOME has nothing to scan.
+# runs when it finds one. The scratch HOME holds no credential store. On macOS
+# it links the login keychain and its security plist when the real HOME has
+# them: an account whose login lives in the keychain is "Not logged in" without
+# them. Nothing else is linked; removing the scratch HOME removes only the links.
 make_scratch_home() {
-  mktemp -d "${TMPDIR:-/tmp}/eval-home.XXXXXX"
+  local h
+  h=$(mktemp -d "${TMPDIR:-/tmp}/eval-home.XXXXXX") || return 1
+  # On a failure the dir goes before the return: the caller's EXIT trap is not set yet.
+  if [ -d "$HOME/Library/Keychains" ]; then
+    { mkdir -p "$h/Library" && ln -s "$HOME/Library/Keychains" "$h/Library/Keychains"; } \
+      || { rm -rf "$h"; return 1; }
+    if [ -f "$HOME/Library/Preferences/com.apple.security.plist" ]; then
+      { mkdir -p "$h/Library/Preferences" \
+        && ln -s "$HOME/Library/Preferences/com.apple.security.plist" "$h/Library/Preferences/"; } \
+        || { rm -rf "$h"; return 1; }
+    fi
+  fi
+  printf '%s\n' "$h"
 }
 
 # Print $PATH without every directory that holds an executable `codegraph`, so the

@@ -58,12 +58,16 @@ claude plugin eval <plugin-dir | bare stub> --runs 3 --ablation <with-without|no
 
 - **Modes.** `with-without` runs both arms; Δ comes from the harness. `none` runs the with
   arm only. `--bare` runs the bare arm only: it builds a stub plugin `<name>-bare` with no
-  component and an `evals` link to the real evals dir, runs it under `none`, and writes
+  component and a copy of the real evals dir, runs it under `none`, and writes
   `bare.json` into the results dir. `compare.py` pairs a `bare` and a `none` result of one
   case and model into one `bare+none` row.
 - **Before the run** it calls `shipgate/evals/evalrun.py config-check`: a plugin of the
   same name installed (any scope) or enabled in the paying config dir stops the run (exit 1).
-  The message names the install and the fix. The check never changes the config dir.
+  So does an enable in the platform's managed settings (macOS
+  `/Library/Application Support/ClaudeCode/managed-settings.json`, Linux and WSL
+  `/etc/claude-code/managed-settings.json`, plus `managed-settings.d/*.json` beside it): a managed enable loads
+  the plugin in every config dir, beside the bare stub too. The message names the install
+  or the file and the fix. The check never changes the config dir or the managed file.
 - **After the run** it calls `evalrun.py post-run`: `shadow.json` (which plugin loaded in
   each run, from the trace's init record), `script-graders.json` (when a case has
   `script-graders/*.py`), then it removes the kept sandboxes. Pass `--keep-temp` yourself
@@ -95,8 +99,11 @@ per run.
    under `$HOME` (`~/.docker`, `~/.aws`, …) contains a symlink; Docker Desktop puts them
    in `~/.docker/bin` and `~/.docker/cli-plugins`. The error names `DOCKER_CONFIG`, but
    setting it does not help and there is no flag. Workaround (built into the scripts): run
-   under an empty scratch `HOME` with `CLAUDE_CONFIG_DIR` pointing at the real config dir.
-   This authenticates normally; no `claude setup-token` needed.
+   under a scratch `HOME` with no credential store, with `CLAUDE_CONFIG_DIR` pointing at
+   the real config dir. On macOS the scratch `HOME` links `~/Library/Keychains` and
+   `~/Library/Preferences/com.apple.security.plist` when they exist: an account whose
+   login lives in the keychain is "Not logged in" without them. Nothing else is linked.
+   No `claude setup-token` needed.
 3. **Which account pays.** With more than one Claude account configured on the machine, the
    shell profile may map `CLAUDE_CONFIG_DIR` to one whose weekly limit is exhausted. The
    symptom is the child `claude` printing `You've hit your weekly limit · resets <time>`
@@ -111,10 +118,13 @@ per run.
 6. **An installed plugin shadows the one under test (#49) — now a guard.** When the paying
    config dir has a plugin of the same name (`shipgate@<marketplace>`), both arms and a
    `claude --plugin-dir` session load that copy, not the tree under test; in one run the
-   without arm loaded it too. `config-check` refuses such a config dir before any spend,
-   and `post-run` marks a run whose init record shows another copy as shadowed in
-   `shadow.json`; `compare.py` refuses a shadowed results dir. Use a config dir without the
-   plugin. Eval sessions also have no `AskUserQuestion` tool, so a flow that asks the user
+   without arm loaded it too. A plugin that the machine's managed settings enable loads
+   the same way in every config dir. `config-check` refuses both before any spend, and
+   `post-run` marks a run whose init record shows another copy as shadowed in
+   `shadow.json`; `compare.py` refuses a shadowed results dir. For an install, use a
+   config dir without the plugin. For a managed enable, a fresh config dir does not help:
+   disable the plugin in the managed file for the length of the runs (admin rights).
+   Eval sessions also have no `AskUserQuestion` tool, so a flow that asks the user
    cannot be judged in the harness; `shipgate/evals/two-turn/` drives one interactive
    session instead, after the merge, against the installed copy.
 

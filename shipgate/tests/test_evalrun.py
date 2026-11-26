@@ -151,7 +151,8 @@ def make_plugin(root, name="shipgate", version="9.9.9", cases=("05-x",)):
     for c in cases:
         (plug / "evals" / c).mkdir(parents=True)
         (plug / "evals" / c / "prompt.md").write_text("a prompt\n")
-    (plug / "evals" / "evalrun.py").symlink_to(EVALRUN)
+    # A copy, not a link: a bare stub copies the evals dir and refuses a link that leaves it.
+    shutil.copy(EVALRUN, plug / "evals" / "evalrun.py")
     return plug
 
 
@@ -182,6 +183,7 @@ class StubEnv(unittest.TestCase):
             "CLAUDE_CONFIG_DIR": str(self.cfg),
             "EVAL_CONFIG_DIR": str(self.cfg),
             "EVAL_SKIP_GIT_CHECK": "1",
+            "EVALRUN_MANAGED_SETTINGS": str(self.tmp / "managed" / "managed-settings.json"),
             "STUB_ARGV_FILE": str(self.argv_file),
             "STUB_SANDBOX_ROOT": str(self.sandboxes),
             "LANG": "C",
@@ -393,6 +395,17 @@ class TestRunCaseArgv(StubEnv):
         for t in self.temp_root_traces("--keep-temp"):
             self.assertTrue(os.path.exists(t), t)
 
+    def test_only_a_bare_run_trusts_its_target(self):
+        """The stub is a fresh dir with no component, so --bare passes --trust-plugin; no other mode does."""
+        for mode, trusted in ((("--bare",), True), (("--ablation", "with-without"), False), (("--ablation", "none"), False)):
+            with self.subTest(mode=mode):
+                if self.argv_file.exists():
+                    self.argv_file.unlink()
+                r = self.run_script(RUN_CASE, *mode, "--model", MODEL, self.plug, "05")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                (argv,) = self.argvs()
+                self.assertEqual("--trust-plugin" in argv, trusted, argv)
+
     def test_bare_run_goes_through_the_stub(self):
         r = self.run_script(RUN_CASE, "--bare", "--model", MODEL, self.plug, "05")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -414,6 +427,69 @@ class TestRunCaseArgv(StubEnv):
         shadow = json.loads((res / "shadow.json").read_text())
         self.assertIs(shadow["shadowed"], False)
         self.assertEqual({x["arm"] for x in shadow["runs"]}, {"without"})
+
+
+class TestScratchHome(unittest.TestCase):
+    """make_scratch_home: an empty HOME, plus the macOS keychain when the real HOME has one."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.real = self.tmp / "real-home"
+        self.real.mkdir()
+
+    def make(self):
+        script = '. "$1"; h=$(make_scratch_home); printf "%s" "$h"'
+        r = subprocess.run([BASH, "-c", script, "bash", str(SCRIPTS / "_common.sh")],
+                           env={"HOME": str(self.real), "TMPDIR": str(self.tmp), "PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        home = Path(r.stdout)
+        self.addCleanup(shutil.rmtree, home, True)
+        self.assertTrue(home.is_dir())
+        self.assertNotEqual(home, self.real)
+        return home
+
+    def test_no_keychain_gives_an_empty_home(self):
+        home = self.make()
+        self.assertEqual(list(home.iterdir()), [])
+
+    def test_keychain_and_security_plist_are_linked_and_nothing_else(self):
+        (self.real / "Library" / "Keychains").mkdir(parents=True)
+        (self.real / "Library" / "Preferences").mkdir()
+        (self.real / "Library" / "Preferences" / "com.apple.security.plist").write_text("plist")
+        (self.real / "Library" / "Preferences" / "other.plist").write_text("x")
+        (self.real / ".aws").mkdir()
+        home = self.make()
+        kc = home / "Library" / "Keychains"
+        plist = home / "Library" / "Preferences" / "com.apple.security.plist"
+        self.assertTrue(kc.is_symlink())
+        self.assertEqual(os.readlink(kc), str(self.real / "Library" / "Keychains"))
+        self.assertTrue(plist.is_symlink())
+        self.assertEqual(sorted(p.name for p in home.iterdir()), ["Library"])
+        self.assertEqual(sorted(p.name for p in (home / "Library").iterdir()), ["Keychains", "Preferences"])
+        self.assertEqual([p.name for p in (home / "Library" / "Preferences").iterdir()], ["com.apple.security.plist"])
+
+    def test_a_failed_link_leaves_no_scratch_home(self):
+        (self.real / "Library" / "Keychains").mkdir(parents=True)
+        stubs = self.tmp / "stubs"
+        stubs.mkdir()
+        (stubs / "ln").write_text("#!/bin/sh\nexit 1\n")
+        (stubs / "ln").chmod(0o755)
+        script = '. "$1"; make_scratch_home'
+        r = subprocess.run([BASH, "-c", script, "bash", str(SCRIPTS / "_common.sh")],
+                           env={"HOME": str(self.real), "TMPDIR": str(self.tmp),
+                                "PATH": str(stubs) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin")},
+                           capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual([p.name for p in self.tmp.iterdir() if p.name.startswith("eval-home.")], [])
+
+    def test_removing_the_scratch_home_keeps_the_real_keychain(self):
+        (self.real / "Library" / "Keychains").mkdir(parents=True)
+        (self.real / "Library" / "Keychains" / "login.keychain-db").write_text("db")
+        home = self.make()
+        subprocess.run(["rm", "-rf", str(home)], check=True)
+        self.assertTrue((self.real / "Library" / "Keychains" / "login.keychain-db").exists())
 
 
 class TestRunCaseRefusals(StubEnv):
@@ -475,14 +551,38 @@ class TestRunCaseRefusals(StubEnv):
         write_json(self.cfg / "settings.json", {"enabledPlugins": {"shipgate@market": True}})
         self.refused("--config-dir", self.cfg, "--bare", "--model", MODEL, self.plug, "05", status=1)
 
+    def test_managed_enable_refused_in_every_mode(self):
+        """A managed enable loads the plugin in any config dir, beside the bare stub too."""
+        managed = Path(self.env["EVALRUN_MANAGED_SETTINGS"])
+        write_json(managed, {"enabledPlugins": {"shipgate@market": True}})
+        for mode in (("--bare",), ("--ablation", "with-without"), ("--ablation", "none")):
+            with self.subTest(mode=mode):
+                r = self.refused("--config-dir", self.cfg, *mode, "--model", MODEL, self.plug, "05", status=1)
+                self.assertIn(str(managed), r.stderr)
+                self.assertIn("shipgate@market", r.stderr)
+
 
 # --------------------------------------------------------------------------
 # evalrun.py
 
 
-def evalrun(*args, timeout=120):
+# config-check reads the platform's managed settings file unless told otherwise; a test
+# never reads the real one. This path does not exist, so the managed side is clean.
+NO_MANAGED = os.path.join(tempfile.gettempdir(), "evalrun-tests-%d-absent" % os.getpid(), "managed-settings.json")
+
+
+def evalrun(*args, timeout=120, env=None):
+    e = dict(os.environ, EVALRUN_MANAGED_SETTINGS=NO_MANAGED)
+    e.update(env or {})
     return subprocess.run(["python3", str(EVALRUN)] + [str(a) for a in args],
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=timeout, env=e)
+
+
+def load_evalrun():
+    spec = importlib.util.spec_from_file_location("evalrun_under_test", EVALRUN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def snapshot(root):
@@ -608,6 +708,127 @@ class TestConfigCheck(unittest.TestCase):
         (self.plug / ".claude-plugin" / "plugin.json").unlink()
         r = evalrun("config-check", "--config-dir", self.cfg, "--plugin-dir", self.plug)
         self.assertEqual(r.returncode, 2, r.stderr)
+
+
+class TestConfigCheckManaged(unittest.TestCase):
+    """The platform's managed settings enable a plugin in every config dir (#28, stage 0)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.plug = make_plugin(self.tmp)
+        self.cfg = self.tmp / "cfg"
+        self.cfg.mkdir()
+        self.managed_dir = self.tmp / "managed"
+        self.managed_dir.mkdir()
+        self.managed = self.managed_dir / "managed-settings.json"
+
+    def check(self, *extra, env=None):
+        before = snapshot(self.managed_dir)
+        r = evalrun("config-check", "--config-dir", self.cfg, "--plugin-dir", self.plug, *extra, env=env)
+        self.assertEqual(snapshot(self.managed_dir), before, "config-check must never write the managed settings")
+        return r
+
+    def test_managed_enable_refused_for_a_clean_config_dir(self):
+        write_json(self.managed, {"enabledPlugins": {"shipgate@market": True, "other@market": True}})
+        r = self.check("--managed-settings", self.managed)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(str(self.managed), r.stderr)
+        self.assertIn("shipgate@market", r.stderr)
+        self.assertIn("managed", r.stderr)
+        self.assertNotIn("other@market", r.stderr)
+        # The fix is the managed file's, not the config dir's: no config dir can override it.
+        self.assertIn("every config dir", r.stderr)
+        self.assertIn("disable", r.stderr)
+        self.assertIn("never changes", r.stderr)
+
+    def test_managed_and_config_dir_findings_are_both_named(self):
+        write_json(self.managed, {"enabledPlugins": {"shipgate@market": True}})
+        write_json(self.cfg / "settings.json", {"enabledPlugins": {"shipgate@other": True}})
+        r = self.check("--managed-settings", self.managed)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn("shipgate@market", r.stderr)
+        self.assertIn("shipgate@other", r.stderr)
+        self.assertIn("--config-dir", r.stderr)
+
+    def test_environment_variable_names_the_file(self):
+        write_json(self.managed, {"enabledPlugins": {"shipgate@market": True}})
+        r = self.check(env={"EVALRUN_MANAGED_SETTINGS": str(self.managed)})
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(str(self.managed), r.stderr)
+
+    def test_flag_wins_over_the_environment_variable(self):
+        write_json(self.managed, {"enabledPlugins": {"shipgate@market": True}})
+        r = self.check("--managed-settings", self.tmp / "absent.json", env={"EVALRUN_MANAGED_SETTINGS": str(self.managed)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_clean_managed_files(self):
+        cases = {
+            "missing": None,
+            "disabled": {"enabledPlugins": {"shipgate@market": False}},
+            "a prefix name": {"enabledPlugins": {"shipgate-hud@market": True}},
+            "no enabledPlugins": {"extraKnownMarketplaces": {"market": {"source": {"source": "directory", "path": "/m"}}}},
+        }
+        for label, data in cases.items():
+            with self.subTest(label=label):
+                if self.managed.exists():
+                    self.managed.unlink()
+                if data is not None:
+                    write_json(self.managed, data)
+                r = self.check("--managed-settings", self.managed)
+                self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_drop_in_dir_enable_refused(self):
+        """managed-settings.d/*.json merges after the file, in name order (Claude Code docs)."""
+        d = self.managed_dir / "managed-settings.d"
+        d.mkdir()
+        write_json(d / "20-plugins.json", {"enabledPlugins": {"shipgate@market": True}})
+        r = self.check("--managed-settings", self.managed)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(str(d / "20-plugins.json"), r.stderr)
+
+    def test_drop_in_dir_merge_order(self):
+        d = self.managed_dir / "managed-settings.d"
+        d.mkdir()
+        write_json(self.managed, {"enabledPlugins": {"shipgate@market": True}})
+        write_json(d / "10-off.json", {"enabledPlugins": {"shipgate@market": False}})
+        (d / ".hidden.json").write_text(json.dumps({"enabledPlugins": {"shipgate@market": True}}))
+        (d / "notes.txt").write_text("not json")
+        r = self.check("--managed-settings", self.managed)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        write_json(d / "20-on.json", {"enabledPlugins": {"shipgate@market": True}})
+        r = self.check("--managed-settings", self.managed)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(str(d / "20-on.json"), r.stderr)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads a mode-000 dir")
+    def test_unreadable_drop_in_dir_is_a_usage_error(self):
+        d = self.managed_dir / "managed-settings.d"
+        d.mkdir()
+        d.chmod(0)
+        self.addCleanup(d.chmod, 0o755)
+        r = evalrun("config-check", "--config-dir", self.cfg, "--plugin-dir", self.plug,
+                    "--managed-settings", self.managed)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn(str(d), r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_unreadable_managed_file_is_a_usage_error(self):
+        self.managed.write_text("{not json")
+        r = self.check("--managed-settings", self.managed)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn(str(self.managed), r.stderr)
+
+    def test_default_path_per_platform(self):
+        mod = load_evalrun()
+        self.assertEqual(mod.managed_settings_path("darwin", {}),
+                         "/Library/Application Support/ClaudeCode/managed-settings.json")
+        self.assertEqual(mod.managed_settings_path("linux", {}), "/etc/claude-code/managed-settings.json")
+        self.assertEqual(mod.managed_settings_path("win32", {"ProgramFiles": r"D:\Apps"}),
+                         "D:\\Apps\\ClaudeCode\\managed-settings.json")
+        self.assertEqual(mod.managed_settings_path("win32", {}),
+                         "C:\\Program Files\\ClaudeCode\\managed-settings.json")
+        self.assertEqual(mod.managed_settings_path("linux", {"EVALRUN_MANAGED_SETTINGS": "/t/m.json"}), "/t/m.json")
 
 
 class TestShadow(EvalrunCase):
@@ -824,6 +1045,46 @@ class TestClean(EvalrunCase):
         self.assertIn("e-lookalike", r.stderr)
         self.assertTrue((self.results / "shadow.json").exists())
 
+    def test_removes_a_sealed_read_only_sandbox(self):
+        """Harness 2.1.332 keeps a sandbox read-only (500) with a sealed/ dir (000) inside."""
+        real, real_trace = self.temp_root_sandbox()
+        sealed = real / "sealed"
+        (sealed / "home").mkdir(parents=True)
+        (sealed / "home" / "f").write_text("x")
+        sealed.chmod(0)
+        real.chmod(0o500)
+
+        def unseal():
+            if real.exists():
+                real.chmod(0o700)
+                sealed.chmod(0o700)
+        self.addCleanup(shutil.rmtree, real, True)
+        self.addCleanup(unseal)
+        self.write_result({"05-x": {"with": [real_trace]}})
+        r = self.post_run("--clean")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(real.exists(), r.stderr)
+        self.assertIn("removed 1 kept sandbox", r.stdout + r.stderr)
+
+    def test_a_sandbox_that_stays_is_named_and_not_counted(self):
+        real, real_trace = self.temp_root_sandbox()
+        mod = load_evalrun()
+        mod.shutil = type("NoRm", (), {"rmtree": staticmethod(lambda *a, **k: None)})
+        removed, kept = mod.clean({"cases": [{"name": "05-x", "arms": {"with": [{"tracePath": real_trace}]}}]}, False)
+        self.assertEqual(removed, 0)
+        self.assertEqual(kept, [(str(real), "could not remove it")])
+        self.assertTrue(real.exists())
+
+    def test_unseal_never_changes_a_dir_outside_through_a_link(self):
+        real, _ = self.temp_root_sandbox()
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        outside.chmod(0o500)
+        self.addCleanup(outside.chmod, 0o700)
+        os.symlink(str(outside), real / "out" / "escape")
+        load_evalrun().unseal(str(real))
+        self.assertEqual(outside.stat().st_mode & 0o777, 0o500)
+
     def test_keeps_sandboxes_without_clean(self):
         real, real_trace = self.temp_root_sandbox()
         self.write_result({"05-x": {"with": [real_trace]}})
@@ -844,8 +1105,68 @@ class TestBareStub(EvalrunCase):
         self.assertEqual((manifest["name"], manifest["version"]), ("shipgate-bare", "9.9.9"))
         self.assertTrue(manifest.get("description"))
         self.assertEqual(set(manifest), {"name", "version", "description"})
-        self.assertTrue((out / "evals").is_symlink())
-        self.assertEqual(os.readlink(out / "evals"), os.path.realpath(self.plug / "evals"))
+        # The harness refuses an evals link that points outside the plugin: the stub holds a copy.
+        self.assertFalse((out / "evals").is_symlink())
+        self.assertTrue((out / "evals" / "05-x" / "prompt.md").is_file())
+        self.assertTrue((out / "evals" / "06-y" / "prompt.md").is_file())
+        self.assertFalse((out / "evals" / "results").exists(), "results/ stays out of the copy")
+
+    def test_copy_leaves_out_results_and_pycache(self):
+        (self.plug / "evals" / "__pycache__").mkdir()
+        (self.plug / "evals" / "__pycache__" / "x.pyc").write_text("x")
+        (self.plug / "evals" / "05-x" / "__pycache__").mkdir()
+        (self.plug / "evals" / "fixtures").mkdir()
+        (self.plug / "evals" / "fixtures" / "shop.py").write_text("print(1)\n")
+        out = self.tmp / "stub"
+        self.assertEqual(evalrun("bare-stub", self.plug, out).returncode, 0)
+        names = {os.path.relpath(os.path.join(d, n), out / "evals")
+                 for d, ds, fs in os.walk(out / "evals") for n in ds + fs}
+        self.assertNotIn("results", names)
+        self.assertFalse(any("__pycache__" in n for n in names), names)
+        self.assertIn(os.path.join("fixtures", "shop.py"), names)
+
+    def test_a_link_inside_the_evals_dir_stays_a_link(self):
+        (self.plug / "evals" / "fixtures").mkdir()
+        (self.plug / "evals" / "fixtures" / "shop.py").write_text("print(1)\n")
+        os.symlink(os.path.join("..", "fixtures", "shop.py"), self.plug / "evals" / "05-x" / "shop.py")
+        out = self.tmp / "stub"
+        r = evalrun("bare-stub", self.plug, out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        link = out / "evals" / "05-x" / "shop.py"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), os.path.join("..", "fixtures", "shop.py"))
+        self.assertTrue(os.path.realpath(link).startswith(os.path.realpath(out) + os.sep))
+
+    def test_a_chain_of_links_that_leaves_evals_is_refused(self):
+        """Each link stays inside on its own text, but the chain resolves outside (review R1)."""
+        deep = self.plug / "evals" / "05-x" / "s1" / "s2"
+        deep.mkdir(parents=True)
+        os.symlink("..", deep / "up")                                   # -> 05-x/s1: inside
+        esc = self.plug / "evals" / "05-x" / "esc"
+        os.symlink(os.path.join("s1", "s2", "up", "..", "..", ".."), esc)  # text: inside; real: the plugin dir
+        out = self.tmp / "stub"
+        r = evalrun("bare-stub", self.plug, out)
+        self.assertEqual(r.returncode, 1, r.stderr)
+        self.assertIn(str(esc), r.stderr)
+        self.assertFalse(os.path.exists(out / "evals"))
+
+    def test_no_link_in_the_copy_points_outside_the_stub(self):
+        outside = self.tmp / "outside.txt"
+        outside.write_text("x")
+        for label, target in (("absolute", str(outside)),
+                              ("relative", os.path.join("..", "..", "..", "outside.txt")),
+                              ("absolute inside", str(self.plug / "evals" / "06-y" / "prompt.md"))):
+            with self.subTest(label=label):
+                link = self.plug / "evals" / "05-x" / "leak"
+                if os.path.lexists(link):
+                    link.unlink()
+                os.symlink(target, link)
+                out = self.tmp / ("stub-" + label.replace(" ", "-"))
+                r = evalrun("bare-stub", self.plug, out)
+                self.assertEqual(r.returncode, 1, r.stderr)
+                self.assertIn(str(link), r.stderr)
+                self.assertIn("outside", r.stderr)
+                self.assertFalse(os.path.exists(out / "evals"), "nothing is copied after a refusal")
 
     def test_empty_out_dir_is_fine(self):
         out = self.tmp / "stub"

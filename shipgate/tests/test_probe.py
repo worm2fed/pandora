@@ -334,6 +334,7 @@ class TestProbeSh(unittest.TestCase):
         full.update({"PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
                      "HOME": str(self.tmp / "home"), "TMPDIR": str(self.tmp),
                      "EVAL_SKIP_GIT_CHECK": "1", "STUB_LOG": str(self.log),
+                     "EVALRUN_MANAGED_SETTINGS": str(self.tmp / "managed" / "managed-settings.json"),
                      "STUB_STREAM": str(self.stream), "STUB_EVALRUN_LOG": str(self.evalrun_log)})
         full.update(env or {})
         bash = "/bin/bash" if os.path.exists("/bin/bash") else "bash"
