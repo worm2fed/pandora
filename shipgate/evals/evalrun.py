@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks that the run scripts make before and after a harness run (ADR 0035, ADR 0036).
 
-    python3 shipgate/evals/evalrun.py config-check --config-dir DIR --plugin-dir PLUGIN
+    python3 shipgate/evals/evalrun.py config-check --config-dir DIR --plugin-dir PLUGIN [--managed-settings FILE]
     python3 shipgate/evals/evalrun.py post-run <results-dir> --plugin-dir PLUGIN [--bare] [--clean]
     python3 shipgate/evals/evalrun.py bare-stub PLUGIN OUT
     python3 shipgate/evals/evalrun.py set-cases <sets.json> <set>
@@ -13,6 +13,15 @@ The plugin name and version come from PLUGIN/.claude-plugin/plugin.json.
   DIR/plugins/installed_plugins.json holds an install of the plugin in any scope, or when
   DIR/settings.json enables the plugin in `enabledPlugins`. A key matches when its part
   before "@" is the plugin name. A missing file is clean.
+  It also reads the platform's managed settings, which enable a plugin in every config
+  dir, whatever CLAUDE_CONFIG_DIR says: FILE (--managed-settings, else
+  $EVALRUN_MANAGED_SETTINGS, else /Library/Application Support/ClaudeCode/ on macOS,
+  /etc/claude-code/ on Linux and WSL, ClaudeCode under %ProgramFiles% on Windows, each
+  managed-settings.json), then each *.json in managed-settings.d/ beside FILE, in name
+  order, with no hidden file. A later file's `enabledPlugins` key wins. It refuses when
+  the merged result enables the plugin, and names the file that set it. MDM profiles, the
+  Windows registry and server-managed settings are not read; post-run's shadow check
+  still sees a plugin they load.
 - `post-run` reads the results dir's aggregate-result.json and each run's kept trace.
   It writes shadow.json: a run is shadowed when the trace's init record shows that the
   wrong plugin loaded. In a with run, every loaded plugin of the name must be the tree
@@ -35,7 +44,10 @@ The plugin name and version come from PLUGIN/.claude-plugin/plugin.json.
   only when its name starts with "e-" and its parent is a temp root. It leaves anything
   else and says so.
 - `bare-stub` writes a stub plugin into OUT: a plugin.json named <name>-bare with the
-  version of PLUGIN and no component, and `evals`, a symbolic link to PLUGIN's evals.
+  version of PLUGIN and no component, and `evals`, a copy of PLUGIN's evals without
+  results/ and __pycache__ (the harness refuses an evals link that leaves the plugin).
+  A link inside evals stays a link when it is relative and stays inside; any other link
+  stops the command before it writes anything.
 - `set-cases` prints the case names of a named set, one per line. It refuses the set
   `parked`, a set that holds a parked case, an empty set, a set that lists a case twice
   and an unknown set. The error for an unknown set lists the sets.
@@ -51,7 +63,8 @@ stderr and still exits 0.
 Exit codes:
 
     0  done (config-check: the config dir is clean)
-    1  config-check: the plugin is installed or enabled in the config dir;
+    1  config-check: the plugin is installed or enabled in the config dir, or enabled
+       in the managed settings;
        other commands: an input error
     2  usage error, or config-check cannot read its inputs
 """
@@ -64,6 +77,8 @@ import subprocess
 import sys
 import tempfile
 
+MANAGED_ENV = "EVALRUN_MANAGED_SETTINGS"
+MANAGED_NAME = "managed-settings.json"
 EXIT_INPUT = 1
 EXIT_USAGE = 2
 SCRIPT_TIMEOUT = 60
@@ -127,23 +142,69 @@ def config_findings(config_dir, name):
     return found
 
 
-def config_check(config_dir, plugin_dir):
+def managed_settings_path(platform=None, environ=None):
+    """The managed settings file: $EVALRUN_MANAGED_SETTINGS, else the platform's path."""
+    platform = sys.platform if platform is None else platform
+    environ = os.environ if environ is None else environ
+    if environ.get(MANAGED_ENV):
+        return environ[MANAGED_ENV]
+    if platform == "darwin":
+        return "/Library/Application Support/ClaudeCode/" + MANAGED_NAME
+    if platform == "win32":
+        base = environ.get("ProgramFiles") or "C:\\Program Files"
+        return base.rstrip("\\") + "\\ClaudeCode\\" + MANAGED_NAME
+    return "/etc/claude-code/" + MANAGED_NAME
+
+
+def managed_findings(managed, name):
+    """Lines for each plugin of `name` that the merged managed settings enable."""
+    files = [managed] if os.path.exists(managed) else []
+    drop_in = os.path.join(os.path.dirname(managed), "managed-settings.d")
+    if os.path.isdir(drop_in):
+        try:
+            names = os.listdir(drop_in)
+        except OSError as e:
+            raise InputError(f"cannot read the managed settings dir {drop_in}: {e.strerror or e}")
+        files += [os.path.join(drop_in, f) for f in sorted(names)
+                  if f.endswith(".json") and not f.startswith(".")
+                  and os.path.isfile(os.path.join(drop_in, f))]
+    merged = {}
+    for path in files:
+        data = read_json(path, "managed settings")
+        enabled = data.get("enabledPlugins") if isinstance(data, dict) else None
+        for key, on in (enabled if isinstance(enabled, dict) else {}).items():
+            if key_names(key, name):
+                merged[key] = (on, path)
+    return [f"{key} is enabled in the managed settings {path} (enabledPlugins)"
+            for key, (on, path) in sorted(merged.items()) if on is True]
+
+
+def config_check(config_dir, plugin_dir, managed=None):
     try:
         if not os.path.isdir(config_dir):
             raise InputError(f"config dir does not exist: {config_dir}")
         name, _ = plugin_meta(plugin_dir)
         found = config_findings(config_dir, name)
+        in_managed = managed_findings(managed or managed_settings_path(), name)
     except InputError as e:
         print(f"evalrun: config-check: {e}", file=sys.stderr)
         return EXIT_USAGE
-    if not found:
+    if not found and not in_managed:
         return 0
-    print(f"evalrun: config-check: the config dir {config_dir} has a plugin named {name}.", file=sys.stderr)
+    if found:
+        print(f"evalrun: config-check: the config dir {config_dir} has a plugin named {name}.", file=sys.stderr)
+    else:
+        print(f"evalrun: config-check: the managed settings enable a plugin named {name}.", file=sys.stderr)
     print("It can load in place of the tree under test and shadow the run (#49).", file=sys.stderr)
-    for line in found:
+    for line in found + in_managed:
         print(f"  {line}", file=sys.stderr)
-    print("Fix: run with a config dir that has no such plugin (--config-dir DIR or EVAL_CONFIG_DIR),", file=sys.stderr)
-    print("or uninstall or disable the plugin in that config dir yourself. This check never changes it.", file=sys.stderr)
+    if found:
+        print("Fix: run with a config dir that has no such plugin (--config-dir DIR or EVAL_CONFIG_DIR),", file=sys.stderr)
+        print("or uninstall or disable the plugin in that config dir yourself. This check never changes it.", file=sys.stderr)
+    if in_managed:
+        print("Fix: disable the plugin in that managed file yourself (set it to false or remove the key;", file=sys.stderr)
+        print("it needs admin rights), and restore it after the runs. A managed enable loads the plugin", file=sys.stderr)
+        print("in every config dir, and no config dir can turn it off. This check never changes it.", file=sys.stderr)
     return EXIT_INPUT
 
 
@@ -284,13 +345,41 @@ def clean(result, bare):
         sandbox = sandbox_of(trace)
         if sandbox is None:
             if os.path.exists(trace):
-                kept.append(trace)
+                kept.append((trace, "not a harness sandbox under a temp root"))
             continue
         if os.path.islink(sandbox) or not os.path.isdir(sandbox):
             continue
+        unseal(sandbox)
         shutil.rmtree(sandbox, ignore_errors=True)
-        removed += 1
+        if os.path.lexists(sandbox):
+            kept.append((sandbox, "could not remove it"))
+        else:
+            removed += 1
     return removed, kept
+
+
+def owner_rwx(path):
+    """chmod 700 on `path` itself, never on what a link points to. Where the platform cannot
+    chmod a link (no lchmod), a link is left as it is."""
+    if os.chmod in os.supports_follow_symlinks:
+        os.chmod(path, 0o700, follow_symlinks=False)
+    elif not os.path.islink(path):
+        os.chmod(path, 0o700)
+
+
+def unseal(root):
+    """Give the owner rwx on every dir under a kept sandbox. The harness keeps a sandbox
+    read-only (500) and seals dirs in it (000), so a plain rmtree removes nothing."""
+    try:
+        owner_rwx(root)
+    except OSError:
+        return
+    for d, dirs, _ in os.walk(root):
+        for x in dirs:
+            try:
+                owner_rwx(os.path.join(d, x))
+            except OSError:
+                pass
 
 
 def write_json(path, obj):
@@ -327,13 +416,36 @@ def post_run(results_dir, plugin_dir, bare=False, do_clean=False, timeout=SCRIPT
     if do_clean:
         removed, kept = clean(result, bare)
         print(f"evalrun: removed {removed} kept sandboxes")
-        for trace in kept:
-            print(f"evalrun: left {trace}: not a harness sandbox under a temp root", file=sys.stderr)
+        for path, why in kept:
+            print(f"evalrun: left {path}: {why}", file=sys.stderr)
     return 0
 
 
 # --------------------------------------------------------------------------
 # bare-stub, set-cases, spent
+
+
+def skipped(directory, names, evals):
+    """The names the stub's copy leaves out: results/ at the top of evals, and every __pycache__."""
+    return [n for n in names if n == "__pycache__" or (n == "results" and directory == evals)]
+
+
+def links_leaving(evals):
+    """Each link under `evals` (outside the skipped dirs) that is absolute or resolves outside it."""
+    root = os.path.realpath(evals)
+    bad = []
+    for d, dirs, files in os.walk(evals):
+        dirs[:] = [x for x in dirs if x not in skipped(d, [x], evals)]
+        for n in dirs + files:
+            path = os.path.join(d, n)
+            if not os.path.islink(path):
+                continue
+            target = os.readlink(path)
+            # realpath resolves the whole chain; a lexical normpath misses a link inside the target.
+            where = os.path.realpath(path)
+            if os.path.isabs(target) or not where.startswith(root + os.sep):
+                bad.append(f"{path} -> {target}")
+    return bad
 
 
 def bare_stub(plugin_dir, out):
@@ -343,13 +455,20 @@ def bare_stub(plugin_dir, out):
         raise InputError(f"the plugin has no evals dir: {evals}")
     if os.path.lexists(out) and (not os.path.isdir(out) or os.listdir(out)):
         raise InputError(f"the stub dir exists and is not empty: {out}")
+    bad = links_leaving(evals)
+    if bad:
+        raise InputError("the evals dir holds a link that points outside it, and the stub's copy "
+                         "must stay inside the stub; make it a file or a relative link inside evals: "
+                         + "; ".join(bad))
     os.makedirs(os.path.join(out, ".claude-plugin"), exist_ok=True)
     write_json(os.path.join(out, ".claude-plugin", "plugin.json"), {
         "name": f"{name}-bare",
         "version": version,
         "description": f"Empty stub of {name} for a bare eval run (ADR 0035): no skill, agent, hook, command or MCP server.",
     })
-    os.symlink(os.path.realpath(evals), os.path.join(out, "evals"))
+    # A copy, not a link: the harness refuses an evals link that points outside the plugin.
+    shutil.copytree(evals, os.path.join(out, "evals"), symlinks=True,
+                    ignore=lambda d, names: skipped(d, names, evals))
     print(os.path.abspath(out))
     return 0
 
@@ -399,6 +518,7 @@ def main(argv=None):
     p = sub.add_parser("config-check", help="refuse a same-name plugin in the paying config dir")
     p.add_argument("--config-dir", required=True)
     p.add_argument("--plugin-dir", required=True)
+    p.add_argument("--managed-settings", help=f"the managed settings file (default ${MANAGED_ENV}, else the platform's path)")
     p = sub.add_parser("post-run", help="shadow check, script graders and clean-up of a results dir")
     p.add_argument("results_dir")
     p.add_argument("--plugin-dir", required=True)
@@ -418,7 +538,7 @@ def main(argv=None):
         ap.print_help()
         return EXIT_USAGE
     if args.cmd == "config-check":
-        return config_check(args.config_dir, args.plugin_dir)
+        return config_check(args.config_dir, args.plugin_dir, args.managed_settings)
     try:
         if args.cmd == "post-run":
             return post_run(args.results_dir, args.plugin_dir, args.bare, args.clean, args.script_timeout)

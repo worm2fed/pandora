@@ -15,8 +15,9 @@
 #   runs, max-turns  whole numbers above 0
 #
 # Refuses to start (exit 1) when evals/evalrun.py config-check finds a plugin of the same
-# name in the paying config dir. probe.py judges the runs; one result file per case goes
-# to <plugin-dir>/evals/results/probes/<stamp>/<case>.json. Prints one line per run:
+# name in the paying config dir or enabled in the managed settings. probe.py judges the
+# runs; one result file per case goes to
+# <plugin-dir>/evals/results/probes/<stamp>/<case>.json. Prints one line per run:
 #   11-neg-one-line-change run1: PASS skill=[] bash{signals\.py}=0 agent=0 turns=3 cost=$0.08 12s
 set -euo pipefail
 

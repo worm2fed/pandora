@@ -21,8 +21,9 @@
 # bare.json. The mode and model flags go before <plugin-dir>, never among the extras.
 # Config dir: --config-dir, else $EVAL_CONFIG_DIR, else $CLAUDE_CONFIG_DIR, else
 # ~/.claude. The run refuses to start when that dir has a plugin of the same name
-# installed or enabled (`evalrun.py config-check`). It runs under a scratch HOME
-# (credential-store symlink check), refuses the Xcode git shim, and drops CLAUDECODE so
+# installed or enabled, or the managed settings enable it (`evalrun.py config-check`),
+# in every mode: a managed plugin loads beside the bare stub too. It runs under a
+# scratch HOME (credential-store symlink check), refuses the Xcode git shim, and drops CLAUDECODE so
 # the nested claude starts clean. The harness always gets --keep-temp; after the run,
 # `evalrun.py post-run` writes shadow.json (and script-graders.json), then removes the
 # kept sandboxes unless you passed --keep-temp yourself. The script sets the results dir:
@@ -120,10 +121,13 @@ mkdir "$out" || die "cannot make the results dir $out"
 eval_args=(plugin eval "$target" --runs 3 --ablation "$ablation" --scaffold --judge-model sonnet --no-publish
   --allow-tools Bash Edit Write --model "$model")
 [ -n "$keep_asked" ] || eval_args+=(--keep-temp)
+# The stub is a fresh dir this script made, with no component; its evals dir is a copy
+# of the plugin's own. A new dir is untrusted, and a non-interactive run cannot ask.
+[ "$mode" != bare ] || eval_args+=(--trust-plugin)
 eval_args+=(--output-dir "$out" --case "$glob")
 
 printf 'run-evals: plugin=%s case=%s mode=%s model=%s config-dir=%s\n' "$plugin" "$glob" "$mode" "$model" "$cfg" >&2
-[ "$mode" != bare ] || printf 'run-evals: bare stub: %s (no component; evals -> %s/evals)\n' "$target" "$plugin" >&2
+[ "$mode" != bare ] || printf 'run-evals: bare stub: %s (no component; evals copied from %s/evals)\n' "$target" "$plugin" >&2
 printf 'run-evals: claude%s\n' "$(printf ' %q' "${eval_args[@]}" "$@")" >&2
 
 status=0

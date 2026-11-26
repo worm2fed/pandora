@@ -42,10 +42,11 @@ user sees it in the lead's report and can veto it.
 
 - `.claude-plugin/plugin.json` with the name `<plugin>-bare` and the tested plugin's
   version, and no skill, agent, hook, command or MCP server;
-- `evals`, a symbolic link to the real evals directory, so cases, fixtures, graders and the
-  results directory are the real ones.
+- `evals`, a copy of the real evals directory without `results/` and `__pycache__`, so
+  cases, fixtures and graders are the real ones. (Changed 2026-11-26: the first proof run
+  showed that the harness refuses an `evals` link that points outside the plugin.)
 
-It runs `claude plugin eval <stub> --ablation none --model <m> --trust-plugin`, with the
+It runs `claude plugin eval <stub> --ablation none --model <m> --trust-plugin` (the first proof run, 2026-11-26, showed the harness refuses the new stub dir without it), with the
 same scaffold, judge and tool grants as any run. The run script writes `bare.json` into the
 results directory. Compare reads the run as `mode: bare` and scores it under the both-arm
 rule (ADR 0034). The shadow check (ADR 0036) must see no plugin named `<plugin>` in the
@@ -73,7 +74,7 @@ proof holds. If it fails, stage 1 stops, and the run goes back to the lead.
 - In `none` mode the harness scores `skill-fired`, which fails in a bare run. The raw score
   of a bare run is therefore low. Only the both-arm score counts, and compare shows only
   that.
-- The stub's results land in the real results directory through the link. `bare.json` is
+- The stub's results land in the real results directory, which the run script passes as `--output-dir`. `bare.json` is
   what tells compare and summarize the arm.
 - If the user vetoes this ADR, stage 1 runs as full `with-without`, and the plan's stage-1
   ceiling becomes 61.67 USD plus 25%.

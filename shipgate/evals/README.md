@@ -52,8 +52,12 @@ none.
 | `bare` | `--bare` | the bare arm only (ADR 0035) |
 
 The harness has no bare-only mode. `--bare` builds a stub plugin `<name>-bare` with no
-skill, agent, hook, command or MCP server, and an `evals` link to this directory. It runs
-the stub under `none` and writes `bare.json` into the results dir. `compare.py` pairs a
+skill, agent, hook, command or MCP server, and a copy of this directory without
+`results/` and `__pycache__` (the harness refuses an `evals` link that leaves the plugin;
+a link inside this directory must be relative and stay inside, or the stub is refused). It runs
+the stub under `none` with `--trust-plugin` and writes `bare.json` into the results dir.
+The flag is safe there: the stub is a fresh dir the script made, it holds no component,
+and its `evals` is a copy of this directory, which a normal run already trusts. `compare.py` pairs a
 `bare` result and a `none` result of one case and model into one `bare+none` row.
 
 A grader is **with-only** when its config says `arm: with-only`, or when it is a
@@ -69,8 +73,14 @@ An installed plugin of the same name loads in place of the tree under test, in b
 Two checks stop that:
 
 - before the run, `evalrun.py config-check` refuses a paying config dir that has a plugin
-  of the same name installed (any scope) or enabled. It names the install and the fix, and
-  never changes the config dir;
+  of the same name installed (any scope) or enabled. It also refuses when the platform's
+  managed settings enable that plugin (`managed-settings.json` and the `*.json` files of
+  `managed-settings.d/` beside it): a managed enable loads the plugin in every config dir,
+  the bare stub's run too, and no config dir can turn it off. Then the fix is to disable it
+  in the managed file for the length of the runs, which needs admin rights. The check
+  names the install or the file and the fix, and never changes either. MDM profiles, the
+  Windows registry and server-managed settings are not read; post-run still sees what they
+  load;
 - after the run, `evalrun.py post-run` reads each run's kept trace. The init record must
   name the tree under test in a with run, and no plugin of that name in a bare run. It
   writes `shadow.json`. `compare.py` refuses a shadowed results dir. It warns on a
@@ -151,9 +161,11 @@ with no recorded model.
   almost always this — read the run's final message before believing it.
 - The harness refuses Bash-granting runs while a credential store under `~` (`~/.aws`,
   `~/.docker`, …) contains a symlink, and there is no flag (`DOCKER_CONFIG` does not bypass
-  it). Workaround: run under an empty scratch `HOME` with `CLAUDE_CONFIG_DIR` pointing at
-  the real config dir of the account to bill — that authenticates as-is, no
-  `claude setup-token` needed. Nested inside a Claude Code session, drop `CLAUDECODE` from
+  it). Workaround: run under a scratch `HOME` with no credential store, with
+  `CLAUDE_CONFIG_DIR` pointing at the real config dir of the account to bill. On macOS the
+  scratch `HOME` links the login keychain (`~/Library/Keychains` and the security plist),
+  because a keychain-backed login is "Not logged in" without it. No `claude setup-token`
+  needed. Nested inside a Claude Code session, drop `CLAUDECODE` from
   the env (`env -u CLAUDECODE`).
 
 ## What the cases measure

@@ -122,7 +122,7 @@ harness is only the runner.
 | --- | --- | --- |
 | `compare.py` | `shipgate/evals/` | Reads results, scores under a named rule, compares per case and model, flags efficiency, records rows (ADR 0034). |
 | `baseline.json` | `shipgate/evals/` | `cases → model → row`. The 75 old rows sit under `unrecorded`. |
-| `evalrun.py` (new) | `shipgate/evals/` | `config-check`: refuses a same-name plugin in the paying config dir. `post-run`: the shadow check and the script graders over the kept traces (ADR 0036). `bare-stub`: builds the stub plugin (ADR 0035). |
+| `evalrun.py` (new) | `shipgate/evals/` | `config-check`: refuses a same-name plugin in the paying config dir, or one that the machine's managed settings enable (T053–T055). `post-run`: the shadow check and the script graders over the kept traces (ADR 0036). `bare-stub`: builds the stub plugin (ADR 0035). |
 | `probe.py` (new) | `shipgate/evals/` | Counts skills and named calls in a stream, judges against `probe.json`, saves the result with model, turns, cost and time. |
 | `sets.json` (new) | `shipgate/evals/` | The named sets: `kept`, `guards`, `ablation-32`, `probes`, `parked`. |
 | `run-case.sh` | `.claude/skills/run-evals/scripts/` | Requires `--ablation` (or `--bare`) and `--model`. Calls `evalrun.py config-check` before the run, `post-run` after it. |
@@ -138,7 +138,7 @@ The Python modules stay Python 3.9 compatible and use the standard library only.
 ```
 run-set.sh (serial, --shard k/n) (--ablation X | --bare) --model M --max-cost-usd C <plugin-dir> <set>
   └─ per case: run-case.sh (--ablation X | --bare) --model M
-       ├─ evalrun.py config-check   → exit 1 before any spend on a same-name install
+       ├─ evalrun.py config-check   → exit 1 before any spend on a same-name install or managed enable
        ├─ [--bare] evalrun.py bare-stub → scratch stub dir; writes bare.json after the run
        ├─ claude plugin eval … --model M --keep-temp --output-dir <own dir> [--max-cost-usd C]
        ├─ evalrun.py post-run <results dir> → shadow.json, script-graders.json
@@ -364,10 +364,25 @@ time in how lanes stop. This one has no lanes.
 - [x] T051 — Implement the serial `run-set.sh`: no lanes, no trap, no process group, no background job, so a Ctrl-C stops the running case whole with its `claude` child; the spend sum is the smallest helper that the tests need — file(s): `.claude/skills/run-evals/scripts/run-set.sh`, `shipgate/evals/evalrun.py` — done when: T050 passes
 - [x] T052 — Docs: README and the run-evals skill show the serial form and the shards (a caller starts `--shard 1/3`, `--shard 2/3` and `--shard 3/3` side by side, each with its own ceiling) — file(s): `shipgate/evals/README.md`, `.claude/skills/run-evals/SKILL.md` — done when: every command in them matches the script
 
+## Managed-settings guard — found by stage 0, before any spend (the lead's brief, 2026-11-26)
+
+Stage 0 stopped at the pre-run check. Every local config dir has shipgate installed, and the
+machine's managed settings enable it for every config dir. `config-check` did not read the
+managed settings, so a fresh config dir would have passed it and every run would have been
+shadowed.
+
+- [x] T053 — Tests first: `config-check` refuses a plugin of the tested name that the managed settings enable (`managed-settings.json`, then `managed-settings.d/*.json` in name order, no hidden file; a later file wins), names the file and the fix, never writes it, and takes the path from `--managed-settings` or `EVALRUN_MANAGED_SETTINGS` (never the real file in a test); the platform paths; `run-case.sh` refuses in every mode, `--bare` included — file(s): `shipgate/tests/test_evalrun.py` — done when: the tests fail first
+- [x] T054 — Implement it in `evalrun.py` — file(s): `shipgate/evals/evalrun.py` — done when: T053 passes
+- [x] T056 — Tests first, then `make_scratch_home` links `~/Library/Keychains` and the security plist into the scratch HOME when they exist, and nothing else, so a keychain-backed login authenticates (the eval-only config dir of the user's choice is one); docs in the README and gotcha 2 of the run-evals skill — file(s): `.claude/skills/run-evals/scripts/_common.sh`, `shipgate/tests/test_evalrun.py`, `shipgate/evals/README.md`, `.claude/skills/run-evals/SKILL.md` — done when: the tests pass
+- [x] T057 — Tests first, then `run-case.sh --bare` passes `--trust-plugin`, and no other mode does (the lead's choice after the first stage-0 attempt); one README line says why; ADR 0035 and the PR 1 Deviations line corrected — file(s): `.claude/skills/run-evals/scripts/run-case.sh`, `shipgate/tests/test_evalrun.py`, `shipgate/evals/README.md`, ADR 0035 — done when: `test_evalrun.py` passes
+- [x] T058 — Tests first, then the bare stub holds a copy of the evals dir (no `results/`, no `__pycache__`) in place of a link, which the harness refuses; a link in evals stays a link only when it is relative and stays inside, else the stub is refused with the link named; the test plugin copies `evalrun.py` in place of linking it; ADR 0035, the README and the skill say copy — file(s): `shipgate/evals/evalrun.py`, `shipgate/tests/test_evalrun.py`, ADR 0035, `shipgate/evals/README.md`, `.claude/skills/run-evals/SKILL.md` — done when: `test_evalrun.py` passes
+- [x] T059 — Tests first, then post-run's clean-up removes a sealed kept sandbox (the harness keeps it read-only, 500, with a `sealed/` dir at 000; `rmtree(ignore_errors=True)` removed nothing and still counted it) and names any sandbox it could not remove — file(s): `shipgate/evals/evalrun.py`, `shipgate/tests/test_evalrun.py` — done when: `test_evalrun.py` passes
+- [x] T055 — Docs: the README's shadow guard, the run-evals skill (the config-check line and gotcha 6) and the headers of `run-case.sh` and `probe.sh` say that a managed enable shadows every config dir — file(s): `shipgate/evals/README.md`, `.claude/skills/run-evals/SKILL.md`, `.claude/skills/run-evals/scripts/run-case.sh`, `.claude/skills/run-evals/scripts/probe.sh` — done when: the full suite passes
+
 ## PR 3 — the re-baseline (only after the user's go on the plan)
 
 - [ ] T040 — Put the plan above to the user through the lead with the measured numbers of PR 1 and 2; record the go — file(s): none — done when: the journal holds the user's go (SC-011)
-- [ ] T041 — Stage 0, the proof run of case 24 (`run-case.sh --bare --model claude-fable-5-2`, 1 run): the trace lists no `shipgate` plugin and no shipgate skill fired; `report.html` and `aggregate-result.json` land in the `--output-dir` that `run-case.sh` passed, and post-run finds the kept traces from it (`shadow.json` holds no `null` run); only then stage 1 and 1b, the serial `run-set.sh --bare --model claude-fable-5-2 --max-cost-usd C shipgate ablation-32` (T050–T052; up to 3 shards side by side, each with its share of the ceiling), and the dip rule — file(s): none — done when: the proof held, the stage list of fallen cases exists, and stage 1 stayed under its ceiling (SC-013)
+- [x] T041 — Stage 0, the proof run of case 24 (`run-case.sh --bare --model claude-fable-5-2`, 1 run): the trace lists no `shipgate` plugin and no shipgate skill fired; `report.html` and `aggregate-result.json` land in the `--output-dir` that `run-case.sh` passed, and post-run finds the kept traces from it (`shadow.json` holds no `null` run); only then stage 1 and 1b, the serial `run-set.sh --bare --model claude-fable-5-2 --max-cost-usd C shipgate ablation-32` (T050–T052; up to 3 shards side by side, each with its share of the ceiling), and the dip rule — file(s): none — done when: the proof held, the stage list of fallen cases exists, and stage 1 stayed under its ceiling (SC-013)
 - [ ] T042 — Stage 2 on the fallen cases, with the serial `run-set.sh` (`--ablation none`) or one `run-case.sh` per case — file(s): none — done when: each has a `bare+none` row
 - [ ] T043 — Stage 3, the `kept` and `guards` sets on Opus and on Fable, with the serial `run-set.sh` in shards — file(s): none — done when: both models ran under their ceilings
 - [ ] T044 — Stage 4, the `probes` set on both models; three probes per model first, to measure — file(s): none — done when: every probe has a saved result per model
@@ -378,7 +393,7 @@ time in how lanes stop. This one has no lanes.
 - FR-001, FR-002, FR-003 → T002, T003
 - FR-004, FR-005, FR-006, FR-007 → T002, T003
 - FR-008, FR-009 → T004, T007
-- FR-010 → T005, T006, T007
+- FR-010 → T005, T006, T007, T053, T054, T055
 - FR-011 → T005, T006, T007, T002
 - FR-012 → T006, T007 (ADR 0035)
 - FR-013 → T050, T051, T035 (T010 moved out of PR 1)
@@ -416,7 +431,7 @@ time in how lanes stop. This one has no lanes.
 - The eval suite has 42 harness cases in named sets (`evals/sets.json`), 19 trigger probes and 2 fixture cases; cuts and merges removed 15 cases.
 - Claims that a script can judge moved out of the paid runs (the signals rankings, the record steps, case 15's assumptions, case 22's run order, case 70's sentence length); no fixture date can expire, the clarify fixtures set their own git identity, and case 73 no longer gives its helper away.
 - `run-set.sh` runs the cases of a named set one after another under one required cost ceiling per invocation; `--shard K/N` splits a set into invocations side by side, and Ctrl-C stops the running case with its `claude` child and starts no further case.
-- `run-case.sh` makes its own results dir and passes it as `--output-dir`, so runs side by side never read or clean another run's results.
+- `run-case.sh` makes its own results dir and passes it as `--output-dir`, so runs side by side never read or clean another run's results; it refuses to start, before any spend, when the machine's managed settings enable the plugin under test, because that enable shadows every config dir.
 
 ## Deviations & notes (filled during implementation)
 
@@ -430,7 +445,13 @@ time in how lanes stop. This one has no lanes.
   `run-case.sh --bare` does not pass it: no run may check the flag at no cost, and the
   with-without runs work without it. The proof run of case 24 (T041) shows whether the
   stub needs it. Pass it as an extra eval flag there; then fix the script or the ADR in
-  one line.
+  one line. Settled 2026-11-26: the first stage-0 attempt was refused as an untrusted
+  plugin dir before any agent ran (0 USD), so `run-case.sh --bare` now passes
+  `--trust-plugin`, and only in that mode (the lead's choice (b); pinned by a test).
+  The second attempt was refused too: the harness refuses an `evals` link that points
+  outside the plugin, so the stub now holds a copy (T058, the lead's choice (b')). It also
+  showed that the harness seals kept sandboxes, which post-run's clean-up could not remove
+  (T059).
 - 2026-11-25, PR 1, additions beyond the plan: `evalrun.py set-cases` (the set rules get
   unit tests; it refuses `parked`, a set that holds a parked case, an empty set and an
   unknown set), `evalrun.py spent` (the ceiling sum of `run-set.sh`; removed with it in
@@ -532,6 +553,26 @@ judges the same scenario. The table names what moved, what is lost, and what kee
   line move the f-string row down two lines. A scaffold of the fixture shows it.
 - FR-022 says a route-and-map record-step test exists. No test pinned it, so
   `TestRecordSteps` pins route-and-map too.
+- 2026-11-26, managed-settings guard (T053–T055, the lead's brief after stage 0 stopped).
+  `config-check` now also reads the platform's managed settings file and the `*.json`
+  files of `managed-settings.d/` beside it. A managed enable loads the plugin in every
+  config dir, so the fix there is not "a config dir without the plugin", as clarify
+  answer (2) says. The fix is to disable the plugin in the managed file, which needs
+  admin rights; the check never edits the file. MDM profiles, the Windows registry and
+  server-managed settings are not read; post-run's shadow check still sees what they load.
+- 2026-11-26, stages 0, 1 and 1b (T041), Fable bare arm, the user's go of seq 4018.
+  Stage 0 held on the third attempt (0.41 USD; the first two were refused at 0 USD, see
+  T057 and T058). Stage 1: 17 cases, 3 runs each, 3 shards, 22.12 USD against a 31.04
+  ceiling (projected 24.85, ratio 0.89). Stage 1b: 29 and 55, 3.43 USD against 12.00. At
+  1.00 bare: 17, 25, 29 (after 1b), 30, 31, 32, 33, 36, 39, 40, 54, 69. Fell: 24, 47, 53,
+  55 (the dip grader failed again in 1b) and 74. These five go to stage 2.
+- 2026-11-26, a T045 rule for the stage-1b cases (29, 55). `compare.py` takes the newest
+  results dir per case, model and mode, so it reads only the 3 runs of the 1b dir. Pooling
+  the two dirs needs a marker that tells an extension from a rerun that supersedes, and a
+  merge of the run lists: about 40 lines in `run-case.sh` and `compare.py` plus tests, so it
+  is a rule, not a fix. Rule: T045 records a 1b case from its 1b dir (3 runs). That row is
+  the verdict of the user's rule (1.00 only when the dip grader passes all 3 new runs). The
+  audit addendum names both dirs and the pooled 6-run mean: 29 0.97, 55 0.89.
 
 ## Review round 1 (PR 1)
 
@@ -814,3 +855,61 @@ all deferred below. Verdict: ready.
 - R5-6 LOW `.claude/skills/run-evals/SKILL.md:40` — The summarize example says `<timestamp>`, the command block `<stamp>-<pid>`; deferred.
 
 ## Rejected findings
+
+## Review round 1 (Managed-settings guard)
+
+The workflow review (run wf_85135642-0e3) used two Opus finders, correctness and
+conventions plus design. It found 13 findings: 6 at or above the confidence floor, 7 below
+it. The one HIGH went to two refuters, and both failed to refute it. The orchestrator fixed
+all 6, plus two cheap ones from below the floor (the Linux path in the skill, the
+traceability line), and pinned the drop-in read error with a test. The fix pass and T056
+(added after the round, when the eval-only config dir turned out to need the keychain)
+were checked by the orchestrator alone: four files, each fix read against its finding, and
+T056 pinned by three tests that failed first. The fresh suite ran in parts: 651 + 1188 +
+418 tests, OK, 2 skipped. Verdict: ready.
+
+- G1 HIGH `shipgate/tests/test_probe.py:331` — The probe.sh tests ran the real config-check with no `EVALRUN_MANAGED_SETTINGS`, so they read the machine's managed file; fixed.
+- G2 MEDIUM `.claude/skills/run-evals/SKILL.md:120` — Gotcha 6 still ended with one fix for both cases; it now gives the install fix and the managed fix apart; fixed.
+- G3 MEDIUM `shipgate/docs/prd/eval-measurement.worklog.md:125` — The Architecture and Data-flow lines described a config-dir-only check; updated, and a Deviations line records the new scope; fixed.
+- G4 LOW `shipgate/docs/prd/eval-measurement.worklog.md:431` — The What changed edit dropped the `--output-dir` fact; restored; fixed.
+- G5 LOW `.claude/skills/run-evals/scripts/probe.sh:18` — Header lines past the wrap width in probe.sh and run-case.sh; reflowed; fixed.
+- G6 LOW `shipgate/evals/evalrun.py:160` — An unreadable `managed-settings.d` escaped as a traceback with exit 1; it is now a usage error, exit 2; fixed.
+
+### Rejected findings (Managed-settings guard round 1)
+
+None. Five below-floor findings stay open as LOW notes: the `EVALRUN_` prefix of the new
+variable, the skill description's triggers, a truthy enable value that is not `true`, the
+order of drop-ins with mixed-case names, and an unreadable managed file.
+
+## Review round 1 (Stage fixes T053-T059)
+
+The lead asked for one review of T053 to T059 as one change, with the focus on T057 to T059
+and on security. The workflow review (run wf_81e57438-58f) used two Opus finders,
+correctness and simplicity plus security. It found 14 findings, 11 after dedupe, 7 above the
+floor (no BLOCKER or HIGH, so no refuter ran) and 4 below it. The orchestrator fixed the 5
+distinct ones, test-first where a test could fail first.
+
+- S1 MEDIUM `shipgate/evals/evalrun.py:436` — `links_leaving` compared link targets lexically, so a chain of relative links could leave evals while each text stayed inside; it now resolves the whole chain with `realpath`; fixed.
+- S2 LOW `.claude/skills/run-evals/scripts/run-case.sh:124` — The comment and the log line still called the stub's evals a link; fixed.
+- S3 LOW `shipgate/evals/evalrun.py:354` — No test pinned the "could not remove it" branch of the clean-up; pinned; fixed.
+- S4 LOW `.claude/skills/run-evals/scripts/_common.sh:59` — A failed link step leaked the scratch HOME with its keychain link before the caller's trap was set; it now removes the dir first; fixed.
+- S5 LOW `shipgate/evals/evalrun.py:361` — `unseal` checked for a link and then called a chmod that follows links; it now uses `follow_symlinks=False` where the platform has it; fixed.
+
+### Rejected findings (Stage fixes round 1)
+
+- `.claude/skills/run-evals/scripts/_common.sh:62` (LOW 55): the keychain link reaches the agent through HOME; the harness gives the agent its own home inside the sandbox, so the scratch HOME is the harness's, and the trap removes only the link.
+- `.claude/skills/run-evals/scripts/run-case.sh:126` (LOW 50): `--trust-plugin` could persist for a reused mktemp path; unverified, and the stub path is new on every run.
+- `.claude/skills/run-evals/scripts/_common.sh:63` (LOW 45): the same keychain point as the first line.
+- `shipgate/evals/evalrun.py:318` (LOW 40): speculative; removal stays limited to an `e-*` dir under a temp root that a trace path names.
+
+## Review round 2 (Stage fixes T053-T059)
+
+One Opus reviewer that carries all lenses re-read the fix hunks and ran `test_evalrun.py`
+(108 OK). S1 to S4 are fixed on evidence. S5 is fixed on macOS; on Linux the code falls
+back to the old check-then-chmod. Three new LOW findings, deferred. No link of these kinds
+exists in the repo's evals, and the cap is two rounds. The fresh verify ran
+`test_evalrun.py` and `test_probe.py`: 309 tests OK. Verdict: ready.
+
+- S6 LOW `shipgate/evals/evalrun.py:442` — A relative link that climbs above evals by name and comes back through the plugin dir's own name passes the check, but in the stub's copy it points outside and dangles; deferred.
+- S7 LOW `shipgate/evals/evalrun.py:425` — A link into the skipped top-level `results/` passes the check and dangles in the copy; deferred.
+- S8 LOW `shipgate/evals/evalrun.py:363` — On Linux (no lchmod) `unseal` keeps the check-then-chmod race, and no test forces that branch; deferred.
