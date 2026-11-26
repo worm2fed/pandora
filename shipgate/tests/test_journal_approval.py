@@ -366,7 +366,8 @@ class TestApprovalPathPins(JournalTestCase):
 
     def test_publish_is_held_after_a_task_done_and_authorized_by_a_ready_verdict(self):
         self.append_event("feat/1-x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event("feat/1-x", "task-done", {"task_id": "T001"})
 
         def publish():
@@ -375,7 +376,8 @@ class TestApprovalPathPins(JournalTestCase):
 
         self.assertEqual(publish(), {"kind": "held"})
         self.append_event("feat/1-x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event("feat/1-x", "review-verdict", {"verdict": "ready"})
         verdict = self.events("feat/1-x")[-1]
         self.assertEqual(publish(), {"kind": "authorized", "by": "review-verdict",
@@ -972,7 +974,8 @@ class TestAuthorize(JournalTestCase):
         self.append_event(self.STREAM, "flow-started", {"request": "x"},
                           "--actor", "orchestrator@A")
         self.append_event(self.STREAM, "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event(self.STREAM, "task-done", {"task_id": "T001"})
 
     def authorize(self, gate="commit", branch=None, *extra):
@@ -1025,7 +1028,8 @@ class TestAuthorize(JournalTestCase):
 
     def test_a_ready_verdict_alone_holds(self):
         self.append_event(self.STREAM, "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]})
         self.append_event(self.STREAM, "review-verdict", {"verdict": "ready"})
         self.assertAnswer(self.authorize("commit"), "hold", "no-go")
         self.assertAnswer(self.authorize("publish"), "hold", "no-go", "publish")

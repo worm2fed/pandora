@@ -10,14 +10,16 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
 
 from test_journal import (
-    CONFLICT, GATE, JournalTestCase, load_journal_module, OK, run_journal, SESSION_ENV,
-    USAGE,
+    CONFLICT, GATE, JOURNAL, JournalTestCase, load_journal_module, OK, run_journal,
+    SESSION_ENV, USAGE,
 )
+from test_journal_runs import end, start
 from test_ui import png_bytes
 
 
@@ -85,28 +87,32 @@ class TestGateTaskDone(JournalTestCase):
 
     def test_failing_verify_run_is_violation(self):
         self.append_event(
-            "feature/x", "verify-run", {"outcome": "fail", "task_ids": ["T001"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 1}],
+                                        "outcome": "fail", "task_ids": ["T001"]}
         )
         self.append_event("feature/x", "task-done", {"task_id": "T001"}, rc=GATE)
         self.assertEqual(len(self.events()), 2)
 
     def test_verify_run_for_other_task_is_violation(self):
         self.append_event(
-            "feature/x", "verify-run", {"outcome": "pass", "task_ids": ["T002"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": ["T002"]}
         )
         self.append_event("feature/x", "task-done", {"task_id": "T001"}, rc=GATE)
         self.assertEqual(len(self.events()), 2)
 
     def test_verify_run_in_other_stream_is_violation(self):
         self.append_event(
-            "feature/y", "verify-run", {"outcome": "pass", "task_ids": ["T001"]}
+            "feature/y", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": ["T001"]}
         )
         self.append_event("feature/x", "task-done", {"task_id": "T001"}, rc=GATE)
         self.assertEqual(self.events("feature/x"), [])
 
     def test_passing_verify_run_unblocks(self):
         self.append_event(
-            "feature/x", "verify-run", {"outcome": "pass", "task_ids": ["T001", "T002"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": ["T001", "T002"]}
         )
         self.append_event("feature/x", "task-done", {"task_id": "T001"})
         self.assertEqual(len(self.events("feature/x")), 3)
@@ -211,7 +217,8 @@ class TestGatePhaseEntered(JournalTestCase):
 class TestImpliedPhase(JournalTestCase):
     """ADR 0002: a phase-owning event enters its phase, and `append` records it."""
 
-    PASSING_VERIFY = {"outcome": "pass", "task_ids": ["T001"]}
+    PASSING_VERIFY = {"commands": [{"cmd": "make test", "exit": 0}],
+                      "outcome": "pass", "task_ids": ["T001"]}
 
     def setUp(self):
         super().setUp()
@@ -321,7 +328,8 @@ class TestGateReviewVerdict(JournalTestCase):
         super().setUp()
         self.init_db()
         self.append_event(
-            "feature/x", "verify-run", {"outcome": "pass", "task_ids": ["T001"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": ["T001"]}
         )
         self.append_event("feature/x", "task-done", {"task_id": "T001"})
 
@@ -345,7 +353,8 @@ class TestGateReviewVerdict(JournalTestCase):
 
     def test_ready_after_fresh_verify_run_allowed(self):
         self.append_event(
-            "feature/x", "verify-run", {"outcome": "pass", "task_ids": ["T001"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": ["T001"]}
         )
         self.append_event("feature/x", "review-verdict", {"verdict": "ready"})
         self.assertEqual(len(self.events("feature/x")), 6)
@@ -353,7 +362,8 @@ class TestGateReviewVerdict(JournalTestCase):
     # A ready verdict closes every `fixing` key first (ADR 0014, amended 0.23.0).
     def fresh_verify(self):
         self.append_event(
-            "feature/x", "verify-run", {"outcome": "pass", "task_ids": ["T001"]}
+            "feature/x", "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                        "outcome": "pass", "task_ids": ["T001"]}
         )
 
     def disposition(self, dispositions, round_number=1):
@@ -453,7 +463,8 @@ class TestGateReviewVerdict(JournalTestCase):
 class TestGateMrOpened(JournalTestCase):
     """FR-009: an MR is opened on the review's word, or on a deliberate publish call."""
 
-    PASSING_VERIFY = {"outcome": "pass", "task_ids": ["T001"]}
+    PASSING_VERIFY = {"commands": [{"cmd": "make test", "exit": 0}],
+                      "outcome": "pass", "task_ids": ["T001"]}
 
     def setUp(self):
         super().setUp()
@@ -593,7 +604,8 @@ class TestGateMrOpened(JournalTestCase):
         self.append_event("feature/x", "verify-run", self.PASSING_VERIFY)
         self.append_event("feature/x", "review-verdict", {"verdict": "ready"})
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T002"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T002"]})
         self.append_event("feature/x", "task-done", {"task_id": "T002"})
         self.mr_opened(rc=GATE)
 
@@ -856,7 +868,8 @@ class TestGateUiTaskDone(JournalTestCase):
         self.append_event(self.S, "flow-started", {"request": "r"})
         self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG})
         self.append_event(self.S, "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001", "T004"]})
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001", "T004"]})
 
     def settings(self, ui):
         data = {} if ui is None else {"ui": ui}
@@ -1017,7 +1030,9 @@ class TestGateUiTaskDone(JournalTestCase):
         self.assertIsNone(load_journal_module().stream_dir_name(stream))
         self.append_event(stream, "flow-started", {"request": "r"})
         self.append_event(stream, "design-committed", {"worklog": self.WORKLOG})
-        self.append_event(stream, "verify-run", {"outcome": "pass", "task_ids": ["T004"]})
+        self.append_event(stream, "verify-run",
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T004"]})
         proc = self.journal("--db", self.db, "append", "--stream", stream,
                             "--type", "task-done", "--data",
                             json.dumps({"task_id": "T004"}), rc=GATE)
@@ -1165,6 +1180,191 @@ class TestGateUiTaskDone(JournalTestCase):
         self.write(self.WORKLOG, "# Build Plan\n\n- [ ] T001 — no paths here\n")
         proc = self.append_event(self.S, "design-committed", {"worklog": self.WORKLOG})
         self.assertEqual(proc.stderr, "")
+
+
+# ---------------------------------------------------------------------------
+# #27 T021: the journal records what it saw (ADR 0033, SC-004)
+# ---------------------------------------------------------------------------
+
+TESTS = "python3 -m unittest discover -s tests"
+NO_RUN = ("no foreground run of this exact command in this session; run it in the "
+          "foreground here and cite it as typed")
+
+
+class TestVerifyRunObservation(JournalTestCase):
+    """At append the journal looks each command up in the session's run log and stores
+    `observed` and maybe `contradicted`, whatever the caller sent. A row that is not
+    observed is stored, not refused, with one notice per command after the `appended`
+    line; the exit code does not change, and no gate reads the marks."""
+
+    S = "session-1"
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.root / "config"
+        self.runs = self.config / "shipgate" / "runs"
+        self.init_db()
+
+    def env(self, session=S):
+        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        if session:
+            env[SESSION_ENV] = session
+        return env
+
+    def run_j(self, *args, rc=OK, session=S, stdin=None):
+        proc = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), *map(str, args)],
+            cwd=str(self.root), env=self.env(session), input=stdin,
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, rc, proc.stdout + proc.stderr)
+        return proc
+
+    def verify(self, data, *args, rc=OK, session=S):
+        return self.run_j("append", "--stream", "feature/x", "--type", "verify-run",
+                          "--data", json.dumps(data), *args, rc=rc, session=session)
+
+    def ran(self, tool_use, command, code, session=S):
+        self.runs.mkdir(parents=True, exist_ok=True)
+        with open(self.runs / (session + ".jsonl"), "a", encoding="utf-8") as log:
+            log.write(json.dumps(start(tool_use, command)) + "\n")
+            log.write(json.dumps(end(tool_use, code)) + "\n")
+
+    def stored(self):
+        return self.events("feature/x")[-1]["data"]
+
+    def lines(self, proc):
+        return proc.stdout.splitlines()
+
+    def test_an_observed_command_is_stored_observed(self):
+        self.ran("a", TESTS, 0)
+        proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]})
+        self.assertEqual(len(self.lines(proc)), 1)
+        self.assertTrue(self.lines(proc)[0].startswith("appended verify-run to feature/x"))
+        data = self.stored()
+        self.assertIs(data["observed"], True)
+        self.assertNotIn("contradicted", data)
+        self.assertEqual(data["outcome"], "pass")
+
+    def test_a_command_with_no_run_is_stored_not_observed_with_a_notice(self):
+        self.ran("a", TESTS, 0)
+        proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0},
+                                         {"cmd": "make lint", "exit": 0}],
+                            "task_ids": ["T001"]})
+        self.assertEqual(self.lines(proc)[1:],
+                         [f"not observed: `make lint` — {NO_RUN}"])
+        self.assertIs(self.stored()["observed"], False)
+        self.assertNotIn("contradicted", self.stored())
+
+    def test_a_contradicted_pass_is_stored_and_still_satisfies_task_done(self):
+        """FR-010: stored, marked and counted, never refused; no gate reads the mark
+        until the December review."""
+        self.ran("a", TESTS, 0)
+        self.ran("b", TESTS, 1)
+        proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]})
+        self.assertEqual(self.lines(proc)[1:], [
+            f"not observed: `{TESTS}` — its newest run in this session exited 1, not 0 "
+            "(stored as contradicted)"])
+        data = self.stored()
+        self.assertIs(data["observed"], False)
+        self.assertIs(data["contradicted"], True)
+        self.assertEqual(data["outcome"], "pass")
+        self.run_j("append", "--stream", "feature/x", "--type", "task-done",
+                   "--data", json.dumps({"task_id": "T001"}))
+
+    def test_the_callers_marks_never_survive(self):
+        self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"],
+                     "observed": True, "contradicted": True})
+        data = self.stored()
+        self.assertIs(data["observed"], False)
+        self.assertNotIn("contradicted", data)
+        self.ran("a", TESTS, 0)
+        self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"],
+                     "observed": "no"})
+        self.assertIs(self.stored()["observed"], True)
+
+    def test_an_empty_list_with_an_outcome_is_stored_not_observed(self):
+        proc = self.verify({"commands": [], "outcome": "pass",
+                            "scope": "the page checked by hand", "task_ids": ["T001"]})
+        self.assertEqual(len(self.lines(proc)), 1)
+        self.assertIs(self.stored()["observed"], False)
+        self.assertNotIn("contradicted", self.stored())
+
+    def test_no_session_id_is_not_observed(self):
+        self.ran("a", TESTS, 0)
+        proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]},
+                           session=None)
+        self.assertEqual(self.lines(proc)[1:], [f"not observed: `{TESTS}` — {NO_RUN}"])
+        self.assertIs(self.stored()["observed"], False)
+
+    def test_another_sessions_run_is_not_observed(self):
+        self.ran("a", TESTS, 0, session="session-2")
+        self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]})
+        self.assertIs(self.stored()["observed"], False)
+
+    def test_a_forced_row_is_checked_the_same_way(self):
+        self.ran("a", TESTS, 1)
+        self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]},
+                    "--force", "--force-reason", "a test of the force path")
+        data = self.stored()
+        self.assertIs(data["observed"], False)
+        self.assertIs(data["contradicted"], True)
+        self.assertIs(data["forced"], True)
+
+    def test_the_command_in_a_notice_is_one_line_of_at_most_60_characters(self):
+        long = "python3 -m unittest discover -s shipgate/tests -p test_journal_runs.py"
+        odd = "printf 'a\\n'\n  && echo \x1b[31m done"
+        proc = self.verify({"commands": [{"cmd": long, "exit": 0},
+                                         {"cmd": odd, "exit": 0}], "task_ids": ["T001"]})
+        notices = self.lines(proc)[1:]
+        self.assertEqual(notices, [
+            f"not observed: `{long[:59]}…` — {NO_RUN}",
+            f"not observed: `printf 'a\\n' && echo ?[31m done` — {NO_RUN}",
+        ])
+
+    def test_a_batch_prints_each_rows_notices_after_its_line(self):
+        self.ran("a", TESTS, 0)
+        batch = "\n".join(json.dumps({"type": "verify-run", "data": data}) for data in (
+            {"commands": [{"cmd": "make lint", "exit": 0}], "task_ids": ["T001"]},
+            {"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]},
+            {"commands": [{"cmd": "make docs", "exit": 2}], "task_ids": ["T002"]},
+        )) + "\n"
+        proc = self.run_j("append", "--stream", "feature/x", "--batch", stdin=batch)
+        lines = self.lines(proc)
+        self.assertEqual(len(lines), 5, lines)
+        self.assertTrue(lines[0].startswith("appended verify-run to feature/x: seq 2"))
+        self.assertEqual(lines[1], f"not observed: `make lint` — {NO_RUN}")
+        self.assertTrue(lines[2].startswith("appended verify-run to feature/x: seq 3"))
+        self.assertTrue(lines[3].startswith("appended verify-run to feature/x: seq 4"))
+        self.assertEqual(lines[4], f"not observed: `make docs` — {NO_RUN}")
+        self.assertEqual([e["data"]["observed"] for e in self.events("feature/x")[1:]],
+                         [False, True, False])
+
+    def test_json_carries_the_notices(self):
+        proc = self.verify({"commands": [{"cmd": "make lint", "exit": 0}],
+                            "task_ids": ["T001"]}, "--json")
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["notices"], [f"not observed: `make lint` — {NO_RUN}"])
+        self.ran("a", TESTS, 0)
+        proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]},
+                           "--json")
+        self.assertEqual(json.loads(proc.stdout)["notices"], [])
+
+    def test_the_cap_measures_the_callers_payload_as_before(self):
+        """The journal's own keys come after the cap check, as `recorded_by` does: a
+        payload of exactly 1,024 bytes lands, one byte more is refused."""
+        def payload(size):
+            data = {"commands": [{"cmd": "", "exit": 0}], "outcome": "pass",
+                    "task_ids": ["T001"]}
+            pad = size - len(json.dumps(data, sort_keys=True))
+            data["commands"][0]["cmd"] = "x" * pad
+            self.assertEqual(len(json.dumps(data, sort_keys=True).encode()), size)
+            return data
+
+        self.verify(payload(1024))
+        self.assertIs(self.stored()["observed"], False)
+        proc = self.verify(payload(1025), rc=GATE)
+        self.assertIn("payload is 1025 bytes (cap 1024)", proc.stderr)
 
 
 if __name__ == "__main__":

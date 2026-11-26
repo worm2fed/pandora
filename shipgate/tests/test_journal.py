@@ -380,7 +380,8 @@ class TestAppend(JournalTestCase):
         self.append_event("feature/x", "flow-suspended")
         proc = self.append(
             "--stream", "feature/x", "--type", "verify-run",
-            "--data", json.dumps({"outcome": "pass", "task_ids": ["T001"]}),
+            "--data", json.dumps({"commands": [{"cmd": "make test", "exit": 0}],
+                                  "outcome": "pass", "task_ids": ["T001"]}),
             "--expect", "1", "--json", rc=OK,
         )
         payload = json.loads(proc.stdout)
@@ -531,7 +532,8 @@ class TestActorCanon(JournalTestCase):
         self.append_event("feature/x", "phase-entered",
                           {"phase": "route-and-map", "skipped": ["workspace"]})
         self.append_event("feature/x", "verify-run",
-                          {"outcome": "pass", "task_ids": ["T001"]}, "--actor", "user")
+                          {"commands": [{"cmd": "make test", "exit": 0}],
+                           "outcome": "pass", "task_ids": ["T001"]}, "--actor", "user")
         rows = self.events("feature/x")
         self.assertEqual([r["type"] for r in rows], [
             "phase-entered", "deviation", "phase-entered", "verify-run",
@@ -671,7 +673,8 @@ class TestActorCanon(JournalTestCase):
     def test_the_implied_phase_row_records_the_writing_session_too(self):
         self.journal(
             "--db", self.db, "append", "--stream", "feature/x", "--type", "verify-run",
-            "--data", json.dumps({"outcome": "pass", "task_ids": ["T001"]}),
+            "--data", json.dumps({"commands": [{"cmd": "make test", "exit": 0}],
+                                  "outcome": "pass", "task_ids": ["T001"]}),
             "--actor", "user", rc=OK, session_env="S1",
         )
         rows = self.events("feature/x")
@@ -1038,7 +1041,8 @@ class TestAppendBatch(JournalTestCase):
 
     def test_json_reports_an_implied_phase_per_line(self):
         proc = self.batch([
-            self.line("verify-run", {"outcome": "pass", "task_ids": ["T001"]}),
+            self.line("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                     "outcome": "pass", "task_ids": ["T001"]}),
         ], "--json")
         self.assertEqual(json.loads(proc.stdout)[0]["implied_phase"], "implement")
 
@@ -1230,7 +1234,8 @@ class TestExportImport(JournalTestCase):
         self.append_event(s, "gate-decision", {
             "gate": "clarify", "question": "q", "decision": "d", "mode": "ask",
         })
-        self.append_event(s, "verify-run", {"outcome": "pass", "task_ids": ["T001"]})
+        self.append_event(s, "verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                            "outcome": "pass", "task_ids": ["T001"]})
         self.append_event(s, "task-done", {"task_id": "T001"}, "--actor", "worker@sess")
         self.append_event("shipgate", "setup-completed", {})
         self.dump = self.root / "dump.jsonl"
@@ -1725,7 +1730,8 @@ def _pin_rows():
              for n in range(6)]
     rows += [
         ("phase-entered", {"phase": "implement", "style": []}),
-        ("verify-run", {"outcome": "pass", "task_ids": ["T001"]}),
+        ("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                        "outcome": "pass", "task_ids": ["T001"]}),
         ("task-done", {"task_id": "T001"}),
         ("design-queued", {"issue": "#1235", "assumes": "the parser lands"}),
     ]
@@ -2011,7 +2017,8 @@ class TestTerminalPrune(JournalTestCase):
                     ("deviation", {"note": "n"}, {}),
                     ("design-committed", {"worklog": "docs/w.worklog.md"},
                      {"force": True, "force_reason": "a test"}),
-                    ("verify-run", {"outcome": "pass", "task_ids": ["T001"]}, {}),
+                    ("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                    "outcome": "pass", "task_ids": ["T001"]}, {}),
                     ("task-done", {"task_id": "T001"},
                      {"force": True, "force_reason": "a test"}),
                     ("flow-suspended", {}, {}), ("flow-resumed", {}, {})):

@@ -261,7 +261,8 @@ class TestHeader(DigestCase):
         it names is the user's publish go, which the ready verdict does not give."""
         self.designed()
         self.batch([("review-verdict", {"verdict": "not-ready"}),
-                    ("verify-run", {"outcome": "pass", "task_ids": ["T001"]}),
+                    ("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                    "outcome": "pass", "task_ids": ["T001"]}),
                     ("review-verdict", {"verdict": "ready"})])
         header, _ = self.table()
         self.assertEqual(header[1], "verdict ready (round 2) · publish held")
@@ -277,7 +278,8 @@ class TestHeader(DigestCase):
         self.assertEqual(self.table()[0][1], "verdict — · publish authorized")
         self.assertEqual(self.doc()["publish"], "authorized")
         # A go lasts until the stream's next task-done.
-        self.batch([("verify-run", {"outcome": "pass", "task_ids": ["T001"]}),
+        self.batch([("verify-run", {"commands": [{"cmd": "make test", "exit": 0}],
+                                    "outcome": "pass", "task_ids": ["T001"]}),
                     ("task-done", {"task_id": "T001"})])
         self.assertEqual(self.table()[0][1], "verdict — · publish held")
         self.assertEqual(self.doc()["publish"], "held")

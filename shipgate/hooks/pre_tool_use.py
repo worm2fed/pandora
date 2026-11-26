@@ -81,7 +81,8 @@ other means, and these are out of scope:
 * any other indirection the lexer does not follow.
 
 This hook fires on every Bash call in every project, so the fast path comes first: decode
-stdin, and exit 0 with no output and no file read unless the command contains both
+stdin, and exit 0 with no output. Apart from the run log below, it reads no file unless
+the command contains both
 `journal.py` and `append` or `import`, or one of the command hints (`commit`, `push`,
 `create`, `new`). A command hint reads no file either unless the lexed line holds a gated
 command. `_common`
@@ -89,6 +90,11 @@ is imported only to print a refusal or to answer for a gated command. A crash of
 forgery net exits 0 silently, except on a command that names `journal.py`, `append` and
 `publish`, or `journal.py` and `import`: that one is refused (ADR 0015, ADR 0023 §20). A
 crash of the command gate passes the command.
+
+**The run log** (ADR 0032). Before both rules, a walk up from the payload's `cwd` looks
+for `.claude/shipgate.json` with `stat` calls only. In a journaled project, `_runs.py`
+appends the call's start row: its `tool_use_id` and the hash of the command as typed.
+The log never changes the hook's answer, and its failures are silent.
 """
 
 from __future__ import annotations
@@ -1791,6 +1797,33 @@ def deny_with(message):
     })
 
 
+def _observe_start(payload, command):
+    """ADR 0032: in a journaled project, log the start of this call for the run log.
+
+    Only the payload's `cwd` names the project, never `CLAUDE_PROJECT_DIR` or the
+    process directory. With no settings file the walk is a few `stat` calls and opens
+    no file; `_runs` is imported only on a hit. Nothing here prints or raises.
+    """
+    try:
+        import os
+
+        cwd = payload.get("cwd")
+        if not isinstance(cwd, str) or not os.path.isabs(cwd):
+            return
+        directory = os.path.normpath(cwd)
+        while not os.path.isfile(os.path.join(directory, ".claude", "shipgate.json")):
+            parent = os.path.dirname(directory)
+            if parent == directory:
+                return
+            directory = parent
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import _runs
+
+        _runs.record_start(payload, command, directory)
+    except Exception:  # noqa: BLE001 — the run log never changes the hook's answer
+        pass
+
+
 def main():
     try:
         payload = json.loads(sys.stdin.read())
@@ -1802,6 +1835,7 @@ def main():
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str):
         return
+    _observe_start(payload, command)
     if names_a_net_target(command):
         try:
             reason = inspect(command)

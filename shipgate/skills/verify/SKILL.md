@@ -120,6 +120,31 @@ EOF
 
 `journal.py vocab --shape verify-run` prints the payload if you need it.
 
+**Cite each command exactly as you ran it.** The Bash hooks log every foreground run in this
+session, a subagent's and a Workflow agent's included: a hash of the command and its exit
+code, no text and no output. At append, the journal looks up each `cmd` in that log. It
+stores `observed: true` when every command ran here with the `exit` the row names, and
+`observed: false` when one did not. So:
+
+- Copy `cmd` character for character from the command you ran: the same `cd`, flags, pipes
+  and redirects. A shortened or retyped command does not match.
+- A pipe ends with the exit code of its last command: `pytest | tail -5` exits 0 when the
+  tests fail. Run the command that proves the claim without such a pipe, or start it with
+  `set -o pipefail;`, so its exit code is the result.
+- Run it in this session and in the foreground. A background run is never observed, because
+  no hook sees its exit code. A run that must count runs in the foreground. A foreground run
+  that passes the Bash tool's time limit moves to the background, so it is not observed
+  either: give it a longer timeout, or run a narrower command in the foreground.
+- You may leave out `outcome`. The journal derives it from the exit codes: `pass` when every
+  one is 0, else `fail`. It refuses an `outcome` that disagrees with them.
+- A check that is no Bash command (a manual UI check, an MCP tool, a read of a file) sends an
+  empty list, `"commands":[]`, with `outcome` and the check in `scope`. The row is stored
+  `observed: false`, because there was nothing to observe.
+- The journal owns `observed` and `contradicted`. It replaces any value you send.
+- A `not observed:` line after `appended` names a command the log does not show ending with
+  that exit code. Run the command again in the foreground and cite it as you typed it, or fix
+  the citation. The row is stored all the same, and it still counts for `task-done`.
+
 Record failures too, with `"outcome":"fail"`. A gate that caught something is the most
 useful entry in the log. It is what lets a later session see that the fix was proven rather
 than assumed.

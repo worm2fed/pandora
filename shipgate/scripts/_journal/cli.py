@@ -541,6 +541,8 @@ def _append_summary(
                  f"seq {result.deviation_seq} — while the stream is still in route-and-map, "
                  "append the map again with `signals` (`signals.py hotspots ... --json`, "
                  "ADR 0011); after it, leave the deviation as the record")
+    for notice in result.notices:
+        line += "\n" + notice
     return line
 
 
@@ -556,6 +558,7 @@ def _append_payload(
         "implied_phase": result.implied_phase,
         "duplicate": result.duplicate,
         "deviation_seq": result.deviation_seq,
+        "notices": list(result.notices),
     }
     if line is not None:
         payload["line"] = line

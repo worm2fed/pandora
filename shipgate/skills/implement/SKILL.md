@@ -35,6 +35,10 @@ worker discipline and the config's **Worker guardrails** section, pasted verbati
 tasks directly. Either way, the loop below is what "done" means for each task, whoever
 executes it.
 
+A worker's report names each command it ran, exactly as it typed it, with its exit code.
+Cite those in your own `verify-run` (see `verify`). The worker's foreground runs are in this
+session's run log, so the journal sees them. Do not run a command again only to cite it.
+
 ## The loop (per task)
 
 When the `writing_style` setting is `ste-80`, the Writing for people rule applies to

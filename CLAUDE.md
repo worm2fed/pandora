@@ -32,10 +32,14 @@ pattern and its paths; treat a hit as a blocker, not a nit.
 - shipgate's tests run with `python3 -m unittest discover -s shipgate/tests` from the repo
   root (never `-t .`: `shipgate/tests` has no `__init__.py`; test modules import each other
   by plain name). Its scripts stay Python 3.9 compatible (no `match`, no runtime `X | Y`).
-- A test that runs `journal.py` in a subprocess gives it a temporary `CLAUDE_CONFIG_DIR`
-  (as `run_journal` in `shipgate/tests/test_journal.py` does): a terminal append and
-  `journal.py screens` prune the evidence root under the Claude config directory (ADR 0031),
-  so an inherited environment reaches the developer's real files.
+- A test that runs `journal.py` or a hook in a subprocess gives it a temporary
+  `CLAUDE_CONFIG_DIR` (as `run_journal` in `shipgate/tests/test_journal.py` and `run_hook`
+  in `shipgate/tests/test_hooks.py` do). A `flow-started` append, a terminal append, a
+  screenshot capture and `journal.py screens --prune` prune the evidence root under the
+  Claude config directory (ADR 0031). The Bash hooks write the run log there and the first
+  two prune it (ADR 0032), and every hook reads the user's settings there, so an inherited
+  environment reaches the developer's real files. A test that loads a hook
+  module into its own process sets the variable for that call too.
 - Plugins are independent: read the plugin's own `README.md` / `CHANGELOG.md` before
   editing it; do not assume one plugin's conventions apply to another.
 - shipgate's settings for this repo are in `.claude/shipgate.json`, and its config (behaviour

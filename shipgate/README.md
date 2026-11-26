@@ -291,15 +291,15 @@ branch), then the checked-out branch's. Every other stream goes into one count l
 | `screens --stream S --task T --file F [--file F …] [--width W]`, `screens --stream S --task T --url U`, `screens --stream S --list [--json]`, `screens --prune` | the evidence store of UI tasks (ADR 0031). `--file` registers PNG screenshots: it reads each file's pixel width, maps it to a width of `ui.widths` at 1x, 2x or 3x (`--width` settles a width that matches two), and copies the file to `<root>/<project key>/<stream>/T<n>-<w>.png` (then `-2` to `-9`). It refuses a stream with no events or a finished one, a task id that is not `T` and digits, a file that is no PNG, and a width that matches no set width; one bad file refuses the whole call. `--url` prints one `ui.capture` command per width, the out path filled in; it runs none. `--list` prints each UI task of the stream's worklog: the widths present, the waiver reason, or the widths missing. `--file` and `--url` first remove this project's directories of finished or unknown streams and every file over 30 days in the root, as `--prune` does. The root is `$CLAUDE_CONFIG_DIR/shipgate/evidence`, else `~/.claude/shipgate/evidence`; with neither variable it exits 2 |
 | `closeout --stream S [--observed DIR]` | the close-out plan of a merged stream (ADR 0025, ADR 0026). Without `--observed` it prints an observe script: the flow runs it, and it writes the forge's PR/MR state (`gh` or `glab`, from the `mr-opened` URL's host, else the `forge` setting), the integration branch git names (`origin/HEAD`), the refs, the refs merged into it, its first-parent line, `git worktree list` and the stream worktree's `git status --porcelain --ignored --untracked-files=normal` into a fresh directory. With it, the forge's state decides, a stream with no PR/MR on a forge that answered is never merged, and with no forge evidence git ancestry is the fallback (a merged tip must sit off the first-parent line, so a branch cut from the integration branch with no commit of its own never reads as merged), and the user's word is never evidence. It acts only on the branch named exactly as the stream, and on the recorded PR/MR or one whose head is the stream; for any other stream it exits 4 and names `journal.py sweep`. A merged stream gets the steps in order, each `[run]`, `[ask]` or `[skip]`: capture, `flow-completed` with `reason`, `evidence` and `url`, the update of the integration branch, the config's **Close-out** steps, the guarded deletion of a squash-merged branch, the report, then the worktree removal and `branch -d` in one Bash call. `[ask]` steps wait for one question that shows each step's command beside its label, recorded as the user's `gate-decision` at gate `close-out`. The worktree removal is an `[ask]` step that lists the paths when the worktree holds an ignored or untracked path, or its files were not observed (git deletes ignored files with the worktree); with none, it runs with no question. No step takes `--force`, `-f` or `-D`. It writes nothing; it exits 4 when the PR/MR did not merge. Text for a model |
 | `sweep [--observed DIR] [--apply]` | a disposition for each dormant stream, from one forge list query and git: `flow-completed` (merged), `flow-abandoned` (closed unmerged), `unknown` or keep, each with its source. It guesses nothing: it reads the branch and the PR/MR head of the stream's exact name, and the recorded PR/MR. With none of them the proposal is `unknown`: the user decides, and the line shows what the sweep looked for. `--apply`, after one confirmation, appends the terminal ones with `reason`, `evidence` and `url`, appends nothing for `unknown` or keep, and skips and names a stream that moved after the evidence was observed. It never touches git |
-| `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call |
+| `append --stream S --type T --data '{…}' [--actor R] [--expect N] [--batch]` | record one event — or a JSONL batch on stdin, so a phase boundary costs one call. After a `verify-run`, one `not observed: …` line per command the run log does not confirm (ADR 0033), and with `--json` a `notices` list in each result; the exit code stays the same |
 | `vocab [--shape T]` | the event vocabulary, and the canonical payload for one type |
 | `assumptions <prd> [--risky [--cap N]] [--json]` | the tagged lines of a PRD's "Assumptions (executive)" list (ADR 0029): class, source, question, answer and end tag of each. Exit 2 names the first malformed line; the section holds only assumption lines (no prose, no code block), and its heading appears once. `--risky` gives the confirm batch: the lines with no end tag that are `domain`, `data` or `behaviour` with no source, or a blindspot or UI candidate, in file order, at most 4 (`--cap N` lowers it for the escalations that share the dialog), with the count over the cap. `--json` also says whether the section exists. Reads one file, never the journal |
 | `reply --session ID --json` | the recorder hook's plan for a user's reply on stdin (ADR 0023): the go rows and witnesses to write, and the context line, which after a witness asks for a new go request and one confirming question. It writes nothing; the hook writes the rows with `append --batch` |
 | `authorize --gate commit\|publish --branch B [--subagent] --json` | the command gate's answer for a branch: `pass` or `hold`, the reason (`authorized`, `no-go`, `witness-waits` when the user's reply was no exact go and a confirming question is due, `no-stream`, `not-live`) and the refusal text. A ready verdict is no go |
 | `check --session ID [--json] [--record]` | what the flow still owes (the Stop hook's source): `findings`, the worklogs it `skipped` and why, and the `waivers` that would clear the findings. `--record` stamps the run as the last check: one `meta` value, no event |
-| `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review". `go` counts the go records by marker (`dialog`, `shell`, `question`, `prompt`) |
+| `stats [--since ISO] [--stream S] [--json]` | events by actor, gate decisions by mode × who raised them, deviations (and by `kind`), verifies per task, review rounds. A trace section says per stream whether the style skills were named at implement and at review (`named`, `none`, `missing`), and which signal source fed route-and-map, design and review (`graph`, `regex`, `none`, `missing`); its totals answer "how often did the graph feed design and review". `go` counts the go records by marker (`dialog`, `shell`, `question`, `prompt`). The `obs` column shows the `verify-run` rows stored `observed: true` of those that carry the key, `ctr` the contradicted ones, and a footer line the share in total; `--json` gives `verify_observed`, `verify_unobserved`, `verify_contradicted`, `verify_unrecorded` and `verify_observed_share` per stream and in the totals (ADR 0033) |
 | `streams --open \| --dormant [--json]` | one line per open (or dormant) stream: lifecycle, phase, last event, idle days, the PR/MR URL, and the ownership mark when `CLAUDE_CODE_SESSION_ID` names another session than the last writer |
-| `log`, `streams`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, schema, health, portability. `session` is retired: it reads and writes nothing, and a later release removes it. `doctor` also reports the settings file's `version` and its `stray_keys`, the keys that `settings.schema.json` does not name (the JSON key is still `sidecar`), and `settings`: each problem the settings resolver finds, each legacy line (in the project's, the nested repos' and the user's configs), each settings file inside a nested repo, and the grace date. None of them changes the exit code. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block, and `evidence`: the evidence root, the size, file count and oldest file of this project and of the whole root, what the next prune would delete, and the entries it refuses. It deletes nothing |
+| `log`, `streams`, `init`, `doctor`, `export`, `import` | plumbing: the raw event log, the streams and their versions, schema, health, portability. `session` is retired: it reads and writes nothing, and a later release removes it. `doctor` also reports the settings file's `version` and its `stray_keys`, the keys that `settings.schema.json` does not name (the JSON key is still `sidecar`), and `settings`: each problem the settings resolver finds, each legacy line (in the project's, the nested repos' and the user's configs), each settings file inside a nested repo, and the grace date. None of them changes the exit code. It also reports `stop_gate`: the last recorded check (time, session, findings, skipped) and the last block, and `evidence`: the evidence root, the size, file count and oldest file of this project and of the whole root, what the next prune would delete, and the entries it refuses, and `runs`: the run log root (ADR 0032), its file count, size and oldest file, what the next prune deletes after 7 days, and the entries it refuses. It deletes nothing |
 
 `append` is where the gates live. It validates the payload against its type's shape
 (normalizing known aliases), records the `phase-entered` a phase-owning event implies — which
@@ -503,6 +503,51 @@ last main-thread assistant record. Past the threshold it prints one line, as a
 `journal.py handoff`. The threshold is the `handoff` setting (default `500k`, `off` turns
 it off). The line is advice: it never blocks. Any other Bash
 call pays two substring checks and does not import the nudge's code.
+
+**Observed runs (ADR 0032, ADR 0033).** A `verify-run` names its commands, and the journal
+checks them against the runs the hooks saw.
+
+- **The run log.** In a journaled project, the **PreToolUse hook on Bash** appends a start
+  row for each call: its `tool_use_id` and an 8-byte BLAKE2b hash of the command as the
+  model typed it. A command that another PreToolUse hook rewrites still matches, because
+  the hash is taken before the rewrite. The **PostToolUse hook**, and the
+  **PostToolUseFailure hook** on Bash, append an end row: the `tool_use_id` and the exit
+  code, when the payload shows it. A row holds no command text, no output, no time, no
+  directory and no agent id. The file is `$CLAUDE_CONFIG_DIR/shipgate/runs/<session>.jsonl`,
+  else `~/.claude/shipgate/runs/<session>.jsonl`, outside every repository. At 256 KB it is
+  renamed to `<session>.jsonl.1`, so a session keeps about 512 KB at most. The journal
+  deletes a session's files 7 days after their last write, right after a `flow-started` and
+  right after a terminal append, in any project; `doctor` shows what is kept. The start row
+  finds the project from the payload's `cwd` only. The end row needs that project too, and
+  the post hook's first check needs a settings file above the session's project directory
+  or the hook's own working directory, as for every other post hook path. A project with no
+  settings file, with `"db": null` or with `enforce.auto_capture: false` gets no row, and a
+  failure to write is silent.
+- **What counts.** A foreground run of the session, and a subagent's or a Workflow agent's
+  foreground run, which the hooks log under the parent session.
+- **Not observed.** A background run (no hook sees its exit code). A foreground run that
+  passes the Bash tool's time limit, which moves to the background: give it a longer
+  timeout, or run a narrower command in the foreground. An interrupted run, and a run the
+  permission check denied. An exit that Claude Code reports with an interpretation and no
+  code: `grep` with no match, `diff` of two different files, a false `test`. A run under
+  another session id: before a `/clear`, a fork or a new session.
+- **The row.** `commands` is required, each item with `cmd` and `exit`. `outcome` may be
+  left out: the journal derives it (`pass` when every exit is 0, else `fail`), and it
+  refuses an `outcome` that disagrees, with `--force` too. A check that is no Bash command
+  sends `"commands":[]` with `outcome` and the check in `scope`. At append, the journal
+  stores `observed: true` when each command's newest run in the appending session ended with
+  the named exit code, and `observed: false` otherwise; it adds `contradicted: true` when a
+  newest run ended with another code. It owns both keys and replaces a caller's value.
+- **No gate reads it yet.** A row that does not match is stored and still counts for
+  `task-done` and the ready verdict. `append` prints one `not observed: …` line per such
+  command after its `appended` line, with the same exit code. `stats` counts the rows, so
+  the December review can decide on a gate from one month of data.
+
+A row with `observed: true` proves that this session ran that exact command with that exit
+code. It does not prove where the command ran, what its exit code means (`pytest | tail`
+exits with the code of `tail`), or that the run came after the last edit. The model can
+write the log with its shell like any other file; that buys a false count in `stats` and
+nothing else.
 
 ## Code signals
 

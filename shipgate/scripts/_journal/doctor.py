@@ -7,8 +7,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .vocab import EVENT_VOCABULARY, EVIDENCE_KEEP_DAYS
-from .plugin import _config
+from .vocab import EVENT_VOCABULARY, EVIDENCE_KEEP_DAYS, RUNS_KEEP_DAYS
+from .plugin import _config, _hooks_common
 from .text import _one_line
 from .project import Resolution, sidecar_db_path
 from .settings import _part, render_settings_report, settings_report
@@ -16,6 +16,7 @@ from .store import pending_migrations, read_schema_version
 from .screens import (
     _as_line, evidence_root, EvidenceSurvey, project_key, survey_evidence,
 )
+from .runs import RunsSurvey, survey_runs
 from .check import stop_gate_trace
 
 
@@ -76,6 +77,7 @@ def run_doctor(conn: sqlite3.Connection, resolution: Resolution) -> Dict[str, An
         "sidecar": sidecar_report,
         "settings": settings_report(resolution.project_dir),
         "evidence": doctor_evidence(conn),
+        "runs": survey_runs(_hooks_common.runs_root()),
     }
 
 
@@ -159,6 +161,8 @@ def render_doctor(report: Dict[str, Any],
         )
     if "evidence" in report:
         lines.extend(_render_evidence(report["evidence"]))
+    if "runs" in report:
+        lines.extend(_render_runs(report["runs"]))
     return "\n".join(lines)
 
 
@@ -219,4 +223,30 @@ def _render_evidence(evidence: EvidenceSurvey) -> List[str]:
         lines.append(f"  refused       : {_counted(refused['count'], 'entry', 'entries')} "
                      f"outside the layout (first: {_as_line(refused['first'] or '')})")
     lines.append(EVIDENCE_NOTE)
+    return lines
+
+
+def _render_runs(runs: RunsSurvey) -> List[str]:
+    """The runs block (#27, ADR 0032): the root, its run logs, the next prune, the
+    refused entries."""
+    root = runs["root"]
+    if root is None:
+        return ["runs root       : none (no CLAUDE_CONFIG_DIR, no HOME)"]
+    if not runs["exists"]:
+        if runs["refused"]:
+            return [f"runs root       : {_as_line(root)} (not a directory: the journal "
+                    "reads and prunes nothing there)"]
+        return [f"runs root       : {_as_line(root)} (none yet)"]
+    lines = [f"runs root       : {_as_line(root)} (this Claude config directory)"]
+    logs = runs["logs"]
+    if logs is not None:
+        lines.append("  run logs      : " + _evidence_files(logs))
+    prune = runs["next_prune"]
+    if prune is not None:
+        lines.append(f"  next prune    : {_counted(prune['files'], 'file', 'files')} "
+                     f"over {RUNS_KEEP_DAYS} days")
+    refused = runs["refused"]
+    if refused is not None and refused["count"]:
+        lines.append(f"  refused       : {_counted(refused['count'], 'entry', 'entries')} "
+                     f"outside the layout (first: {_as_line(refused['first'] or '')})")
     return lines

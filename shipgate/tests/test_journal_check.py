@@ -48,6 +48,7 @@ class TestCheck(JournalTestCase):
         """SC-007."""
         self.worklog("- [x] T001 — first\n- [ ] T002 — second")
         self.append_event("feature/demo", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 0}],
             "outcome": "pass", "task_ids": ["T001"],
         })
         self.artifact_written("docs/prd/demo.worklog.md")
@@ -61,6 +62,7 @@ class TestCheck(JournalTestCase):
     def test_suggested_command_resolves_the_finding(self):
         self.worklog("- [x] T001 — first")
         self.append_event("feature/demo", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 0}],
             "outcome": "pass", "task_ids": ["T001"],
         })
         self.artifact_written("docs/prd/demo.worklog.md")
@@ -76,6 +78,7 @@ class TestCheck(JournalTestCase):
     def test_clean_session_passes(self):
         self.worklog("- [x] T001 — first")
         self.append_event("feature/demo", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 0}],
             "outcome": "pass", "task_ids": ["T001"],
         })
         self.append_event("feature/demo", "task-done", {"task_id": "T001"},
@@ -175,6 +178,7 @@ class TestCheck(JournalTestCase):
         self.worklog("- [x] T001 — first\n- [x] T002 — second")
         self.names_the_worklog("fix/1290-date-off-by-one")
         self.append_event("fix/1290-date-off-by-one", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 0}],
             "outcome": "pass", "task_ids": ["T001"],
         })
         self.append_event("fix/1290-date-off-by-one", "task-done", {"task_id": "T001"})
@@ -429,6 +433,7 @@ class TestCheck(JournalTestCase):
         self.append_event("feat/demo", "phase-entered", {"phase": "workspace"})
         self.append_event("fix/demo", "phase-entered", {"phase": "workspace"})
         self.append_event("fix/demo", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 0}],
             "outcome": "pass", "task_ids": ["T001"],
         })
         self.captured()
@@ -465,6 +470,7 @@ class TestCheck(JournalTestCase):
         self.assertEqual((finding["missing"], finding["stream"], finding["task_id"]),
                          ("verify-run", "feat/demo", "T001"))
         self.append_event("feat/demo", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 0}],
             "outcome": "pass", "task_ids": ["T001"],
         })
         self.check(rc=OK)
@@ -501,6 +507,7 @@ class TestCheck(JournalTestCase):
         self.append_event("feat/demo", "task-done", {"task_id": "T001"},
                           "--force", "--actor", "orchestrator@" + self.SESSION)
         self.append_event("feat/demo", "verify-run", {
+            "commands": [{"cmd": "make test", "exit": 1}],
             "outcome": "fail", "task_ids": ["T001"],
         })
         self.check(rc=CHECK)
