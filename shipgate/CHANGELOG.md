@@ -2,6 +2,56 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.37.0 — a verify-run records an observed run, not a claim (#27, ADR 0032, ADR 0033).
+
+**The journal now checks a verify-run against the runs it saw (#27, ADR 0032, ADR 0033).**
+Before, the model typed every `verify-run`, and no hook saw the test run. Now the Bash hooks
+log each foreground run of the session, and the journal stores whether it saw each command
+that a `verify-run` names end with the exit code the row claims. No gate reads the result
+yet: `journal.py stats` measures the share for one month first.
+- **Hooks (a hook contract change).** In a journaled project, the PreToolUse hook on Bash
+  appends a start row: the call's `tool_use_id` and an 8-byte BLAKE2b hash of the command
+  as the model typed it, so a command that another hook rewrites still matches. The
+  PostToolUse hook, and the newly registered PostToolUseFailure hook on Bash, append an end
+  row with the exit code when the payload shows it. No row holds command text, output, a
+  time, a directory or an agent id. The rows go to
+  `$CLAUDE_CONFIG_DIR/shipgate/runs/<session>.jsonl` (else `~/.claude/shipgate/runs`),
+  outside every repository; at 256 KB a file is renamed to `.jsonl.1`, so a session keeps
+  about 512 KB at most. A project with no settings file, with `"db": null` or with
+  `enforce.auto_capture: false` writes nothing, and a failure to write is silent. A failing
+  Bash call now starts the post hook too, which costs about 25 ms in a project with no
+  settings file; on a passing call each hook costs at most 1.5 ms more.
+- **Not observed.** A background run (no hook sees its exit), a foreground run that passes
+  the Bash tool's time limit and so moves to the background, an interrupted run, a denied
+  run, an exit that Claude Code reports with an interpretation and no code (`grep` with no
+  match, `diff` of two different files, a false `test`), and a run under another session id
+  (before a `/clear`, a fork or a new session). A subagent's and a Workflow agent's
+  foreground runs are logged under the parent session, so they count.
+- **`verify-run` shape (a break for callers).** `commands` is required, each item with `cmd`
+  and `exit`; a row without it is refused. `outcome` may be left out: the journal derives it
+  (`pass` when every exit is 0, else `fail`) and refuses an `outcome` that disagrees, with
+  `--force` too. A check that is no Bash command (a manual UI check, an MCP tool, a read of
+  a file) sends `"commands":[]` with `outcome` and the check in `scope`.
+- **What the journal stores.** `observed: true` when every named command's newest run in the
+  appending session ended with the named exit code, else `observed: false`, and
+  `contradicted: true` when a newest run ended with another exit code. The journal owns both
+  keys and replaces a caller's value. A row that does not match is stored, never refused,
+  and still counts for `task-done` and the ready verdict. `append` prints one
+  `not observed: …` line per unmatched command after its `appended` line and keeps its exit
+  code.
+- **`journal.py stats`** counts per stream and in total `verify_observed`,
+  `verify_unobserved`, `verify_contradicted` and `verify_unrecorded` (rows from before this
+  release or from an older `journal.py`), with `verify_observed_share` in `--json`. The text
+  adds the columns `obs` (observed of recorded) and `ctr`, and one footer line with the share.
+- The journal deletes a session's run log 7 days after its last write, right after a
+  `flow-started` and right after a terminal append, in any project; with no `runs`
+  directory this costs one `lstat`. `doctor` reports the directory, its files and size,
+  what the next prune deletes and the names it refuses.
+- The verify skill says how to cite a command so that it matches: the exact text, in this
+  session, in the foreground. The implement and model-tiers skills say that a worker reports
+  each command as typed with its exit code, and the orchestrator cites it without a re-run.
+- No shipgate-hud file changes, and rows already in a journal stay valid.
+
 v0.36.0 — a UI task is done with screenshots (#26, ADR 0031).
 
 **A UI task now needs screenshots before it is done (#26, ADR 0031).** A test can pass while

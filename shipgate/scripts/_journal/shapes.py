@@ -109,6 +109,47 @@ def check_security_review(event_type: str, payload: Dict[str, Any]) -> None:
         )
 
 
+_EXITS_SHOWN = 10
+
+
+def _settle_verify_outcome(event_type: str, payload: Dict[str, Any]) -> None:
+    """Derive a ``verify-run``'s ``outcome`` from its exits, or refuse it (ADR 0033).
+
+    With items in ``commands``, the outcome is ``pass`` when every ``exit`` is 0, else
+    ``fail``: an absent ``outcome`` is set to it, and one that differs is refused. An
+    empty list is the way out for a check that is no Bash command, so it needs the
+    ``outcome``. A payload check, like the shape: ``--force`` does not waive it. Runs
+    after ``_validate_shape``, so ``commands`` is a list of objects with an integer
+    ``exit`` each, and ``outcome`` is absent or in the enum.
+    """
+    if event_type != "verify-run":
+        return
+    commands = payload["commands"]
+    outcome = payload.get("outcome")
+    if not commands:
+        if outcome is None:
+            raise GateViolation(
+                f"{event_type}: data.commands is empty, so data.outcome is required — "
+                "an empty list is for a check that is no Bash command: name the check "
+                "in data.scope and give its data.outcome"
+            )
+        return
+    exits = [item["exit"] for item in commands]
+    derived = "pass" if all(code == 0 for code in exits) else "fail"
+    if outcome is None:
+        payload["outcome"] = derived
+        return
+    if outcome != derived:
+        shown = ", ".join(str(code) for code in exits[:_EXITS_SHOWN])
+        more = len(exits) - _EXITS_SHOWN
+        raise GateViolation(
+            f"{event_type}: data.outcome is {outcome!r}, but data.commands exit "
+            f"{shown}" + (f" and {more} more" if more > 0 else "")
+            + f", which is {derived!r} — leave data.outcome out and the journal "
+            "derives it from the exits"
+        )
+
+
 # The maps keyed by a review finding (ADR 0014, amended 0.23.0). Each key must be a
 # location, as the HUD's `parseLocation` reads one; a free label never matches a finding,
 # so its state would stay open on one side of the fold for good.

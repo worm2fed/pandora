@@ -803,7 +803,9 @@ class CloseoutCase(unittest.TestCase):
                    "--data", json.dumps(data), rc=0)
 
     def opened(self, stream=None):
-        self.append(stream or self.S, "verify-run", {"outcome": "pass", "task_ids": []})
+        self.append(stream or self.S, "verify-run",
+                    {"commands": [{"cmd": "make test", "exit": 0}],
+                     "outcome": "pass", "task_ids": []})
         self.append(stream or self.S, "review-verdict", {"verdict": "ready"})
         self.append(stream or self.S, "mr-opened", {"ref": "#7", "url": self.URL})
 

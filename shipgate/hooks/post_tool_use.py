@@ -28,6 +28,11 @@ the hook also measures the session's context from the tail of `transcript_path` 
 line goes out as a `systemMessage` for the user and as `additionalContext` for the model.
 That is advice: it never blocks.
 
+**The run log** (ADR 0032). This script also runs on PostToolUseFailure, which fires in
+place of PostToolUse when a Bash call exits non-zero. On both events, in a journaled
+project, `_runs.py` appends the call's end row when the payload shows the exit status.
+A failed call stops there: it claims no artifact and asks for no nudge.
+
 This hook fires on every Write, Edit and Bash call in every project, so the ordering
 below is deliberate: gate on the sidecar before reading stdin, and return before
 importing anything heavy when the project isn't journaled. A Bash call runs
@@ -270,10 +275,9 @@ def window_paths(project, command, duration_ms, now):
     return found
 
 
-def record_bash_claims(payload):
-    import time
-
-    now = time.time()  # the call ended just before this hook started
+def record_bash_claims(payload, project, now):
+    """Claim the artifacts a Bash call wrote, in `project` (the payload cwd's journaled
+    project, or None). `now` is when the hook started, just after the call ended."""
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         return
@@ -283,7 +287,6 @@ def record_bash_claims(payload):
     if not isinstance(session, str) or not session:
         return  # a claim with no session never names an author
 
-    project = find_project(payload.get("cwd"))
     if project is None or not project.enforces("auto_capture"):
         return
 
@@ -336,8 +339,19 @@ def main() -> None:
         sys.exit(0)
 
     payload = read_hook_input()
+    failed = payload.get("hook_event_name") == "PostToolUseFailure"
     if payload.get("tool_name") == "Bash":
-        record_bash_claims(payload)
+        import time
+
+        now = time.time()
+        project = find_project(payload.get("cwd"))
+        if project is not None:
+            from _runs import record_end
+
+            record_end(payload, project)
+        if failed:
+            sys.exit(0)  # a failed call wrote nothing it can claim, and asks no nudge
+        record_bash_claims(payload, project, now)
         line = None
         if maybe_boundary(payload):
             from _nudge import context_nudge
@@ -354,7 +368,7 @@ def main() -> None:
                 },
             })
         sys.exit(0)
-    if payload.get("tool_name") not in WRITE_TOOLS:
+    if failed or payload.get("tool_name") not in WRITE_TOOLS:
         sys.exit(0)
 
     target = changed_path(payload)
