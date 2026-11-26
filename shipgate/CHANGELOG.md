@@ -2,6 +2,34 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.38.1 — an honest verify-run matches the run the hooks saw (#81, ADR 0032 and ADR 0033
+amended).
+
+**A `verify-run` now matches its observed run whatever the shell's config directory, and
+with a leading `cd` (#81).** Under 0.37.0, most honest runs on one machine were stored
+`observed: false`. A probe found two causes, and both are fixed:
+- **The run log moves to `~/.claude/shipgate/runs` (a hook contract change).** The hooks
+  wrote the log under the `CLAUDE_CONFIG_DIR` the session runs under. `journal.py append`
+  looked under the `CLAUDE_CONFIG_DIR` of the Bash shell, and a shell profile may set that
+  to another directory. Now both sides use `$HOME/.claude/shipgate/runs` and do not read
+  `CLAUDE_CONFIG_DIR` for it; with no absolute `HOME` nothing is written. A log that 0.37.0
+  wrote under `$CLAUDE_CONFIG_DIR/shipgate/runs`, for a config directory other than
+  `~/.claude`, is no longer read or pruned. It holds hashes and exit codes only: you can
+  delete that `runs` directory by hand. The evidence store of UI tasks stays under the
+  config directory.
+- **A leading `cd <dir> && ` no longer counts.** Claude Code removes one leading
+  `cd <cwd> && ` before the hooks see the command, and the model cites the form it typed.
+  The hash now leaves out each leading `cd <word> && ` on both sides, so both forms match.
+  The key no longer tells where a command ran, which it never proved.
+- **The not-observed notice names the cause:** no session id in the shell, no log for this
+  session under the runs root, no foreground run of the command in the log (a run past the
+  Bash time limit moves to the background and is never seen), or another exit code.
+- `doctor`'s runs line names `HOME` in place of the config directory.
+- Rows stored `observed: false` before this release are not rewritten. No gate reads
+  `observed`. Each hook costs the same as before: within 0.7 ms, which is noise.
+- A test that runs a hook or `journal.py` now gives it a temporary `HOME` as well as a
+  temporary `CLAUDE_CONFIG_DIR`.
+
 v0.38.0 — the hotspots UI flag comes first in the output (#28).
 
 **`signals.py hotspots` shows the UI flag in its first lines (#28).** An agent that reads

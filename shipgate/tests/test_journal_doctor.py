@@ -1148,13 +1148,14 @@ RUNS_OLD = time.time() - 8 * 86400 - 3600
 
 class TestDoctorRuns(JournalTestCase):
     """#27 T023: after the evidence block, `doctor` reports the run log of the Bash
-    hooks in this Claude config directory: the files, their size, what the next prune
-    deletes and the names it refuses. It deletes nothing."""
+    hooks under this HOME (ADR 0032, amended by #81): the files, their size, what the
+    next prune deletes and the names it refuses. It deletes nothing."""
 
     def setUp(self):
         super().setUp()
-        self.config = self.root / "config"
-        self.config.mkdir()
+        self.home = self.root / "home"
+        self.config = self.home / ".claude"
+        self.config.mkdir(parents=True)
         self.runs = self.config / "shipgate" / "runs"
         self.shown = os.path.join(os.path.realpath(self.runs.parent), "runs")
         self.outside = self.root / "outside"
@@ -1164,7 +1165,7 @@ class TestDoctorRuns(JournalTestCase):
 
     def env(self):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
-        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        env["HOME"], env["CLAUDE_CONFIG_DIR"] = str(self.home), str(self.config)
         return env
 
     def run_j(self, *args, env=None):
@@ -1199,7 +1200,7 @@ class TestDoctorRuns(JournalTestCase):
         self.plant_store()
         lines = self.doctor()
         self.assertEqual(lines[-4:], [
-            f"runs root       : {self.shown} (this Claude config directory)",
+            f"runs root       : {self.shown} (under this HOME)",
             "  run logs      : 3 files · 600 B · oldest 8 days",
             "  next prune    : 2 files over 7 days",
             f"  refused       : 2 entries outside the layout (first: "
@@ -1219,7 +1220,7 @@ class TestDoctorRuns(JournalTestCase):
     def test_an_empty_root(self):
         self.runs.mkdir(parents=True)
         self.assertEqual(self.doctor()[-3:], [
-            f"runs root       : {self.shown} (this Claude config directory)",
+            f"runs root       : {self.shown} (under this HOME)",
             "  run logs      : no files",
             "  next prune    : 0 files over 7 days",
         ])
@@ -1241,7 +1242,8 @@ class TestDoctorRuns(JournalTestCase):
         env = {k: v for k, v in os.environ.items()
                if k not in (SESSION_ENV, "CLAUDE_CONFIG_DIR", "HOME")}
         lines = self.doctor(env=env)
-        self.assertEqual(lines[-1], "runs root       : none (no CLAUDE_CONFIG_DIR, no HOME)")
+        self.assertEqual(lines[-1],
+                         "runs root       : none (HOME is unset or not an absolute path)")
         self.assertEqual(lines[-2], "evidence root   : none (no CLAUDE_CONFIG_DIR, no HOME)")
         self.assertEqual(self.doctor_json(env=env), {
             "root": None, "exists": False, "logs": None, "next_prune": None,
@@ -1276,7 +1278,7 @@ class TestDoctorRuns(JournalTestCase):
         cwd = os.getcwd()
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.dict(
-                os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)}))
+                os.environ, {"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.config)}))
             stack.callback(os.chdir, cwd)
             os.chdir(str(self.root))
             for name in ("unlink", "remove", "rmdir", "removedirs", "mkdir", "makedirs",

@@ -36,6 +36,10 @@ _END_KEYS = frozenset(("i", "x"))
 MATCHED = "matched"
 UNMATCHED = "unmatched"
 CONTRADICTED = "contradicted"
+# Why no command can match (ADR 0033, amended by #81): the shell has no plain-token
+# session id, or the session has no log under the runs root.
+NO_SESSION = "no-session"
+NO_LOG = "no-log"
 
 
 def _plain_session(session: Any) -> bool:
@@ -158,7 +162,12 @@ class CommandRun(NamedTuple):
 
 
 class Observation(NamedTuple):
+    """The cited commands, why none could match (``NO_SESSION``, ``NO_LOG``, or None when
+    the session's log was read), and the runs root the journal looked under."""
+
     commands: Tuple[CommandRun, ...]
+    cause: Optional[str] = None
+    root: Optional[str] = None
 
     @property
     def observed(self) -> bool:
@@ -178,8 +187,14 @@ def observe(commands: Any, session: Any) -> Observation:
     an item the shape check would refuse. It never raises."""
     try:
         items = list(commands) if isinstance(commands, (list, tuple)) else []
-        newest = _newest_exits(read_session_runs(session))
-        return Observation(tuple(_observe_one(item, newest) for item in items))
+        if _plain_session(session):
+            runs = read_session_runs(session)
+            cause = None if runs is not None else NO_LOG
+        else:
+            runs, cause = None, NO_SESSION
+        newest = _newest_exits(runs)
+        return Observation(tuple(_observe_one(item, newest) for item in items), cause,
+                           _hooks_common.runs_root())
     except Exception:  # noqa: BLE001 — an observation never blocks an append
         return Observation(())
 
@@ -187,10 +202,14 @@ def observe(commands: Any, session: Any) -> Observation:
 NOTICE_CMD_CHARS = 60
 
 
+NOTICE_ROOT_CHARS = 200
+
+
 def not_observed_lines(observation: Observation) -> Tuple[str, ...]:
     """One line per command that is not matched, as ``append`` prints it after its
-    ``appended`` line (ADR 0033). The command is shown on one line, each character that
-    does not print as ``?``, clipped to ``NOTICE_CMD_CHARS``."""
+    ``appended`` line (ADR 0033, amended by #81): the line names why. The command is
+    shown on one line, each character that does not print as ``?``, clipped to
+    ``NOTICE_CMD_CHARS``; the root likewise, its end kept."""
     lines = []
     for run in observation.commands:
         if run.state == MATCHED:
@@ -200,9 +219,18 @@ def not_observed_lines(observation: Observation) -> Tuple[str, ...]:
         if run.state == CONTRADICTED:
             why = (f"its newest run in this session exited {run.newest_exit}, not "
                    f"{run.exit} (stored as contradicted)")
+        elif observation.cause == NO_SESSION:
+            why = ("this shell has no valid CLAUDE_CODE_SESSION_ID, so no run can be tied "
+                   "to a session")
+        elif observation.cause == NO_LOG and observation.root is None:
+            why = "no run log for this session: HOME is unset or not an absolute path"
+        elif observation.cause == NO_LOG:
+            why = ("no run log for this session under "
+                   + _part(observation.root, NOTICE_ROOT_CHARS, tail=True))
         else:
-            why = ("no foreground run of this exact command in this session; run it in "
-                   "the foreground here and cite it as typed")
+            why = ("no foreground run of this exact command in this session's log; a run "
+                   "past the Bash time limit moves to the background and is never seen; "
+                   "run it in the foreground here and cite it as typed")
         lines.append(f"not observed: `{shown}` — {why}")
     return tuple(lines)
 

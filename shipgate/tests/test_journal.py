@@ -60,6 +60,20 @@ SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
 _AMBIENT_CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR")
 _EMPTY_CONFIG_DIR = tempfile.mkdtemp(prefix="shipgate-test-config-")
 atexit.register(shutil.rmtree, _EMPTY_CONFIG_DIR, True)
+# An empty home directory: since #81 the run log of ADR 0032 lives under
+# `$HOME/.claude/shipgate/runs`, whatever CLAUDE_CONFIG_DIR says, and a flow-started or
+# terminal append prunes it. A run whose HOME is the suite's own gets this one instead, so
+# it never reads or prunes the developer's real run log. A test that sets HOME keeps it.
+_AMBIENT_HOME = os.environ.get("HOME")
+_EMPTY_HOME = tempfile.mkdtemp(prefix="shipgate-test-home-")
+atexit.register(shutil.rmtree, _EMPTY_HOME, True)
+
+
+def _isolated_home(env):
+    """ENV with HOME pointed at the empty home when it is the suite's own HOME."""
+    if _AMBIENT_HOME and env.get("HOME") == _AMBIENT_HOME:
+        return dict(env, HOME=_EMPTY_HOME)
+    return env
 
 
 def _evidence_base(env):
@@ -75,7 +89,9 @@ _AMBIENT_EVIDENCE_BASE = _evidence_base(os.environ)
 def isolated_env(env):
     """ENV, with CLAUDE_CONFIG_DIR pointed at the empty directory when ENV would reach
     the developer's evidence root: since #26 T023 every flow-started append prunes that
-    root (ADR 0031). An ENV with a root of its own, or with none, stays as it is."""
+    root (ADR 0031). An ENV with a root of its own, or with none, stays as it is. Its HOME
+    goes to the empty home when it is the suite's own (#81: the run log's root)."""
+    env = _isolated_home(env)
     if (_AMBIENT_EVIDENCE_BASE is not None
             and _evidence_base(env) == _AMBIENT_EVIDENCE_BASE):
         return dict(env, CLAUDE_CONFIG_DIR=_EMPTY_CONFIG_DIR)
@@ -95,6 +111,7 @@ def run_journal(args, cwd=None, env=None):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         if env.get("CLAUDE_CONFIG_DIR") == _AMBIENT_CONFIG_DIR:
             env["CLAUDE_CONFIG_DIR"] = _EMPTY_CONFIG_DIR
+        env = _isolated_home(env)
     else:
         env = isolated_env(env)
     return subprocess.run(
@@ -1891,7 +1908,7 @@ class TestTerminalPrune(JournalTestCase):
     def env(self):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         env["CLAUDE_CONFIG_DIR"] = str(self.config)
-        return env
+        return isolated_env(env)  # HOME too (#81: the run log)
 
     def journal(self, *args, cwd=None, rc=None, session_env=None):
         proc = run_journal(args, cwd=cwd or self.root, env=self.env())

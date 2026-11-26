@@ -2,9 +2,11 @@
 """Tests of the run log as the journal reads and prunes it (#27, ADR 0032 and ADR 0033):
 ``_journal/runs.py``.
 
-Every log is written into a temporary ``CLAUDE_CONFIG_DIR``, and an in-process call reads
-it under ``mock.patch.dict(os.environ)``. A ``journal.py`` subprocess gets the same
-directory. The module checks at its end that no old file of the real runs root of the
+Every log is written under a temporary ``HOME`` (ADR 0032, amended by #81), and an
+in-process call reads it under ``mock.patch.dict(os.environ)``. ``CLAUDE_CONFIG_DIR`` names
+another temporary directory, as a shell profile may set it in the Bash shell, so every test
+also shows that the journal does not read it. A ``journal.py`` subprocess gets the same
+two directories. The module checks at its end that no old file of the real runs root of the
 environment went away.
 """
 
@@ -33,10 +35,7 @@ KEEP_DAYS = 7
 
 def _ambient_runs_root() -> str:
     """The real runs root of the environment the suite runs in."""
-    config = os.environ.get("CLAUDE_CONFIG_DIR")
-    base = (os.path.expanduser(config) if config
-            else os.path.join(os.environ.get("HOME", ""), ".claude"))
-    return os.path.join(base, "shipgate", "runs")
+    return os.path.join(os.environ.get("HOME", ""), ".claude", "shipgate", "runs")
 
 
 def _old_files(root: str):
@@ -73,7 +72,8 @@ def tearDownModule():
 
 
 def fingerprint(command: str) -> str:
-    """ADR 0032's key, computed here without the plugin's code."""
+    """ADR 0032's key of a command with no leading `cd <word> && ` step, computed here
+    without the plugin's code."""
     data = command.strip().encode("utf-8", "surrogateescape")
     return hashlib.blake2b(data, digest_size=8).hexdigest()
 
@@ -92,15 +92,19 @@ LINT = "ruff check ."
 
 
 class RunsCase(unittest.TestCase):
-    """A Claude config directory of its own, set in this process's environment."""
+    """A home of its own, and a Claude config directory elsewhere, set in this process's
+    environment: the run log lives under the home whatever CLAUDE_CONFIG_DIR says (#81)."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
-        self.config = self.tmp / "config"
+        self.home = self.tmp / "home"
+        self.config = self.home / ".claude"
+        self.shell_config = self.tmp / "shell-config"
         self.runs = self.config / "shipgate" / "runs"
-        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)})
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.home),
+                                               "CLAUDE_CONFIG_DIR": str(self.shell_config)})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -200,7 +204,7 @@ class TestReadSessionRuns(RunsCase):
                if k not in ("CLAUDE_CONFIG_DIR", "HOME")}
         with mock.patch.dict(os.environ, env, clear=True):
             self.assertIsNone(J.read_session_runs(S))
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": "relative/config"}):
+        with mock.patch.dict(os.environ, {"HOME": "relative/home"}):
             self.assertIsNone(J.read_session_runs(S))
 
     def test_a_link_in_place_of_the_file_is_no_log(self):
@@ -219,13 +223,14 @@ class TestReadSessionRuns(RunsCase):
         self.assertIsNone(J.read_session_runs(S))
         self.assertEqual(self.states((TESTS, 0)), ["unmatched"])
 
-    def test_a_linked_config_directory_is_followed(self):
-        """ADR 0031 allows the config directory itself to be a link; only the `runs`
-        directory and the files are opened without following one."""
+    def test_a_linked_claude_directory_is_followed(self):
+        """`~/.claude` may be a link (a dotfiles checkout); only the `runs` directory and
+        the files are opened without following one."""
         self.run_of("a", TESTS, 0)
-        linked = self.tmp / "linked-config"
-        os.symlink(self.config, linked)
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(linked)}):
+        linked = self.tmp / "linked-home"
+        linked.mkdir()
+        os.symlink(self.config, linked / ".claude")
+        with mock.patch.dict(os.environ, {"HOME": str(linked)}):
             self.assertEqual(self.states((TESTS, 0)), ["matched"])
 
     def test_a_fifo_or_a_directory_in_place_of_the_file_is_no_log(self):
@@ -338,10 +343,30 @@ class TestObserve(RunsCase):
         self.assertEqual(self.states((rewritten, 0)), ["unmatched"])
 
     def test_the_command_is_cited_by_its_exact_text(self):
+        """Exact text, except each leading `cd <word> && ` (#81): Claude Code removes one
+        `cd <cwd> && ` before the hook sees the command."""
         self.run_of("a", TESTS, 0)
         self.assertEqual(self.states(("  " + TESTS + "\n", 0)), ["matched"])
         self.assertEqual(self.states((TESTS.replace(" -s", "  -s"), 0)), ["unmatched"])
-        self.assertEqual(self.states(("cd x && " + TESTS, 0)), ["unmatched"])
+        self.assertEqual(self.states(("cd x && " + TESTS, 0)), ["matched"])
+        self.assertEqual(self.states(("cd x && cd y && " + TESTS, 0)), ["matched"])
+        self.assertEqual(self.states(("cd x; " + TESTS, 0)), ["unmatched"])
+        self.assertEqual(self.states(("cd 'x y' && " + TESTS, 0)), ["unmatched"])
+
+    def test_the_observation_names_why_nothing_matched(self):
+        """#81: the notice names the cause, so the observation carries it and the root."""
+        root = str(self.runs)
+        self.assertEqual(J.observe([{"cmd": TESTS, "exit": 0}], S)[1:],
+                         (J._package.runs.NO_LOG, root))
+        for session in (None, "", "a/b"):
+            with self.subTest(session=session):
+                self.assertEqual(J.observe([{"cmd": TESTS, "exit": 0}], session)[1:],
+                                 (J._package.runs.NO_SESSION, root))
+        self.run_of("a", LINT, 0)
+        self.assertEqual(J.observe([{"cmd": TESTS, "exit": 0}], S)[1:], (None, root))
+        with mock.patch.dict(os.environ, {"HOME": "relative/home"}):
+            self.assertEqual(J.observe([{"cmd": TESTS, "exit": 0}], S)[1:],
+                             (J._package.runs.NO_LOG, None))
 
     def test_no_session_id_is_unmatched(self):
         self.run_of("a", TESTS, 0)
@@ -589,7 +614,7 @@ class TestPruneAtAppend(PruneCase):
 
     def env(self, **extra):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
-        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        env["HOME"], env["CLAUDE_CONFIG_DIR"] = str(self.home), str(self.shell_config)
         env.update(extra)
         return env
 

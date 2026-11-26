@@ -228,16 +228,16 @@ def _render_evidence(evidence: EvidenceSurvey) -> List[str]:
 
 def _render_runs(runs: RunsSurvey) -> List[str]:
     """The runs block (#27, ADR 0032): the root, its run logs, the next prune, the
-    refused entries."""
+    refused entries. The root is under HOME, never the config directory (#81)."""
     root = runs["root"]
     if root is None:
-        return ["runs root       : none (no CLAUDE_CONFIG_DIR, no HOME)"]
+        return ["runs root       : none (HOME is unset or not an absolute path)"]
     if not runs["exists"]:
         if runs["refused"]:
             return [f"runs root       : {_as_line(root)} (not a directory: the journal "
                     "reads and prunes nothing there)"]
         return [f"runs root       : {_as_line(root)} (none yet)"]
-    lines = [f"runs root       : {_as_line(root)} (this Claude config directory)"]
+    lines = [f"runs root       : {_as_line(root)} (under this HOME)"]
     logs = runs["logs"]
     if logs is not None:
         lines.append("  run logs      : " + _evidence_files(logs))

@@ -1187,8 +1187,12 @@ class TestGateUiTaskDone(JournalTestCase):
 # ---------------------------------------------------------------------------
 
 TESTS = "python3 -m unittest discover -s tests"
-NO_RUN = ("no foreground run of this exact command in this session; run it in the "
+# The causes the notice names (ADR 0033, amended by #81).
+NO_RUN = ("no foreground run of this exact command in this session's log; a run past the "
+          "Bash time limit moves to the background and is never seen; run it in the "
           "foreground here and cite it as typed")
+NO_SESSION = ("this shell has no valid CLAUDE_CODE_SESSION_ID, so no run can be tied to "
+              "a session")
 
 
 class TestVerifyRunObservation(JournalTestCase):
@@ -1201,13 +1205,15 @@ class TestVerifyRunObservation(JournalTestCase):
 
     def setUp(self):
         super().setUp()
-        self.config = self.root / "config"
-        self.runs = self.config / "shipgate" / "runs"
+        # The run log lives under HOME (#81). CLAUDE_CONFIG_DIR names another directory,
+        # as a shell profile may set it in the Bash shell, and the journal ignores it.
+        self.home = self.root / "home"
+        self.runs = self.home / ".claude" / "shipgate" / "runs"
         self.init_db()
 
     def env(self, session=S):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
-        env["CLAUDE_CONFIG_DIR"] = str(self.config)
+        env["HOME"], env["CLAUDE_CONFIG_DIR"] = str(self.home), str(self.root / "shell")
         if session:
             env[SESSION_ENV] = session
         return env
@@ -1235,6 +1241,10 @@ class TestVerifyRunObservation(JournalTestCase):
 
     def lines(self, proc):
         return proc.stdout.splitlines()
+
+    def no_log(self):
+        """The cause when the session has no log: the root as `runs_root()` gives it."""
+        return f"no run log for this session under {self.runs}"
 
     def test_an_observed_command_is_stored_observed(self):
         self.ran("a", TESTS, 0)
@@ -1294,12 +1304,30 @@ class TestVerifyRunObservation(JournalTestCase):
         self.ran("a", TESTS, 0)
         proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]},
                            session=None)
-        self.assertEqual(self.lines(proc)[1:], [f"not observed: `{TESTS}` — {NO_RUN}"])
+        self.assertEqual(self.lines(proc)[1:], [f"not observed: `{TESTS}` — {NO_SESSION}"])
         self.assertIs(self.stored()["observed"], False)
 
     def test_another_sessions_run_is_not_observed(self):
         self.ran("a", TESTS, 0, session="session-2")
-        self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]})
+        proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]})
+        self.assertEqual(self.lines(proc)[1:], [f"not observed: `{TESTS}` — {self.no_log()}"])
+        self.assertIs(self.stored()["observed"], False)
+
+    def test_no_absolute_home_names_no_root(self):
+        """#81: the runs root is `$HOME/.claude/shipgate/runs`; with no absolute HOME the
+        notice says there is no root, and the config directory never stands in."""
+        self.ran("a", TESTS, 0)
+        proc = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append", "--stream",
+             "feature/x", "--type", "verify-run", "--data",
+             json.dumps({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]})],
+            cwd=str(self.root), env=dict(self.env(), HOME="relative/home",
+                                         CLAUDE_CONFIG_DIR=str(self.home / ".claude")),
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, OK, proc.stdout + proc.stderr)
+        self.assertEqual(self.lines(proc)[1:], [
+            f"not observed: `{TESTS}` — no run log for this session: HOME is unset or "
+            "not an absolute path"])
         self.assertIs(self.stored()["observed"], False)
 
     def test_a_forced_row_is_checked_the_same_way(self):
@@ -1318,8 +1346,8 @@ class TestVerifyRunObservation(JournalTestCase):
                                          {"cmd": odd, "exit": 0}], "task_ids": ["T001"]})
         notices = self.lines(proc)[1:]
         self.assertEqual(notices, [
-            f"not observed: `{long[:59]}…` — {NO_RUN}",
-            f"not observed: `printf 'a\\n' && echo ?[31m done` — {NO_RUN}",
+            f"not observed: `{long[:59]}…` — {self.no_log()}",
+            f"not observed: `printf 'a\\n' && echo ?[31m done` — {self.no_log()}",
         ])
 
     def test_a_batch_prints_each_rows_notices_after_its_line(self):
@@ -1344,7 +1372,7 @@ class TestVerifyRunObservation(JournalTestCase):
         proc = self.verify({"commands": [{"cmd": "make lint", "exit": 0}],
                             "task_ids": ["T001"]}, "--json")
         payload = json.loads(proc.stdout)
-        self.assertEqual(payload["notices"], [f"not observed: `make lint` — {NO_RUN}"])
+        self.assertEqual(payload["notices"], [f"not observed: `make lint` — {self.no_log()}"])
         self.ran("a", TESTS, 0)
         proc = self.verify({"commands": [{"cmd": TESTS, "exit": 0}], "task_ids": ["T001"]},
                            "--json")

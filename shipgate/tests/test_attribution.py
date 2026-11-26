@@ -229,7 +229,9 @@ class JournalCase(unittest.TestCase):
         self.journal("init", rc=OK)
 
     def journal(self, *args, rc=None, session_env=None):
-        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        from test_journal import isolated_env
+
+        env = isolated_env({k: v for k, v in os.environ.items() if k != SESSION_ENV})
         if session_env is not None:
             env[SESSION_ENV] = session_env
         proc = subprocess.run(

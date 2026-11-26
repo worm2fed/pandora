@@ -50,6 +50,8 @@ SIDECAR_VERSION = 2
 # and reads the log with the same root and the same `run_fingerprint`.
 RUNS_PARTS = ("shipgate", "runs")
 RUNS_FILE_BYTES = 256 * 1024
+# A `cd` word with one of these runs more than a `cd`, so its step stays in the key (#81).
+_SHELL_OPERATORS = frozenset(";|&<>()`")
 
 
 def _session_id_re():
@@ -85,26 +87,29 @@ def marker_path(db_path, session_id):
 
 
 def runs_root():
-    """`$CLAUDE_CONFIG_DIR/shipgate/runs` when the variable is set and not empty, else
-    `$HOME/.claude/shipgate/runs`. None when neither variable is set, or when the chosen
-    one is not an absolute path. The rule of the journal's `evidence_root()` (ADR 0031),
-    and a test pins the two to one base: environment variables only, no file created."""
-    config = os.environ.get("CLAUDE_CONFIG_DIR", "")
-    if config:
-        base = os.path.expanduser(config)
-    else:
-        home = os.environ.get("HOME", "")
-        if not home:
-            return None
-        base = os.path.join(home, ".claude")
-    if not os.path.isabs(base):
+    """`$HOME/.claude/shipgate/runs`, or None when HOME is unset, empty or not an
+    absolute path. Environment variables only, and no file created.
+
+    CLAUDE_CONFIG_DIR is not read (ADR 0032, amended by #81). The hooks get the one the
+    session runs under, but the Bash shell that runs `journal.py` sources the user's shell
+    profile, which may set it to another directory. HOME is the same on both sides.
+    """
+    home = os.environ.get("HOME", "")
+    if not home or not os.path.isabs(home):
         return None
-    return os.path.join(base, *RUNS_PARTS)
+    return os.path.join(home, ".claude", *RUNS_PARTS)
 
 
 def run_fingerprint(command):
     """The run log's key of `command`, a str: the 8-byte BLAKE2b digest of the stripped
-    text encoded UTF-8 with `surrogateescape`, as 16 hex digits (ADR 0032).
+    text, with each leading `cd <word> && ` removed, encoded UTF-8 with
+    `surrogateescape`, as 16 hex digits (ADR 0032, amended by #81).
+
+    Claude Code removes one leading `cd <cwd> && ` before PreToolUse sees the command, and
+    the model cites the form it typed. Both sides remove every leading step of that form,
+    so the two give one key. `<word>` is any run of characters with no whitespace and no
+    shell operator (`;|&<>()` and a backtick); a quote is an ordinary character. String
+    methods only (rule 2: `re` costs ms).
 
     `_blake2` first, because importing `hashlib` loads OpenSSL (rule 2). A Python built
     without `_blake2` gets `hashlib.blake2b`, which gives the same digest. A surrogate
@@ -114,7 +119,18 @@ def run_fingerprint(command):
         from _blake2 import blake2b
     except ImportError:
         from hashlib import blake2b
-    data = command.strip().encode("utf-8", "surrogateescape")
+    text = command.strip()
+    start, size = 0, len(text)
+    while text.startswith("cd ", start):
+        end = text.find(" && ", start + 3)
+        word = text[start + 3:end]
+        if (end < 0 or not word or word.split() != [word]
+                or not _SHELL_OPERATORS.isdisjoint(word)):
+            break
+        start = end + 4
+        while start < size and text[start].isspace():
+            start += 1
+    data = text[start:].encode("utf-8", "surrogateescape")
     return blake2b(data, digest_size=8).hexdigest()
 
 
