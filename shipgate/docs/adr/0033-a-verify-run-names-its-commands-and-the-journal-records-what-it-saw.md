@@ -167,3 +167,23 @@ digest and the HUD do not change.
   foreground run is in the parent session's log and a citation of it counts as observed.)
 - The December review with #42 can decide a gate from `observed` and `contradicted`
   without a new event shape.
+
+## Notes for the December gate review
+
+Added 2026-11-26, at the Capture of #27. Read these before a gate reads `observed` or
+`contradicted`.
+
+- **A run past the Bash tool's time limit is never observed.** A foreground Bash run that
+  passes the tool's limit (at most 10 minutes) moves to the background, and no hook sees
+  its exit code. So the full suite of a large project may never count as observed: the
+  suite of this repository takes about 15 minutes, and its runs in the build of #27 moved
+  to the background. The verify skill and the README name the case and its remedy (a
+  longer timeout, or a narrower run in the foreground); no rule enforces it. Before a gate
+  refuses an unobserved pass, count how many unobserved rows cite such a long command.
+- **A contradicted row is not always a stale pass.** The user chose to store a
+  contradicted pass, not to refuse it, because a refusal misfires after a failed run, a
+  fix and a re-run that no hook sees end (a background run, or one past the time limit):
+  the newest observed run is then the old failure. Before a gate refuses a contradicted
+  row, sample the contradicted rows of the month and sort them into a stale claim and such
+  a re-run. A pipe hides a failure the other way (`pytest | tail -5` exits 0 on failing
+  tests, so the row is observed and proves nothing); the verify skill now says so.
