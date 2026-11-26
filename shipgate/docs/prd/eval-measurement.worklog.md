@@ -126,7 +126,7 @@ harness is only the runner.
 | `probe.py` (new) | `shipgate/evals/` | Counts skills and named calls in a stream, judges against `probe.json`, saves the result with model, turns, cost and time. |
 | `sets.json` (new) | `shipgate/evals/` | The named sets: `kept`, `guards`, `ablation-32`, `probes`, `parked`. |
 | `run-case.sh` | `.claude/skills/run-evals/scripts/` | Requires `--ablation` (or `--bare`) and `--model`. Calls `evalrun.py config-check` before the run, `post-run` after it. |
-| `run-set.sh` (later PR) | `.claude/skills/run-evals/scripts/` | Runs a set from `sets.json` serially, one `run-case.sh` after another, under one ceiling per invocation; `--shard k/n` lets a caller start several invocations side by side. Taken out of PR 1 (round 4); task group "Set runner" below. |
+| `run-set.sh` | `.claude/skills/run-evals/scripts/` | Runs a set from `sets.json` serially, one `run-case.sh` after another, under one ceiling per invocation; `--shard k/n` lets a caller start several invocations side by side. Taken out of PR 1 (round 4); task group "Set runner" below. |
 | `probe.sh` | `.claude/skills/run-evals/scripts/` | Thin wrapper: scaffold, `claude -p`, then `probe.py`. Takes `--model`. Runs one probe case or the `probes` set. |
 | `summarize.py` | `.claude/skills/run-evals/scripts/` | Adds model, mode, cost and time per arm, the shadow mark and the script graders. |
 | `signals.py` | `shipgate/scripts/` | `hotspots` puts the `ui` flag first in the JSON and on the first line of the table (FR-025). The only shipped behaviour change. |
@@ -136,11 +136,11 @@ The Python modules stay Python 3.9 compatible and use the standard library only.
 ## Data flow
 
 ```
-run-set.sh (later PR; serial, --shard k/n) (--ablation X | --bare) --model M --max-cost-usd C <plugin-dir> <set>
+run-set.sh (serial, --shard k/n) (--ablation X | --bare) --model M --max-cost-usd C <plugin-dir> <set>
   └─ per case: run-case.sh (--ablation X | --bare) --model M
        ├─ evalrun.py config-check   → exit 1 before any spend on a same-name install
        ├─ [--bare] evalrun.py bare-stub → scratch stub dir; writes bare.json after the run
-       ├─ claude plugin eval … --model M --keep-temp [--max-cost-usd C]
+       ├─ claude plugin eval … --model M --keep-temp --output-dir <own dir> [--max-cost-usd C]
        ├─ evalrun.py post-run <results dir> → shadow.json, script-graders.json
        └─ removes kept scaffold dirs (unless --keep-temp was asked)
 compare.py <results…> [--record]
@@ -360,14 +360,14 @@ Tests are tasks, not a separate phase. Tick boxes as you go; log deviations inli
 Taken out of PR 1 in review round 4. The lane version regressed three rounds in a row, every
 time in how lanes stop. This one has no lanes.
 
-- [ ] T050 — Tests first, with the stub `claude`: `run-set.sh` runs the cases of a set from a sets file one after another (one `run-case.sh` at a time, in the foreground), passes the mode, `--model` and the full case name, requires `--max-cost-usd C` (one ceiling per invocation: before each case it sums the spend so far and stops at C), refuses the `parked` set through `evalrun.py set-cases`, and with `--shard k/n` runs only the cases whose index in the set is k modulo n — file(s): `shipgate/tests/test_evalrun.py` — done when: the tests fail first
-- [ ] T051 — Implement the serial `run-set.sh`: no lanes, no trap, no process group, no background job, so a Ctrl-C stops the running case whole with its `claude` child; the spend sum is the smallest helper that the tests need — file(s): `.claude/skills/run-evals/scripts/run-set.sh`, `shipgate/evals/evalrun.py` — done when: T050 passes
-- [ ] T052 — Docs: README and the run-evals skill show the serial form and the shards (a caller starts `--shard 1/3`, `--shard 2/3` and `--shard 3/3` side by side, each with its own ceiling) — file(s): `shipgate/evals/README.md`, `.claude/skills/run-evals/SKILL.md` — done when: every command in them matches the script
+- [x] T050 — Tests first, with the stub `claude`: `run-set.sh` runs the cases of a set from a sets file one after another (one `run-case.sh` at a time, in the foreground), passes the mode, `--model` and the full case name, requires `--max-cost-usd C` (one ceiling per invocation: before each case it sums the spend so far and stops at C), refuses the `parked` set through `evalrun.py set-cases`, and with `--shard k/n` runs only the cases whose index in the set is k modulo n — file(s): `shipgate/tests/test_evalrun.py` — done when: the tests fail first
+- [x] T051 — Implement the serial `run-set.sh`: no lanes, no trap, no process group, no background job, so a Ctrl-C stops the running case whole with its `claude` child; the spend sum is the smallest helper that the tests need — file(s): `.claude/skills/run-evals/scripts/run-set.sh`, `shipgate/evals/evalrun.py` — done when: T050 passes
+- [x] T052 — Docs: README and the run-evals skill show the serial form and the shards (a caller starts `--shard 1/3`, `--shard 2/3` and `--shard 3/3` side by side, each with its own ceiling) — file(s): `shipgate/evals/README.md`, `.claude/skills/run-evals/SKILL.md` — done when: every command in them matches the script
 
 ## PR 3 — the re-baseline (only after the user's go on the plan)
 
 - [ ] T040 — Put the plan above to the user through the lead with the measured numbers of PR 1 and 2; record the go — file(s): none — done when: the journal holds the user's go (SC-011)
-- [ ] T041 — Stage 0, the proof run of case 24 (`run-case.sh --bare --model claude-fable-5-2`, 1 run): the trace lists no `shipgate` plugin and no shipgate skill fired; only then stage 1 and 1b, the serial `run-set.sh --bare --model claude-fable-5-2 --max-cost-usd C shipgate ablation-32` (T050–T052; up to 3 shards side by side, each with its share of the ceiling), and the dip rule — file(s): none — done when: the proof held, the stage list of fallen cases exists, and stage 1 stayed under its ceiling (SC-013)
+- [ ] T041 — Stage 0, the proof run of case 24 (`run-case.sh --bare --model claude-fable-5-2`, 1 run): the trace lists no `shipgate` plugin and no shipgate skill fired; `report.html` and `aggregate-result.json` land in the `--output-dir` that `run-case.sh` passed, and post-run finds the kept traces from it (`shadow.json` holds no `null` run); only then stage 1 and 1b, the serial `run-set.sh --bare --model claude-fable-5-2 --max-cost-usd C shipgate ablation-32` (T050–T052; up to 3 shards side by side, each with its share of the ceiling), and the dip rule — file(s): none — done when: the proof held, the stage list of fallen cases exists, and stage 1 stayed under its ceiling (SC-013)
 - [ ] T042 — Stage 2 on the fallen cases, with the serial `run-set.sh` (`--ablation none`) or one `run-case.sh` per case — file(s): none — done when: each has a `bare+none` row
 - [ ] T043 — Stage 3, the `kept` and `guards` sets on Opus and on Fable, with the serial `run-set.sh` in shards — file(s): none — done when: both models ran under their ceilings
 - [ ] T044 — Stage 4, the `probes` set on both models; three probes per model first, to measure — file(s): none — done when: every probe has a saved result per model
@@ -414,8 +414,9 @@ time in how lanes stop. This one has no lanes.
 
 - `signals.py hotspots` shows the UI flag first: the first key of `--json`, and the first table line when `ui.globs` is set (shipgate 0.38.0).
 - The eval suite has 42 harness cases in named sets (`evals/sets.json`), 19 trigger probes and 2 fixture cases; cuts and merges removed 15 cases.
-- Claims that a script can judge moved out of the paid runs: the signals rankings, the skills' record steps, case 15's assumptions, case 22's run order and case 70's sentence length.
-- No eval fixture holds a deadline date that can expire, the clarify fixtures set their own git identity, and case 73 no longer gives its helper away.
+- Claims that a script can judge moved out of the paid runs (the signals rankings, the record steps, case 15's assumptions, case 22's run order, case 70's sentence length); no fixture date can expire, the clarify fixtures set their own git identity, and case 73 no longer gives its helper away.
+- `run-set.sh` runs the cases of a named set one after another under one required cost ceiling per invocation; `--shard K/N` splits a set into invocations side by side, and Ctrl-C stops the running case with its `claude` child and starts no further case.
+- `run-case.sh` makes its own results dir and passes it as `--output-dir`, so runs side by side never read or clean another run's results.
 
 ## Deviations & notes (filled during implementation)
 
@@ -451,6 +452,31 @@ time in how lanes stop. This one has no lanes.
   listing, the post-run checks and the clean-up, and it hid the harness's own status. Two
   tests pin the fix (an aborted harness keeps its status; no `Report:` line falls back to
   the listing).
+- 2026-11-26, set runner, two stops the plan did not name. (1) On macOS bash 3.2 a
+  serial loop starts the next case after Ctrl-C when the child catches SIGINT and exits
+  130: bash then takes the signal as handled. So a case that exits above 128 stops the
+  set with its status. A test pins it with a stub that exits 130 on SIGINT. (2) A case
+  that leaves no results dir stops the set with exit 1, because the ceiling cannot count
+  its spend. Neither is a trap. `evalrun.py spent` is back as the ceiling sum. The set
+  runner does no config check of its own: each `run-case.sh` makes it.
+- 2026-11-26, set runner, the lead's change by removal. `run-case.sh` no longer takes a
+  results dir from a before/after listing of the results root when the harness prints no
+  `Report:` line. With shards side by side, that listing could pick another shard's dir.
+  Now a run with no `Report:` line has no results dir: the script says so with the harness
+  status, and `run-set.sh` stops the set. This reverses the round 1 rejection of
+  `run-set.sh:125`. Four tests pin it, and each fails on the old script.
+- 2026-11-26, set runner, option (b) built (the user's choice "Pass --output-dir",
+  relayed by the lead; journal seq 3920). `run-case.sh` owns its results dir: a new dir
+  under `evals/results/`, named by the UTC time with milliseconds (the harness's own form,
+  so `compare.py`'s order by name holds) and the script's process id. It passes the dir as
+  `--output-dir` and refuses a caller's own. The `Report:` line parse, the `--report`
+  refusal and the bare-run path mapping are gone, and so is the README's same-millisecond
+  note. `mkdir` makes the dir before the run and fails on an existing name. The harness
+  refuses only an existing default dir; a dir given with `--output-dir` it writes into
+  (read from the harness 2.1.332 bundle, round 4). Stage 0 checks the layout (T041).
+- 2026-11-26, set runner, deferred (R4-8, the lead's decision): `run-case.sh` does not
+  refuse an extra `--eval-dir`. The harness would then read cases from another dir while
+  the script checks the case and writes results under `evals/`. No refusal is added now.
 
 ### PR 2 — the merges, checked by scenario (T025)
 
@@ -680,5 +706,111 @@ test name, this worklog note) and defers the rest.
 Deferred: R3-3 to R3-7. Each is a rare edge of a grader that only reads text; R3-5 already
 ends as an error, never as a wrong verdict. The PR 3 runs keep their traces, so the first
 measured traces of case 22 show whether any edge occurs.
+
+## Review round 1 (Set runner)
+
+The workflow review (run wf_71bf14f1-035) used two Opus finders, correctness and
+conventions plus design. It found 16 findings: 6 at or above the confidence floor, 10
+below it. None was BLOCKER or HIGH, so no refuter ran. The orchestrator read each one
+against the code. It fixed the 6 and rejected the 10 below. The fix diff is two blocks of
+`run-set.sh` and four doc lines. The orchestrator checked it alone: two new tests pin the
+exit-2 stop, and the doc check runs every documented `run-set.sh` command with the stub
+`claude`. The fresh full suite ran in three parts: 821 + 1188 + 640 = 2649 tests, OK, 2
+skipped. Verdict: ready.
+
+- S1 MEDIUM `shipgate/docs/adr/0036-post-run-checks-read-the-kept-trace-and-probes-leave-the-harness.md:60` — The ADR still called `run-set.sh` a later PR; fixed.
+- S2 MEDIUM `.claude/skills/run-evals/SKILL.md:44` — The options line read as true for `run-set.sh`, which takes no `--no-codegraph`; the line now names the options of each script.
+- S3 MEDIUM `.claude/skills/run-evals/scripts/run-set.sh:121` — A case that hit its ceiling (exit 2) did not stop the set, and on the last case the set exited 0; it now stops the set with exit 2, pinned by two tests.
+- S4 LOW `.claude/skills/run-evals/scripts/_common.sh:2` — The header did not name `run-set.sh` as a user; fixed.
+- S5 LOW `.claude/skills/run-evals/scripts/run-set.sh:134` — A failed final spend sum printed an empty value and exited 0; it now stops with exit 1.
+- S6 LOW `.claude/skills/run-evals/scripts/run-set.sh:119` — The docs said the log keeps each case's output, but it keeps stdout; the docs now say stdout.
+
+### Rejected findings (Set runner round 1)
+
+- `.claude/skills/run-evals/scripts/run-set.sh:125` (MEDIUM 50): with no `Report:` line, the listing fallback of `run-case.sh` can pick another shard's dir; that fallback is in `run-case.sh` and holds for any two runs side by side.
+- `.claude/skills/run-evals/scripts/run-set.sh:44` (LOW 55): the mode and model parsing repeats `run-case.sh`; the set needs it to refuse a usage error with exit 64 before any case.
+- `.claude/skills/run-evals/scripts/run-set.sh:113` (LOW 50): the ceiling stop prints to stdout and the error stops to stderr; the ceiling is a planned stop, not an error.
+- `shipgate/evals/evalrun.py:380` (LOW 45): `spent` reads only per-run costs; a cut run now also stops the set through exit 2.
+- `.claude/skills/run-evals/scripts/run-set.sh:64` (LOW 45): an extra `--case` or `--config-dir` is not refused; `run-case.sh` refuses neither among its extras either.
+- `.claude/skills/run-evals/scripts/run-set.sh:91` (LOW 45): the set-time case check exits 1; a set that names a missing case is a data error, not a usage error.
+- `.claude/skills/run-evals/scripts/run-set.sh:111` (LOW 40): the remainder rounds down to the cent; the difference is below one cent.
+- `docs/ledger.md:5` (LOW 40): the ledger line names no home; the ledger takes one dated line, and Capture routes it.
+- `.claude/skills/run-evals/SKILL.md:3` (LOW 35): the skill description already triggers on any ask to run the evals.
+- `.claude/skills/run-evals/SKILL.md:173` (LOW 30): the shard ceilings are an example with a placeholder model, not a plan value.
+
+## Review round 2 (Set runner)
+
+The lead reopened the round 1 rejection of `run-set.sh:125` and asked for the listing
+fallback of `run-case.sh` to go. One Opus reviewer with all lenses read the fix diff only.
+It confirmed that no path picks a results dir by a listing. It confirmed that the earlier
+fix holds: with no `Report:` line the exit status is still the harness's. It found that the
+four new tests fail on the old script. `test_evalrun.py`: 79 tests, OK. It found one new
+MEDIUM and four LOW. Verdict: not ready. Under the lead's rule (a new MEDIUM stops the
+round), the list went to the lead with no further fix.
+
+- R2-1 MEDIUM `.claude/skills/run-evals/scripts/run-case.sh:151` — A harness that writes its results but prints no `Report:` line (it can fail to build the HTML report) now leaves the kept sandboxes in the temp dir and the dir with no `shadow.json`; the message does not say so or give the manual `post-run` step.
+- R2-2 LOW `.claude/skills/run-evals/scripts/run-case.sh:123` — An extra `--report <path>` can make the `Report:` line name a dir that is not the results dir; it predates the fix, but the line is now the only source.
+- R2-3 LOW `shipgate/docs/prd/eval-measurement.worklog.md:577` — The worklog did not record the removal; fixed by the dated Deviations line of 2026-11-26.
+- R2-4 LOW `.claude/skills/run-evals/scripts/run-case.sh:151` — The new message drops the hint of the old one and gives no next step.
+- R2-5 LOW `shipgate/tests/test_evalrun.py:?` — `test_the_report_line_wins_over_a_newer_foreign_dir` passes with or without the fix; it guards the order, it does not prove the fix.
+
+## Review round 3 (Set runner)
+
+The lead rated R2-1 LOW (it fails closed, and compare refuses a dir with no
+`shadow.json`) and chose the fix: the message names what stays on disk and the command
+by hand, and `run-case.sh` refuses `--report`. R2-5 is rejected: that test guards the
+order by design. One Opus reviewer with all lenses read the fix diff only. It confirmed
+R2-1 (message) and R2-2 fixed, ran the printed command by hand on a path with a space and
+a quote, and found that both new tests fail without the fix. `test_evalrun.py`: 81 tests,
+OK. It found one new MEDIUM and six LOW. Verdict: not ready. Under the lead's rule (a
+MEDIUM that is more than a one-line doc fix stops the round), the list went to the lead.
+
+- R3-1 MEDIUM `.claude/skills/run-evals/scripts/run-case.sh:63` — `--json` makes the harness quiet, so a run with it likely prints no `Report:` line and has no results dir; the README still recommends `--json` for runs side by side (README:246) and says the `Report:` line always names the results dir.
+- R3-2 LOW `.claude/skills/run-evals/scripts/run-set.sh:73` — `run-set.sh` does not refuse `--report` itself; the first case exits 64 and the set reports "left no results dir" with exit 1.
+- R3-3 LOW `shipgate/tests/test_evalrun.py:?` — The test does not pin the `%q` quoting of the printed command.
+- R3-4 LOW `.claude/skills/run-evals/scripts/run-case.sh:150` — The Report-line branch prints its post-run command without `%q`.
+- R3-5 LOW `.claude/skills/run-evals/scripts/run-case.sh:154` — The message does not say where the sandboxes are or how to pick the dir; "stay on disk" overclaims after an abort before any run.
+- R3-6 LOW `.claude/skills/run-evals/scripts/run-case.sh:21` — The usage header does not name the `--report` refusal.
+- R3-7 LOW `.claude/skills/run-evals/scripts/run-case.sh:67` — "do not move the report" assumes what `--report` does.
+
+## Review round 4 (Set runner)
+
+The user chose "Pass --output-dir" (relayed by the lead): `run-case.sh` owns its results
+dir, and the `Report:` line parse goes. The findings of round 3 that lived in the removed
+code close with it: R3-1 (`--json` hides the `Report:` line), R3-2 (`run-set.sh` and
+`--report`), R3-5 (the by-hand message) and R3-7 (the `--report` wording). R3-3 and R3-4
+are fixed: the post-run echo quotes with `%q`, and a test runs it on a path with a space.
+R3-6 is fixed: the usage header names the `--output-dir` refusal. One Opus reviewer with
+all lenses read the round 4 diff. It found that every new or changed test fails on the
+HEAD script, that nothing still depends on the `Report:` line, and that `--bare`,
+`--keep-temp`, `--report` and `--json` work. `test_evalrun.py`: 81 tests, OK. It found two
+new MEDIUM and six LOW. Verdict: not ready. Under the lead's rule (a MEDIUM stops the
+round), the list went to the lead with no further fix.
+
+- R4-1 MEDIUM `.claude/skills/run-evals/scripts/run-case.sh:109` — The `rmdir` rests on a false premise: the harness bundle refuses only a default results dir that exists, and with `--output-dir` it makes the dir recursively; the comment, the Deviations line and the stub's refusal of an existing dir are wrong.
+- R4-2 MEDIUM `.claude/skills/run-evals/SKILL.md:51` — The "`run-case.sh` runs:" command block leaves out `--output-dir`.
+- R4-3 LOW `.claude/skills/run-evals/scripts/run-case.sh:135` — The printed summarize and signal-grader commands are not quoted with `%q`.
+- R4-4 LOW `.claude/skills/run-evals/scripts/run-case.sh:114` — A failed `mkdir -p` of the results root or a failed stamp exits 1 with no `run-evals:` line.
+- R4-5 LOW `.claude/skills/run-evals/scripts/run-case.sh:153` — A dir with files but no `aggregate-result.json` stays on disk, and the message does not say so.
+- R4-6 LOW `.claude/skills/run-evals/scripts/run-case.sh:122` — An explicit `--output-dir` turns off the harness's warning and ownership check for results written inside the plugin.
+- R4-7 LOW `.claude/skills/run-evals/scripts/run-case.sh:115` — Within one millisecond a script dir sorts before a default dir; rare.
+- R4-8 LOW `.claude/skills/run-evals/scripts/run-case.sh:65` — An extra `--eval-dir` is not refused, and the old hint that named it is gone.
+
+## Review round 5 (Set runner)
+
+The last fix round, by the lead's decisions: R4-1 the lead's plan as written (the script
+makes the dir and keeps it), R4-2 the command block, R4-3 the quoted echo lines, R4-4 a
+`run-evals:` line on each failed setup step, R4-5 the "stays" message, R4-6 one README
+line. R4-7: no fix. R4-8: deferred (Deviations). Each code change had its test first. One
+Opus reviewer with all lenses read the fix diff: all six are fixed, each new test fails on
+the round 4 script, `test_evalrun.py` 85 tests OK. No BLOCKER, HIGH or MEDIUM; six LOW,
+all deferred below. Verdict: ready.
+
+- R5-1 LOW `shipgate/tests/test_evalrun.py:?` — The read-only subtest of `test_a_results_dir_that_cannot_be_made_stops_before_any_spend` fails when the tests run as root; deferred.
+- R5-2 LOW `shipgate/tests/test_evalrun.py:?` — Both subtests match any "cannot make" message, not the step that failed; deferred.
+- R5-3 LOW `.claude/skills/run-evals/scripts/run-set.sh:127` — "left no results dir" follows a "stays" line for a dir with files and no aggregate; deferred.
+- R5-4 LOW `.claude/skills/run-evals/scripts/run-case.sh:155` — The "stays" message prints for any `rmdir` failure, also when the dir is gone; deferred.
+- R5-5 LOW `.claude/skills/run-evals/scripts/run-case.sh:118` — A run stopped by Ctrl-C leaves its empty results dir; compare and summarize skip it; deferred.
+- R5-6 LOW `.claude/skills/run-evals/SKILL.md:40` — The summarize example says `<timestamp>`, the command block `<stamp>-<pid>`; deferred.
 
 ## Rejected findings

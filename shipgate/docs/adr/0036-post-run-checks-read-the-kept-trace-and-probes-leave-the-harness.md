@@ -57,9 +57,9 @@ ADR 0016, which put the signal grader outside the harness.
   `prompt.md` or `graders/`.
 - `evals/sets.json` names the sets: `kept`, `guards`, `ablation-32`, `probes`, `parked`. A
   unit test checks that the eval sets cover exactly the harness's case list, and that no
-  case is in two sets. A set runner (`run-set.sh`, a later PR) runs a set serially, one
-  harness call per case; `--shard k/n` gives parallel work as several invocations side by
-  side. (Changed during the build: a version with lanes left PR 1 in review round 4.)
+  case is in two sets. A set runner (`run-set.sh`) runs a set serially, one harness call
+  per case; `--shard k/n` gives parallel work as several invocations side by side.
+  (Changed during the build: a version with lanes left PR 1 in review round 4.)
 - `probe.py` replaces the inline counter of `probe.sh`. It reads the stream, counts the
   skills that fired and the named calls, judges the run against `probe.json`, and saves a
   result with model, turns, cost and time.

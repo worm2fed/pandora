@@ -5,6 +5,7 @@
     python3 shipgate/evals/evalrun.py post-run <results-dir> --plugin-dir PLUGIN [--bare] [--clean]
     python3 shipgate/evals/evalrun.py bare-stub PLUGIN OUT
     python3 shipgate/evals/evalrun.py set-cases <sets.json> <set>
+    python3 shipgate/evals/evalrun.py spent [<results-dir> ...]
 
 The plugin name and version come from PLUGIN/.claude-plugin/plugin.json.
 
@@ -38,6 +39,8 @@ The plugin name and version come from PLUGIN/.claude-plugin/plugin.json.
 - `set-cases` prints the case names of a named set, one per line. It refuses the set
   `parked`, a set that holds a parked case, an empty set, a set that lists a case twice
   and an unknown set. The error for an unknown set lists the sets.
+- `spent` prints the summed agent and judge cost of every run in the results dirs.
+  run-set.sh calls it before each case to hold its ceiling.
 
 The arm in shadow.json and script-graders.json is the logical arm: "with" means the
 plugin should load, "without" means it should not.
@@ -330,7 +333,7 @@ def post_run(results_dir, plugin_dir, bare=False, do_clean=False, timeout=SCRIPT
 
 
 # --------------------------------------------------------------------------
-# bare-stub, set-cases
+# bare-stub, set-cases, spent
 
 
 def bare_stub(plugin_dir, out):
@@ -374,6 +377,18 @@ def set_cases(sets_file, name):
     return cases
 
 
+def spent(results_dirs):
+    total = 0.0
+    for d in results_dirs:
+        result = read_json(os.path.join(d, "aggregate-result.json"), "aggregate result")
+        for _, _, _, run in runs_of(result, False):
+            for key in ("costUsd", "judgeCostUsd"):
+                value = run.get(key)
+                if isinstance(value, (int, float)):
+                    total += value
+    return total
+
+
 # --------------------------------------------------------------------------
 # CLI
 
@@ -396,6 +411,8 @@ def main(argv=None):
     p = sub.add_parser("set-cases", help="print the cases of a named set")
     p.add_argument("sets_file")
     p.add_argument("set")
+    p = sub.add_parser("spent", help="print the agent and judge cost of the results dirs")
+    p.add_argument("results_dirs", nargs="*")
     args = ap.parse_args(argv)
     if not args.cmd:
         ap.print_help()
@@ -409,6 +426,9 @@ def main(argv=None):
             return bare_stub(args.plugin_dir, args.out)
         if args.cmd == "set-cases":
             print("\n".join(set_cases(args.sets_file, args.set)))
+            return 0
+        if args.cmd == "spent":
+            print(f"{spent(args.results_dirs):.2f}")
             return 0
     except InputError as e:
         print(f"evalrun: {args.cmd}: {e}", file=sys.stderr)

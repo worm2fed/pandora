@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for run-case.sh and probe.sh. Sourced, never executed.
+# Shared helpers for run-case.sh, run-set.sh and probe.sh. Sourced, never executed.
 #
 # Nothing account- or machine-specific lives here: the Claude config dir that
 # eval runs are billed to is discovered at runtime (resolve_config_dir).
