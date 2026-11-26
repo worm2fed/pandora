@@ -98,6 +98,12 @@ beside the harness score and never inside it (as for the signal grader, ADR 0016
 `compare.py` shows the pass rate per arm and flags a fall against the baseline row. Test a
 script grader with a canned trace; it costs nothing.
 
+A script grader judges tool calls, not shell text. The trace records an Edit, Write,
+MultiEdit or NotebookEdit call exactly, so count an edit only from those, and state that an
+edit made through a shell command is out of scope. A net of patterns over Bash commands
+(`sed -i`, `>`, `cp`) misses quoted paths and reads past command separators: in #28 such a
+net in case 22 failed review twice, and the user chose tool edits only.
+
 ### Three case forms
 
 The file names of a case directory decide what it is (ADR 0036):
