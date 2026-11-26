@@ -18,7 +18,7 @@ import unittest
 
 from test_journal import (
     INFRA, JOURNAL, JournalTestCase, journal_env, load_journal_module, OK,
-    insert_legacy_row,
+    insert_legacy_row, isolated_env,
     run_journal, SESSION_ENV,
 )
 from test_journal_screens import _ambient_root, _tree
@@ -896,7 +896,7 @@ class TestScreensPart(DigestCase):
         env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
         env["CLAUDE_CONFIG_DIR"] = str(self.config)
         env.update(extra)
-        return env
+        return isolated_env(env)  # HOME too (#81: the run log)
 
     def run_j(self, args, env=None, stdin=None):
         proc = subprocess.run([sys.executable, str(JOURNAL), "--db", str(self.db), *args],

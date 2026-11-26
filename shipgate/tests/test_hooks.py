@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -30,7 +31,9 @@ JOURNAL = SHIPGATE / "scripts" / "journal.py"
 sys.path.insert(0, str(HOOKS))
 
 from _common import find_project, load_project  # noqa: E402
-from test_journal import _EMPTY_CONFIG_DIR, load_journal_module  # noqa: E402
+from test_journal import (  # noqa: E402
+    _EMPTY_CONFIG_DIR, _EMPTY_HOME, isolated_env, load_journal_module,
+)
 
 SESSION = "sess-integration-1"
 SLUG = "feat"
@@ -47,9 +50,11 @@ WORKLOG_ONE_TICKED = WORKLOG_UNTICKED.replace("- [ ] T001", "- [x] T001")
 WORKLOG_TWO_TICKED = WORKLOG_ONE_TICKED.replace("- [ ] T002", "- [x] T002")
 
 
-# Since #27 (ADR 0032) the Bash hooks write a run log under the Claude config directory,
-# and every hook reads the user's settings file there. A hook a test starts gets a fresh
-# temporary directory of its own under this root unless the test names one.
+# Every hook reads the user's settings file under the Claude config directory, and since
+# #27 (ADR 0032, amended by #81) the Bash hooks write a run log under
+# `$HOME/.claude/shipgate/runs`. A hook a test starts gets a fresh temporary home of its
+# own under this root, with its config directory at `<home>/.claude`, unless the test
+# names one.
 _HOOK_CONFIG_ROOT = tempfile.mkdtemp(prefix="shipgate-hook-config-")
 atexit.register(shutil.rmtree, _HOOK_CONFIG_ROOT, True)
 
@@ -57,11 +62,49 @@ atexit.register(shutil.rmtree, _HOOK_CONFIG_ROOT, True)
 def hook_env(extra: dict | None = None) -> dict:
     """The environment of a hook a test starts: os.environ without Claude Code's session
     id (it would label the hooks' appends; a test sets it when it means to), with a fresh
-    temporary CLAUDE_CONFIG_DIR, then EXTRA, which may name its own."""
+    temporary HOME and its `.claude` as CLAUDE_CONFIG_DIR, then EXTRA, which may name its
+    own."""
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
-    env["CLAUDE_CONFIG_DIR"] = tempfile.mkdtemp(dir=_HOOK_CONFIG_ROOT)
+    home = tempfile.mkdtemp(dir=_HOOK_CONFIG_ROOT)
+    os.mkdir(os.path.join(home, ".claude"))
+    env["HOME"], env["CLAUDE_CONFIG_DIR"] = home, os.path.join(home, ".claude")
     env.update(extra or {})
     return env
+
+
+_REAL_RUNS = os.path.join(os.environ.get("HOME", ""), ".claude", "shipgate", "runs")
+_REAL_RUNS_BEFORE: set = set()
+
+
+def _test_run_logs():
+    """The files of the developer's real runs root whose session part is no UUID: a
+    Claude Code session id is one, and every session id these tests use is not."""
+    try:
+        names = os.listdir(_REAL_RUNS)
+    except OSError:
+        return set()
+    return {name for name in names
+            if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\.jsonl(\.1)?",
+                            name) is None}
+
+
+def setUpModule():
+    _REAL_RUNS_BEFORE.update(_test_run_logs())
+
+
+def tearDownModule():
+    """#81: a test that isolates CLAUDE_CONFIG_DIR alone writes the run log under the
+    developer's real HOME, since the log no longer follows the config directory."""
+    new = _test_run_logs() - _REAL_RUNS_BEFORE
+    if new:
+        raise AssertionError(f"the tests wrote {sorted(new)} into the real runs root "
+                             f"{_REAL_RUNS}: give them a temporary HOME")
+
+
+def home_env(home) -> dict:
+    """The env entries that put the run log under HOME (ADR 0032, amended by #81) and the
+    Claude config directory at `HOME/.claude`, as `hook_env` does."""
+    return {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(Path(home) / ".claude")}
 
 
 def run_hook(
@@ -86,9 +129,10 @@ def run_hook(
 
 
 def journal_env() -> dict:
-    """The inherited environment with an empty Claude config directory: a terminal
-    append prunes the evidence root under it (ADR 0031), never the real one."""
-    return {**os.environ, "CLAUDE_CONFIG_DIR": _EMPTY_CONFIG_DIR}
+    """The inherited environment with an empty Claude config directory and an empty home:
+    a terminal append prunes the evidence root under the first (ADR 0031) and the run log
+    under the second (ADR 0032, amended by #81), never the real ones."""
+    return {**os.environ, "CLAUDE_CONFIG_DIR": _EMPTY_CONFIG_DIR, "HOME": _EMPTY_HOME}
 
 
 def journal(db: Path, *args: str, cwd: Path | None = None):
@@ -408,7 +452,8 @@ class TestSessionStartSources(HookTestCase):
         self.start("startup")
         self.start("clear", session="sess-after-clear")
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        env = isolated_env({k: v for k, v in os.environ.items()
+                            if k != "CLAUDE_CODE_SESSION_ID"})
         appended = subprocess.run(
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
              "--stream", STREAM, "--type", "phase-entered",
@@ -658,21 +703,24 @@ class TestRunLogPathAndHash(unittest.TestCase):
     """#27 T010, ADR 0032: the hooks write the run log and the journal reads it, so both
     take its directory and its hash from `_common`."""
 
-    # (environment, its Claude config directory or None): CLAUDE_CONFIG_DIR and HOME each
-    # set, empty and unset, then a tilde and relative values.
+    # (environment, the run log's base or None): CLAUDE_CONFIG_DIR and HOME each set, empty
+    # and unset, then a tilde and relative values. Since #81 the base is `$HOME/.claude`
+    # and CLAUDE_CONFIG_DIR never moves it: the hooks and the Bash shell of one session
+    # may see different values of it, never different homes.
     BASES = (
-        ({"CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}, "/c"),
-        ({"CLAUDE_CONFIG_DIR": "/c", "HOME": ""}, "/c"),
-        ({"CLAUDE_CONFIG_DIR": "/c"}, "/c"),
+        ({"CLAUDE_CONFIG_DIR": "/c", "HOME": "/h"}, "/h/.claude"),
+        ({"CLAUDE_CONFIG_DIR": "/c", "HOME": ""}, None),
+        ({"CLAUDE_CONFIG_DIR": "/c"}, None),
         ({"CLAUDE_CONFIG_DIR": "", "HOME": "/h"}, "/h/.claude"),
         ({"CLAUDE_CONFIG_DIR": "", "HOME": ""}, None),
         ({"CLAUDE_CONFIG_DIR": ""}, None),
         ({"HOME": "/h"}, "/h/.claude"),
         ({"HOME": ""}, None),
         ({}, None),
-        ({"CLAUDE_CONFIG_DIR": "~/c", "HOME": "/h"}, "/h/c"),
-        ({"CLAUDE_CONFIG_DIR": "rel/c", "HOME": "/h"}, None),
+        ({"CLAUDE_CONFIG_DIR": "~/c", "HOME": "/h"}, "/h/.claude"),
+        ({"CLAUDE_CONFIG_DIR": "rel/c", "HOME": "/h"}, "/h/.claude"),
         ({"HOME": "rel/h"}, None),
+        ({"HOME": "~"}, None),
     )
     PINNED = ("python3 -m unittest discover -s shipgate/tests", "702259831bb42128")
     SAMPLES = (
@@ -690,24 +738,26 @@ class TestRunLogPathAndHash(unittest.TestCase):
         data = command.strip().encode("utf-8", "surrogateescape")
         return hashlib.blake2b(data, digest_size=8).hexdigest()
 
-    def test_the_run_log_shares_the_base_of_the_evidence_store(self):
+    def test_the_run_log_is_under_home_whatever_the_config_dir_says(self):
+        """#81: a shell profile may set CLAUDE_CONFIG_DIR in the Bash shell to another
+        directory than the hooks see, so the run log's root does not read it."""
         from unittest import mock
 
         import _common
 
-        evidence_root = load_journal_module().evidence_root
         self.assertEqual(_common.RUNS_PARTS, ("shipgate", "runs"))
         self.assertEqual(_common.RUNS_FILE_BYTES, 256 * 1024)
         for env, base in self.BASES:
             with self.subTest(env=env):
                 with mock.patch.dict(os.environ, env, clear=True):
-                    runs, evidence = _common.runs_root(), evidence_root()
+                    runs = _common.runs_root()
                 if base is None:
                     self.assertIsNone(runs)
-                    self.assertIsNone(evidence)
                 else:
                     self.assertEqual(runs, os.path.join(base, "shipgate", "runs"))
-                    self.assertEqual(evidence, os.path.join(base, "shipgate", "evidence"))
+                without = {k: v for k, v in env.items() if k != "CLAUDE_CONFIG_DIR"}
+                with mock.patch.dict(os.environ, without, clear=True):
+                    self.assertEqual(_common.runs_root(), runs)
 
     def test_the_fingerprint_is_an_8_byte_blake2b_of_the_stripped_text(self):
         from _common import run_fingerprint
@@ -720,6 +770,51 @@ class TestRunLogPathAndHash(unittest.TestCase):
                 self.assertEqual(fingerprint, self.by_hashlib(command))
                 self.assertEqual(run_fingerprint(" " + command + "\n"), fingerprint)
         self.assertNotEqual(run_fingerprint("pytest  -q"), run_fingerprint("pytest -q"))
+
+    # #81: Claude Code removes one leading `cd <cwd> && ` before PreToolUse sees the
+    # command, so the key leaves out each leading `cd <word> && `. (typed, same key as)
+    CD_LEFT_OUT = (
+        ("cd /w && pytest -q", "pytest -q"),
+        ("  cd /w && pytest -q \n", "pytest -q"),
+        ("cd /w &&  pytest -q", "pytest -q"),
+        ("cd /w && cd sub && pytest -q", "cd sub && pytest -q"),
+        ("cd /w && cd sub && pytest -q", "pytest -q"),
+        ("cd '/w' && pytest -q", "pytest -q"),
+        ('cd "/w" && pytest -q', "pytest -q"),
+        ("cd /w && make && make test", "make && make test"),
+    )
+    # (typed, a key it must not share): a step that is no single word before ` && `.
+    CD_KEPT = (
+        ("cd /w; pytest -q", "pytest -q"),
+        ("cd /w&&pytest -q", "pytest -q"),
+        ("cd '/a b' && pytest -q", "pytest -q"),
+        ("cd  /w && pytest -q", "pytest -q"),
+        ("cd\t/w && pytest -q", "pytest -q"),
+        ("cd && pytest -q", "pytest -q"),
+        ("cdx /w && pytest -q", "pytest -q"),
+        ("cd /w &&", ""),
+        ("echo cd /w && pytest -q", "pytest -q"),
+        ("pytest -q && cd /w && ls", "pytest -q && ls"),
+        # A shell operator in the word: the step runs more than a `cd` (review round 1).
+        ("cd x;make && pytest -q", "pytest -q"),
+        ("cd x&&make && pytest -q", "pytest -q"),
+        ("cd x|tee && pytest -q", "pytest -q"),
+        ("cd $(pwd) && pytest -q", "pytest -q"),
+        ("cd `pwd` && pytest -q", "pytest -q"),
+        ("cd x>y && pytest -q", "pytest -q"),
+    )
+
+    def test_a_leading_cd_step_is_left_out_of_the_key(self):
+        from _common import run_fingerprint
+
+        for typed, same in self.CD_LEFT_OUT:
+            with self.subTest(typed=typed, same=same):
+                self.assertEqual(run_fingerprint(typed), run_fingerprint(same))
+        self.assertEqual(run_fingerprint("cd /w && pytest -q"), self.by_hashlib("pytest -q"))
+        for typed, other in self.CD_KEPT:
+            with self.subTest(typed=typed, other=other):
+                self.assertNotEqual(run_fingerprint(typed), run_fingerprint(other))
+                self.assertEqual(run_fingerprint(typed), self.by_hashlib(typed))
 
     def test_blake2_comes_first(self):
         try:
@@ -764,6 +859,7 @@ class TestRunLogPathAndHash(unittest.TestCase):
             "print(sorted(m for m in heavy if m in sys.modules and m not in before))\n"
             "_common.runs_root()\n"
             "_common.run_fingerprint('pytest -q')\n"
+            "_common.run_fingerprint('cd /w && cd sub && pytest -q')\n"
             "print(sorted(m for m in heavy if m in sys.modules and m not in before))\n"
         )
         result = subprocess.run([sys.executable, "-S", "-c", probe], capture_output=True,
@@ -794,7 +890,8 @@ def probe_payload(event, cwd, **fields):
 
 
 def run_log(config, session=RUN_SESSION, suffix=""):
-    """The rows of SESSION's run log under the config directory CONFIG, or None."""
+    """The rows of SESSION's run log under CONFIG, the `.claude` of the home the hooks
+    ran with (ADR 0032, amended by #81), or None."""
     path = Path(config) / "shipgate" / "runs" / f"{session}.jsonl{suffix}"
     if path.is_symlink() or not path.is_file():
         return None
@@ -860,11 +957,12 @@ class RunLogCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name).resolve()
-        self.root, self.config = base / "proj", base / "config"
+        self.root, self.home = base / "proj", base / "home"
+        self.config = self.home / ".claude"
         (self.root / ".claude").mkdir(parents=True)
-        self.config.mkdir()
+        self.config.mkdir(parents=True)
         self.write_sidecar({"version": 2, "db": ".claude/shipgate.db"})
-        patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config)})
+        patcher = mock.patch.dict(os.environ, home_env(self.home))
         patcher.start()
         self.addCleanup(patcher.stop)
         self.runs = _runs
@@ -902,7 +1000,7 @@ class RunLogCase(unittest.TestCase):
                 json.dumps(probe_payload("PreToolUse", self.root)), *args]
 
     def driver_env(self):
-        return hook_env({"CLAUDE_CONFIG_DIR": str(self.config)})
+        return hook_env(home_env(self.home))
 
 
 class TestRunLogWriter(RunLogCase):
@@ -1650,7 +1748,7 @@ class TestHostileBriefFields(HookTestCase):
         self.configure(ledger=relative)
 
     def append_as_session(self, stream: str) -> None:
-        env = {**os.environ, "CLAUDE_CODE_SESSION_ID": SESSION}
+        env = isolated_env({**os.environ, "CLAUDE_CODE_SESSION_ID": SESSION})
         appended = subprocess.run(
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append",
              "--stream", stream, "--type", "phase-entered",
@@ -3059,9 +3157,10 @@ class TestBashHooksWriteNoRunLogOffAJournal(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name).resolve()
-        self.root, self.config = base / "plain", base / "config"
+        self.root, self.home = base / "plain", base / "home"
+        self.config = self.home / ".claude"
         self.root.mkdir()
-        self.config.mkdir()
+        self.config.mkdir(parents=True)
 
     def test_the_bash_hooks_create_nothing_under_the_config_dir(self):
         payload = {"session_id": SESSION, "tool_use_id": "toolu_t002", "tool_name": "Bash",
@@ -3078,7 +3177,7 @@ class TestBashHooksWriteNoRunLogOffAJournal(unittest.TestCase):
         for hook, body in runs:
             with self.subTest(hook=hook, event=body["hook_event_name"]):
                 result = run_hook(hook, body, self.root,
-                                  env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+                                  env_extra=home_env(self.home))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, "")
                 self.assertEqual(result.stderr, "")
@@ -3093,10 +3192,11 @@ class BashHookCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         base = Path(tmp.name).resolve()
-        self.root, self.plain, self.config = base / "proj", base / "plain", base / "config"
+        self.root, self.plain, self.home = base / "proj", base / "plain", base / "home"
+        self.config = self.home / ".claude"
         (self.root / ".claude").mkdir(parents=True)
         self.plain.mkdir()
-        self.config.mkdir()
+        self.config.mkdir(parents=True)
         self.write_sidecar({"version": 2, "db": ".claude/shipgate.db"})
 
     def write_sidecar(self, sidecar) -> None:
@@ -3106,7 +3206,7 @@ class BashHookCase(unittest.TestCase):
     def hook(self, name, payload, cwd=None, project_dir=None):
         """Run hook NAME with this test's config directory; it must exit 0 silently."""
         result = run_hook(name, payload, cwd or self.root, project_dir=project_dir,
-                          env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+                          env_extra=home_env(self.home))
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
         return result
 
@@ -3154,6 +3254,28 @@ class TestPreToolUseWritesTheStartRow(BashHookCase):
                 self.pre("echo probe")
                 self.assertEqual(list(self.config.iterdir()), [])
 
+    def test_no_absolute_home_writes_nothing_whatever_the_config_dir_says(self):
+        """#81: the run log's root is `$HOME/.claude`. With HOME unset, empty or relative
+        there is no root, and the config directory never stands in for it."""
+        payload = probe_payload("PreToolUse", self.root)
+        for home in (None, "", "relative/home"):
+            with self.subTest(home=home):
+                env = hook_env({"CLAUDE_CONFIG_DIR": str(self.config)})
+                env.pop("HOME")
+                if home is not None:
+                    env["HOME"] = home
+                for name, body in (("pre_tool_use", payload),
+                                   ("post_tool_use", dict(payload, **passed(),
+                                                          hook_event_name="PostToolUse"))):
+                    result = subprocess.run(
+                        [sys.executable, str(HOOKS / f"{name}.py")],
+                        input=json.dumps(body), capture_output=True, text=True,
+                        cwd=str(self.root), env=env, timeout=60)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                     (0, "", ""))
+                self.assertEqual(list(self.config.iterdir()), [])
+                self.assertFalse((self.root / "relative").exists())
+
     def test_a_command_the_hash_cannot_take_exits_0_silently_and_writes_nothing(self):
         """`run_hook` sends JSON with ASCII escapes, so the hook reads U+D800 from a
         `\\ud800` escape, as Claude Code's JSON could carry it."""
@@ -3164,7 +3286,7 @@ class TestPreToolUseWritesTheStartRow(BashHookCase):
         payload = probe_payload("PreToolUse", self.root, tool_input={
             "command": f"{J} append --stream s --type reply-witnessed --data '{{}}'"})
         result = run_hook("pre_tool_use", payload, self.root,
-                          env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+                          env_extra=home_env(self.home))
         self.assertEqual(result.returncode, 0, result.stderr)
         decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
         self.assertEqual(decision, "deny")
@@ -3179,11 +3301,13 @@ class TestPostHooksWriteTheEndRow(HookTestCase):
         super().setUp()
         config = tempfile.TemporaryDirectory()
         self.addCleanup(config.cleanup)
-        self.config = Path(config.name).resolve()
+        self.home = Path(config.name).resolve()
+        self.config = self.home / ".claude"
+        self.config.mkdir()
 
     def run_bash_hook(self, name, event, **fields):
         result = run_hook(name, probe_payload(event, self.root, **fields), self.root,
-                          env_extra={"CLAUDE_CONFIG_DIR": str(self.config)})
+                          env_extra=home_env(self.home))
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
 
     def post(self, event, **fields):
@@ -3237,6 +3361,84 @@ class TestPostHooksWriteTheEndRow(HookTestCase):
                 self.post("PostToolUse", **passed())
                 self.post("PostToolUseFailure", **failed("Exit code 1"))
                 self.assertEqual(list(self.config.iterdir()), [])
+
+
+class TestAVerifyRunMatchesTheRunTheHooksSaw(BashHookCase):
+    """#81, end to end: the hooks get the text Claude Code hands them and the session's
+    config directory; `journal.py append` runs in a Bash shell whose CLAUDE_CONFIG_DIR a
+    shell profile set to another directory, and cites the command as the model typed it.
+    Each form of the probe of 2026-11-26 is stored observed."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.db = self.root / ".claude" / "shipgate.db"
+        self.assertEqual(journal(self.db, "init").returncode, 0)
+
+    def forms(self):
+        """(case, the command the model typed, the command PreToolUse receives). Claude
+        Code removes one leading `cd <cwd> && ` with the cwd as it is, unquoted, and
+        hands every other form over as typed."""
+        cwd, other = str(self.root), str(self.plain)
+        return (
+            ("plain", "echo f0", "echo f0"),
+            ("cd to the cwd", f"cd {cwd} && echo f1", "echo f1"),
+            ("cd to the cwd, single quotes", f"cd '{cwd}' && echo f2", None),
+            ("cd to the cwd, double quotes", f'cd "{cwd}" && echo f3', None),
+            ("cd to the cwd, trailing slash", f"cd {cwd}/ && echo f4", None),
+            ("cd to the cwd, a semicolon", f"cd {cwd}; echo f5", None),
+            ("cd to the cwd, no spaces", f"cd {cwd}&&echo f6", None),
+            ("cd to another directory", f"cd {other} && echo f7", None),
+            ("cd to a relative directory", "cd sub && echo f8", None),
+            ("a chain from the cwd", f"cd {cwd} && cd sub && echo f9", "cd sub && echo f9"),
+        )
+
+    def append(self, typed, code):
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
+        env.update(HOME=str(self.home), CLAUDE_CONFIG_DIR=str(self.root / "shell-config"),
+                   CLAUDE_CODE_SESSION_ID=RUN_SESSION)
+        data = {"task_ids": ["T1"], "commands": [{"cmd": typed, "exit": code}]}
+        result = subprocess.run(
+            [sys.executable, str(JOURNAL), "--db", str(self.db), "append", "--stream",
+             "fix/1-x", "--type", "verify-run", "--json", "--data", json.dumps(data)],
+            capture_output=True, text=True, cwd=str(self.root), env=env, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
+
+    def stored(self):
+        conn = sqlite3.connect(str(self.db))
+        try:
+            row = conn.execute("SELECT data FROM events WHERE type = 'verify-run' "
+                               "ORDER BY seq DESC LIMIT 1").fetchone()
+        finally:
+            conn.close()
+        return json.loads(row[0])
+
+    def test_each_probe_form_is_observed_as_typed(self):
+        for number, (case, typed, seen) in enumerate(self.forms()):
+            with self.subTest(case=case):
+                tool_use = f"toolu_form{number}"
+                self.hook("pre_tool_use", probe_payload(
+                    "PreToolUse", self.root, tool_use_id=tool_use,
+                    tool_input={"command": seen or typed}))
+                self.hook("post_tool_use", probe_payload(
+                    "PostToolUse", self.root, tool_use_id=tool_use,
+                    tool_input={"command": seen or typed}, **passed()))
+                self.append(typed, 0)
+                self.assertIs(self.stored()["observed"], True)
+
+    def test_the_typed_and_the_received_form_give_one_contradiction(self):
+        """The key is one for both forms, so the newest run's exit decides."""
+        cwd = str(self.root)
+        self.hook("pre_tool_use", probe_payload(
+            "PreToolUse", self.root, tool_use_id="toolu_red",
+            tool_input={"command": "pytest -q"}))
+        self.hook("post_tool_use", probe_payload(
+            "PostToolUseFailure", self.root, tool_use_id="toolu_red",
+            tool_input={"command": "pytest -q"}, **failed("Exit code 1\nboom")))
+        self.append(f"cd {cwd} && pytest -q", 0)
+        stored = self.stored()
+        self.assertIs(stored["observed"], False)
+        self.assertIs(stored["contradicted"], True)
 
 
 class TestUnjournaledProjectIsInert(unittest.TestCase):
@@ -4549,7 +4751,7 @@ class TestCommandGate(CommandGateCase):
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append", "--stream",
              self.BRANCH, "--type", "gate-decision", "--actor", "user", "--data", data],
             capture_output=True, text=True,
-            env={**os.environ, "CLAUDE_CODE_SESSION_ID": "lead-session"},
+            env=isolated_env({**os.environ, "CLAUDE_CODE_SESSION_ID": "lead-session"}),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertPassed("git commit -m x")
@@ -4645,7 +4847,7 @@ class ReplyHookCase(CommandGateCase):
              stream or self.BRANCH, "--type", "go-requested", "--data",
              json.dumps({"gate": gate, "question": "Commit T003-T005?"})],
             capture_output=True, text=True,
-            env={**os.environ, "CLAUDE_CODE_SESSION_ID": session},
+            env=isolated_env({**os.environ, "CLAUDE_CODE_SESSION_ID": session}),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return self.events()[-1]["seq"]

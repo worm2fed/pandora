@@ -942,9 +942,12 @@ class TestObservedVerifyRunText(unittest.TestCase):
             "no output.",
             "It stores `observed: true` when every command ran here with the `exit` the row "
             "names, and `observed: false` when one did not.",
-            "Copy `cmd` character for character from the command you ran: the same `cd`, "
-            "flags, pipes and redirects.",
+            "Copy `cmd` character for character from the command you ran: the same flags, "
+            "pipes and redirects.",
             "A shortened or retyped command does not match.",
+            "A leading `cd <dir> && ` does not count when `<dir>` holds no space and no shell "
+            "operator: the journal leaves it out, because Claude Code removes `cd <cwd> && ` "
+            "before the hooks see the command.",
             "A pipe ends with the exit code of its last command: `pytest | tail -5` exits 0 "
             "when the tests fail. Run the command that proves the claim without such a pipe, "
             "or start it with `set -o pipefail;`, so its exit code is the result.",
@@ -963,7 +966,9 @@ class TestObservedVerifyRunText(unittest.TestCase):
             "The row is stored `observed: false`, because there was nothing to observe.",
             "The journal owns `observed` and `contradicted`. It replaces any value you send.",
             "A `not observed:` line after `appended` names a command the log does not show "
-            "ending with that exit code.",
+            "ending with that exit code, and the cause: no session id in the shell, no log "
+            "for this session under the runs root, no foreground run of the command in the "
+            "log, or another exit code.",
             "Run the command again in the foreground and cite it as you typed it, or fix the "
             "citation.",
             "The row is stored all the same, and it still counts for `task-done`.",

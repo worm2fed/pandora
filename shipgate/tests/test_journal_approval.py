@@ -17,7 +17,7 @@ from pathlib import Path
 
 from test_journal import (
     CHECK, GATE, INFRA, insert_legacy_row, JOURNAL, JournalTestCase, legacy_read_go,
-    load_journal_module, OK, SESSION_ENV, USAGE, WORKLOG_TEMPLATE,
+    isolated_env, load_journal_module, OK, SESSION_ENV, USAGE, WORKLOG_TEMPLATE,
 )
 
 
@@ -672,7 +672,7 @@ class TestReplyPlan(JournalTestCase):
         return self.events(stream)[-1]["seq"]
 
     def reply(self, payload, session="A", rc=OK):
-        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env = isolated_env({k: v for k, v in os.environ.items() if k != SESSION_ENV})
         proc = subprocess.run(
             [sys.executable, str(JOURNAL), "--db", str(self.db), "reply", "--session",
              session, "--json"],
@@ -688,7 +688,7 @@ class TestReplyPlan(JournalTestCase):
     def write(self, plan, session="A"):
         lines = "\n".join(json.dumps({k: e[k] for k in ("stream", "type", "data", "actor")})
                           for e in plan["events"])
-        env = {k: v for k, v in os.environ.items() if k != SESSION_ENV}
+        env = isolated_env({k: v for k, v in os.environ.items() if k != SESSION_ENV})
         env[SESSION_ENV] = session
         proc = subprocess.run(
             [sys.executable, str(JOURNAL), "--db", str(self.db), "append", "--batch",

@@ -2,7 +2,7 @@
 type: adr
 title: "0033. A verify-run names its commands, and the journal records what it saw"
 created: 2026-11-25
-updated: 2026-11-25
+updated: 2026-11-26
 tags:
   - adr
   - shipgate
@@ -10,10 +10,11 @@ tags:
   - verify
 status: accepted
 date: 2026-11-25
-issue: "#27 (shipgate), child of #37"
+issue: "#27 (shipgate), child of #37; amended by #81"
 related:
   - "../prd/observed-verify-run.md"
   - "../prd/observed-verify-run.worklog.md"
+  - "../prd/observed-run-match.worklog.md"
   - "./0032-the-bash-hooks-log-each-observed-run-by-session.md"
   - "./0031-a-ui-task-is-done-with-screenshots-on-disk.md"
   - "./0020-the-stop-gate-binds-a-worklog-the-way-position-does.md"
@@ -117,7 +118,8 @@ not observed: `pytest -q` — no foreground run of this exact command in this se
 not observed: `pytest -q` — its newest run in this session exited 1, not 0 (stored as contradicted)
 ```
 
-The command is shown clipped to 60 characters. The notices change no exit code.
+The command is shown clipped to 60 characters. The notices change no exit code. (Amended
+by #81: the line names why the command is not matched. See the amendment at the end.)
 
 **What reads it.** No gate. `task-done` and the ready verdict keep reading `outcome`, so a
 contradicted pass still satisfies them until the December review. `journal.py stats`
@@ -187,3 +189,32 @@ Added 2026-11-26, at the Capture of #27. Read these before a gate reads `observe
   row, sample the contradicted rows of the month and sort them into a stale claim and such
   a re-run. A pipe hides a failure the other way (`pytest | tail -5` exits 0 on failing
   tests, so the row is observed and proves nothing); the verify skill now says so.
+
+## Amendment (2026-11-26, #81): the notice names why
+
+Under 0.37.0 one notice covered every unmatched command: "no foreground run of this exact
+command in this session". The same words stood for three different facts, so the cause of
+issue #81 (the journal read another directory than the hooks wrote) was not visible. The
+lead accepted this change on 2026-11-26 (executive).
+
+`observe` now records why the commands are not matched, and the append prints one line per
+command that is not matched, with the cause:
+
+```text
+not observed: `pytest -q` — this shell has no valid CLAUDE_CODE_SESSION_ID, so no run can be tied to a session
+not observed: `pytest -q` — no run log for this session under /home/user/.claude/shipgate/runs
+not observed: `pytest -q` — no foreground run of this exact command in this session's log; a run past the Bash time limit moves to the background and is never seen; run it in the foreground here and cite it as typed
+not observed: `pytest -q` — its newest run in this session exited 1, not 0 (stored as contradicted)
+```
+
+- The first line: the shell has no session id, or one that is no plain token.
+- The second line: the session has no log file under the runs root of ADR 0032, as its
+  amendment of #81 defines it. With no runs root (`HOME` is unset or not an absolute
+  path), the line says so in place of the path.
+- The third line: the log exists, and no run of the command's key ended in it. It names
+  the case of a run past the Bash tool's time limit, which the notes for the December gate
+  review describe.
+- The fourth line does not change.
+
+What is stored does not change: `observed`, `contradicted`, the gates and `stats` read the
+same keys as before. Rows stored before this change are not rewritten.
