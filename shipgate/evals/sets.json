@@ -1,0 +1,73 @@
+{
+  "kept": [
+    "02-selective-bug",
+    "03-suggested-quickfix",
+    "04-pasted-stack-trace",
+    "05-fix-it-wording",
+    "15-clarify-exec-issue-seeded",
+    "16-clarify-exec-one-way-door",
+    "18-clarify-ask-vague",
+    "19-clarify-ask-fully-specified",
+    "22-verify-stale-after-fix",
+    "23-verify-edit-then-claim",
+    "26-verify-multi-claim",
+    "38-kb-ledger-jot",
+    "43-kb-implicit-jot",
+    "45-review-unmet-sc",
+    "46-review-clean-diff",
+    "51-design-exec-genuine-fork",
+    "58-big-debug-regression",
+    "68-design-steel-man",
+    "70-review-fact-retention",
+    "73-graph-reuse-hidden-helper",
+    "76-clarify-exec-confirm-batch",
+    "77-clarify-ui-reference"
+  ],
+  "guards": [
+    "48-review-small-diff",
+    "52-design-exec-no-fork"
+  ],
+  "ablation-32": [
+    "17-clarify-exec-stale-assumption",
+    "24-verify-pasted-evidence",
+    "25-verify-zero-tests-ran",
+    "29-route-nested-rule",
+    "30-route-cross-cutting-split",
+    "31-route-schema-and-dump",
+    "32-route-rules-conflict",
+    "33-route-signals-vs-rule",
+    "36-kb-recall-explicit",
+    "39-kb-triage",
+    "40-kb-capture-update",
+    "47-review-after-fixes",
+    "53-design-ask-recommend",
+    "54-design-prior-adr",
+    "55-design-exec-one-way-door",
+    "69-debug-map-territory",
+    "74-review-canon-lens"
+  ],
+  "probes": [
+    "06-neg-feature-request",
+    "07-neg-explain-code",
+    "08-bug-localization-history",
+    "09-blast-radius-diff",
+    "10-risk-ranked-review",
+    "11-neg-one-line-change",
+    "20-neg-clarify-one-line-fix",
+    "21-neg-clarify-explain-code",
+    "27-neg-verify-explain",
+    "28-neg-verify-run-once",
+    "34-neg-route-one-line",
+    "35-neg-route-explain",
+    "41-neg-kb-personal-pref",
+    "42-neg-kb-code-question",
+    "49-neg-review-explain-diff",
+    "50-neg-review-trivial",
+    "56-neg-design-already-designed",
+    "57-neg-design-adr-question",
+    "67-big-neg-one-line"
+  ],
+  "parked": [
+    "78-clarify-exec-fully-specified"
+  ]
+}

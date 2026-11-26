@@ -1,4 +1,0 @@
-schema_version: "1.1"
-name: 10-risk-ranked-review
-context:
-  scaffold_script: fixture.sh

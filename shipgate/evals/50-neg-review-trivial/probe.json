@@ -1,0 +1,7 @@
+{
+  "skill": "review",
+  "fires": false,
+  "zero": {
+    "agent": true
+  }
+}

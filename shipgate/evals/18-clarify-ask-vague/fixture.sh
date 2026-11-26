@@ -2,6 +2,8 @@
 # Scaffold: builds the synthetic repo in app/ before the agent starts (runs outside the sandbox, --scaffold).
 set -e
 mkdir app && cd app && git init -q -b main
+git config user.name dev
+git config user.email dev@example.com
 c() { git add -A && GIT_AUTHOR_DATE="$1T10:00:00+00:00" GIT_COMMITTER_DATE="$1T10:00:00+00:00" git -c user.name=dev -c user.email=dev@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm "$2"; }
 mkdir -p docs/prd
 cat > README.md <<'MD'

@@ -1097,11 +1097,17 @@ class TestUiFlag(SignalsCase):
         self.assertEqual(self.hotspots("--diff", "HEAD")["ui"],
                          {"files": 1, "sample": ["web/a.tsx"]})
 
-    def test_the_text_form_does_not_change(self):
-        argv = ("hotspots", "--repo", self.repo.path, "--graph", "off")
-        plain = self.signals(*argv).stdout
-        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
-        self.assertEqual(self.signals(*argv).stdout, plain)
+    def test_the_text_form_gains_only_the_ui_line(self):
+        for args in ((), ("--by-dir", "1")):
+            with self.subTest(args=args):
+                self.write_settings(self.repo.path, {})
+                argv = ("hotspots", *args, "--repo", self.repo.path, "--graph", "off")
+                plain = self.signals(*argv).stdout
+                self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+                self.assertEqual(
+                    self.signals(*argv).stdout,
+                    "ui: 5 files match ui.globs "
+                    "(styles/main.css, web/d.tsx, web/c.tsx)\n" + plain)
 
     def test_a_ui_setting_that_cannot_be_read_leaves_ui_null_and_nothing_else(self):
         plain = self.hotspots()
@@ -1134,6 +1140,98 @@ class TestUiFlag(SignalsCase):
                           payload["config"]["source"]["window_months"]),
                          (6, "shipgate.json"))
         self.assertEqual(payload["ui"]["files"], 4)
+
+    # FR-025: the UI flag moves to the head of the output; nothing else changes.
+    KEYS = {"available", "config", "files", "head", "own_reason", "ranking", "reason",
+            "structure", "trajectory", "ui", "version"}
+    UI = {"files": 5, "sample": ["styles/main.css", "web/d.tsx", "web/c.tsx"]}
+
+    def raw(self, command, *args, repo=None):
+        return self.signals(command, *args, "--repo", repo or self.repo.path,
+                            "--graph", "off").stdout
+
+    @staticmethod
+    def key_orders(text):
+        """The key order of each JSON object in TEXT; the outermost object is last."""
+        orders = []
+
+        def hook(pairs):
+            orders.append([key for key, _ in pairs])
+            return dict(pairs)
+
+        json.loads(text, object_pairs_hook=hook)
+        return orders
+
+    def test_the_json_keeps_its_keys_its_ui_value_and_sorted_nested_objects(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+        for args, extra in (((), set()), (("--by-dir", "1"), {"dirs"}),
+                            (("--blast",), {"blast"})):
+            with self.subTest(args=args):
+                text = self.raw("hotspots", "--json", *args)
+                payload = json.loads(text)
+                self.assertEqual(set(payload), self.KEYS | extra)
+                self.assertEqual(payload["ui"], self.UI)
+                for order in self.key_orders(text)[:-1]:
+                    self.assertEqual(order, sorted(order))
+
+    def test_blast_and_suspects_print_sorted_json(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+        for command in ("blast", "suspects"):
+            with self.subTest(command=command):
+                text = self.raw(command, "web/a.tsx", "--json")
+                self.assertNotIn("ui", json.loads(text))
+                self.assertEqual(
+                    text, json.dumps(json.loads(text), sort_keys=True, indent=2) + "\n")
+
+    def test_a_null_ui_leaves_the_table_unchanged(self):
+        for args in ((), ("--by-dir", "1")):
+            with self.subTest(args=args):
+                self.write_settings(self.repo.path, {})
+                plain = self.raw("hotspots", *args)
+                for value in ("web/*.tsx", [""], [3], []):
+                    self.write_settings(self.repo.path, {"ui": {"globs": value}})
+                    self.assertEqual(self.raw("hotspots", *args), plain)
+        bare = self.tmp / "bare"
+        (bare / "web").mkdir(parents=True)
+        (bare / "web" / "a.tsx").write_text("x\n", encoding="utf-8")
+        plain = self.raw("hotspots", repo=bare)
+        self.write_settings(bare, {"ui": {"globs": self.GLOBS}})
+        self.assertEqual(self.raw("hotspots", repo=bare), plain)
+
+    def test_ui_is_the_first_key_of_the_json(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": self.GLOBS}})
+        for args in ((), ("--by-dir", "1"), ("--blast",)):
+            with self.subTest(args=args):
+                text = self.raw("hotspots", "--json", *args)
+                self.assertEqual(text.splitlines()[:3],
+                                 ["{", '  "ui": {', '    "files": 5,'])
+                top = self.key_orders(text)[-1]
+                self.assertEqual(top, ["ui"] + sorted(set(top) - {"ui"}))
+
+    def test_a_null_ui_is_the_first_key_too(self):
+        bare = self.tmp / "bare"
+        bare.mkdir()
+        for repo in (self.repo.path, bare):
+            with self.subTest(repo=repo):
+                text = self.raw("hotspots", "--json", repo=repo)
+                self.assertEqual(text.splitlines()[:2], ["{", '  "ui": null,'])
+
+    def test_the_ui_line_counts_one_file_in_the_singular_and_zero_without_a_sample(self):
+        self.write_settings(self.repo.path, {"ui": {"globs": ["web/*.tsx"]}})
+        self.repo.write("web/a.tsx", "edited\n")
+        self.repo.write("server/db.py", "edited\n")
+        first = self.raw("hotspots", "--diff", "HEAD").splitlines()[0]
+        self.assertEqual(first, "ui: 1 file matches ui.globs (web/a.tsx)")
+        first = self.raw("hotspots", "server").splitlines()[0]
+        self.assertEqual(first, "ui: 0 files match ui.globs")
+
+    def test_the_ui_line_comes_before_the_notes(self):
+        dst = shallow_clone(self.repo.path, self.tmp / "shallow")
+        self.write_settings(dst, {"ui": {"globs": self.GLOBS}})
+        lines = self.raw("hotspots", repo=dst).splitlines()
+        # No trajectory, so the sample order is not pinned here.
+        self.assertTrue(lines[0].startswith("ui: 5 files match ui.globs ("), lines[0])
+        self.assertEqual(lines[1], "trajectory unavailable: shallow")
 
 
 # ---------------------------------------------------------------------------

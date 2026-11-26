@@ -2,6 +2,20 @@
 
 All notable changes to the **shipgate** plugin, newest first.
 
+v0.38.0 — the hotspots UI flag comes first in the output (#28).
+
+**`signals.py hotspots` shows the UI flag in its first lines (#28).** An agent that reads
+only the head of the output now sees the flag. In `--json`, `ui` is the first key of the
+top-level object. Every other key and every nested object keep their sorted order, and the
+parsed JSON does not change. When `ui.globs` is set, the table starts with one line, for
+example `ui: 5 files match ui.globs (a.tsx, b.tsx, c.css)`. One file reads
+`1 file matches`, and 0 files has no list. The line comes before the advisory and the
+"unavailable" notes, in the file table and in `--by-dir`. With no `ui.globs`, the table does
+not change.
+- **Evals (#28).** The suite has 42 harness cases in named sets (`evals/sets.json`), 19
+  trigger probes and 2 fixture cases. Cuts and merges removed 15 cases. Claims that a script
+  can judge moved to unit tests, regex graders and two script graders.
+
 v0.37.0 — a verify-run records an observed run, not a claim (#27, ADR 0032, ADR 0033).
 
 **The journal now checks a verify-run against the runs it saw (#27, ADR 0032, ADR 0033).**

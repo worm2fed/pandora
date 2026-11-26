@@ -1,0 +1,9 @@
+{
+  "skill": "route-and-map",
+  "fires": false,
+  "zero": {
+    "bash": [
+      "journal\\.py"
+    ]
+  }
+}

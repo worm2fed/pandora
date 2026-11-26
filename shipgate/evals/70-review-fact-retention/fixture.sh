@@ -2,6 +2,8 @@
 # Scaffold: builds the synthetic repo in app/ before the agent starts (runs outside the sandbox, --scaffold).
 # HEAD plants three findings, one per file: SQL interpolation in db.py (blocker), CSV quoting
 # lost in export.py (high), money formatted outside money.fmt() in report.py (medium).
+# HEAD also logs the export at INFO, which the worklog records as an authorised deviation
+# (taken in from case 44): a review must not raise it as a finding.
 set -e
 mkdir app && cd app && git init -q -b main
 c() { git add -A && GIT_AUTHOR_DATE="$1T10:00:00+00:00" GIT_COMMITTER_DATE="$1T10:00:00+00:00" git -c user.name=dev -c user.email=dev@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm "$2"; }
@@ -11,7 +13,7 @@ cat > CLAUDE.md <<'EOF_F'
 
 - SQL is always parameterised (`db.query(sql, *params)`); never interpolate values into SQL strings.
 - Money is formatted only through `money.fmt()`; never format amounts inside other modules.
-- No `print` for logging; use `log.info` / `log.debug` from `logging_.py`.
+- No `print` for logging; use `log.info` / `log.debug` from `logging_.py`. Export paths log at DEBUG.
 - Tests: `python3 -m unittest`.
 - PRDs live in `docs/prd/<feature>.md`; the worklog beside it records design and build plan.
 EOF_F
@@ -137,7 +139,14 @@ cat > docs/prd/customer-statements.worklog.md <<'EOF_F'
 - [x] T1 `DB.invoices_for` (FR-001, FR-004)
 - [x] T2 `report.statement` with late fee (FR-001, FR-002 / SC-001)
 - [x] T3 export customer filter (FR-003 / SC-002)
+
+## Deviations (authorised)
+- 2026-09-18 — Export logs at INFO instead of DEBUG (CLAUDE.md says DEBUG): the ops team asked to see exports in the default log level for the first two weeks after launch. Authorised by the user; revisit REVISIT_DATE.
 EOF_F
+# The revisit date must stay in the future whenever the case runs, or every model flags the
+# deviation as expired (case 46 met this on 2026-10-06).
+REVISIT=$(date -v+30d +%F 2>/dev/null || date -d "+30 days" +%F)
+sed -i.bak "s/REVISIT_DATE/$REVISIT/" docs/prd/customer-statements.worklog.md && rm -f docs/prd/customer-statements.worklog.md.bak
 c 2026-09-18 "docs: PRD + worklog for customer statements"
 cat > db.py <<'EOF_F'
 """Tiny query layer over sqlite."""
@@ -162,6 +171,7 @@ EOF_F
 cat > export.py <<'EOF_F'
 """Invoice CSV export."""
 from db import DB
+from logging_ import log
 from money import fmt
 
 HEADER = "number,customer,total,status"
@@ -173,6 +183,7 @@ def export(customer=None, db=None):
         records = db.invoices_for(customer)
     else:
         records = db.query("SELECT number, customer, total, status FROM invoices")
+    log.info("export: %d invoices", len(records))
     lines = [HEADER]
     for number, name, total, status in records:
         lines.append(f"{number},{name},{fmt(total)},{status}")

@@ -1,4 +1,0 @@
-schema_version: "1.1"
-name: 01-regression-failing-test
-context:
-  scaffold_script: fixture.sh

@@ -2,7 +2,10 @@
 # Scaffold: builds the bigshop monorepo (fixtures/bigshop.py, embedded) in the CURRENT directory, which is the repo root.
 set -e
 python3 - --variant base <<'PYGEN'
-"""bigshop — a deterministic ~180-file, 60-commit, journaled monorepo fixture.
+"""bigshop — a ~180-file, 60-commit, journaled monorepo fixture.
+
+The tree is deterministic except the revisit date in the CSV-export worklog, which is
+computed at scaffold time, 30 days ahead (FR-023).
 
 Usage (from an empty directory, which becomes the repo root):
     python3 bigshop.py --variant <case>
@@ -15,6 +18,7 @@ Variants plant one scenario each on top of the shared history (see VARIANTS). Ev
 synthetic; nothing here refers to a real project.
 """
 import argparse
+import datetime
 import json
 import os
 import sqlite3
@@ -694,8 +698,12 @@ def write_docs():
         - [x] T3 — status filter, parameterised + test (SC-002)
 
         ## Deviations (authorised)
-        - 2026-08-12 — Export logs at INFO instead of DEBUG for the first weeks after launch; ops asked for it. Authorised by the user; revisit 2026-10-05.
+        - 2026-08-12 — Export logs at INFO instead of DEBUG for the first weeks after launch; ops asked for it. Authorised by the user; revisit REVISIT_DATE.
     ''')
+    # The revisit date stays in the future whenever the case runs, or every model flags the
+    # deviation as expired (case 46 met this on 2026-10-06).
+    revisit = (datetime.date.today() + datetime.timedelta(days=30)).isoformat()
+    replace("docs/prd/invoice-csv-export.worklog.md", "REVISIT_DATE", revisit)
     write("docs/prd/monthly-statement-pdf.md", '''
         ---
         type: prd
