@@ -281,6 +281,23 @@ class TestCase74JournalVerdict(JournalGrader, unittest.TestCase):
             "phase": "review", "verdict": "not-ready"})))
 
 
+class TestCase74AnswerInFinalMessage(unittest.TestCase):
+    """#28, T062: 74's canon and verdict graders read only the last message. A run that
+    ended on a short follow-up after a background task scored low with the answer in an
+    earlier message, so the ask puts every finding and the verdict in the final message."""
+
+    CASE = "74-review-canon-lens"
+
+    def test_the_ask_puts_findings_and_verdict_in_the_final_message(self):
+        ask = (EVALS / self.CASE / "prompt.md").read_text(encoding="utf-8").split("---\n")[-1]
+        self.assertRegex(ask, r"every finding and your verdict in your final message")
+
+    def test_the_graders_that_need_it_read_the_last_message(self):
+        for name in ("canon-branded-id-named", "canon-switch-named", "verdict-not-ready"):
+            with self.subTest(name):
+                self.assertEqual(grader(self.CASE, name)[0]["target"], "last_message")
+
+
 class TestCase15ExecHygiene(unittest.TestCase):
     """Two regex graders replace the LLM judge ``exec-hygiene``: an answered and reasoned
     item in the "Assumptions (executive)" section, and a non-empty non-goals list."""

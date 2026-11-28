@@ -12,7 +12,9 @@ Each run file is the stream-json output of one `claude -p ... --output-format st
 - the Bash calls whose `command` matches each regex in `zero.bash`;
 - the Agent calls (the legacy tool name `Task` counts too);
 - the Edit and Write calls whose `file_path` matches each regex in `zero.edit` / `zero.write`;
-- the turns, the cost and the time (`duration_ms` / 1000) of the result record.
+- the turns, the cost and the time (`duration_ms` / 1000) of the result record;
+- whether the run stopped on the turn cap (`--max-turns`): a result record with the
+  subtype `error_max_turns` gives `stopped: "max_turns"`.
 
 An empty or absent pattern list counts every call of that tool (shown as `*`).
 
@@ -25,12 +27,14 @@ A fired skill matches when its name is `<plugin>:<skill>` or `<skill>`. With `fi
 a run passes only when the skill fired; with `fires: false`, only when it did not. Every
 count named in `zero` must be 0 (`agent: true` checks the Agent count; an absent key is
 not checked). A run with an error fails: a non-JSON line in the stream (a usage-limit
-message), a result record with `is_error`, or no result record. The case passes only when
-every run passes. Without --expect the script counts and judges nothing.
+message), a result record with `is_error`, or no result record. A run that stops on the
+turn cap is a stop, not an error: the skills and the counts up to the cap decide it, as for
+any other run. The case passes only when every run passes. Without --expect the script
+counts and judges nothing.
 
 The result file holds the case, the model, the plugin name and version, the expectation,
-every run (skills, counts, turns, cost, seconds, passed, failures, error), the case verdict
-and the summed cost.
+every run (skills, counts, turns, stopped, cost, seconds, passed, failures, error), the case
+verdict and the summed cost.
 
 `check` validates probe.json files before a probe spends anything.
 
@@ -51,6 +55,7 @@ TOOLS = ("bash", "agent", "edit", "write")
 PATTERN_TOOLS = {"bash": ("Bash", "command"), "edit": ("Edit", "file_path"), "write": ("Write", "file_path")}
 AGENT_NAMES = ("Agent", "Task")
 EVERY = "*"
+MAX_TURNS = "error_max_turns"  # the result subtype of a run that hit --max-turns
 
 
 class ProbeError(Exception):
@@ -108,7 +113,7 @@ def plugin_meta(plugin_dir):
 
 
 def read_stream(path):
-    """{skills, calls, turns, cost, seconds, error} of one stream-json run file."""
+    """{skills, calls, turns, cost, seconds, stopped, error} of one stream-json run file."""
     try:
         fh = open(path, encoding="utf-8", errors="replace")
     except OSError as e:
@@ -142,7 +147,8 @@ def read_stream(path):
     errors = []
     if raw:
         errors.append("non-JSON output: " + " | ".join(raw[:3]))
-    run = {"skills": skills, "calls": calls, "turns": None, "cost": None, "seconds": None}
+    run = {"skills": skills, "calls": calls, "turns": None, "cost": None, "seconds": None,
+           "stopped": None}
     if record is None:
         errors.append("no result record in the stream")
     else:
@@ -150,7 +156,9 @@ def read_stream(path):
         run["cost"] = record.get("total_cost_usd")
         ms = record.get("duration_ms")
         run["seconds"] = ms / 1000 if isinstance(ms, (int, float)) else None
-        if record.get("is_error"):
+        if record.get("subtype") == MAX_TURNS:
+            run["stopped"] = "max_turns"
+        elif record.get("is_error"):
             errors.append(f"result is_error: {record.get('result') or record.get('subtype') or '?'}")
     run["error"] = "; ".join(errors) or None
     return run
@@ -219,7 +227,8 @@ def judge_case(case, model, plugin, version, expect, run_paths):
         run = read_stream(path)
         verdict = judge_run(run, expect, plugin)
         runs.append({"run": k, "skills": run["skills"], "counts": verdict["counts"],
-                     "turns": run["turns"], "cost": run["cost"], "seconds": run["seconds"],
+                     "turns": run["turns"], "stopped": run["stopped"],
+                     "cost": run["cost"], "seconds": run["seconds"],
                      "passed": verdict["passed"], "failures": verdict["failures"],
                      "error": run["error"]})
     passed = None if expect is None else bool(runs) and all(r["passed"] for r in runs)
@@ -243,6 +252,8 @@ def run_line(case, run, expect):
         verdict = "PASS " if run["passed"] else "FAIL "
     counts = "".join(f" {label}={n}" for label, n in shown)
     turns = "?" if run["turns"] is None else str(run["turns"])
+    if run.get("stopped"):
+        turns += f" stopped={run['stopped']}"
     cost = "?" if run["cost"] is None else f"{run['cost']:.2f}"
     secs = "?s" if run["seconds"] is None else f"{run['seconds']:.0f}s"
     head = (f"{case} run{run['run']}: {verdict}skill=[{', '.join(run['skills'])}]{counts}"
