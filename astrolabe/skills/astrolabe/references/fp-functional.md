@@ -213,6 +213,12 @@ Signals the extraction is due:
   switching behavior inside means you've unified two skeletons, not extracted one. Split
   it, or accept the duplication.
 
+None of these excuses a domain concept spelled twice. A predicate, derived value or
+constant that states one domain fact at two sites is a second definition, not a candidate
+abstraction: give it one named home now, even when it is one line (see "One definition per
+concept" in `domain-modeling.md`). Two look-alike predicates for different facts stay
+apart, as accidentally-similar code.
+
 ## Absence: Option end-to-end, null only at the unwrap boundary
 
 **Model absence with `Option` in every domain/application signature, schema, and DTO —
