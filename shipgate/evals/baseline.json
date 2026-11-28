@@ -15,6 +15,50 @@
       }
     },
     "02-selective-bug": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.5978,
+          "without": 0.3749
+        },
+        "delta": 0.33,
+        "judge": "sonnet",
+        "judge_cost": 0.0186,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-40-12-295Z-30805+2026-11-27T11-53-29-677Z-35519",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 57.7,
+          "without": 38.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.67
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.294,
+          "without": 0.1712
+        },
+        "delta": 0.44,
+        "judge": "sonnet",
+        "judge_cost": 0.0189,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-40-12-689Z-30932+2026-11-27T11-53-29-304Z-35354",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 49.7,
+          "without": 39.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.56
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.44,
@@ -29,6 +73,50 @@
       }
     },
     "03-suggested-quickfix": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.5125,
+          "without": 0.3326
+        },
+        "delta": 0.38,
+        "judge": "sonnet",
+        "judge_cost": 0.0099,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-40-12-375Z-30843+2026-11-27T11-53-29-431Z-35439",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 41.0,
+          "without": 27.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.62
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.2815,
+          "without": 0.139
+        },
+        "delta": 0.57,
+        "judge": "sonnet",
+        "judge_cost": 0.0103,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-40-12-864Z-30978+2026-11-27T11-53-29-203Z-35315",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 54.7,
+          "without": 21.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.43
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.57,
@@ -43,6 +131,50 @@
       }
     },
     "04-pasted-stack-trace": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4725,
+          "without": 0.3159
+        },
+        "delta": 0.44,
+        "judge": "sonnet",
+        "judge_cost": 0.0122,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-40-12-524Z-30891+2026-11-27T11-56-26-253Z-42727",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 30.3,
+          "without": 26.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.56
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.2382,
+          "without": 0.1286
+        },
+        "delta": 0.44,
+        "judge": "sonnet",
+        "judge_cost": 0.0124,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-40-13-025Z-31019+2026-11-27T11-56-01-106Z-42262",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 32.7,
+          "without": 23.0
+        },
+        "version": "0.38.1",
+        "with": 0.78,
+        "without": 0.33
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.44,
@@ -57,6 +189,50 @@
       }
     },
     "05-fix-it-wording": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.53,
+          "without": 0.2797
+        },
+        "delta": 0.67,
+        "judge": "sonnet",
+        "judge_cost": 0.0054,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-42-10-017Z-38838+2026-11-27T11-57-58-302Z-45639",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 37.0,
+          "without": 23.3
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.33
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.2712,
+          "without": 0.1426
+        },
+        "delta": 0.44,
+        "judge": "sonnet",
+        "judge_cost": 0.0055,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-42-12-700Z-39050+2026-11-27T11-57-39-724Z-45253",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 37.0,
+          "without": 23.0
+        },
+        "version": "0.38.1",
+        "with": 0.78,
+        "without": 0.33
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.67,
@@ -197,6 +373,50 @@
       }
     },
     "15-clarify-exec-issue-seeded": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.0806,
+          "without": 0.6758
+        },
+        "delta": 0.5,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-41-34-842Z-36360+2026-11-27T11-59-51-180Z-49534",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 114.3,
+          "without": 86.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.5
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4888,
+          "without": 0.2863
+        },
+        "delta": 0.42,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-41-19-888Z-35317+2026-11-27T11-59-32-382Z-49093",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 86.7,
+          "without": 62.0
+        },
+        "version": "0.38.1",
+        "with": 0.94,
+        "without": 0.53
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.39,
@@ -211,6 +431,50 @@
       }
     },
     "16-clarify-exec-one-way-door": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.0094,
+          "without": 0.5958
+        },
+        "delta": 0.6,
+        "judge": "sonnet",
+        "judge_cost": 0.0086,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-41-34-720Z-36332+2026-11-27T11-53-29-560Z-35482",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 108.0,
+          "without": 72.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.4
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.5239,
+          "without": 0.2475
+        },
+        "delta": 0.27,
+        "judge": "sonnet",
+        "judge_cost": 0.0092,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-41-23-794Z-35502+2026-11-27T11-53-29-203Z-35317",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 96.0,
+          "without": 53.0
+        },
+        "version": "0.38.1",
+        "with": 0.67,
+        "without": 0.4
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.47,
@@ -225,6 +489,26 @@
       }
     },
     "17-clarify-exec-stale-assumption": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.552
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0177,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-54-46-631Z-24726",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 64.3
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -239,6 +523,50 @@
       }
     },
     "18-clarify-ask-vague": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.809,
+          "without": 0.5116
+        },
+        "delta": 0.38,
+        "judge": "sonnet",
+        "judge_cost": 0.0147,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-43-22-239Z-42153+2026-11-27T11-58-55-709Z-47714",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 77.7,
+          "without": 62.7
+        },
+        "version": "0.38.1",
+        "with": 0.95,
+        "without": 0.56
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.3882,
+          "without": 0.2287
+        },
+        "delta": 0.33,
+        "judge": "sonnet",
+        "judge_cost": 0.0153,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-43-23-081Z-42234+2026-11-27T11-58-18-554Z-46258",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 65.7,
+          "without": 45.3
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.67
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.18,
@@ -253,6 +581,50 @@
       }
     },
     "19-clarify-ask-fully-specified": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.8034,
+          "without": 0.4462
+        },
+        "delta": 0.13,
+        "judge": "sonnet",
+        "judge_cost": 0.0068,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-45-53-990Z-54486+2026-11-27T12-05-35-065Z-58616",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 78.7,
+          "without": 41.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.87
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4036,
+          "without": 0.2661
+        },
+        "delta": 0.25,
+        "judge": "sonnet",
+        "judge_cost": 0.0103,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-44-27-530Z-46499+2026-11-27T12-03-53-523Z-55930",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 73.0,
+          "without": 59.3
+        },
+        "version": "0.38.1",
+        "with": 0.94,
+        "without": 0.68
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.17,
@@ -295,6 +667,62 @@
       }
     },
     "22-verify-stale-after-fix": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4899,
+          "without": 0.3361
+        },
+        "delta": -0.27,
+        "judge": "sonnet",
+        "judge_cost": 0.0094,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-45-12-595Z-51112+2026-11-27T18-25-27-006Z-65544",
+        "rule": "both-arm",
+        "runs": 3,
+        "scripts": {
+          "last-test-after-last-edit": {
+            "with": 1.0,
+            "without": 1.0
+          }
+        },
+        "seconds": {
+          "with": 38.3,
+          "without": 30.7
+        },
+        "version": "0.38.1",
+        "with": 0.6,
+        "without": 0.87
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.2497,
+          "without": 0.1738
+        },
+        "delta": -0.13,
+        "judge": "sonnet",
+        "judge_cost": 0.0073,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-44-04-400Z-45756+2026-11-27T12-07-33-268Z-61419",
+        "rule": "both-arm",
+        "runs": 3,
+        "scripts": {
+          "last-test-after-last-edit": {
+            "with": 1.0,
+            "without": 1.0
+          }
+        },
+        "seconds": {
+          "with": 34.7,
+          "without": 29.7
+        },
+        "version": "0.38.1",
+        "with": 0.87,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.29,
@@ -309,6 +737,50 @@
       }
     },
     "23-verify-edit-then-claim": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4521,
+          "without": 0.2683
+        },
+        "delta": 0.22,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-46-32-230Z-57065+2026-11-27T12-02-50-301Z-54150",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 21.3,
+          "without": 13.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.78
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.2121,
+          "without": 0.1078
+        },
+        "delta": 0.17,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-45-40-613Z-53752+2026-11-27T12-01-36-832Z-51787",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 16.3,
+          "without": 7.3
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.83
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.11,
@@ -323,6 +795,28 @@
       }
     },
     "24-verify-pasted-evidence": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.408,
+          "without": 0.28
+        },
+        "delta": 0.07,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-54-46-631Z-24727+2026-11-26T22-45-00-668Z-49113",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 16.7,
+          "without": 25.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.93
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.04,
@@ -337,6 +831,26 @@
       }
     },
     "25-verify-zero-tests-ran": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.3062
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-54-46-631Z-24733",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 21.3
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -351,6 +865,50 @@
       }
     },
     "26-verify-multi-claim": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4349,
+          "without": 0.2688
+        },
+        "delta": -0.1,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-48-01-419Z-63048+2026-11-27T11-55-34-553Z-41399",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 20.3,
+          "without": 12.3
+        },
+        "version": "0.38.1",
+        "with": 0.81,
+        "without": 0.9
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.2275,
+          "without": 0.1478
+        },
+        "delta": 0.1,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-47-28-333Z-61926+2026-11-27T11-56-16-302Z-42528",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 17.0,
+          "without": 18.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.9
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.29,
@@ -393,6 +951,26 @@
       }
     },
     "29-route-nested-rule": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.4017
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0076,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-10-13-522Z-43180",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 36.3
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.06,
@@ -407,6 +985,26 @@
       }
     },
     "30-route-cross-cutting-split": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.3503
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0103,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-56-04-898Z-26886",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 33.3
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -421,6 +1019,26 @@
       }
     },
     "31-route-schema-and-dump": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.4046
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0083,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-55-52-695Z-26282",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 37.0
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -435,6 +1053,26 @@
       }
     },
     "32-route-rules-conflict": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.55
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0151,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-00-18-767Z-32296",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 71.3
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -449,6 +1087,26 @@
       }
     },
     "33-route-signals-vs-rule": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.4423
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.011,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-57-45-903Z-28911",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 51.7
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -491,6 +1149,26 @@
       }
     },
     "36-kb-recall-explicit": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.3527
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.008,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-57-45-339Z-28874",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 27.0
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -519,6 +1197,50 @@
       }
     },
     "38-kb-ledger-jot": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.2657,
+          "without": 0.2389
+        },
+        "delta": 0.0,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-46-47-227Z-58522+2026-11-27T11-56-36-895Z-43127",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 5.3,
+          "without": 12.3
+        },
+        "version": "0.38.1",
+        "with": 0.62,
+        "without": 0.62
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.1748,
+          "without": 0.1275
+        },
+        "delta": 0.25,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-45-34-142Z-52902+2026-11-27T11-57-08-340Z-44220",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 16.7,
+          "without": 14.7
+        },
+        "version": "0.38.1",
+        "with": 0.88,
+        "without": 0.62
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.38,
@@ -533,6 +1255,26 @@
       }
     },
     "39-kb-triage": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.406
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.008,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-03-53-973Z-36707",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 42.7
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -547,6 +1289,26 @@
       }
     },
     "40-kb-capture-update": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.3015
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-00-23-312Z-32495",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 19.7
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -589,6 +1351,50 @@
       }
     },
     "43-kb-implicit-jot": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.5329,
+          "without": 0.3635
+        },
+        "delta": 0.17,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-47-13-568Z-61219+2026-11-27T12-03-54-443Z-55986",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 33.7,
+          "without": 31.7
+        },
+        "version": "0.38.1",
+        "with": 0.89,
+        "without": 0.72
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.1816,
+          "without": 0.1552
+        },
+        "delta": -0.17,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-46-04-372Z-55077+2026-11-27T12-02-27-761Z-53252",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 20.7,
+          "without": 23.7
+        },
+        "version": "0.38.1",
+        "with": 0.67,
+        "without": 0.83
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.22,
@@ -617,6 +1423,50 @@
       }
     },
     "45-review-unmet-sc": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.0121,
+          "without": 0.3391
+        },
+        "delta": -0.13,
+        "judge": "sonnet",
+        "judge_cost": 0.0141,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-48-40-926Z-64569+2026-11-27T18-25-25-504Z-65481",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 86.3,
+          "without": 38.0
+        },
+        "version": "0.38.1",
+        "with": 0.87,
+        "without": 1.0
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.369,
+          "without": 0.1733
+        },
+        "delta": 0.07,
+        "judge": "sonnet",
+        "judge_cost": 0.0109,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-48-24-467Z-63960+2026-11-27T17-10-05-014Z-97939",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 41.3,
+          "without": 34.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.93
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.13,
@@ -631,6 +1481,50 @@
       }
     },
     "46-review-clean-diff": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.1685,
+          "without": 0.3235
+        },
+        "delta": -0.44,
+        "judge": "sonnet",
+        "judge_cost": 0.0109,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-47-25-388Z-61721+2026-11-27T17-19-43-821Z-8025",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 126.0,
+          "without": 32.7
+        },
+        "version": "0.38.1",
+        "with": 0.56,
+        "without": 1.0
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4993,
+          "without": 0.1747
+        },
+        "delta": 0.0,
+        "judge": "sonnet",
+        "judge_cost": 0.0098,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-46-19-897Z-55686+2026-11-27T12-03-30-799Z-55303",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 72.0,
+          "without": 32.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.11,
@@ -645,6 +1539,28 @@
       }
     },
     "47-review-after-fixes": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.7869,
+          "without": 0.3362
+        },
+        "delta": 0.05,
+        "judge": "sonnet",
+        "judge_cost": 0.0072,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T16-59-07-319Z-30923+2026-11-26T22-45-51-521Z-54359",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 47.7,
+          "without": 31.7
+        },
+        "version": "0.38.1",
+        "with": 0.9,
+        "without": 0.86
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -659,6 +1575,46 @@
       }
     },
     "48-review-small-diff": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.7201
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-27T11-56-54-052Z-43573",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 36.3
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": null
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.3411
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-27T11-57-58-981Z-45678",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 32.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": null
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -701,6 +1657,50 @@
       }
     },
     "51-design-exec-genuine-fork": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.2756,
+          "without": 0.7472
+        },
+        "delta": 0.43,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-48-50-439Z-64832+2026-11-27T11-58-44-985Z-47262",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 158.0,
+          "without": 101.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.57
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.5761,
+          "without": 0.3014
+        },
+        "delta": 0.36,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-47-17-458Z-61431+2026-11-27T11-59-36-057Z-49265",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 115.3,
+          "without": 73.7
+        },
+        "version": "0.38.1",
+        "with": 0.98,
+        "without": 0.62
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.41,
@@ -715,6 +1715,46 @@
       }
     },
     "52-design-exec-no-fork": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.0549
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-27T17-32-18-703Z-24228",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 121.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": null
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4907
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-27T12-05-23-464Z-58193",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 93.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": null
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -729,6 +1769,28 @@
       }
     },
     "53-design-ask-recommend": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.7083,
+          "without": 0.3785
+        },
+        "delta": 0.17,
+        "judge": "sonnet",
+        "judge_cost": 0.0101,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-06-03-364Z-39459+2026-11-26T22-48-15-889Z-63580",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 67.3,
+          "without": 42.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.83
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -743,6 +1805,26 @@
       }
     },
     "54-design-prior-adr": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.6392
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-01-24-589Z-33968",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 81.0
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -757,6 +1839,28 @@
       }
     },
     "55-design-exec-one-way-door": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.1892,
+          "without": 0.7216
+        },
+        "delta": -0.11,
+        "judge": "sonnet",
+        "judge_cost": 0.0113,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-10-13-544Z-43200+2026-11-27T11-53-29-203Z-35316",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 142.0,
+          "without": 102.7
+        },
+        "version": "0.38.1",
+        "with": 0.78,
+        "without": 0.89
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -799,6 +1903,50 @@
       }
     },
     "58-big-debug-regression": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.7161,
+          "without": 0.4208
+        },
+        "delta": 0.0,
+        "judge": "sonnet",
+        "judge_cost": 0.0166,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-50-37-109Z-73695+2026-11-27T22-30-00-455Z-93746",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 67.7,
+          "without": 57.0
+        },
+        "version": "0.38.1",
+        "with": 0.85,
+        "without": 0.85
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.3955,
+          "without": 0.2307
+        },
+        "delta": -0.07,
+        "judge": "sonnet",
+        "judge_cost": 0.0222,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-50-09-859Z-69974+2026-11-27T17-12-10-525Z-954",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 89.3,
+          "without": 67.7
+        },
+        "version": "0.38.1",
+        "with": 0.93,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.27,
@@ -939,6 +2087,50 @@
       }
     },
     "68-design-steel-man": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.8096,
+          "without": 0.4544
+        },
+        "delta": 0.07,
+        "judge": "sonnet",
+        "judge_cost": 0.012,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-49-05-865Z-66190+2026-11-27T17-31-50-188Z-23903",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 91.0,
+          "without": 54.7
+        },
+        "version": "0.38.1",
+        "with": 0.59,
+        "without": 0.52
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.3046,
+          "without": 0.1945
+        },
+        "delta": 0.26,
+        "judge": "sonnet",
+        "judge_cost": 0.0141,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-47-57-890Z-62853+2026-11-27T12-07-07-080Z-60707",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 49.0,
+          "without": 37.3
+        },
+        "version": "0.38.1",
+        "with": 0.7,
+        "without": 0.44
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.37,
@@ -953,6 +2145,26 @@
       }
     },
     "69-debug-map-territory": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.3303
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0152,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T17-08-10-765Z-41441",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 32.0
+        },
+        "version": "0.38.0",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.0,
@@ -967,6 +2179,62 @@
       }
     },
     "70-review-fact-retention": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.1627,
+          "without": 0.3989
+        },
+        "delta": 0.02,
+        "judge": "sonnet",
+        "judge_cost": 0.0249,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-53-55-526Z-84948+2026-11-27T17-26-04-809Z-18071",
+        "rule": "both-arm",
+        "runs": 3,
+        "scripts": {
+          "no-sentence-over-40-words": {
+            "with": 1.0,
+            "without": 1.0
+          }
+        },
+        "seconds": {
+          "with": 114.7,
+          "without": 44.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.98
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.6325,
+          "without": 0.2148
+        },
+        "delta": 0.16,
+        "judge": "sonnet",
+        "judge_cost": 0.0271,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-51-01-759Z-74679+2026-11-27T17-16-39-916Z-5367",
+        "rule": "both-arm",
+        "runs": 3,
+        "scripts": {
+          "no-sentence-over-40-words": {
+            "with": 1.0,
+            "without": 1.0
+          }
+        },
+        "seconds": {
+          "with": 91.3,
+          "without": 44.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.84
+      },
       "unrecorded": {
         "claude": "2.1.296",
         "delta": 0.27,
@@ -1009,6 +2277,50 @@
       }
     },
     "73-graph-reuse-hidden-helper": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.8713,
+          "without": 0.5825
+        },
+        "delta": 0.0,
+        "judge": "sonnet",
+        "judge_cost": 0.0088,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-26T22-53-31-079Z-82565+2026-11-27T22-25-52-568Z-72325",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 82.0,
+          "without": 54.3
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 1.0
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4294,
+          "without": 0.3546
+        },
+        "delta": 0.0,
+        "judge": "sonnet",
+        "judge_cost": 0.009,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-53-34-279Z-82989+2026-11-27T17-21-15-459Z-9465",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 69.7,
+          "without": 67.3
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.304",
         "delta": 0.0,
@@ -1023,6 +2335,26 @@
       }
     },
     "74-review-canon-lens": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "without": 0.4266
+        },
+        "delta": null,
+        "judge": "sonnet",
+        "judge_cost": 0.0089,
+        "mode": "bare",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-27T12-00-49-586Z-50806",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "without": 40.0
+        },
+        "version": "0.38.1",
+        "with": null,
+        "without": 1.0
+      },
       "unrecorded": {
         "claude": "2.1.316",
         "delta": 0.11,
@@ -1049,8 +2381,100 @@
         "with": 1.0,
         "without": 0.4
       }
+    },
+    "76-clarify-exec-confirm-batch": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 1.3024,
+          "without": 0.8427
+        },
+        "delta": 0.46,
+        "judge": "sonnet",
+        "judge_cost": 0.1225,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-27T12-02-51-539Z-54212+2026-11-27T17-10-59-629Z-99379",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 174.3,
+          "without": 132.7
+        },
+        "version": "0.38.1",
+        "with": 0.93,
+        "without": 0.46
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.6249,
+          "without": 0.3967
+        },
+        "delta": 0.39,
+        "judge": "sonnet",
+        "judge_cost": 0.1062,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-49-51-107Z-68176+2026-11-27T16-58-58-315Z-82785",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 146.0,
+          "without": 111.3
+        },
+        "version": "0.38.1",
+        "with": 0.81,
+        "without": 0.43
+      }
+    },
+    "77-clarify-ui-reference": {
+      "claude-fable-5-2": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.9035,
+          "without": 0.539
+        },
+        "delta": 0.78,
+        "judge": "sonnet",
+        "judge_cost": 0.0083,
+        "mode": "bare+none",
+        "model": "claude-fable-5-2",
+        "results": "2026-11-27T17-24-46-780Z-15485+2026-11-27T17-27-58-171Z-19466",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 86.0,
+          "without": 63.0
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.22
+      },
+      "claude-opus-5-5": {
+        "claude": "2.1.332",
+        "cost": {
+          "with": 0.4462,
+          "without": 0.2641
+        },
+        "delta": 1.0,
+        "judge": "sonnet",
+        "judge_cost": 0.0085,
+        "mode": "bare+none",
+        "model": "claude-opus-5-5",
+        "results": "2026-11-26T22-53-17-196Z-81840+2026-11-27T17-06-17-382Z-93687",
+        "rule": "both-arm",
+        "runs": 3,
+        "seconds": {
+          "with": 75.3,
+          "without": 53.7
+        },
+        "version": "0.38.1",
+        "with": 1.0,
+        "without": 0.0
+      }
     }
   },
   "note": "Rows are cases[<case>][<model>] (ADR 0034). The rows under 'unrecorded' predate the model record: each is the latest full (3-run) result of its case, and its 'version' is the plugin version at record time, not necessarily the version the run tested. A row under a model key names the version the run tested.",
-  "updated": "2026-11-08"
+  "updated": "2026-11-27"
 }

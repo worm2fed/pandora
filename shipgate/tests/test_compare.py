@@ -104,13 +104,15 @@ GRADERS = [
 
 
 def none_runs(cost=0.16, secs=90):
-    """Three runs that score 0.80, 1.00 and 0 (errored) as the harness counts; 0.67, 1.00, 0 under both-arm."""
+    """Three runs that score 0.80, 1.00 and 0 (no grader ran) as the harness counts; 0.67, 1.00, 0 under both-arm.
+
+    The third run carries no error: a run with an error voids its batch (T060)."""
     return [
         run(0.8, cost=cost, secs=secs, graders=[grade("answer", True), grade("file", False, weight=0.5),
                                                 grade("skill-fired", True)]),
         run(1.0, cost=cost, secs=secs, graders=[grade("answer", True), grade("file", True, weight=0.5),
                                                 grade("skill-fired", True), grade("extra", True)]),
-        run(0.0, cost=0, secs=0, judge=0, error="boom"),
+        run(0.0, cost=0, secs=0, judge=0),
     ]
 
 
@@ -539,6 +541,91 @@ class OldDirsTest(CompareBase):
         out = self.refused(self.tmp)
         self.assertIn("refused: 2026-10-02T10-00-00-000Z (and 1 older dir(s)): the model was not recorded", out)
         self.assertNotIn("skipped", out)
+
+
+LIMIT = "exit 1: You've hit your 5-hour limit"
+
+
+class VoidBatchTest(CompareBase):
+    """T060: a run with an error voids its case's batch in that dir; the newest valid dir per case and model counts."""
+
+    def void_dir(self, name, *, model=MODEL, case="01-case"):
+        return write_result(self.tmp, name, [ww_case([run(), run(0.0, cost=0, error=LIMIT)], [run(0.0)] * 2, name=case)],
+                            model=model)
+
+    def test_a_newer_void_dir_is_skipped_and_named_and_the_older_valid_dir_is_used(self):
+        write_result(self.tmp, "2026-11-20T10-00-00-000Z", [ww_case([run()], [run(0.5)])])
+        self.void_dir("2026-11-25T10-00-00-000Z")
+        out = self.compare(self.tmp)
+        w, wo, d, *_, row = self.row_cells(out)
+        self.assertEqual((w, wo, d), ("1.00", "0.50", "+0.50"), row)
+        self.assertEqual(out.count("skipped 2026-11-25T10-00-00-000Z: void batch of 01-case "
+                                   f"{MODEL}, a run has an error: {LIMIT}"), 1, out)
+        self.assertNotIn("no valid dir", out)
+        self.assertNotIn("refused", out)
+
+    def test_record_never_writes_a_void_batch_and_records_the_older_valid_dir(self):
+        write_result(self.tmp, "2026-11-20T10-00-00-000Z", [ww_case([run()], [run(0.5)])])
+        self.void_dir("2026-11-25T10-00-00-000Z")
+        out = self.compare("--record", self.tmp)
+        self.assertIn("skipped 2026-11-25T10-00-00-000Z: void batch of 01-case", out)
+        rec = self.rows()["01-case"][MODEL]
+        self.assertEqual((rec["results"], rec["without"], rec["delta"]), ("2026-11-20T10-00-00-000Z", 0.5, 0.5))
+
+    def test_a_case_and_model_with_only_a_void_dir_has_no_row_and_the_skip_says_why(self):
+        self.void_dir("2026-11-25T10-00-00-000Z")
+        write_result(self.tmp, "2026-11-25T11-00-00-000Z", [ww_case([run()], [run(0.5)])], model="other-model")
+        for args in ((), ("--record",)):
+            with self.subTest(args=args):
+                out = self.compare(*args, self.tmp)
+                rows = [line for line in out.splitlines() if line.startswith("01-case")]
+                self.assertEqual(len(rows), 1, out)
+                self.assertIn("other-model", rows[0])
+                self.assertIn("skipped 2026-11-25T10-00-00-000Z: void batch of 01-case "
+                              f"{MODEL}, a run has an error: {LIMIT} (no valid dir: no row)", out)
+        self.assertEqual(list(self.rows()["01-case"]), ["other-model"])
+
+    def test_a_void_line_says_when_the_older_valid_dir_is_refused(self):
+        write_result(self.tmp, "2026-11-20T10-00-00-000Z", [ww_case([run()], [run(0.5)])], shadow=None)
+        self.void_dir("2026-11-25T10-00-00-000Z")
+        proc = self.run_compare("--record", self.tmp)
+        self.assertIn("skipped 2026-11-25T10-00-00-000Z: void batch of 01-case "
+                      f"{MODEL}, a run has an error: {LIMIT} (valid dir refused: no row)", proc.stdout)
+        self.assertNotIn("no valid dir", proc.stdout)
+
+    def test_only_void_dirs_name_each_and_exit_1(self):
+        self.void_dir("2026-11-24T10-00-00-000Z")
+        self.void_dir("2026-11-25T10-00-00-000Z")
+        proc = self.run_compare("--record", self.tmp)
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        for d in ("2026-11-24T10-00-00-000Z", "2026-11-25T10-00-00-000Z"):
+            self.assertIn(f"skipped {d}: void batch of 01-case", proc.stdout)
+        self.assertFalse(self.baseline.exists())
+
+    def test_a_void_case_leaves_the_other_cases_of_its_dir_valid(self):
+        write_result(self.tmp, "2026-11-25T10-00-00-000Z", [
+            ww_case([run(), run(0.0, error=LIMIT)], [run(0.5)] * 2),
+            ww_case([run()], [run(0.5)], name="02-case"),
+        ])
+        out = self.compare("--record", self.tmp)
+        self.assertIn("skipped 2026-11-25T10-00-00-000Z: void batch of 01-case", out)
+        self.assertNotIn("void batch of 02-case", out)
+        self.assertEqual(sorted(self.rows()), ["02-case"])
+
+    def test_a_void_newest_bare_dir_pairs_the_older_valid_bare_dir(self):
+        bare_runs = [run(0.5, cost=0.1, secs=40, graders=[grade("answer", False), grade("file", True, weight=0.5)])] * 3
+        write_result(self.tmp, "2026-11-20T10-00-00-000Z", [one_arm_case(bare_runs, graders=GRADERS)],
+                     ablation="none", bare=True)
+        write_result(self.tmp, "2026-11-25T10-00-00-000Z", [one_arm_case(
+            bare_runs[:2] + [run(0.0, cost=0, secs=0, judge=0, error=LIMIT)], graders=GRADERS)],
+            ablation="none", bare=True)
+        write_result(self.tmp, "2026-11-25T11-00-00-000Z", [one_arm_case(none_runs(), graders=GRADERS)],
+                     ablation="none")
+        out = self.compare("--record", self.tmp)
+        self.assertIn("skipped 2026-11-25T10-00-00-000Z: void batch of 01-case", out)
+        rec = self.rows()["01-case"][MODEL]
+        self.assertEqual((rec["mode"], rec["with"], rec["without"], rec["results"]),
+                         ("bare+none", 0.56, 0.33, "2026-11-20T10-00-00-000Z+2026-11-25T11-00-00-000Z"))
 
 
 class EfficiencyTest(CompareBase):

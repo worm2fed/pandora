@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Cheap triggering probe: does the plugin's skill fire on a case's prompt, and does the
-# run stay clear of the calls the case names? No graders, no ablation, about $0.10 per
-# run. It measures TRIGGERING ONLY, not answer quality (ADR 0036).
+# run stay clear of the calls the case names? No graders, no ablation, about $0.15 a run
+# on Opus and $0.30 on Fable (measured 2026-11-27). It measures TRIGGERING ONLY, not answer
+# quality (ADR 0036).
 #
 #   probe.sh [--config-dir DIR] --model M <plugin-dir> <NN|probes> [runs=3] [max-turns=4]
 #               (the flags may come in any position)

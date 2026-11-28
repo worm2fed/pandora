@@ -358,3 +358,44 @@ corrections above remove the without counts and costs of case 77, and the claim 
 bare Fable did worse than the bare Opus. The ratio of 2.03 between the Fable and the Opus
 without-arm cost of case 77 is not a bare-arm ratio either. The plan's Fable projection uses
 the with-arm ratio of 2.08, which these runs do not touch.
+
+## Addendum, 2026-11-27: the re-baseline numbers for #32
+
+The re-baseline of #28 ran every kept and guard case on both models and the `ablation-32`
+set on Fable (harness 2.1.332, judge sonnet, 3 runs per arm). A score is the mean of the
+both-arm score over the runs (`compare.py`). Δ is the with arm (`--ablation none`) minus the
+bare arm (`--bare`). A lift is Δ above +0.10, the 0.10 that `compare.py` uses as its noise
+threshold. The `ablation-32` set on Opus did not run: it rests on the October rows (decision
+D1).
+
+**Fable.**
+
+- Bare 1.00, so the plugin has no lift to show. Cut together with #32's decision on the
+  skill text: 17, 25, 29 (after the 1b rule), 30, 31, 32, 33, 36, 39, 40, 54, 69, 74 (the
+  rerun scored 1.00 in 3 of 3; the first batch fell on a grading artifact). Also at bare
+  1.00 in the kept set, to read at #32: 45 (with 0.87, Δ −0.13), 46 (with 0.56, Δ −0.44),
+  73 (with 1.00, Δ 0.00).
+- A lift, keep: 02 (+0.33), 03 (+0.38), 04 (+0.44), 05 (+0.67), 15 (+0.50), 16 (+0.60),
+  18 (+0.38), 19 (+0.13), 23 (+0.22), 43 (+0.17), 51 (+0.43), 53 (+0.17), 76 (+0.46),
+  77 (+0.78).
+- No clear lift or negative, to read at #32: 22 (−0.27), 24 (+0.07), 26 (−0.10), 38 (0.00),
+  47 (+0.05), 55 (−0.11), 58 (0.00), 68 (+0.07), 70 (+0.02).
+
+**Opus** (the kept set).
+
+- Bare 1.00: 22 (with 0.87, Δ −0.13), 46 (Δ 0.00), 58 (with 0.93, Δ −0.07), 73 (Δ 0.00).
+- A lift, keep: 02 (+0.44), 03 (+0.57), 04 (+0.44), 05 (+0.44), 15 (+0.42), 16 (+0.27),
+  18 (+0.33), 19 (+0.25), 23 (+0.17), 38 (+0.25), 51 (+0.36), 68 (+0.26), 70 (+0.16),
+  76 (+0.39), 77 (+1.00).
+- No clear lift or negative: 26 (+0.10), 43 (−0.17), 45 (+0.07).
+
+**Both models.** The guards 48 and 52 scored 1.00 in 3 of 3 runs. The negative Δ of 46 on
+Fable comes from two runs that failed `no-invented-findings` and `not-not-ready`, and of 22
+on Fable from `status-matches-evidence` in all three runs: these are the first texts to
+read at #32.
+
+**Probes.** All 19 probes ran 3 times on each model. By the counts of each stream (the
+turn-cap rule of T061), each probe matched its expectation in 3 of 3 runs on both models.
+A side fire: probe 56 ("already designed", `design` must not fire) fired
+`shipgate:implement` in 1 Opus run and in 3 Fable runs. The probe does not check
+`implement`, so this is information for #32 and for the trigger work, not a failure.

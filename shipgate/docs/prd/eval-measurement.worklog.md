@@ -381,17 +381,26 @@ shadowed.
 
 ## PR 3 — the re-baseline (only after the user's go on the plan)
 
-- [ ] T040 — Put the plan above to the user through the lead with the measured numbers of PR 1 and 2; record the go — file(s): none — done when: the journal holds the user's go (SC-011)
+- [x] T040 — Put the plan above to the user through the lead with the measured numbers of PR 1 and 2; record the go — file(s): none — done when: the journal holds the user's go (SC-011)
 - [x] T041 — Stage 0, the proof run of case 24 (`run-case.sh --bare --model claude-fable-5-2`, 1 run): the trace lists no `shipgate` plugin and no shipgate skill fired; `report.html` and `aggregate-result.json` land in the `--output-dir` that `run-case.sh` passed, and post-run finds the kept traces from it (`shadow.json` holds no `null` run); only then stage 1 and 1b, the serial `run-set.sh --bare --model claude-fable-5-2 --max-cost-usd C shipgate ablation-32` (T050–T052; up to 3 shards side by side, each with its share of the ceiling), and the dip rule — file(s): none — done when: the proof held, the stage list of fallen cases exists, and stage 1 stayed under its ceiling (SC-013)
-- [ ] T042 — Stage 2 on the fallen cases, with the serial `run-set.sh` (`--ablation none`) or one `run-case.sh` per case — file(s): none — done when: each has a `bare+none` row
-- [ ] T043 — Stage 3, the `kept` and `guards` sets on Opus and on Fable, with the serial `run-set.sh` in shards — file(s): none — done when: both models ran under their ceilings
-- [ ] T044 — Stage 4, the `probes` set on both models; three probes per model first, to measure — file(s): none — done when: every probe has a saved result per model
-- [ ] T045 — Record: `compare.py --record` per model; the README's cost table from the measured numbers; an addendum to the audit note for #32 (the cases at 1.00 bare, the cases with a Δ) — file(s): `shipgate/evals/baseline.json`, `shipgate/evals/README.md`, `shipgate/docs/research/2026-11-25-eval-suite-audit.md` — done when: SC-001 and SC-012 hold
+- [x] T042 — Stage 2 on the fallen cases, with the serial `run-set.sh` (`--ablation none`) or one `run-case.sh` per case — file(s): none — done when: each has a `bare+none` row
+- [x] T043 — Stage 3, the `kept` and `guards` sets on Opus and on Fable, with the serial `run-set.sh` in shards — file(s): none — done when: both models ran under their ceilings
+- [x] T044 — Stage 4, the `probes` set on both models; three probes per model first, to measure — file(s): none — done when: every probe has a saved result per model
+- [x] T045 — Record: `compare.py --record` per model; the README's cost table from the measured numbers; an addendum to the audit note for #32 (the cases at 1.00 bare, the cases with a Δ) — file(s): `shipgate/evals/baseline.json`, `shipgate/evals/README.md`, `shipgate/docs/research/2026-11-25-eval-suite-audit.md` — done when: SC-001 and SC-012 hold
+
+### T045 split (the lead's word, 2026-11-27; no spend)
+
+- [x] T060 — Tests first, then `compare.py` refuses a results dir whose runs carry an error (no compare, no record, and it names the skipped dir); the newest VALID dir per case and model counts, so a newer void dir no longer masks an older valid one — file(s): `shipgate/evals/compare.py`, `shipgate/tests/test_compare.py` — done when: the tests fail first, then pass
+- [x] T061 — Tests first, then `probe.py` judges a run that ends on the turn cap (`error_max_turns`) by the counts of its stream up to the cap; any other error stays a failure; then the saved probe logs of both models are re-judged at 0 USD — file(s): `shipgate/evals/probe.py`, `shipgate/tests/test_probe.py` — done when: the tests pass and every probe has a re-judged result per model
+- [x] T062 — Case 74: the canon and verdict graders no longer depend on the last message alone (the smallest change that holds) — file(s): `shipgate/evals/74-review-canon-lens/` — done when: the worklog says what was chosen and why, and the suite's case checks pass
+- [x] T063 — `compare.py --record` per model for every case with valid runs, in the modes that ran — file(s): `shipgate/evals/baseline.json` — done when: SC-001 and SC-012 hold
+- [x] T064 — Docs: the README cost table (measured, per case, model and arm, with date and harness version), the run-evals skill's cost line, the audit addendum for #32, the 5-hour window note and the quota gate candidate — file(s): `shipgate/evals/README.md`, `.claude/skills/run-evals/SKILL.md`, `shipgate/docs/research/2026-11-25-eval-suite-audit.md` — done when: every number matches the results
+- [x] T065 — Tidy the stage sections of this worklog: counts, scores, costs and times only; no path of this machine — file(s): this worklog — done when: the grep for private paths finds nothing
 
 ## Traceability
 
 - FR-001, FR-002, FR-003 → T002, T003
-- FR-004, FR-005, FR-006, FR-007 → T002, T003
+- FR-004, FR-005, FR-006, FR-007 → T002, T003, T060 (FR-006)
 - FR-008, FR-009 → T004, T007
 - FR-010 → T005, T006, T007, T053, T054, T055
 - FR-011 → T005, T006, T007, T002
@@ -399,7 +408,7 @@ shadowed.
 - FR-013 → T050, T051, T035 (T010 moved out of PR 1)
 - FR-014 → T005, T006, T034
 - FR-015 → T011
-- FR-016, FR-017, FR-018 → T008, T009, T026
+- FR-016, FR-017, FR-018 → T008, T009, T026, T061
 - FR-019 → T024, T025, T026, T027, T032
 - FR-020 → T022, T023, T026, T027, T033, T034
 - FR-021 → T028
@@ -410,11 +419,11 @@ shadowed.
 - FR-026 → T031
 - FR-027 → T032
 - FR-028 → T035
-- FR-029 → T013, T036
+- FR-029 → T013, T036, T064
 - FR-030 → this plan, T040
-- FR-031, FR-032 → T041, T042, T043, T044, T045
+- FR-031, FR-032 → T041, T042, T043, T044, T045, T062, T064
 - FR-033 → T041, T043, T044
-- SC-001, SC-012 → T045
+- SC-001, SC-012 → T045, T063
 - SC-002, SC-003, SC-005 → T002
 - SC-004 → T007
 - SC-006 → T008
@@ -427,11 +436,11 @@ shadowed.
 
 ## What changed
 
-- `signals.py hotspots` shows the UI flag first: the first key of `--json`, and the first table line when `ui.globs` is set (shipgate 0.38.0).
-- The eval suite has 42 harness cases in named sets (`evals/sets.json`), 19 trigger probes and 2 fixture cases; cuts and merges removed 15 cases.
-- Claims that a script can judge moved out of the paid runs (the signals rankings, the record steps, case 15's assumptions, case 22's run order, case 70's sentence length); no fixture date can expire, the clarify fixtures set their own git identity, and case 73 no longer gives its helper away.
-- `run-set.sh` runs the cases of a named set one after another under one required cost ceiling per invocation; `--shard K/N` splits a set into invocations side by side, and Ctrl-C stops the running case with its `claude` child and starts no further case.
-- `run-case.sh` makes its own results dir and passes it as `--output-dir`, so runs side by side never read or clean another run's results; it refuses to start, before any spend, when the machine's managed settings enable the plugin under test, because that enable shadows every config dir.
+- `baseline.json` holds a measured row per case and model: Opus and Fable for every kept and guard case, Fable for the `ablation-32` set, each with its mode, rule, tested version, cost and time.
+- `compare.py` skips a batch whose runs carry an error (a limit hit, an interrupt), names it, and compares the newest valid batch instead, so a void rerun never hides a valid result.
+- A trigger probe that stops on the turn cap is judged by what it did up to the cap; all 19 probes pass 3 of 3 on both models.
+- The evals README has a measured cost table per case, model and arm, and the cost of the account's 5-hour window; the audit note lists, per model, the cases #32 can cut, keep or must read.
+- Case 74 asks for every finding and the verdict in the final message, so its graders no longer miss an answer given earlier in the run.
 
 ## Deviations & notes (filled during implementation)
 
@@ -498,6 +507,16 @@ shadowed.
 - 2026-11-26, set runner, deferred (R4-8, the lead's decision): `run-case.sh` does not
   refuse an extra `--eval-dir`. The harness would then read cases from another dir while
   the script checks the case and writes results under `evals/`. No refusal is added now.
+- 2026-11-27, T062, case 74. Its canon and verdict graders read `last_message`. Every
+  grader of the suite reads `last_message` or a file; none reads the whole run, and a
+  check that the harness has such a scope would need a paid run. A file target would
+  change what the case asks. The smallest change that holds is one sentence in the ask:
+  "Put every finding and your verdict in your final message." It applies to both arms
+  alike, and a test pins it. The case is a cut candidate for #32 anyway (bare 1.00 on
+  Fable in the rerun), so nothing larger.
+- 2026-11-27, PR 3, the probes. probe.py judged a run that stopped on `--max-turns 4` as a
+  failure; every probe.py failure of the 38 probes was that stop. The lead ruled the stop
+  is not a miss (T061), and the saved stream logs were re-judged at 0 USD.
 
 ### PR 2 — the merges, checked by scenario (T025)
 
@@ -571,6 +590,12 @@ judges the same scenario. The table names what moved, what is lost, and what kee
   --bare`; the with arm (`none`) follows on a later go. Each kept row is then a `bare+none`
   pair (ADR 0034), not one `with-without` run: the same arms, the same cost, the same
   information, and the bare half does not depend on the plugin version.
+- 2026-11-26, stage 2, `--trust-plugin` on the with arm. The harness refused the
+  worktree's plugin dir as untrusted at 0 USD: the eval-only config dir never trusted it.
+  The with-arm runs pass `--trust-plugin` as an extra eval flag (the lead's pre-answer;
+  the plugin under test is this repository's own checkout). `run-case.sh` keeps its
+  default for non-bare runs. Whether it should always pass the flag is a question for the
+  T045 PR.
 - 2026-11-26, a candidate, not built: a post-run flag for a run whose graded last message
   is far shorter than an earlier assistant message of the same run (case 74, run 3). It is
   a flag to read, never a verdict. Until it exists, every result table carries that count
@@ -922,3 +947,321 @@ exists in the repo's evals, and the cap is two rounds. The fresh verify ran
 - S6 LOW `shipgate/evals/evalrun.py:442` — A relative link that climbs above evals by name and comes back through the plugin dir's own name passes the check, but in the stub's copy it points outside and dangles; deferred.
 - S7 LOW `shipgate/evals/evalrun.py:425` — A link into the skipped top-level `results/` passes the check and dangles in the copy; deferred.
 - S8 LOW `shipgate/evals/evalrun.py:363` — On Linux (no lchmod) `unseal` keeps the check-then-chmod race, and no test forces that branch; deferred.
+
+## Stage results (PR 3 of #28)
+
+Counts, scores, costs and times only. Scores are per run under the both-arm rule
+(`compare.py`'s `both_arm_score`: no `skill-fired`, no with-only grader). Results dirs are
+in this worktree's `shipgate/evals/results/` (ignored by git). The tables per run with
+the failed graders and the times sit in the stage reports to the lead.
+
+**Stages 0, 1, 1b (Fable bare, `ablation-32`).** 0.41 + 22.12 + 3.43 USD. At 1.00 bare: 17,
+25, 29 (after 1b), 30, 31, 32, 33, 36, 39, 40, 54, 69. Fell: 24, 47, 53, 55, 74. Case 74's
+run 3 is a grading artifact: the graded last message was a 337-character follow-up after a
+background task. The graders that read `last_message` there are a defect of the case to
+repair in T045's PR, not a behaviour.
+
+**Stage 2 (Fable with arm, `none`, `--trust-plugin`; tree 0.38.1).** 8.82 of 12 USD.
+24: 1.00/1.00/1.00, 1.22 USD (bare mean 0.93, delta +0.07). 47: 1.00/1.00/0.71, 2.38 USD
+(bare 0.86, delta +0.05). 53: 1.00/1.00/1.00, 2.16 USD (bare 0.83, delta +0.17). 55: void,
+run 3 hit the 5-hour limit (1.00/0.67 in runs 1 and 2, 3.06 USD). Case 74's 3 bare runs did
+not start. No run had a graded last message far shorter than an earlier assistant message
+(checked from the kept traces).
+
+**Kept set, bare arm, both models (the user's go "Both models, bare").** Opus 14.70 of
+22.00 USD, all 22 valid. Fable 28.55 of 44.00 USD, 20 valid; 76 and 77 void (the 5-hour
+limit). The last shard ended at 22:57 UTC.
+
+| Case | Opus bare per run | Opus USD | Fable bare per run | Fable USD |
+| --- | --- | --- | --- | --- |
+| 02 | 0.67/0.67/0.33 | 0.57 | 0.67/0.67/0.67 | 1.18 |
+| 03 | 0.43/0.43/0.43 | 0.43 | 0.71/0.71/0.43 | 1.02 |
+| 04 | 0.33/0.33/0.33 | 0.42 | 0.33/1.00/0.33 | 0.98 |
+| 05 | 0.33/0.33/0.33 | 0.44 | 0.33/0.33/0.33 | 0.85 |
+| 15 | 0.50/0.58/0.50 | 0.86 | 0.50/0.50/0.50 | 2.03 |
+| 16 | 0.40/0.40/0.40 | 0.77 | 0.40/0.40/0.40 | 1.81 |
+| 18 | 0.46/0.77/0.77 | 0.73 | 0.62/0.46/0.62 | 1.57 |
+| 19 | 0.62/0.81/0.62 | 0.84 | 0.81/1.00/0.81 | 1.37 |
+| 22 | 1.00/1.00/1.00 | 0.54 | 1.00/0.60/1.00 | 1.03 |
+| 23 | 0.83/0.83/0.83 | 0.32 | 0.67/0.83/0.83 | 0.80 |
+| 26 | 1.00/1.00/0.71 | 0.44 | 1.00/0.71/1.00 | 0.81 |
+| 38 | 0.62/0.62/0.62 | 0.38 | 0.62/0.62/0.62 | 0.72 |
+| 43 | 0.50/1.00/1.00 | 0.47 | 0.83/0.83/0.50 | 1.09 |
+| 45 | 1.00/1.00/0.80 | 0.55 | 1.00/1.00/1.00 | 1.06 |
+| 46 | 1.00/1.00/1.00 | 0.55 | 1.00/1.00/1.00 | 0.99 |
+| 51 | 0.67/0.53/0.67 | 0.90 | 0.64/0.67/0.40 | 2.24 |
+| 58 | 1.00/1.00/1.00 | 0.75 | 0.78/1.00/0.78 | 1.32 |
+| 68 | 0.44/0.44/0.44 | 0.62 | 0.44/0.44/0.67 | 1.40 |
+| 70 | 0.79/0.86/0.86 | 0.72 | 1.00/1.00/0.93 | 1.26 |
+| 73 | 1.00/1.00/1.00 | 1.09 | 1.00/1.00/1.00 | 1.77 |
+| 76 | 0.39/0.39/0.50 | 1.48 | 0.61/0.39/0.00 (void: limit) | 2.53 |
+| 77 | 0.00/0.00/0.00 | 0.82 | 0.00/0.00/0.00 (void: limit) | 0.73 |
+
+### Runs of 2026-11-27 (the user's go A, B and C; journal seq 4107 to 4109)
+
+Written before the start, so a session cut by a limit can pick up. Config dir: the
+eval-only one (`--config-dir`). Each shard is one `run-set.sh` with a sets file in the
+session scratchpad (`sets-27.json`: the sets below, by full case name), wrapped by a
+scratchpad watcher that judges each results dir by its JSON and stops the shard's process
+group at the first void batch. Every with-arm run passes `--keep-temp --trust-plugin`.
+
+| Shard | Model | Mode | Cases | Projected USD | Ceiling USD |
+| --- | --- | --- | --- | --- | --- |
+| a-with | Fable | `none` | 55 | 3.45 | 4.31 |
+| a-bare | Fable | `--bare` | 74, 76, 77 | 5.99 | 7.49 |
+| b1-opus | Opus | `none` | 03, 26, 38, 48, 51, 52, 58, 70 | 9.52 | 12.50 |
+| b2-opus | Opus | `none` | 16, 18, 23, 43, 46, 68, 73, 76 | 9.85 | 12.50 |
+| b3-opus | Opus | `none` | 02, 04, 05, 15, 19, 22, 45, 77 | 9.64 | 12.50 |
+| b1-fable | Fable | `none` | as b1-opus | 19.77 | 28.00 |
+| b2-fable | Fable | `none` | as b2-opus | 19.25 | 28.00 |
+| b3-fable | Fable | `none` | as b3-opus | 18.87 | 28.00 |
+
+A: 11.80 of 12 USD. B: Opus 37.50 of 38, Fable 84.00 of 85. The projection per case is
+the plan's both-arm cost minus the measured bare cost (the guards: the plan's with cost).
+a-with and a-bare run one after the other in one stream; the six B shards run beside it.
+
+```
+S=.claude/skills/run-evals/scripts; CFG=<eval config dir>; SETS=<scratchpad>/sets-27.json
+$S/run-set.sh --config-dir $CFG --sets $SETS --max-cost-usd 4.31 --ablation none --model claude-fable-5-2 shipgate a-with --keep-temp --trust-plugin
+$S/run-set.sh --config-dir $CFG --sets $SETS --max-cost-usd 7.49 --bare --model claude-fable-5-2 shipgate a-bare
+$S/run-set.sh --config-dir $CFG --sets $SETS --max-cost-usd 12.50 --ablation none --model claude-opus-5-5 shipgate bK --keep-temp --trust-plugin   # K = 1, 2, 3
+$S/run-set.sh --config-dir $CFG --sets $SETS --max-cost-usd 28.00 --ablation none --model claude-fable-5-2 shipgate bK --keep-temp --trust-plugin  # K = 1, 2, 3
+```
+
+C: probes through `probe.sh`, one case at a time, Opus first; at most 2 USD in all.
+
+**C, probes (done 11:55 UTC).** 1.82 of 2 USD. Opus 11 ran 3 runs; at 0.37 USD per 3-run
+probe on Opus and about twice that on Fable, three 3-run probes per model would pass the
+cap, so the other five ran 1 run each, for cost only. All passed.
+
+| Probe | Kind | Opus USD per run | Fable USD per run | Turns |
+| --- | --- | --- | --- | --- |
+| 11 (fixture 1.3 KB) | negative | 0.125, 0.123, 0.125 | 0.233 | 4 / 3 |
+| 10 (fixture 10.7 KB) | positive, `review` fired | 0.278 | 0.558 | 4 / 4 |
+| 67 (fixture 57 KB) | negative | 0.130 | 0.248 | 5 / 4 |
+
+The fixture size does not move the cost; a skill that fires doubles it. Projection for all
+19 probes, 3 runs each (16 negatives, 3 positives: 08, 09, 10): Opus 8.55 USD (ceiling
+10.69), Fable 16.59 USD (ceiling 20.74). The plan's 5.70 and 11.90 were too low.
+
+**A and B were cut by the eval account's 5-hour limit at 12:11 UTC.** The scores of the
+valid batches are in the final tables below; the interim lists and the 17:00 table that
+stood here are replaced by them.
+
+Spend of A and B, agent and judge, USD: Opus B 20.56 of 37.50 (valid 18.81, void 1.75);
+Fable B 35.98 of 84.00 (valid 28.74, void 7.24); A 8.79 of 12 (valid 7.75, void 1.04).
+Void, all at the 5-hour limit of 12:11 UTC: Opus 45, 58, 70, 73, 76, 77 (76 and 77 were
+started and stopped at 0 USD); Fable with arm 22, 45, 46, 52, 58, 68, 73, 77; Fable bare 77.
+Fable 70 and 76 never started. The user's go of seq 4117 covered the reruns; every rerun was
+valid (the open-case runners below).
+
+`compare.py` takes the newest results dir of a case and model even when its runs carry an
+error, so a void batch masks an older valid one (for example Fable 45, 46 and 58 show a
+with score of 0.00). `compare.py --record` must not run until each void batch is
+superseded by a valid rerun, or compare must refuse a run with an error. T060 makes
+compare refuse it.
+
+- 2026-11-27, a candidate, not built: a quota gate in `run-set.sh` that reads the status
+  line's rate-limit data before each case and waits while the 5-hour window is at 80% or
+  more. Two limit cuts in two days voided 13 batches. The scratch gate of this stage shows
+  one trap: the status data that the machine keeps holds the windows of several accounts,
+  so a gate must select the paying account's own observation.
+
+**Open with-arm cases (the user's go "Yes, both models", journal seq 4117).** Each case is
+one `run-case.sh` from a scratchpad runner. Before each case, a quota gate reads the eval
+account's own status-line observation. Fresh (under 10 minutes): the case starts below 80%
+of the 5-hour window. Stale (10 to 60 minutes): it starts below 60% and only while the eval
+spend since that observation is under 15 USD. Older, or none: the case waits. At most two
+paid runners run at once (with the probes).
+
+| Runner | Model | Cases, in order | Projected USD | Ceiling USD |
+| --- | --- | --- | --- | --- |
+| q-opus | Opus | 76, 77, 45, 58, 70, 73 | 9.11 | 11.39 |
+| q-fbare | Fable, `--bare` | 77 | 1.77 | 2.21 |
+| q-f2 | Fable | 77, 52, 45, 73, 58 | 13.59 | 16.99 |
+| p-f1 | Fable, after the probes | 76, 46, 70, 68, 22 | 14.56 | 18.20 |
+
+Fable: 29.92 projected, ceilings 37.40. q-opus, q-fbare and q-f2 run one after the other in
+one stream.
+
+### Final tables (2026-11-27, 22:35 UTC)
+
+**With arm, every kept and guard case, both models.** The newest valid batch per case and
+model. Every batch of the open-case runners was valid. Short last: 0 in all 49 batches,
+read from the kept traces. The 1-turn runs are flagged; three of them ran over 100 s
+(Opus 70 run 2, Fable 46 run 2, Fable 70 run 1). `post-run --clean` then removed the kept
+sandboxes (16 more dirs).
+
+| Model | Case | With, per run | Failed graders | USD | Mean s | Short last | Bare mean | Delta |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Opus | 02 | 1.00/1.00/1.00 | - | 0.94 | 50 | 0 | 0.56 | +0.44 |
+| Opus | 03 | 1.00/1.00/1.00 | - | 0.89 | 55 | 0 | 0.43 | +0.57 |
+| Opus | 04 | 1.00/0.33/1.00 | r2 hypotheses-not-verdict | 0.75 | 33 | 0 | 0.33 | +0.44 |
+| Opus | 05 | 1.00/1.00/0.33 | r3 fix-not-applied,proposal-with-tradeoffs | 0.83 | 37 | 0 | 0.33 | +0.44 |
+| Opus | 15 | 1.00/1.00/0.83 | r3 no-design-in-requirements | 1.47 | 87 | 0 | 0.53 | +0.42 |
+| Opus | 16 | 1.00/1.00/0.00 | r3 answer-hands-decisions-to-user,api-escalated,has-open-marker | 1.60 | 96 | 0 | 0.40 | +0.27 |
+| Opus | 18 | 1.00/1.00/1.00 | - | 1.21 | 66 | 0 | 0.67 | +0.33 |
+| Opus | 19 | 1.00/1.00/0.81 | r3 no-design-in-requirements | 1.24 | 73 | 0 | 0.68 | +0.25 |
+| Opus | 22 | 0.60/1.00/1.00 | r1 status-matches-evidence | 0.77 | 35 | 0 | 1.00 | -0.13 |
+| Opus | 23 | 1.00/1.00/1.00 | - | 0.64 | 16 | 0 | 0.83 | +0.17 |
+| Opus | 26 | 1.00/1.00/1.00 | - | 0.68 | 17 | 0 | 0.90 | +0.10 |
+| Opus | 38 | 1.00/0.62/1.00 | r2 dated-line,ledger-has-note | 0.52 | 17 | 0 | 0.62 | +0.25 |
+| Opus | 43 | 0.67/0.67/0.67 | r1 gotcha-jotted-unprompted; r2 gotcha-jotted-unprompted; r3 gotcha-jotted-unprompted | 0.54 | 21 | 0 | 0.83 | -0.17 |
+| Opus | 45 | 1.00/1.00/1.00 | - | 1.14 | 41 | 0 | 0.93 | +0.07 |
+| Opus | 46 | 1.00/1.00/1.00 | - | 1.54 | 72 | 0 | 1.00 | +0.00 |
+| Opus | 48 | 1.00/1.00/1.00 | - | 1.02 | 32 | 0 | — | — (guard) |
+| Opus | 51 | 1.00/1.00/0.93 | r3 tradeoff-stated | 1.73 | 115 | 0 | 0.62 | +0.36 |
+| Opus | 52 | 1.00/1.00/1.00 | - | 1.47 | 94 | 0 | — | — (guard) |
+| Opus | 58 | 0.89/1.00/0.89 | r1 hedge-words; r3 hedge-words | 1.26 | 89 | 0 | 1.00 | -0.07 |
+| Opus | 68 | 0.56/0.78/0.78 | r1 says-recommend,steel-mans-the-alternative; r2 steel-mans-the-alternative; r3 steel-mans-the-alternative | 0.96 | 49 | 0 | 0.44 | +0.26 |
+| Opus | 70 | 1.00/1.00/1.00 | - | 1.98 | 91 | 0 (1 turn: runs 2) | 0.84 | +0.16 |
+| Opus | 73 | 1.00/1.00/1.00 | - | 1.32 | 70 | 0 | 1.00 | +0.00 |
+| Opus | 76 | 0.89/0.78/0.78 | r1 batch-put-to-user; r2 batch-items-user-facing,batch-put-to-user; r3 batch-put-to-user,lines-classed | 2.22 | 146 | 0 | 0.43 | +0.39 |
+| Opus | 77 | 1.00/1.00/1.00 | - | 1.36 | 75 | 0 | 0.00 | +1.00 |
+| Fable | 02 | 1.00/1.00/1.00 | - | 1.85 | 58 | 0 | 0.67 | +0.33 |
+| Fable | 03 | 1.00/1.00/1.00 | - | 1.58 | 41 | 0 | 0.62 | +0.38 |
+| Fable | 04 | 1.00/1.00/1.00 | - | 1.46 | 30 | 0 | 0.56 | +0.44 |
+| Fable | 05 | 1.00/1.00/1.00 | - | 1.61 | 37 | 0 | 0.33 | +0.67 |
+| Fable | 15 | 1.00/1.00/1.00 | - | 3.24 | 114 | 0 | 0.50 | +0.50 |
+| Fable | 16 | 1.00/1.00/1.00 | - | 3.06 | 108 | 0 | 0.40 | +0.60 |
+| Fable | 18 | 1.00/0.85/1.00 | r2 scope-first | 2.48 | 78 | 0 | 0.56 | +0.38 |
+| Fable | 19 | 1.00/1.00/1.00 | - | 2.42 | 79 | 0 | 0.87 | +0.13 |
+| Fable | 22 | 0.60/0.60/0.60 | r1 status-matches-evidence; r2 status-matches-evidence; r3 status-matches-evidence | 1.51 | 38 | 0 | 0.87 | -0.27 |
+| Fable | 23 | 1.00/1.00/1.00 | - | 1.36 | 21 | 0 | 0.78 | +0.22 |
+| Fable | 24 | 1.00/1.00/1.00 | - | 1.22 | 17 | 0 | 0.93 | +0.07 |
+| Fable | 26 | 1.00/0.71/0.71 | r2 test-result-cited; r3 test-result-cited | 1.30 | 20 | 0 | 0.90 | -0.10 |
+| Fable | 38 | 0.62/0.62/0.62 | r1 dated-line,ledger-has-note; r2 dated-line,ledger-has-note; r3 dated-line,ledger-has-note | 0.80 | 5 | 0 (1 turn: runs 1,2,3) | 0.62 | +0.00 |
+| Fable | 43 | 1.00/0.67/1.00 | r2 gotcha-jotted-unprompted | 1.60 | 34 | 0 | 0.72 | +0.17 |
+| Fable | 45 | 0.60/1.00/1.00 | r1 verdict-on-ac | 3.08 | 86 | 0 | 1.00 | -0.13 |
+| Fable | 46 | 1.00/0.33/0.33 | r2 no-invented-findings,not-not-ready; r3 no-invented-findings,not-not-ready | 3.55 | 126 | 0 (1 turn: runs 2) | 1.00 | -0.44 |
+| Fable | 47 | 1.00/1.00/0.71 | r3 re-reviewed-the-fix | 2.38 | 48 | 0 | 0.86 | +0.05 |
+| Fable | 48 | 1.00/1.00/1.00 | - | 2.16 | 36 | 0 | — | — (guard) |
+| Fable | 51 | 1.00/1.00/1.00 | - | 3.83 | 158 | 0 | 0.57 | +0.43 |
+| Fable | 52 | 1.00/1.00/1.00 | - | 3.16 | 121 | 0 | — | — (guard) |
+| Fable | 53 | 1.00/1.00/1.00 | - | 2.16 | 67 | 0 | 0.83 | +0.17 |
+| Fable | 55 | 1.00/0.67/0.67 | r2 escalates-api-change; r3 escalates-api-change | 3.60 | 142 | 0 | 0.89 | -0.11 |
+| Fable | 58 | 0.78/0.78/1.00 | r1 diagnosis-quality; r2 diagnosis-quality | 2.19 | 68 | 0 | 0.85 | +0.00 |
+| Fable | 68 | 0.33/0.78/0.67 | r1 no-worklog-yet,says-recommend,steel-mans-the-alternative,strongest-case-stated; r2 steel-mans-the-alternative; r3 steel-mans-the-alternative,strongest-case-stated | 2.46 | 91 | 0 | 0.52 | +0.07 |
+| Fable | 70 | 1.00/1.00/1.00 | - | 3.57 | 115 | 0 (1 turn: runs 1) | 0.98 | +0.02 |
+| Fable | 73 | 1.00/1.00/1.00 | - | 2.64 | 82 | 0 | 1.00 | +0.00 |
+| Fable | 76 | 0.89/0.89/1.00 | r1 blindspot-found; r2 batch-put-to-user | 4.33 | 174 | 0 | 0.46 | +0.46 |
+| Fable | 77 | 1.00/1.00/1.00 | - | 2.73 | 86 | 0 | 0.22 | +0.78 |
+
+**Probes, 3 runs each, both models.** Before T061, probe.py counted a run that stopped on
+`--max-turns 4` (`error_max_turns`) as a failure; the column "probe.py before T061" shows
+that verdict. The counts verdict passes such a run when that stop is its only failure.
+Every failure before T061 was that stop. Re-judged at 0 USD with T061, all 38 probes pass
+3 of 3. Side fire: probe 56
+fired `shipgate:implement` (Opus in 1 run, Fable in 3), which the probe does not check.
+
+| Model | Probe | Named skill, fires | probe.py before T061 | Counts | Side fires | USD |
+| --- | --- | --- | --- | --- | --- | --- |
+| Fable | 06 | structured-debug no | 1/3 | 3/3 | - | 0.96 |
+| Fable | 07 | structured-debug no | 3/3 | 3/3 | - | 0.85 |
+| Fable | 08 | structured-debug yes | 3/3 | 3/3 | - | 1.38 |
+| Fable | 09 | route-and-map yes | 1/3 | 3/3 | - | 1.18 |
+| Fable | 10 | review yes | 3/3 | 3/3 | - | 1.67 |
+| Fable | 11 | route-and-map no | 3/3 | 3/3 | - | 0.71 |
+| Fable | 20 | clarify no | 3/3 | 3/3 | - | 0.71 |
+| Fable | 21 | clarify no | 2/3 | 3/3 | - | 0.81 |
+| Fable | 27 | verify no | 3/3 | 3/3 | - | 0.72 |
+| Fable | 28 | verify no | 3/3 | 3/3 | - | 0.79 |
+| Fable | 34 | route-and-map no | 3/3 | 3/3 | - | 0.73 |
+| Fable | 35 | route-and-map no | 3/3 | 3/3 | - | 1.05 |
+| Fable | 41 | knowledge-base no | 3/3 | 3/3 | - | 0.82 |
+| Fable | 42 | knowledge-base no | 3/3 | 3/3 | - | 0.72 |
+| Fable | 49 | review no | 3/3 | 3/3 | - | 0.86 |
+| Fable | 50 | review no | 3/3 | 3/3 | - | 0.79 |
+| Fable | 56 | design no | 0/3 | 3/3 | shipgate:implement in 3 run(s) | 1.19 |
+| Fable | 57 | design no | 3/3 | 3/3 | - | 0.84 |
+| Fable | 67 | route-and-map no | 3/3 | 3/3 | - | 0.74 |
+| Opus | 06 | structured-debug no | 2/3 | 3/3 | - | 0.45 |
+| Opus | 07 | structured-debug no | 3/3 | 3/3 | - | 0.43 |
+| Opus | 08 | structured-debug yes | 0/3 | 3/3 | - | 0.64 |
+| Opus | 09 | route-and-map yes | 0/3 | 3/3 | - | 0.57 |
+| Opus | 10 | review yes | 3/3 | 3/3 | - | 0.83 |
+| Opus | 11 | route-and-map no | 3/3 | 3/3 | - | 0.37 |
+| Opus | 20 | clarify no | 2/3 | 3/3 | - | 0.38 |
+| Opus | 21 | clarify no | 0/3 | 3/3 | - | 0.36 |
+| Opus | 27 | verify no | 3/3 | 3/3 | - | 0.37 |
+| Opus | 28 | verify no | 3/3 | 3/3 | - | 0.39 |
+| Opus | 34 | route-and-map no | 3/3 | 3/3 | - | 0.38 |
+| Opus | 35 | route-and-map no | 2/3 | 3/3 | - | 0.52 |
+| Opus | 41 | knowledge-base no | 3/3 | 3/3 | - | 0.38 |
+| Opus | 42 | knowledge-base no | 3/3 | 3/3 | - | 0.35 |
+| Opus | 49 | review no | 3/3 | 3/3 | - | 0.43 |
+| Opus | 50 | review no | 3/3 | 3/3 | - | 0.38 |
+| Opus | 56 | design no | 0/3 | 3/3 | shipgate:implement in 1 run(s) | 0.49 |
+| Opus | 57 | design no | 3/3 | 3/3 | - | 0.38 |
+| Opus | 67 | route-and-map no | 2/3 | 3/3 | - | 0.40 |
+total claude-fable-5-2 17.50 over 19 probes
+total claude-opus-5-5 8.51 over 19 probes
+
+**The 17 `ablation-32` cases (Fable).** Cut with #32's decision, bare 1.00: 17, 25, 29, 30,
+31, 32, 33, 36, 39, 40, 54, 69, 74 (74's rerun scored 1.00 bare in 3 of 3; stage 1's fall
+was the `last_message` artifact). Keep, a lift: 53 (+0.17). No clear lift: 24 (+0.07),
+47 (+0.05), 55 (−0.11).
+
+**Spend of 2026-11-27, agent and judge, USD.**
+
+| Part | Ceiling | Valid | Void | Total |
+| --- | --- | --- | --- | --- |
+| A, reruns (Fable) | 12.00 | 7.75 | 1.04 | 8.79 |
+| B, Opus | 37.50 | 18.81 | 1.75 | 20.56 |
+| B, Fable | 84.00 | 28.74 | 7.24 | 35.98 |
+| C, probe measurement | 2.00 | 1.82 | 0 | 1.82 |
+| Probes, Opus | 10.69 | 8.51 | 0.30 (a stopped start) | 8.81 |
+| Probes, Fable | 20.74 | 17.50 | 0 | 17.50 |
+| Open cases, Opus | 11.39 | 9.29 | 0 | 9.29 |
+| Open cases, Fable | 37.40 | 30.86 | 0 | 30.86 |
+| **All** | | 123.28 | 10.33 | 133.61 |
+
+**The 5-hour window per case.** The eval account went from 0% at 16:44 to 88% at 18:29,
+while our eval runs spent 61.34 USD: about 0.70 USD per percent, about 70 USD per full
+window, if no other session used the account. One Opus case (1.0 to 2.2 USD) is then
+about 1.5 to 3%, one Fable case (1.3 to 4.3 USD) about 2 to 6%. The observation is
+coarse and lags: at 18:25 it read 45% (35 s old), and at 18:29 88%, with about 4.6 USD of
+our spend between the two readings.
+
+**The gate's rules as run** (scratchpad only): fresh (under 10 minutes) below 80%; stale
+(10 to 60 minutes) below 60% with under 15 USD spent since; idle (older, the lead's rule)
+below 30% with no paid run of ours in 3 hours, and the runner stops at 15 USD under that
+rule; otherwise wait. The newest observation of the paying account can drop out of the
+status data (the 88% reading did), and the gate then falls back to an older one.
+
+## Review round 1 (T045, PR 3)
+
+Workflow run `wf_ebe22bbb-1f5`, lenses correctness and conventions+design, verify
+`high-only`: 20 found, 18 after dedupe, 8 above the floor of 60, 0 refuters (no BLOCKER or
+HIGH), 8 survivors, 0 killed. The orchestrator checked each survivor against the code.
+
+- F1 MEDIUM `run-evals/SKILL.md:172` — The skill's kept-set sums used the rounded cells (14.69, 25.59, 2.49) and disagreed with the README's sum row; fixed with the unrounded sums 14.70, 25.60, 2.50 and 5.33.
+- F2 LOW `evals/README.md:212` — The cost table's sum row adds unrounded costs and differs from its printed cells; fixed with a sentence that says so.
+- F3 LOW `evals/compare.py:286` — The void line's suffix tested `picked`, so a valid dir that compare then refuses left no hint that no row is written; fixed with the suffix "(valid dir refused: no row)" and a test.
+- F4 LOW `scripts/probe.sh:3` — The header still said about $0.10 a run; fixed with the measured $0.15 on Opus and $0.30 on Fable.
+- F5 LOW `evals/compare.py:35` — The docstring said a void batch is never a refusal, but a void batch in a dir with no model is refused as before; fixed in the docstring.
+- F6 LOW `prd/eval-measurement.worklog.md:1149` — The probe table text said in the present tense that probe.py fails a turn-cap stop; fixed to the past tense, with the column named "probe.py before T061".
+- F7 LOW `run-evals/SKILL.md:91` — Two edited paragraphs (also this worklog's case 74 entry) broke the wrap width; reflowed.
+- F8 LOW `prd/eval-measurement.worklog.md:400` — The Traceability list had no entry for T060 to T065; added.
+
+Also fixed from below the floor: the audit addendum said a lift is "the threshold
+compare.py marks" (compare marks |ΔΔ|; now "the 0.10 that compare.py uses as its noise
+threshold"), and the README's per-case shares of the 5-hour window did not cover the cost
+table (now Opus 1 to 3%, Fable 1 to 6%, with the cost ranges).
+
+### Rejected findings
+
+- `evals/compare.py:187` (LOW 45): a cut batch with fewer than `--min-runs` runs is dropped without a void line; that filter predates T060, and an errored run in it is still named as void.
+- `evals/compare.py:285` (LOW 45): every void batch is printed on every run, also an old one a valid rerun replaced; the lead asked compare to name each dir it skips.
+- `evals/compare.py:192` (LOW 35): any run error voids the batch; that is the rule the lead set for T060.
+- `evals/probe.py:159` (LOW 40): a negative probe stopped on the turn cap passes even if the skill would fire after the cap; that is the lead's rule, and the stop stays visible as `stopped: max_turns`.
+- `prd/eval-measurement.worklog.md:1023` (LOW 50): the stage sections hold a command block and the gate rules; they carry no path of this machine, and T065 asks for no raw answer, trace or path.
+- `shipgate/CHANGELOG.md:43` (LOW 35): no changelog entry; this PR changes eval tooling and bumps no plugin version, and release notes belong to a version.
+
+## Review round 2 (T045, the fix diff)
+
+The orchestrator re-reviewed the fix diff alone: one suffix in `compare.py` with its test,
+and doc lines. F1 to F8 are closed in the code at the lines above; the new test
+`test_a_void_line_says_when_the_older_valid_dir_is_refused` failed first and passes now.
+The full suite after the fixes: 939 + 1190 + 656 = 2785 tests OK (2 skipped). No new
+finding. Verdict: ready.

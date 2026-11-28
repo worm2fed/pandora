@@ -29,9 +29,16 @@ result and a none result of one case and one model make one row of mode "bare+no
 Scoring rule. Every score uses the both-arm rule. It leaves out a with-only grader: a
 grader with config arm "with-only", a tool_used grader for Skill without arm "both", or
 a run grader flagged withOnly. A with-without result is already scored by this rule.
-Compare scores a none or bare run again from its per-run grader results. An errored run
-scores from the graders it has, as the harness scores it; a run with no scoring grader
-scores 0.
+Compare scores a none or bare run again from its per-run grader results. A run with no
+scoring grader scores 0.
+
+Void batches. A run with an error (a usage limit, an interrupt, a scaffold failure) makes
+its case's batch in that results dir void; the dir's other cases still count. A void batch
+is never compared and never recorded. In a dir with a recorded model it is never a
+refusal; a dir with no recorded model is refused as before. Each one is named in a
+"skipped <dir>: void batch of <case> <model>" line with the first error; the line ends in
+"(no valid dir: no row)" when no valid dir of that case and model is left, and in
+"(valid dir refused: no row)" when the valid dir that is left is refused.
 
 Refusals (exit 3). Compare never crosses a model, a mode or a rule:
 - without --against, a result compares only with the row of its own model;
@@ -57,7 +64,8 @@ case row gives the pass rate of each script grader per arm. A run whose script c
 under "scripts". A rate lower than the row's rate by more than the noise floor is flagged.
 
 When several results dirs hold the same case and model, the latest (by directory name)
-wins. Exit codes: 0 ok; 1 no results found; 3 one or more refusals.
+that is not void wins, so a newer void dir never masks an older valid one. Exit codes:
+0 ok; 1 no valid results found; 3 one or more refusals.
 """
 from __future__ import annotations
 
@@ -148,13 +156,14 @@ UNCHECKED = "not checked for shadowing: no shadow.json (run evalrun.py post-run 
 
 
 def load_results(paths, min_runs=1):
-    """(entries, no_model) for each case per results dir with >= min_runs runs.
+    """(entries, no_model, void) for each case per results dir with >= min_runs runs.
 
     An entry of a dir with no shadow.json or a shadowed run lists (dir, reason) in "flaws".
     An entry of a dir with a run that has no trace to check lists its warning in "notes".
-    no_model holds (case, dir) for a dir with no recorded model. choose() decides which of
-    them are reported."""
-    entries, no_model = [], []
+    no_model holds (case, dir) for a dir with no recorded model. void holds (case, model,
+    dir, error) for a case whose batch in a dir has a run with an error: it is no entry.
+    choose() decides which of them are reported."""
+    entries, no_model, void = [], [], []
     for f in result_files(paths):
         data = read_json(f)
         if not isinstance(data, dict):
@@ -181,6 +190,10 @@ def load_results(paths, min_runs=1):
                 continue
             if not model:
                 no_model.append((cname, name))
+                continue
+            error = next((str(r["error"]) for r in with_runs + without_runs if r.get("error")), None)
+            if error:
+                void.append((cname, model, name, " ".join(error.split())[:100]))
                 continue
             graders = case.get("graders") or []
             if bare:
@@ -210,7 +223,7 @@ def load_results(paths, min_runs=1):
                 "flaws": [(name, SHADOWED)] if shadowed else [] if checked else [(name, UNCHECKED)],
                 "notes": notes,
             })
-    return entries, no_model
+    return entries, no_model, void
 
 
 def pair(bare, none):
@@ -243,15 +256,16 @@ def select(entries):
     return out
 
 
-def choose(entries, no_model, record):
-    """(current, refusals, warnings, skipped): the entries compare uses, and what it reports.
+def choose(entries, no_model, void, record):
+    """(current, refusals, warnings, skipped, voided): the entries compare uses, and what it reports.
 
     A shadowed dir, a dir with no shadow.json and a dir with no recorded model are reported
     only when compare would use them. When select() picks a shadowed dir, alone or in a
     pair, it is refused. When it picks a dir with no shadow.json, that dir gives a warning,
     or a refusal with --record. A picked dir with a run that has no trace to check gives a
     warning. A dir with no model is refused unless it is older than the newest pick of its
-    case, any model. Every other such dir only counts in skipped."""
+    case, any model. Every other such dir only counts in skipped. Every void batch gets
+    its own line in voided, which says when its case and model is left with no row."""
     picked = select(entries)
     current, refusals, warnings = {}, [], {}
     for key, e in picked.items():
@@ -270,7 +284,11 @@ def choose(entries, no_model, record):
         if not any(k[0] == case and e["newest"] > d for k, e in picked.items()):
             refusals.append((case, None, NO_MODEL, d))
     skipped -= {d for e in picked.values() for d, _ in e["flaws"]} | {r[3] for r in refusals}
-    return current, refusals, list(warnings), len(skipped)
+    voided = [f"skipped {d}: void batch of {case} {model}, a run has an error: {error}"
+              + ("" if (case, model) in current else " (valid dir refused: no row)"
+                 if (case, model) in picked else " (no valid dir: no row)")
+              for case, model, d, error in sorted(void, key=lambda v: (v[2], v[0]))]
+    return current, refusals, list(warnings), len(skipped), voided
 
 
 def load_baseline(path=BASELINE):
@@ -363,11 +381,14 @@ def main():
     ap.add_argument("--against", metavar="MODEL", help="the model whose rows to compare with; must be the result's model")
     args = ap.parse_args()
 
-    entries, no_model = load_results(args.paths, args.min_runs)
-    current, load_refusals, warnings, skipped = choose(entries, no_model, args.record)
+    entries, no_model, void = load_results(args.paths, args.min_runs)
+    current, load_refusals, warnings, skipped, voided = choose(entries, no_model, void, args.record)
     refused_keys = {(case, model) for case, model, _, _ in load_refusals}
     if not current and not load_refusals:
-        print("no aggregate-result.json with aggregates found", file=sys.stderr)
+        for line in voided:
+            print(line)
+        print("no valid aggregate-result.json: every batch found is void" if voided
+              else "no aggregate-result.json with aggregates found", file=sys.stderr)
         return 1
     baseline = load_baseline(args.baseline)
     cases = baseline.setdefault("cases", {})
@@ -445,6 +466,8 @@ def main():
         print(f"~ {moved} row(s) recorded under a different harness: a flag there may be drift, not the plugin. "
               f"Re-run on the unchanged tree before reading it as a regression.")
     for line in warnings:
+        print(line)
+    for line in voided:
         print(line)
     if skipped:
         print(f"skipped {skipped} older results dirs (no recorded model, no shadow check, or shadowed)")
