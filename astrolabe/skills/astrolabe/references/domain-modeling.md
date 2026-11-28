@@ -315,7 +315,8 @@ absent past that point").
 already describes, declare the literal union on the owning model type instead of importing
 the map.** Verify the map's runtime values match the literals you're about to hardcode —
 don't guess the strings — and record the verification in the doc comment. **Legacy call
-sites keep using the map** — this is a new-code convention, not a retrofit.
+sites keep using the map** — this is a new-code convention, not a retrofit, and a
+sanctioned exception to "One definition per concept".
 
 ## Canonical type ownership across bounded contexts
 
@@ -352,10 +353,100 @@ is its only public surface; cross-context imports go through it.
 not a home.** Move it out to the module owning the type it operates on; the barrel only
 imports and re-exports.
 
+## Shape rules
+
+These rules apply to every signature and shared value (one that more than one module
+reads), not only to new domain types.
+
+### The tells of an illegal state
+
+- **A closed set typed as `string` or `number`**: a field or parameter that only ever holds
+  a few known values. Make it a union, on a parameter too.
+- **Optional fields that only some states use**: fields set only together, or only when a
+  flag is true. Make one discriminated union, one variant per state.
+- **A sentinel** (`0`, `""`, `"all"`) for "none" or "every": an `Option`, or a variant of
+  its own.
+- **One type, two meanings**: one `Day` that one caller reads as the due day and another as
+  the return day. Give each meaning its own type or field.
+- **A return type that claims more than the body returns**: a declared `Book` where a
+  branch yields `undefined`, or `string` where three literals come back. Name what every
+  branch returns.
+
+```ts
+// bad — returnedOn is set only when isReturned is true; memberId 0 means "reading room"
+interface Loan {
+  readonly isReturned: boolean;
+  readonly returnedOn?: Day;
+  readonly memberId: number;
+}
+
+// good — one variant per state; a reading-room copy has no member at all
+type Loan = Lent | Returned | InReadingRoom;
+interface Lent { readonly type: "lent"; readonly member: MemberId; readonly dueOn: Day }
+interface Returned {
+  readonly type: "returned";
+  readonly member: MemberId;
+  readonly returnedOn: Day;
+}
+interface InReadingRoom { readonly type: "inReadingRoom" }
+```
+
+### One owner per value
+
+**Every value has one owner, the module that stores or computes it; every other site reads
+it there.** A second source (a stored setting, a default) or a recomputed stored result
+gives two values that agree only until one rule changes. When two sources can supply a
+value, one function at the owner picks. That the two agree today is no reason to keep both.
+
+```ts
+// bad — sums the lines again; a pricing rounding change splits the totals
+const invoiceTotal = (order: PricedOrder): Money => sumMoney(order.lines.map(lineTotal));
+// good — pricing owns the total
+const invoiceTotal = (order: PricedOrder): Money => order.total;
+```
+
+### One definition per concept
+
+**A domain concept (a predicate, a derived value, a constant, a vocabulary) is defined
+once, under a name, beside the type it is about; every other site imports it.** A concept
+spelled at two sites is two definitions, even at one line each: when one rule changes, the
+two disagree silently. It gets its name at its second use; the abstraction limits in
+`fp-functional.md` do not apply to it.
+
+```ts
+// bad — "past" spelled twice; the edges already differ
+const past = events.filter(e => Ord.lt(instantOrd)(e.endsAt, now)); // agenda
+const done = events.filter(e => Ord.leq(instantOrd)(e.endsAt, now)); // reminders
+
+// good — one definition beside the type it is about; both import it
+export const isPast = (now: Instant) => (event: CalendarEvent): boolean =>
+  Ord.leq(instantOrd)(event.endsAt, now);
+```
+
+### Signatures
+
+**A function asks for no more than its body uses, and its callers conform.** A wider input
+(a whole entity for one field, an optional argument, a `string` for a closed set) lets the
+body accept what the domain forbids. Narrow each parameter until the body needs no check of
+it; each caller proves the narrow type once, where it has the facts. A helper takes
+non-nullable arguments; a fact no type can carry is a precondition the caller guards
+(non-negotiable 3).
+
+```ts
+// bad — takes an optional member to read one count, then re-checks it
+const canBorrow = (member?: Member): boolean =>
+  member !== undefined && Ord.lt(loanCountOrd)(member.openLoans, maxOpenLoans);
+
+// good — asks for what it reads; the caller resolves the member once
+const canBorrow = (openLoans: LoanCount): boolean =>
+  Ord.lt(loanCountOrd)(openLoans, maxOpenLoans);
+```
+
 ## Type review checklist
 
 For reviewing a set of declarations on its own — a types-only change, a declarations-first
-round, or the type surface of any diff. Each item is a question; a "no" is a finding.
+round, or the type surface of any diff; items 7 to 10 also read the code that uses them.
+Each item is a question; a "no" is a finding.
 
 1. **Is every closed, finite vocabulary a union (or enum-equivalent)?** `string`,
    `Record<string, X>`, and `readonly string[]` standing in for a closed set are findings.
@@ -372,11 +463,21 @@ round, or the type surface of any diff. Each item is a question; a "no" is a fin
    contexts are the worst offenders precisely because translating is nearly all they do.
 3. **Is every record over a union total**, so adding or renaming a member is a compile
    error at every site that must decide something — not a runtime default?
-4. **Can any two fields combine into an invalid state?** Group them into one discriminated
-   shape (one option, not two independent ones) so the invalid combination cannot be
-   constructed.
+4. **Can any two fields combine into an invalid state, or does another of the tells of an
+   illegal state apply?** Fix it as the tell says.
 5. **Absence and identity:** nulls are `Option` (or required `| null` at the edge);
    co-optional fields that appear together are grouped into one optional object; a raw
    `string`/`number` where a branded id exists is a finding.
 6. **Does every declared type have a consumer?** A type with none gets deleted, not
    admired.
+7. **Does each value have one owner** (no second source, no recomputed stored result)?
+8. **Does each concept have one definition** (no predicate, derived value or constant
+   spelled in two modules)?
+9. **Does each signature ask for no more than its body uses, and does its return type
+   match every branch?**
+10. **Is every cast, and every annotation on an untyped value, one that non-negotiable 1
+    allows?**
+
+**Self-check a proposed shape.** Write the named illegal state as a value of the proposed
+type: it must not compile. Answer items 1 to 10 for the proposed type: it must add no new
+illegal state. Say whether you compiled it against its callers.

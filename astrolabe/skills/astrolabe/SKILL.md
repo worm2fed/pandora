@@ -39,6 +39,7 @@ When both exist, read this one first, then the project's.
 | ------------------------------------------------------------------------------------ | ------------------------------------------ |
 | New types: entities, value objects, branded ids, error unions, enums-vs-unions      | `references/domain-modeling.md`            |
 | Reviewing declarations alone (a types-only round, the type surface of a diff)       | the **Type review checklist** at the end of `references/domain-modeling.md` |
+| Any signature you write or change, or a shared value (a constant or derived value more than one module reads) | **Shape rules** in `references/domain-modeling.md` |
 | FP plumbing: pipelines, Option/Either/RTE, ts-pattern, immutability, aggregation, when/how to abstract | `references/fp-functional.md`   |
 | Backend structure (layers, use cases, validation, mappers, DTOs, errors, DI) or tests | `references/architecture-and-testing.md` |
 
@@ -49,9 +50,12 @@ test needs the testing half of architecture-and-testing.
 ## Non-negotiables (always apply, no reference read needed)
 
 1. **No `as` casts** (including `as unknown as`), no `any`, no non-null `!`.
-   Brand, narrow, or guard instead. Casts are allowed ONLY at declared type
-   boundaries (where raw external data enters a typed model), one per boundary,
-   each with a cause-naming comment — never mid-pipeline.
+   Brand, narrow, or guard instead. ONLY at a declared type boundary, a cast
+   may target only `unknown`, or a type that a parser then narrows; untrusted
+   input is parsed (#11). One cast per boundary, with a comment that names its
+   cause — never mid-pipeline. That comment never stands in for the fix of a
+   type gap: when the gap is in a type this codebase declares, fix that type.
+   An annotation on an untyped value is a cast.
 2. **Absence is a typed value** — `Option` in fp-ts code, a required `| null`
    field at the edge. Never an empty-string/empty-array sentinel for
    "not there".
@@ -85,3 +89,14 @@ test needs the testing half of architecture-and-testing.
     line comments** — they attach to the symbol and surface in editor hover.
     `//` is for inline constraint notes inside a body, not for documenting a
     declaration.
+11. **Shape: a type holds only what the domain allows**, in every signature and
+    shared value, not only in new domain types (full rules: **Shape rules** in
+    `references/domain-modeling.md`):
+    - a closed set is a union, never `string` or `number`;
+    - each value has one owner, the module that stores or computes it, and each
+      concept one definition, beside the type it is about; other sites read or
+      import them, never recompute or respell them;
+    - a function asks for no more than its body uses, and its return type
+      matches every branch;
+    - untrusted input is parsed where it enters, never cast to its domain
+      type (`references/architecture-and-testing.md`, validation).

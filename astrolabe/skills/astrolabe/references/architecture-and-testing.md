@@ -72,6 +72,22 @@ helper) — never let a raw `string`/`number` travel where a branded id exists. 
 the boundary lands directly on `Option` (an `optionFromNullable`-style codec), not on
 `null` carried inward.
 
+**Every boundary parses the untrusted input it receives, where it enters.** A request, a
+message and another service's response each count as the first boundary. Typing the result
+of `JSON.parse` or a response body instead is an annotation on an untyped value, which
+non-negotiable 1 counts as a cast:
+
+```ts
+// bad — the annotation claims a shape nothing checked
+const hold: HoldRequest = await response.json();
+
+// good — read as `unknown` through the effect-boundary helper, then parsed
+const hold = pipe(
+  effectBoundary((): Promise<unknown> => response.json()),
+  RTE.flatMapEither(parseHoldRequest),
+);
+```
+
 **One handler per file under `api/`, built with the codebase's single handler-factory
 (route, request-mapper, use case, success status).** Handlers translate; they never
 contain business logic.
@@ -106,8 +122,8 @@ assignment.**
 - **Declare boolean/flag columns `NOT NULL` with a default, using the schema builder's
   boolean type** — a bare integer flag returns a number and breaks strict boolean checks;
   a NULL flag is silently excluded by `flag = false` filters.
-- **Helpers require non-nullable arguments and let callers guard** — a helper throws on
-  unmet preconditions, never returns `null`/empty on missing required input.
+- **Helper arguments** follow "Signatures" in `domain-modeling.md`: non-nullable, guarded
+  by the caller.
 - **Don't couple services through a shared DB schema** — read/write through the owning
   service's boundary.
 
