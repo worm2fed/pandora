@@ -34,7 +34,9 @@ pattern and its paths; treat a hit as a blocker, not a nit.
   by plain name). Its scripts stay Python 3.9 compatible (no `match`, no runtime `X | Y`).
 - astrolabe's tests run with `python3 -m unittest discover -s astrolabe/tests` from the
   repo root. They pin rule headings, each rule's anchor phrase and the pointers between
-  files; a reword of an anchor phrase updates its test.
+  files; a reword of an anchor phrase updates its test. Their private-name test checks
+  generic forms only, unless `PANDORA_PRIVATE_NAMES` (comma-separated, set in your shell,
+  never committed) names the private projects to look for.
 - A test that runs `journal.py` or a hook in a subprocess gives it a temporary
   `CLAUDE_CONFIG_DIR` and a temporary `HOME` (as `run_journal` in
   `shipgate/tests/test_journal.py` and `run_hook` in `shipgate/tests/test_hooks.py` do). A
