@@ -15,7 +15,7 @@ are relative to the repo root.
 
 | question | tool | cost |
 |---|---|---|
-| Does the skill fire on this prompt, and do the named calls stay at 0? | `scripts/probe.sh`: plain `claude -p --plugin-dir`, judged by `shipgate/evals/probe.py` against the case's `probe.json` | about $0.10 per run (not yet measured per model) |
+| Does the skill fire on this prompt, and do the named calls stay at 0? | `scripts/probe.sh`: plain `claude -p --plugin-dir`, judged by `shipgate/evals/probe.py` against the case's `probe.json` | about $0.15 a run on Opus, $0.30 on Fable (measured; see **Cost**) |
 | Is the answer better with the plugin? (the gate) | `scripts/run-case.sh`: `claude plugin eval` with graders | see **Cost** |
 
 The probe measures triggering only, never answer quality. Ship on harness numbers.
@@ -87,7 +87,9 @@ claude plugin eval <plugin-dir | bare stub> --runs 3 --ablation <with-without|no
 `probe.sh` needs `--model`, runs `config-check` too, and checks every `probe.json`
 (`probe.py check`) before it spends. A probe case holds `probe.md` (the prompt) and
 `probe.json`; a case with only `prompt.md` runs count-only. A probe passes when all its
-runs pass (3 of 3). One miss is a finding to read before the description changes. Results
+runs pass (3 of 3); a run that stops on the turn cap is judged by its counts up to the
+cap (`stopped: max_turns`), any other error fails it. One miss is a finding to read
+before the description changes. Results
 go to `shipgate/evals/results/probes/<stamp>/<case>.json` with model, turns, cost and time
 per run.
 
@@ -165,14 +167,14 @@ offline by `signal_grader.py fixture`. See the evals README, "Signal grader".
 
 ## Cost
 
-Measured costs, 3 runs per arm, judge included (audit of 2026-11-25): a Fable run costs
-about 2.08 times an Opus run of the same case (median of 15 cases, with arm). No bare-arm
-ratio is measured yet: the without arm of the case-77 runs was shadowed. Until the
-re-baseline (PR 3 of #28) measures every case per model, the cost per case and model is
-the table of the re-baseline plan in
-[shipgate/docs/prd/eval-measurement.worklog.md](../../../shipgate/docs/prd/eval-measurement.worklog.md):
-the kept suite projects to 43.72 USD on Opus and 87.77 USD on Fable, the bare arm of the
-#32 set to 24.83 USD on Fable. Probes are about $0.10 a run, not yet measured per model.
+Measured costs per case, model and arm (the re-baseline of #28, 2026-11-26 and 27,
+harness 2.1.332) are the cost table of
+[shipgate/evals/README.md](../../../shipgate/evals/README.md) ("Cost (measured ...)").
+In sum, 3 runs per case, from the unrounded costs: the kept set's bare arm 14.70 USD on
+Opus and 29.78 on Fable, its with arm 25.60 and 52.65, the guards' with arm 2.50 and
+5.33, all 19 probes 8.51 and 17.50. A Fable run costs about 1.98 times an Opus run. About 0.70 USD of eval spend moves
+the account's 5-hour window by one percent, so a full set on both models side by side can
+fill it: count the window before you start a set.
 Set `--max-cost-usd` on every run.
 
 ## Running many cases
@@ -202,9 +204,9 @@ one afternoon; every run after that returns `score 0.00 $0.00 error: You've hit 
 session limit`, exit 1; 3 at once fit a full pass in one window), and the weekly limit
 (gotcha 3).
 
-Afterwards grep each run's log for `hit your session limit` before trusting its score,
-and re-run those cases: `compare.py` takes the latest results dir per case and model, so
-a clean re-run supersedes a limit-hit one.
+A run that a limit cuts carries an `error`, so its batch is void: `compare.py` skips it,
+names the dir, and takes the newest valid results dir of that case and model. Re-run
+those cases; a clean re-run then counts.
 
 ## When a run scores 0.00
 

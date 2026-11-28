@@ -90,7 +90,10 @@ Two checks stop that:
   model counts only in that line when it is older than the newest pick of its case, any
   model; else compare refuses it. A run with no trace to check gives a warning only when
   compare uses its dir. `--record` skips every case and model that has a refusal in the
-  run, so a refused partner never turns a `bare+none` row into a half row.
+  run, so a refused partner never turns a `bare+none` row into a half row. A case whose
+  runs in a dir carry an `error` (a limit hit, an interrupt, a failed scaffold) is a void
+  batch: compare never compares or records it, names it in a line `skipped <dir>: void
+  batch of <case> <model>, ...`, and takes the newest valid dir of that case and model.
 
 ### Script graders
 
@@ -133,7 +136,9 @@ The harness never runs a probe or fixture case: it holds no `prompt.md` and no `
 ```
 
 An empty pattern list counts every call of that tool. A probe passes when all its runs
-pass (3 of 3).
+pass (3 of 3). A run that stops on the turn cap (`error_max_turns`) is judged by the
+counts of its stream up to the cap, and the result file marks it `stopped: max_turns`;
+any other error fails the run.
 
 ### Sets
 
@@ -152,6 +157,73 @@ per arm, Δ, the mean cost and time of one run per arm, the judge cost, and the
 script-grader rates. Rows recorded before the model was recorded sit under the key
 `unrecorded`. `compare.py` never crosses a model, a mode or a rule, and refuses a result
 with no recorded model.
+
+### Cost (measured 2026-11-26 and 2026-11-27, harness 2.1.332, judge sonnet)
+
+USD for one batch of 3 runs, agent and judge, from the newest valid results dir of each
+case, model and arm (the re-baseline of #28). "bare" is `--bare`, "with" is
+`--ablation none`; a `with-without` run costs about the sum of the two. A dash: that arm
+did not run for that model. A Fable run costs about 1.98 times an Opus run of the same
+case (median of 24 cases, with arm; 1.97 over 22 cases, bare arm). The sum row adds the
+unrounded costs, so it can differ from the sum of the printed cells by 0.01 or 0.02.
+
+| Case | Set | Opus bare | Opus with | Fable bare | Fable with |
+| --- | --- | --- | --- | --- | --- |
+| 02 | kept | 0.57 | 0.94 | 1.18 | 1.85 |
+| 03 | kept | 0.43 | 0.89 | 1.02 | 1.58 |
+| 04 | kept | 0.42 | 0.75 | 0.98 | 1.46 |
+| 05 | kept | 0.44 | 0.83 | 0.85 | 1.61 |
+| 15 | kept | 0.86 | 1.47 | 2.03 | 3.24 |
+| 16 | kept | 0.77 | 1.60 | 1.81 | 3.06 |
+| 17 | ablation-32 | — | — | 1.71 | — |
+| 18 | kept | 0.73 | 1.21 | 1.57 | 2.48 |
+| 19 | kept | 0.84 | 1.24 | 1.37 | 2.42 |
+| 22 | kept | 0.54 | 0.77 | 1.03 | 1.51 |
+| 23 | kept | 0.32 | 0.64 | 0.80 | 1.36 |
+| 24 | ablation-32 | — | — | 0.84 | 1.22 |
+| 25 | ablation-32 | — | — | 0.92 | — |
+| 26 | kept | 0.44 | 0.68 | 0.81 | 1.30 |
+| 29 | ablation-32 | — | — | 1.23 | — |
+| 30 | ablation-32 | — | — | 1.08 | — |
+| 31 | ablation-32 | — | — | 1.24 | — |
+| 32 | ablation-32 | — | — | 1.70 | — |
+| 33 | ablation-32 | — | — | 1.36 | — |
+| 36 | ablation-32 | — | — | 1.08 | — |
+| 38 | kept | 0.38 | 0.52 | 0.72 | 0.80 |
+| 39 | ablation-32 | — | — | 1.24 | — |
+| 40 | ablation-32 | — | — | 0.90 | — |
+| 43 | kept | 0.47 | 0.54 | 1.09 | 1.60 |
+| 45 | kept | 0.55 | 1.14 | 1.06 | 3.08 |
+| 46 | kept | 0.55 | 1.54 | 0.99 | 3.55 |
+| 47 | ablation-32 | — | — | 1.04 | 2.38 |
+| 48 | guards | — | 1.02 | — | 2.16 |
+| 51 | kept | 0.90 | 1.73 | 2.24 | 3.83 |
+| 52 | guards | — | 1.47 | — | 3.16 |
+| 53 | ablation-32 | — | — | 1.16 | 2.16 |
+| 54 | ablation-32 | — | — | 1.92 | — |
+| 55 | ablation-32 | — | — | 2.20 | 3.60 |
+| 58 | kept | 0.75 | 1.26 | 1.32 | 2.19 |
+| 68 | kept | 0.62 | 0.96 | 1.40 | 2.46 |
+| 69 | ablation-32 | — | — | 1.04 | — |
+| 70 | kept | 0.72 | 1.98 | 1.26 | 3.57 |
+| 73 | kept | 1.09 | 1.32 | 1.77 | 2.64 |
+| 74 | ablation-32 | — | — | 1.31 | — |
+| 76 | kept | 1.48 | 2.22 | 2.84 | 4.33 |
+| 77 | kept | 0.82 | 1.36 | 1.64 | 2.73 |
+| **sum** | | 14.70 | 28.09 | 51.73 | 67.34 |
+
+Probes, 3 runs each with `--max-turns 4`: all 19 cost 8.51 USD on Opus and 17.50 USD on
+Fable. A negative probe costs 0.35 to 0.52 USD on Opus and 0.71 to 1.19 USD on Fable;
+the three probes whose skill fires (08, 09, 10) cost 0.57 to 0.83 USD on Opus and 1.18 to
+1.67 USD on Fable.
+
+The account's 5-hour window: in one afternoon of these runs, about 0.70 USD of eval spend
+moved the window by one percent (about 70 USD for a full window), so an Opus case (0.52 to
+2.22 USD, with arm) is about 1 to 3% and a Fable case (0.80 to 4.33 USD) about 1 to 6%. A
+candidate, not built: a quota gate in `run-set.sh` that reads the status line's rate-limit
+data before each case and waits while the 5-hour window is at 80% or more. The status data
+can hold several accounts, so such a gate must read the paying account's own observation,
+and the reading lags.
 
 ### What the harness does to a run (2.1.332)
 
@@ -277,7 +349,7 @@ A `case.yaml` can set only `EVAL_*` variables. Confirm each arm from a kept trac
 (`--keep-temp`): look for `"source": "graph"` or `"source": "regex"` in a `signals.py`
 result. Record the graph arm with `compare.py --record`; keep the regex arm out of
 `baseline.json`. Also move the regex arm's results dirs out of `evals/results/` after the
-run. `compare.py` takes the newest dir per case, so a regex-arm dir there replaces the
+run. `compare.py` takes the newest valid dir per case, so a regex-arm dir there replaces the
 graph arm in every later compare.
 
 Result on 2026-10-19 (plugin 0.17.0, 3 runs per arm): every case scored 1.00 with and

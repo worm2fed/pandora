@@ -74,6 +74,12 @@ FIRED = [init(), tool("Skill", skill="shipgate:route-and-map"),
 LIMIT_LINE = "You've hit your weekly limit · resets Mon 9am"
 
 
+def cap_result(subtype="error_max_turns", turns=5, cost=0.11, ms=30000):
+    """The result record of a run that ended on an error subtype: is_error, no `result` text."""
+    return {"type": "result", "subtype": subtype, "num_turns": turns,
+            "total_cost_usd": cost, "duration_ms": ms, "is_error": True}
+
+
 class TmpDir(unittest.TestCase):
     def setUp(self):
         if probe is None:
@@ -187,6 +193,34 @@ class TestJudge(TmpDir):
         self.assertIs(verdict["passed"], False)
         self.assertTrue(any("weekly limit" in f for f in verdict["failures"]), verdict)
 
+    def test_negative_probe_stopped_on_the_turn_cap_passes(self):
+        run = probe.read_stream(self.stream(QUIET[:-1] + [cap_result()]))
+        self.assertIsNone(run["error"])
+        self.assertEqual(run["stopped"], "max_turns")
+        verdict = probe.judge_run(run, NEGATIVE, "shipgate")
+        self.assertIs(verdict["passed"], True, verdict)
+        self.assertEqual(verdict["failures"], [])
+
+    def test_firing_probe_stopped_on_the_turn_cap_after_the_skill_fired_passes(self):
+        verdict = self.judge(FIRED[:-1] + [cap_result()], FIRING)
+        self.assertIs(verdict["passed"], True, verdict)
+
+    def test_turn_cap_stop_still_fails_on_the_fired_skill_and_counts_not_on_the_stop(self):
+        verdict = self.judge(NOISY[:-1] + [cap_result()], NEGATIVE)
+        self.assertIs(verdict["passed"], False)
+        text = "\n".join(verdict["failures"])
+        self.assertIn("skill structured-debug fired", text)
+        self.assertIn("signals\\.py", text)
+        self.assertNotIn("error", text)
+        self.assertNotIn("max_turns", text)
+
+    def test_another_error_subtype_still_fails_with_its_error(self):
+        run = probe.read_stream(self.stream(QUIET[:-1] + [cap_result("error_during_execution")]))
+        self.assertIsNone(run["stopped"])
+        verdict = probe.judge_run(run, NEGATIVE, "shipgate")
+        self.assertIs(verdict["passed"], False)
+        self.assertEqual(verdict["failures"], ["error: result is_error: error_during_execution"])
+
     def test_no_expectation_judges_nothing(self):
         verdict = self.judge(NOISY, None)
         self.assertIsNone(verdict["passed"])
@@ -247,6 +281,17 @@ class TestSavedResult(TmpDir):
         self.assertAlmostEqual(saved["cost"], 0.39)
         self.assertIn("run2: FAIL", proc.stdout)
         self.assertIn("weekly limit", proc.stdout)
+
+    def test_a_turn_cap_stop_is_saved_and_printed_as_a_stop(self):
+        streams = [self.stream(QUIET, "run1.jsonl"),
+                   self.stream(QUIET[:-1] + [cap_result()], "run2.jsonl")]
+        proc, out = self.judge_cli(NEGATIVE, *streams)
+        saved = json.loads(out.read_text())
+        self.assertIs(saved["passed"], True)
+        self.assertEqual([r["stopped"] for r in saved["runs"]], [None, "max_turns"])
+        self.assertIsNone(saved["runs"][1]["error"])
+        self.assertIn("run2: PASS skill=[]", proc.stdout)
+        self.assertIn("turns=5 stopped=max_turns cost=$0.11", proc.stdout)
 
     def test_count_only_without_an_expectation(self):
         proc, out = self.judge_cli(None, self.stream(NOISY))
